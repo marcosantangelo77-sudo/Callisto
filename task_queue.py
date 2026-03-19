@@ -1,0 +1,149 @@
+"""
+Persistent task queue backed by SQLite.
+
+Named task_queue.py (not queue.py) to avoid collision with Python stdlib.
+Shares callisto.db with the memory system; uses WAL mode.
+"""
+
+import json
+import os
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Optional
+
+import aiosqlite
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+
+TASK_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS task_queue (
+    task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING'
+        CHECK(status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED')),
+    priority INTEGER NOT NULL DEFAULT 0,
+    result TEXT,
+    error TEXT,
+    session_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_queue_poll
+    ON task_queue(status, priority DESC, created_at);
+"""
+
+
+class TaskStatus(str, Enum):
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class TaskQueue:
+    """Persistent task queue using SQLite."""
+
+    def __init__(self, db_path: str = DB_PATH):
+        self.db_path = db_path
+        self._db: Optional[aiosqlite.Connection] = None
+
+    async def initialize(self) -> None:
+        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+        self._db = await aiosqlite.connect(self.db_path)
+        await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.executescript(TASK_SCHEMA_SQL)
+        await self._db.commit()
+
+    async def close(self) -> None:
+        if self._db:
+            await self._db.close()
+            self._db = None
+
+    async def submit_task(self, query: str, priority: int = 0) -> int:
+        """Submit a new task. Returns task_id."""
+        cursor = await self._db.execute(
+            """INSERT INTO task_queue (query, priority, created_at)
+               VALUES (?, ?, ?)""",
+            (query, priority, datetime.now(timezone.utc).isoformat()),
+        )
+        await self._db.commit()
+        return cursor.lastrowid
+
+    async def get_next(self) -> Optional[dict]:
+        """Atomically claim the next pending task. Returns task dict or None."""
+        # Find highest priority pending task
+        row = await self._db.execute_fetchall(
+            """SELECT task_id, query, priority FROM task_queue
+               WHERE status = 'PENDING'
+               ORDER BY priority DESC, created_at ASC
+               LIMIT 1""",
+        )
+        if not row:
+            return None
+
+        task_id, query, priority = row[0]
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Atomic claim via UPDATE with WHERE status check
+        cursor = await self._db.execute(
+            """UPDATE task_queue
+               SET status = 'PROCESSING', started_at = ?
+               WHERE task_id = ? AND status = 'PENDING'""",
+            (now, task_id),
+        )
+        await self._db.commit()
+
+        if cursor.rowcount == 0:
+            return None  # another worker claimed it
+
+        return {"task_id": task_id, "query": query, "priority": priority}
+
+    async def complete_task(
+        self, task_id: int, result: dict, session_id: Optional[str] = None
+    ) -> None:
+        """Mark a task as completed with its result."""
+        await self._db.execute(
+            """UPDATE task_queue
+               SET status = 'COMPLETED', result = ?, session_id = ?,
+                   completed_at = ?
+               WHERE task_id = ?""",
+            (
+                json.dumps(result, ensure_ascii=False),
+                session_id,
+                datetime.now(timezone.utc).isoformat(),
+                task_id,
+            ),
+        )
+        await self._db.commit()
+
+    async def fail_task(self, task_id: int, error: str) -> None:
+        """Mark a task as failed with error details."""
+        await self._db.execute(
+            """UPDATE task_queue
+               SET status = 'FAILED', error = ?, completed_at = ?
+               WHERE task_id = ?""",
+            (error, datetime.now(timezone.utc).isoformat(), task_id),
+        )
+        await self._db.commit()
+
+    async def get_task(self, task_id: int) -> Optional[dict]:
+        """Get task by ID."""
+        rows = await self._db.execute_fetchall(
+            "SELECT * FROM task_queue WHERE task_id = ?", (task_id,)
+        )
+        if not rows:
+            return None
+
+        columns = [
+            "task_id", "query", "status", "priority", "result", "error",
+            "session_id", "created_at", "started_at", "completed_at",
+        ]
+        task = dict(zip(columns, rows[0]))
+        if task["result"]:
+            task["result"] = json.loads(task["result"])
+        return task

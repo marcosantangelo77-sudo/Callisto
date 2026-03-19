@@ -1,0 +1,15 @@
+ollama
+fastapi
+uvicorn[standard]
+pydantic
+aiosqlite
+httpx
+python-dotenv
+langchain
+langchain-core
+yfinance
+pandas
+beautifulsoup4
+jsonschema
+art
+requests

@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "brave-search": {
+      "command": "python",
+      "args": ["tools/brave_search.py"],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+      }
+    },
+    "sqlite-memory": {
+      "command": "python",
+      "args": ["-m", "memory"],
+      "env": {
+        "CALLISTO_DB_PATH": "${CALLISTO_DB_PATH}"
+      }
+    }
+  }
+}
