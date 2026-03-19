@@ -8,4 +8,5 @@ memory/
 *.egg-info/
 dist/
 build/
+logs/
 .claude/

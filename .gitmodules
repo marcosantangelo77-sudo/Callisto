@@ -1,0 +1,3 @@
+[submodule "hermes-function-calling"]
+	path = hermes-function-calling
+	url = https://github.com/NousResearch/hermes-function-calling.git

@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from agp import Domain
+from logging_config import setup_logging
 from memory import MemoryStore
 from monitor import HealthMonitor
 from orchestrator import Orchestrator
@@ -23,8 +24,8 @@ from task_queue import TaskQueue
 
 load_dotenv()
 
+setup_logging()
 logger = logging.getLogger("callisto.api")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 CALLISTO_PORT = int(os.getenv("CALLISTO_PORT", "8420"))
 
