@@ -344,6 +344,7 @@ RESEARCH_SPORTS = [
     "basketball_nba",
     "americanfootball_nfl",
     "basketball_ncaab",
+    "basketball_ncaaw",
     "icehockey_nhl",
     "baseball_mlb",
     "golf_pga",

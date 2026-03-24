@@ -57,6 +57,7 @@ LEAGUE_MAP = {
     "basketball_nba": "nba",
     "americanfootball_nfl": "nfl",
     "basketball_ncaab": "ncaab",
+    "basketball_ncaaw": "ncaaw",
     "icehockey_nhl": "nhl",
     "baseball_mlb": "mlb",
 }
