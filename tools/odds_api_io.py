@@ -115,8 +115,8 @@ def _load_usage() -> None:
                 _hourly_requests = data.get("count", 0)
                 _hour_key = current_hour
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.info(f"Could not load odds-api.io usage tracker (resetting): {e}")
 
     # New hour or no file — reset hourly counter
     _hourly_requests = 0

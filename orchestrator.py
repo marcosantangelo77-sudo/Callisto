@@ -811,7 +811,7 @@ class Orchestrator:
             logger.error(f"Session {session.session_id}: AGP violation: {e}")
             raise
         except Exception as e:
-            logger.error(f"Session {session.session_id}: failed: {e}")
+            logger.error(f"Session {session.session_id}: failed: {e}", exc_info=True)
             raise
 
     def _domain_search_query(self, query: str, domain: Domain) -> Optional[str]:

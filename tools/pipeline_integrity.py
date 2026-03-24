@@ -1,607 +1,882 @@
 """
-Pipeline integrity checks for Callisto.
+Pipeline integrity checker — detects silent failures, stalled pipelines,
+and broken data flows that the standard health check misses.
 
-Two tiers:
-  1. Lightweight checks (used by /health) — fast SQL counts and timestamp checks.
-     These run on every health poll and must complete in <500ms.
+The standard /health endpoint only checks if processes are running.
+This module checks if they are PRODUCING VALID OUTPUT.
 
-  2. Deep checks (used by /health/deep) — thorough analysis of pipeline output
-     quality, edge distributions, hypothesis flow, paper trade accuracy, etc.
-     These can take several seconds and are called on-demand.
+Three bugs that motivated this module:
+  1. Paper trading had a wrong import — silently swallowed by bare
+     `except Exception`, 194 hypotheses stuck with 0 trades for days
+  2. Backtest engine found 0 edges across 734 events because it compared
+     consensus against itself — nobody checked that 0% positive edge rate
+     is abnormal
+  3. Composite TCI was flat at 51.9% but kept being used as a signal
 
-Status levels per pipeline:
-  "ok"      — producing expected output within normal parameters
-  "WARNING" — output exists but quantity/quality is suboptimal
-  "BROKEN"  — critical failure, pipeline not producing expected output
-
-Overall status:
-  "ok"       — all pipelines ok
-  "DEGRADED" — at least one WARNING, no BROKEN
-  "BROKEN"   — at least one BROKEN pipeline
+Design: Run as part of the autonomous loop. Log all results to a
+dedicated table for trend analysis. Surface issues in /health and
+/system/full-status.
 """
 
+import asyncio
+import json
 import logging
 import os
 import time
-from datetime import datetime, timezone, timedelta
+import traceback
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import aiosqlite
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger("callisto.pipeline_integrity")
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
-# ---------------------------------------------------------------------------
-# Thresholds (tune as the system matures)
-# ---------------------------------------------------------------------------
-# Paper trading
-PAPER_TRADE_STALE_HOURS = 72       # BROKEN if no trades in this window
-PAPER_TRADE_WARNING_HOURS = 24     # WARNING if no trades in this window
+# ── Thresholds ──
+PAPER_TRADE_STALL_HOURS = 24       # Alert if paper_trading hypotheses but 0 trades after this
+HYPOTHESIS_STALL_HOURS = 48        # Alert if hypothesis stuck in same state this long
+BACKTEST_MIN_EVENTS_FOR_EDGE_CHECK = 50  # Need this many events before checking edge rate
+BACKTEST_ZERO_EDGE_IS_BROKEN = True  # 0% positive edges across 50+ events = broken methodology
+ODDS_SNAPSHOT_STALE_HOURS = 2      # Alert if line_monitor "running" but no new snapshots
+SIGNAL_PIPELINE_MIN_HYPOTHESES = 40  # Need this many in backtesting to check signal rate
+REJECTION_RATE_BROKEN_THRESHOLD = 0.95  # > 95% rejection suggests broken evaluation
+PHASE_ERROR_RATE_THRESHOLD = 0.50  # > 50% error rate over last 10 runs = broken phase
+METRIC_STALE_HOURS = 24            # Alert if a metric hasn't changed in this long
+INTEGRITY_CHECK_INTERVAL_CYCLES = 3  # Run every N research loop cycles
 
-# Backtest edges
-MIN_POSITIVE_EDGE_RATE = 0.01      # BROKEN if < 1% of events have positive edge
-WARN_POSITIVE_EDGE_RATE = 0.05     # WARNING if < 5% positive edge rate
-
-# Hypothesis flow
-HYPOTHESIS_PROMOTION_DAYS = 30     # WARNING if 0 promoted in this window
-HYPOTHESIS_STALE_DAYS = 60         # BROKEN if 0 promoted in this window
-
-# Data collection
-DATA_STALE_MINUTES = 60            # WARNING if last snapshot > 60 min
-DATA_BROKEN_MINUTES = 360          # BROKEN if last snapshot > 6 hours
-
-# Odds snapshots
-SNAPSHOT_STALE_MINUTES = 30        # WARNING if no snapshot in 30 min
-SNAPSHOT_BROKEN_MINUTES = 120      # BROKEN if no snapshot in 2 hours
+# ── Issue severity levels ──
+SEVERITY_CRITICAL = "CRITICAL"  # Pipeline is broken, producing wrong output
+SEVERITY_WARNING = "WARNING"    # Pipeline is degraded, may produce wrong output
+SEVERITY_INFO = "INFO"          # Something is unusual but not necessarily broken
 
 
-# ---------------------------------------------------------------------------
-# Lightweight checks — called by /health
-# ---------------------------------------------------------------------------
+class IntegrityIssue:
+    """A single detected integrity problem."""
 
-async def _get_db() -> aiosqlite.Connection:
-    """Open a read-only connection for integrity checks."""
-    db = await aiosqlite.connect(DB_PATH)
-    db.row_factory = aiosqlite.Row
-    return db
+    def __init__(self, check_name: str, severity: str, message: str,
+                 details: Optional[dict] = None, auto_fix: Optional[str] = None):
+        self.check_name = check_name
+        self.severity = severity
+        self.message = message
+        self.details = details or {}
+        self.auto_fix = auto_fix  # Description of auto-fix attempted, if any
+        self.timestamp = datetime.now(timezone.utc).isoformat()
+
+    def to_dict(self) -> dict:
+        return {
+            "check": self.check_name,
+            "severity": self.severity,
+            "message": self.message,
+            "details": self.details,
+            "auto_fix": self.auto_fix,
+            "timestamp": self.timestamp,
+        }
 
 
-async def check_paper_trading() -> dict:
-    """Check if paper trading pipeline is producing trades."""
-    try:
-        db = await _get_db()
+class PipelineIntegrityChecker:
+    """
+    Comprehensive pipeline integrity checker.
+
+    Checks that pipelines are not just running but producing valid,
+    changing, non-zero output. Detects silent failures that standard
+    health checks miss.
+    """
+
+    def __init__(self):
+        self._issues: list[IntegrityIssue] = []
+        self._last_run: Optional[str] = None
+        self._run_count = 0
+        self._phase_errors: dict[str, list[bool]] = defaultdict(list)  # phase -> [success/fail]
+        self._metric_history: dict[str, list[tuple[str, float]]] = defaultdict(list)  # metric -> [(timestamp, value)]
+        self._known_issues: set[str] = set()  # Dedup for alerts
+
+    async def ensure_table(self) -> None:
+        """Create the integrity_checks log table if it doesn't exist."""
         try:
-            # Total paper trades
-            cursor = await db.execute("SELECT COUNT(*) FROM paper_trades")
-            total = (await cursor.fetchone())[0]
-
-            # Recent paper trades
-            cutoff_broken = (
-                datetime.now(timezone.utc) - timedelta(hours=PAPER_TRADE_STALE_HOURS)
-            ).isoformat()
-            cutoff_warn = (
-                datetime.now(timezone.utc) - timedelta(hours=PAPER_TRADE_WARNING_HOURS)
-            ).isoformat()
-
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM paper_trades WHERE created_at > ?",
-                (cutoff_broken,),
-            )
-            recent_72h = (await cursor.fetchone())[0]
-
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM paper_trades WHERE created_at > ?",
-                (cutoff_warn,),
-            )
-            recent_24h = (await cursor.fetchone())[0]
-
-            # Count hypotheses in paper_trading status
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM hypotheses WHERE status = 'paper_trading'"
-            )
-            paper_hypos = (await cursor.fetchone())[0]
-
-            if paper_hypos == 0 and total == 0:
-                return {
-                    "status": "WARNING",
-                    "message": f"No hypotheses in paper_trading stage, 0 trades total",
-                    "total_trades": total,
-                    "recent_72h": recent_72h,
-                    "paper_hypotheses": paper_hypos,
-                }
-
-            if paper_hypos > 0 and recent_72h == 0:
-                return {
-                    "status": "BROKEN",
-                    "message": f"{paper_hypos} hypotheses in paper_trading, 0 trades in {PAPER_TRADE_STALE_HOURS}h",
-                    "total_trades": total,
-                    "recent_72h": recent_72h,
-                    "paper_hypotheses": paper_hypos,
-                }
-
-            if paper_hypos > 0 and recent_24h == 0:
-                return {
-                    "status": "WARNING",
-                    "message": f"{paper_hypos} hypotheses in paper_trading, 0 trades in {PAPER_TRADE_WARNING_HOURS}h",
-                    "total_trades": total,
-                    "recent_24h": recent_24h,
-                    "paper_hypotheses": paper_hypos,
-                }
-
-            return {
-                "status": "ok",
-                "message": f"{total} total trades, {recent_24h} in last 24h",
-                "total_trades": total,
-                "recent_24h": recent_24h,
-                "paper_hypotheses": paper_hypos,
-            }
-        finally:
-            await db.close()
-    except Exception as e:
-        return {"status": "WARNING", "message": f"check error: {e}"}
-
-
-async def check_backtest_edges() -> dict:
-    """Check if backtests are producing any positive edges."""
-    try:
-        db = await _get_db()
-        try:
-            # Total backtest events
-            cursor = await db.execute("SELECT COUNT(*) FROM backtest_events")
-            total = (await cursor.fetchone())[0]
-
-            if total == 0:
-                return {
-                    "status": "WARNING",
-                    "message": "0 backtest events recorded",
-                    "total_events": 0,
-                    "positive_edge_count": 0,
-                    "positive_edge_rate": 0,
-                }
-
-            # Positive edge events
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM backtest_events WHERE edge > 0"
-            )
-            positive = (await cursor.fetchone())[0]
-            rate = positive / total if total > 0 else 0
-
-            # Average edge across all events
-            cursor = await db.execute(
-                "SELECT AVG(edge) FROM backtest_events WHERE signal_generated = TRUE"
-            )
-            row = await cursor.fetchone()
-            avg_edge = row[0] if row[0] is not None else 0
-
-            if rate < MIN_POSITIVE_EDGE_RATE:
-                return {
-                    "status": "BROKEN",
-                    "message": f"{rate:.1%} positive edge rate across {total} events",
-                    "total_events": total,
-                    "positive_edge_count": positive,
-                    "positive_edge_rate": round(rate, 4),
-                    "avg_signal_edge": round(avg_edge, 4),
-                }
-
-            if rate < WARN_POSITIVE_EDGE_RATE:
-                return {
-                    "status": "WARNING",
-                    "message": f"{rate:.1%} positive edge rate ({positive}/{total})",
-                    "total_events": total,
-                    "positive_edge_count": positive,
-                    "positive_edge_rate": round(rate, 4),
-                    "avg_signal_edge": round(avg_edge, 4),
-                }
-
-            return {
-                "status": "ok",
-                "message": f"{rate:.1%} positive edge rate ({positive}/{total}), avg edge {avg_edge:.3f}",
-                "total_events": total,
-                "positive_edge_count": positive,
-                "positive_edge_rate": round(rate, 4),
-                "avg_signal_edge": round(avg_edge, 4),
-            }
-        finally:
-            await db.close()
-    except Exception as e:
-        return {"status": "WARNING", "message": f"check error: {e}"}
-
-
-async def check_hypothesis_flow() -> dict:
-    """Check if hypotheses are being promoted through the pipeline."""
-    try:
-        db = await _get_db()
-        try:
-            # Count by status
-            cursor = await db.execute(
-                "SELECT status, COUNT(*) FROM hypotheses GROUP BY status"
-            )
-            rows = await cursor.fetchall()
-            counts = {row[0]: row[1] for row in rows}
-            total = sum(counts.values())
-
-            draft = counts.get("draft", 0)
-            backtesting = counts.get("backtesting", 0)
-            paper_trading = counts.get("paper_trading", 0)
-            live = counts.get("live", 0)
-            rejected = counts.get("rejected", 0)
-
-            # Check recent promotions
-            cutoff_warn = (
-                datetime.now(timezone.utc) - timedelta(days=HYPOTHESIS_PROMOTION_DAYS)
-            ).isoformat()
-            cutoff_broken = (
-                datetime.now(timezone.utc) - timedelta(days=HYPOTHESIS_STALE_DAYS)
-            ).isoformat()
-
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM hypotheses WHERE promoted_at > ?",
-                (cutoff_warn,),
-            )
-            promoted_30d = (await cursor.fetchone())[0]
-
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM hypotheses WHERE promoted_at > ?",
-                (cutoff_broken,),
-            )
-            promoted_60d = (await cursor.fetchone())[0]
-
-            if total == 0:
-                return {
-                    "status": "WARNING",
-                    "message": "No hypotheses in system",
-                    "counts": counts,
-                    "promoted_30d": 0,
-                }
-
-            if draft > 0 and promoted_60d == 0 and total > 10:
-                return {
-                    "status": "BROKEN",
-                    "message": f"{draft} draft, 0 promoted in {HYPOTHESIS_STALE_DAYS} days",
-                    "counts": counts,
-                    "promoted_30d": promoted_30d,
-                    "promoted_60d": promoted_60d,
-                }
-
-            if draft > 0 and promoted_30d == 0 and total > 10:
-                return {
-                    "status": "WARNING",
-                    "message": f"{draft} draft, 0 promoted in {HYPOTHESIS_PROMOTION_DAYS} days",
-                    "counts": counts,
-                    "promoted_30d": promoted_30d,
-                }
-
-            return {
-                "status": "ok",
-                "message": f"{total} total: {draft} draft, {backtesting} backtesting, {paper_trading} paper, {live} live",
-                "counts": counts,
-                "promoted_30d": promoted_30d,
-            }
-        finally:
-            await db.close()
-    except Exception as e:
-        return {"status": "WARNING", "message": f"check error: {e}"}
-
-
-async def check_data_collection() -> dict:
-    """Check if data collection is running and producing snapshots."""
-    try:
-        db = await _get_db()
-        try:
-            # Check odds_snapshots_v2 for recency
-            cursor = await db.execute(
-                "SELECT COUNT(*), MAX(snapshot_time) FROM odds_snapshots_v2"
-            )
-            row = await cursor.fetchone()
-            total_snapshots = row[0] if row[0] else 0
-            last_snapshot = row[1]
-
-            # Check game_contexts for data collection
-            cursor = await db.execute(
-                "SELECT COUNT(*), MAX(game_date) FROM game_contexts"
-            )
-            row = await cursor.fetchone()
-            total_contexts = row[0] if row[0] else 0
-
-            if total_snapshots == 0:
-                return {
-                    "status": "BROKEN",
-                    "message": "0 odds snapshots recorded",
-                    "total_snapshots": 0,
-                    "total_contexts": total_contexts,
-                }
-
-            # Parse last snapshot time
-            minutes_ago = None
-            if last_snapshot:
-                try:
-                    last_dt = datetime.fromisoformat(
-                        str(last_snapshot).replace("Z", "+00:00")
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS integrity_checks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        run_id INTEGER NOT NULL,
+                        check_name TEXT NOT NULL,
+                        severity TEXT NOT NULL,
+                        message TEXT NOT NULL,
+                        details_json TEXT,
+                        auto_fix TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                     )
-                    if last_dt.tzinfo is None:
-                        last_dt = last_dt.replace(tzinfo=timezone.utc)
-                    delta = datetime.now(timezone.utc) - last_dt
-                    minutes_ago = delta.total_seconds() / 60
-                except Exception:
-                    minutes_ago = None
+                """)
+                await db.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_integrity_checks_run
+                    ON integrity_checks(run_id, severity)
+                """)
+                await db.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_integrity_checks_name
+                    ON integrity_checks(check_name, created_at)
+                """)
+                await db.commit()
+        except Exception as e:
+            logger.error(f"Failed to create integrity_checks table: {e}", exc_info=True)
 
-            if minutes_ago is not None and minutes_ago > DATA_BROKEN_MINUTES:
-                return {
-                    "status": "BROKEN",
-                    "message": f"{total_snapshots} snapshots, last {int(minutes_ago)}min ago",
-                    "total_snapshots": total_snapshots,
-                    "last_snapshot_minutes_ago": round(minutes_ago, 1),
-                    "total_contexts": total_contexts,
-                }
+    async def run_all_checks(self) -> dict:
+        """
+        Run the full integrity check suite.
 
-            if minutes_ago is not None and minutes_ago > DATA_STALE_MINUTES:
-                return {
-                    "status": "WARNING",
-                    "message": f"{total_snapshots} snapshots, last {int(minutes_ago)}min ago",
-                    "total_snapshots": total_snapshots,
-                    "last_snapshot_minutes_ago": round(minutes_ago, 1),
-                    "total_contexts": total_contexts,
-                }
+        Returns a summary dict suitable for inclusion in /health and
+        /system/full-status responses.
+        """
+        self._issues = []
+        self._run_count += 1
+        start_time = time.monotonic()
 
-            msg = f"{total_snapshots} snapshots"
-            if minutes_ago is not None:
-                msg += f", last {int(minutes_ago)}min ago"
-            return {
-                "status": "ok",
-                "message": msg,
-                "total_snapshots": total_snapshots,
-                "last_snapshot_minutes_ago": round(minutes_ago, 1) if minutes_ago else None,
-                "total_contexts": total_contexts,
-            }
-        finally:
-            await db.close()
-    except Exception as e:
-        return {"status": "WARNING", "message": f"check error: {e}"}
+        checks = [
+            ("paper_trade_flow", self._check_paper_trade_flow),
+            ("hypothesis_progression", self._check_hypothesis_progression),
+            ("backtest_edge_rate", self._check_backtest_edge_rate),
+            ("odds_snapshot_freshness", self._check_odds_snapshot_freshness),
+            ("signal_pipeline", self._check_signal_pipeline),
+            ("zero_metric_detection", self._check_zero_metrics),
+            ("stale_metric_detection", self._check_stale_metrics),
+            ("rejection_rate", self._check_rejection_rate),
+        ]
 
-
-def compute_overall_status(checks: dict) -> str:
-    """Derive overall status from individual pipeline checks."""
-    statuses = [v.get("status", "ok") for v in checks.values()]
-    if "BROKEN" in statuses:
-        return "BROKEN"
-    if "WARNING" in statuses:
-        return "DEGRADED"
-    return "ok"
-
-
-async def lightweight_pipeline_check() -> dict:
-    """
-    Fast pipeline health check for /health endpoint.
-    Runs all lightweight checks in parallel and returns summary.
-    Must complete in <500ms.
-    """
-    import asyncio
-
-    results = await asyncio.gather(
-        check_paper_trading(),
-        check_backtest_edges(),
-        check_hypothesis_flow(),
-        check_data_collection(),
-        return_exceptions=True,
-    )
-
-    names = ["paper_trading", "backtest_edges", "hypothesis_flow", "data_collection"]
-    checks = {}
-    for name, result in zip(names, results):
-        if isinstance(result, Exception):
-            checks[name] = {"status": "WARNING", "message": f"check failed: {result}"}
-        else:
-            checks[name] = result
-
-    # Build compact format for /health: just status + message per pipeline
-    compact = {}
-    for name, check in checks.items():
-        status = check.get("status", "ok")
-        message = check.get("message", "")
-        if status == "ok":
-            compact[name] = f"ok: {message}"
-        else:
-            compact[name] = f"{status}: {message}"
-
-    compact["overall"] = compute_overall_status(checks)
-    return compact
-
-
-# ---------------------------------------------------------------------------
-# Deep checks — called by /health/deep (can be slow)
-# ---------------------------------------------------------------------------
-
-async def check_backtest_quality() -> dict:
-    """Deep analysis of backtest output quality."""
-    try:
-        db = await _get_db()
-        try:
-            # Per-hypothesis backtest summary
-            cursor = await db.execute("""
-                SELECT
-                    h.hypothesis_id,
-                    h.name,
-                    h.status,
-                    COUNT(be.id) as event_count,
-                    SUM(CASE WHEN be.edge > 0 THEN 1 ELSE 0 END) as positive_edges,
-                    AVG(be.edge) as avg_edge,
-                    AVG(CASE WHEN be.signal_generated THEN be.ev_pct END) as avg_ev,
-                    SUM(CASE WHEN be.actual_result = 'won' THEN 1 ELSE 0 END) as wins,
-                    SUM(CASE WHEN be.actual_result = 'lost' THEN 1 ELSE 0 END) as losses
-                FROM hypotheses h
-                LEFT JOIN backtest_events be ON h.hypothesis_id = be.hypothesis_id
-                GROUP BY h.hypothesis_id
-                ORDER BY event_count DESC
-                LIMIT 20
-            """)
-            rows = await cursor.fetchall()
-            cols = [d[0] for d in cursor.description]
-            hypotheses = [dict(zip(cols, r)) for r in rows]
-
-            # Backtest run summary
-            cursor = await db.execute("""
-                SELECT
-                    COUNT(*) as total_runs,
-                    SUM(CASE WHEN is_significant THEN 1 ELSE 0 END) as significant_runs,
-                    AVG(hit_rate) as avg_hit_rate,
-                    AVG(roi_pct) as avg_roi,
-                    AVG(sharpe_ratio) as avg_sharpe
-                FROM backtest_runs
-                WHERE completed_at IS NOT NULL
-            """)
-            row = await cursor.fetchone()
-            run_summary = dict(zip([d[0] for d in cursor.description], row)) if row else {}
-
-            return {
-                "hypotheses": hypotheses,
-                "run_summary": run_summary,
-            }
-        finally:
-            await db.close()
-    except Exception as e:
-        return {"error": str(e)}
-
-
-async def check_paper_trade_accuracy() -> dict:
-    """Deep analysis of paper trade performance."""
-    try:
-        db = await _get_db()
-        try:
-            cursor = await db.execute("""
-                SELECT
-                    h.hypothesis_id,
-                    h.name,
-                    COUNT(pt.trade_id) as trade_count,
-                    SUM(CASE WHEN pt.actual_result = 'won' THEN 1 ELSE 0 END) as wins,
-                    SUM(CASE WHEN pt.actual_result = 'lost' THEN 1 ELSE 0 END) as losses,
-                    AVG(pt.edge) as avg_edge,
-                    AVG(pt.clv_implied) as avg_clv,
-                    SUM(pt.hypothetical_pnl) as total_pnl
-                FROM hypotheses h
-                JOIN paper_trades pt ON h.hypothesis_id = pt.hypothesis_id
-                GROUP BY h.hypothesis_id
-                ORDER BY trade_count DESC
-            """)
-            rows = await cursor.fetchall()
-            cols = [d[0] for d in cursor.description]
-            return {"hypotheses": [dict(zip(cols, r)) for r in rows]}
-        finally:
-            await db.close()
-    except Exception as e:
-        return {"error": str(e)}
-
-
-async def check_hypothesis_pipeline_flow() -> dict:
-    """Deep check of how hypotheses move through the pipeline stages."""
-    try:
-        db = await _get_db()
-        try:
-            # Stage distribution
-            cursor = await db.execute(
-                "SELECT status, COUNT(*) FROM hypotheses GROUP BY status"
-            )
-            stage_counts = {row[0]: row[1] for row in await cursor.fetchall()}
-
-            # Recently created vs promoted vs rejected
-            cutoff_7d = (
-                datetime.now(timezone.utc) - timedelta(days=7)
-            ).isoformat()
-            cutoff_30d = (
-                datetime.now(timezone.utc) - timedelta(days=30)
-            ).isoformat()
-
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM hypotheses WHERE created_at > ?", (cutoff_7d,)
-            )
-            created_7d = (await cursor.fetchone())[0]
-
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM hypotheses WHERE promoted_at > ?", (cutoff_7d,)
-            )
-            promoted_7d = (await cursor.fetchone())[0]
-
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM hypotheses WHERE promoted_at > ?", (cutoff_30d,)
-            )
-            promoted_30d = (await cursor.fetchone())[0]
-
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM hypotheses WHERE status = 'rejected' AND updated_at > ?",
-                (cutoff_30d,),
-            )
-            rejected_30d = (await cursor.fetchone())[0]
-
-            # Bottleneck detection: stages with stale hypotheses
-            bottlenecks = []
-            for stage in ["draft", "backtesting", "paper_trading"]:
-                cursor = await db.execute(
-                    "SELECT COUNT(*), MIN(updated_at) FROM hypotheses WHERE status = ?",
-                    (stage,),
+        for check_name, check_fn in checks:
+            try:
+                await check_fn()
+            except Exception as e:
+                logger.error(
+                    f"Integrity check '{check_name}' itself failed: {e}",
+                    exc_info=True,
                 )
-                row = await cursor.fetchone()
-                count = row[0] or 0
-                oldest = row[1]
-                if count > 0 and oldest:
+                self._issues.append(IntegrityIssue(
+                    check_name=check_name,
+                    severity=SEVERITY_WARNING,
+                    message=f"Check failed to execute: {e}",
+                    details={"traceback": traceback.format_exc()},
+                ))
+
+        elapsed = time.monotonic() - start_time
+        self._last_run = datetime.now(timezone.utc).isoformat()
+
+        # Log all issues to the database
+        await self._log_issues()
+
+        # Build summary
+        critical_count = sum(1 for i in self._issues if i.severity == SEVERITY_CRITICAL)
+        warning_count = sum(1 for i in self._issues if i.severity == SEVERITY_WARNING)
+        info_count = sum(1 for i in self._issues if i.severity == SEVERITY_INFO)
+
+        summary = {
+            "healthy": critical_count == 0,
+            "degraded": warning_count > 0,
+            "run_number": self._run_count,
+            "last_run": self._last_run,
+            "elapsed_seconds": round(elapsed, 2),
+            "issues": {
+                "critical": critical_count,
+                "warning": warning_count,
+                "info": info_count,
+                "total": len(self._issues),
+            },
+            "issue_details": [i.to_dict() for i in self._issues],
+        }
+
+        if critical_count > 0:
+            logger.error(
+                f"PIPELINE INTEGRITY: {critical_count} CRITICAL issues detected! "
+                f"System is reporting healthy but pipelines are broken."
+            )
+        elif warning_count > 0:
+            logger.warning(
+                f"PIPELINE INTEGRITY: {warning_count} warnings detected."
+            )
+        else:
+            logger.info(
+                f"PIPELINE INTEGRITY: all checks passed "
+                f"({len(checks)} checks in {elapsed:.1f}s)"
+            )
+
+        return summary
+
+    # ──────────────────────────────────────────────────────────
+    # DATA FLOW CHECKS
+    # ──────────────────────────────────────────────────────────
+
+    async def _check_paper_trade_flow(self) -> None:
+        """
+        If hypotheses are in paper_trading state, paper_trades count should
+        be growing. Alert if paper_trading hypotheses exist but 0 trades
+        after 24 hours.
+        """
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                # Count paper_trading hypotheses
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM hypotheses WHERE status = 'paper_trading'"
+                )
+                paper_trading_count = (await cursor.fetchone())[0]
+
+                if paper_trading_count == 0:
+                    return  # No paper trading hypotheses, nothing to check
+
+                # Count total paper trades
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM paper_trades"
+                )
+                total_trades = (await cursor.fetchone())[0]
+
+                # Check for recent paper trades (last 24 hours)
+                cutoff = (datetime.now(timezone.utc) - timedelta(hours=PAPER_TRADE_STALL_HOURS)).isoformat()
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM paper_trades WHERE created_at > ?",
+                    (cutoff,)
+                )
+                recent_trades = (await cursor.fetchone())[0]
+
+                # Get oldest paper_trading hypothesis
+                cursor = await db.execute(
+                    "SELECT hypothesis_id, name, updated_at FROM hypotheses "
+                    "WHERE status = 'paper_trading' "
+                    "ORDER BY updated_at ASC LIMIT 1"
+                )
+                oldest = await cursor.fetchone()
+                oldest_age_hours = 0
+                if oldest and oldest[2]:
                     try:
-                        oldest_dt = datetime.fromisoformat(
-                            str(oldest).replace("Z", "+00:00")
-                        )
-                        if oldest_dt.tzinfo is None:
-                            oldest_dt = oldest_dt.replace(tzinfo=timezone.utc)
-                        days_old = (datetime.now(timezone.utc) - oldest_dt).days
-                        if days_old > 14:
-                            bottlenecks.append({
-                                "stage": stage,
-                                "count": count,
-                                "oldest_days": days_old,
-                            })
-                    except Exception:
+                        updated = datetime.fromisoformat(str(oldest[2]).replace("Z", "+00:00"))
+                        if updated.tzinfo is None:
+                            updated = updated.replace(tzinfo=timezone.utc)
+                        oldest_age_hours = (datetime.now(timezone.utc) - updated).total_seconds() / 3600
+                    except (ValueError, TypeError):
                         pass
 
-            return {
-                "stage_counts": stage_counts,
-                "created_7d": created_7d,
-                "promoted_7d": promoted_7d,
-                "promoted_30d": promoted_30d,
-                "rejected_30d": rejected_30d,
-                "bottlenecks": bottlenecks,
+                if total_trades == 0 and oldest_age_hours > PAPER_TRADE_STALL_HOURS:
+                    self._issues.append(IntegrityIssue(
+                        check_name="paper_trade_flow",
+                        severity=SEVERITY_CRITICAL,
+                        message=(
+                            f"{paper_trading_count} hypotheses in paper_trading state "
+                            f"but 0 paper trades exist. Oldest paper_trading hypothesis "
+                            f"is {oldest_age_hours:.1f}h old. The paper trading pipeline "
+                            f"is silently failing."
+                        ),
+                        details={
+                            "paper_trading_hypotheses": paper_trading_count,
+                            "total_paper_trades": total_trades,
+                            "oldest_hypothesis_id": oldest[0] if oldest else None,
+                            "oldest_hypothesis_age_hours": round(oldest_age_hours, 1),
+                        },
+                    ))
+                elif recent_trades == 0 and paper_trading_count > 0 and oldest_age_hours > PAPER_TRADE_STALL_HOURS:
+                    self._issues.append(IntegrityIssue(
+                        check_name="paper_trade_flow",
+                        severity=SEVERITY_WARNING,
+                        message=(
+                            f"{paper_trading_count} hypotheses in paper_trading but "
+                            f"0 new trades in last {PAPER_TRADE_STALL_HOURS}h "
+                            f"({total_trades} total trades exist). Pipeline may be stalled."
+                        ),
+                        details={
+                            "paper_trading_hypotheses": paper_trading_count,
+                            "total_paper_trades": total_trades,
+                            "recent_trades_24h": recent_trades,
+                        },
+                    ))
+
+        except Exception as e:
+            logger.warning(f"Paper trade flow check failed: {e}", exc_info=True)
+
+    async def _check_hypothesis_progression(self) -> None:
+        """
+        Flag hypotheses stuck in the same state for too long with no
+        evaluation activity.
+        """
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                cutoff = (datetime.now(timezone.utc) - timedelta(hours=HYPOTHESIS_STALL_HOURS)).isoformat()
+
+                # Find hypotheses that haven't been updated in HYPOTHESIS_STALL_HOURS
+                cursor = await db.execute(
+                    "SELECT hypothesis_id, name, status, updated_at FROM hypotheses "
+                    "WHERE status IN ('draft', 'backtesting', 'paper_trading') "
+                    "AND updated_at < ? ",
+                    (cutoff,)
+                )
+                stalled = await cursor.fetchall()
+
+                if not stalled:
+                    return
+
+                stalled_by_status: dict[str, int] = defaultdict(int)
+                for row in stalled:
+                    stalled_by_status[row[2]] += 1
+
+                # Only alert if a significant number are stalled
+                total_stalled = len(stalled)
+                if total_stalled >= 5:
+                    self._issues.append(IntegrityIssue(
+                        check_name="hypothesis_progression",
+                        severity=SEVERITY_WARNING,
+                        message=(
+                            f"{total_stalled} hypotheses stuck in same state for "
+                            f">{HYPOTHESIS_STALL_HOURS}h with no evaluation: "
+                            f"{dict(stalled_by_status)}"
+                        ),
+                        details={
+                            "stalled_count": total_stalled,
+                            "by_status": dict(stalled_by_status),
+                            "sample_ids": [row[0] for row in stalled[:5]],
+                        },
+                    ))
+
+        except Exception as e:
+            logger.warning(f"Hypothesis progression check failed: {e}", exc_info=True)
+
+    async def _check_backtest_edge_rate(self) -> None:
+        """
+        If backtests run but find 0% positive edges across many events,
+        the edge detection methodology is broken — not "no edges exist."
+        """
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                # Get aggregate backtest stats
+                cursor = await db.execute(
+                    "SELECT COUNT(*) as total, "
+                    "SUM(CASE WHEN edge > 0 THEN 1 ELSE 0 END) as positive_edges, "
+                    "SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) as signals "
+                    "FROM backtest_events"
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    return
+
+                total_events = row[0] or 0
+                positive_edges = row[1] or 0
+                signals = row[2] or 0
+
+                if total_events < BACKTEST_MIN_EVENTS_FOR_EDGE_CHECK:
+                    return  # Not enough data to judge
+
+                positive_edge_rate = positive_edges / total_events if total_events > 0 else 0
+                signal_rate = signals / total_events if total_events > 0 else 0
+
+                if positive_edge_rate == 0 and total_events >= BACKTEST_MIN_EVENTS_FOR_EDGE_CHECK:
+                    self._issues.append(IntegrityIssue(
+                        check_name="backtest_edge_rate",
+                        severity=SEVERITY_CRITICAL,
+                        message=(
+                            f"0% positive edge rate across {total_events} backtest events. "
+                            f"This is statistically impossible with correct methodology — "
+                            f"the edge detection is comparing consensus against itself or "
+                            f"has a similar systemic bug."
+                        ),
+                        details={
+                            "total_events": total_events,
+                            "positive_edges": positive_edges,
+                            "signals": signals,
+                            "positive_edge_rate": positive_edge_rate,
+                            "signal_rate": signal_rate,
+                        },
+                    ))
+                elif positive_edge_rate < 0.02 and total_events >= BACKTEST_MIN_EVENTS_FOR_EDGE_CHECK:
+                    self._issues.append(IntegrityIssue(
+                        check_name="backtest_edge_rate",
+                        severity=SEVERITY_WARNING,
+                        message=(
+                            f"Extremely low positive edge rate: {positive_edge_rate:.1%} "
+                            f"across {total_events} events ({positive_edges} positive). "
+                            f"Expected 5-20% for healthy hypothesis testing."
+                        ),
+                        details={
+                            "total_events": total_events,
+                            "positive_edges": positive_edges,
+                            "positive_edge_rate": positive_edge_rate,
+                        },
+                    ))
+
+                # Also check per-hypothesis: any hypothesis with >50 events and 0 signals
+                cursor = await db.execute(
+                    "SELECT hypothesis_id, COUNT(*) as events, "
+                    "SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) as signals "
+                    "FROM backtest_events "
+                    "GROUP BY hypothesis_id "
+                    "HAVING events >= 50 AND signals = 0"
+                )
+                zero_signal_hypos = await cursor.fetchall()
+                if len(zero_signal_hypos) >= 10:
+                    self._issues.append(IntegrityIssue(
+                        check_name="backtest_edge_rate",
+                        severity=SEVERITY_WARNING,
+                        message=(
+                            f"{len(zero_signal_hypos)} hypotheses with 50+ events "
+                            f"but 0 signals each. Systematic failure in signal generation."
+                        ),
+                        details={
+                            "zero_signal_hypothesis_count": len(zero_signal_hypos),
+                            "sample_ids": [row[0] for row in zero_signal_hypos[:5]],
+                        },
+                    ))
+
+        except Exception as e:
+            logger.warning(f"Backtest edge rate check failed: {e}", exc_info=True)
+
+    async def _check_odds_snapshot_freshness(self) -> None:
+        """
+        If line_monitor claims to be running but no new snapshots exist
+        in the last ODDS_SNAPSHOT_STALE_HOURS, it's silently failing.
+        """
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                # Check odds_snapshots_v2 (the normalized table)
+                try:
+                    cursor = await db.execute(
+                        "SELECT MAX(snapshot_time) FROM odds_snapshots_v2"
+                    )
+                    row = await cursor.fetchone()
+                    if row and row[0]:
+                        latest = datetime.fromisoformat(
+                            str(row[0]).replace("Z", "+00:00")
+                        )
+                        if latest.tzinfo is None:
+                            latest = latest.replace(tzinfo=timezone.utc)
+                        age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+                        if age_hours > ODDS_SNAPSHOT_STALE_HOURS:
+                            self._issues.append(IntegrityIssue(
+                                check_name="odds_snapshot_freshness",
+                                severity=SEVERITY_WARNING,
+                                message=(
+                                    f"Latest odds snapshot is {age_hours:.1f}h old. "
+                                    f"Line monitor may be silently failing if it claims to be running."
+                                ),
+                                details={
+                                    "latest_snapshot": str(row[0]),
+                                    "age_hours": round(age_hours, 1),
+                                    "threshold_hours": ODDS_SNAPSHOT_STALE_HOURS,
+                                },
+                            ))
+                except Exception as e:
+                    logger.warning(f"odds_snapshots_v2 freshness check failed: {e}", exc_info=True)
+
+                # Also check the line_monitor's own odds_snapshots table
+                try:
+                    cursor = await db.execute(
+                        "SELECT MAX(timestamp) FROM odds_snapshots"
+                    )
+                    row = await cursor.fetchone()
+                    if row and row[0]:
+                        latest = datetime.fromisoformat(
+                            str(row[0]).replace("Z", "+00:00")
+                        )
+                        if latest.tzinfo is None:
+                            latest = latest.replace(tzinfo=timezone.utc)
+                        age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+                        if age_hours > ODDS_SNAPSHOT_STALE_HOURS:
+                            self._issues.append(IntegrityIssue(
+                                check_name="odds_snapshot_freshness",
+                                severity=SEVERITY_WARNING,
+                                message=(
+                                    f"Line monitor odds_snapshots table: latest is "
+                                    f"{age_hours:.1f}h old (threshold: {ODDS_SNAPSHOT_STALE_HOURS}h)."
+                                ),
+                                details={"age_hours": round(age_hours, 1)},
+                            ))
+                except Exception as e:
+                    logger.warning(f"odds_snapshots freshness check failed: {e}", exc_info=True)
+
+        except Exception as e:
+            logger.warning(f"Odds snapshot freshness check failed: {e}", exc_info=True)
+
+    async def _check_signal_pipeline(self) -> None:
+        """
+        If many hypotheses are in backtesting state but 0 signals have been
+        generated across all of them, the signal pipeline is broken.
+        """
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                # Count backtesting hypotheses
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM hypotheses WHERE status = 'backtesting'"
+                )
+                backtesting_count = (await cursor.fetchone())[0]
+
+                if backtesting_count < SIGNAL_PIPELINE_MIN_HYPOTHESES:
+                    return  # Not enough to diagnose
+
+                # Count total signals across all backtested hypotheses
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM backtest_events WHERE signal_generated = 1"
+                )
+                total_signals = (await cursor.fetchone())[0]
+
+                # Count total backtest events
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM backtest_events"
+                )
+                total_events = (await cursor.fetchone())[0]
+
+                if total_signals == 0 and total_events > 0:
+                    self._issues.append(IntegrityIssue(
+                        check_name="signal_pipeline",
+                        severity=SEVERITY_CRITICAL,
+                        message=(
+                            f"{backtesting_count} hypotheses in backtesting, "
+                            f"{total_events} backtest events evaluated, but 0 signals "
+                            f"generated across ALL of them. The signal generation "
+                            f"pipeline is fundamentally broken."
+                        ),
+                        details={
+                            "backtesting_hypotheses": backtesting_count,
+                            "total_backtest_events": total_events,
+                            "total_signals": total_signals,
+                        },
+                    ))
+
+        except Exception as e:
+            logger.warning(f"Signal pipeline check failed: {e}", exc_info=True)
+
+    # ──────────────────────────────────────────────────────────
+    # OUTPUT SANITY CHECKS
+    # ──────────────────────────────────────────────────────────
+
+    async def _check_zero_metrics(self) -> None:
+        """
+        Any metric that is exactly 0 when it shouldn't be — 0 paper trades,
+        0 signals, 0 edges, 0 snapshots — when the pipeline claims to be running.
+        """
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                zero_checks = []
+
+                # Paper trades should exist if we have paper_trading hypotheses
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM hypotheses WHERE status = 'paper_trading'"
+                )
+                pt_hypos = (await cursor.fetchone())[0]
+
+                cursor = await db.execute("SELECT COUNT(*) FROM paper_trades")
+                pt_count = (await cursor.fetchone())[0]
+
+                if pt_hypos > 0 and pt_count == 0:
+                    zero_checks.append(
+                        f"paper_trades=0 but {pt_hypos} paper_trading hypotheses exist"
+                    )
+
+                # Signals table should have entries if we've been running
+                cursor = await db.execute("SELECT COUNT(*) FROM signals")
+                sig_count = (await cursor.fetchone())[0]
+
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM hypotheses WHERE status IN ('paper_trading', 'live')"
+                )
+                active_hypos = (await cursor.fetchone())[0]
+
+                if active_hypos > 0 and sig_count == 0:
+                    zero_checks.append(
+                        f"signals=0 but {active_hypos} active (paper_trading/live) hypotheses"
+                    )
+
+                # Backtest events should exist if we have backtesting/paper_trading hypotheses
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM hypotheses WHERE status IN ('backtesting', 'paper_trading', 'live', 'rejected')"
+                )
+                tested_hypos = (await cursor.fetchone())[0]
+
+                cursor = await db.execute("SELECT COUNT(*) FROM backtest_events")
+                bt_count = (await cursor.fetchone())[0]
+
+                if tested_hypos > 5 and bt_count == 0:
+                    zero_checks.append(
+                        f"backtest_events=0 but {tested_hypos} hypotheses have been through testing"
+                    )
+
+                if zero_checks:
+                    self._issues.append(IntegrityIssue(
+                        check_name="zero_metric_detection",
+                        severity=SEVERITY_WARNING,
+                        message=f"Zero-value metrics detected: {'; '.join(zero_checks)}",
+                        details={"zero_checks": zero_checks},
+                    ))
+
+        except Exception as e:
+            logger.warning(f"Zero metric check failed: {e}", exc_info=True)
+
+    async def _check_stale_metrics(self) -> None:
+        """
+        Any metric that hasn't changed in METRIC_STALE_HOURS when the
+        pipeline claims to be running.
+        """
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                now = datetime.now(timezone.utc)
+                cutoff = (now - timedelta(hours=METRIC_STALE_HOURS)).isoformat()
+                stale_items = []
+
+                # Check if any new hypotheses have been created recently
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM hypotheses WHERE created_at > ?", (cutoff,)
+                )
+                recent_hypos = (await cursor.fetchone())[0]
+
+                cursor = await db.execute("SELECT COUNT(*) FROM hypotheses")
+                total_hypos = (await cursor.fetchone())[0]
+
+                if total_hypos > 0 and recent_hypos == 0:
+                    stale_items.append(
+                        f"No new hypotheses created in {METRIC_STALE_HOURS}h "
+                        f"({total_hypos} total exist)"
+                    )
+
+                # Check if any new backtest events have been created recently
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM backtest_events WHERE created_at > ?", (cutoff,)
+                )
+                recent_bt = (await cursor.fetchone())[0]
+
+                cursor = await db.execute("SELECT COUNT(*) FROM backtest_events")
+                total_bt = (await cursor.fetchone())[0]
+
+                if total_bt > 0 and recent_bt == 0:
+                    stale_items.append(
+                        f"No new backtest events in {METRIC_STALE_HOURS}h "
+                        f"({total_bt} total exist)"
+                    )
+
+                # Check game_contexts freshness
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM game_contexts WHERE created_at > ?", (cutoff,)
+                )
+                recent_gc = (await cursor.fetchone())[0]
+
+                cursor = await db.execute("SELECT COUNT(*) FROM game_contexts")
+                total_gc = (await cursor.fetchone())[0]
+
+                if total_gc > 0 and recent_gc == 0:
+                    stale_items.append(
+                        f"No new game_contexts in {METRIC_STALE_HOURS}h "
+                        f"({total_gc} total exist)"
+                    )
+
+                if stale_items:
+                    self._issues.append(IntegrityIssue(
+                        check_name="stale_metric_detection",
+                        severity=SEVERITY_WARNING,
+                        message=(
+                            f"Stale data detected — pipeline claims to be running but "
+                            f"no new data in {METRIC_STALE_HOURS}h: {'; '.join(stale_items)}"
+                        ),
+                        details={"stale_items": stale_items},
+                    ))
+
+        except Exception as e:
+            logger.warning(f"Stale metric check failed: {e}", exc_info=True)
+
+    async def _check_rejection_rate(self) -> None:
+        """
+        If hypothesis rejection rate > 95%, it suggests broken evaluation
+        rather than consistently bad hypotheses.
+        """
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                cursor = await db.execute(
+                    "SELECT status, COUNT(*) FROM hypotheses "
+                    "WHERE status IN ('rejected', 'paper_trading', 'live', 'retired') "
+                    "GROUP BY status"
+                )
+                counts = dict(await cursor.fetchall())
+
+                rejected = counts.get("rejected", 0)
+                promoted = (
+                    counts.get("paper_trading", 0)
+                    + counts.get("live", 0)
+                    + counts.get("retired", 0)
+                )
+                total_evaluated = rejected + promoted
+
+                if total_evaluated < 20:
+                    return  # Not enough data
+
+                rejection_rate = rejected / total_evaluated
+
+                if rejection_rate > REJECTION_RATE_BROKEN_THRESHOLD:
+                    self._issues.append(IntegrityIssue(
+                        check_name="rejection_rate",
+                        severity=SEVERITY_WARNING,
+                        message=(
+                            f"Hypothesis rejection rate is {rejection_rate:.1%} "
+                            f"({rejected}/{total_evaluated}). >{REJECTION_RATE_BROKEN_THRESHOLD:.0%} "
+                            f"suggests broken evaluation criteria, not bad hypotheses."
+                        ),
+                        details={
+                            "rejected": rejected,
+                            "promoted": promoted,
+                            "total_evaluated": total_evaluated,
+                            "rejection_rate": rejection_rate,
+                        },
+                    ))
+
+        except Exception as e:
+            logger.warning(f"Rejection rate check failed: {e}", exc_info=True)
+
+    # ──────────────────────────────────────────────────────────
+    # PHASE ERROR TRACKING
+    # ──────────────────────────────────────────────────────────
+
+    def record_phase_result(self, phase_name: str, success: bool) -> None:
+        """Record the success/failure of a research loop phase for trend analysis."""
+        history = self._phase_errors[phase_name]
+        history.append(success)
+        # Keep last 20 results
+        if len(history) > 20:
+            self._phase_errors[phase_name] = history[-20:]
+
+    def get_phase_error_rates(self) -> dict[str, dict]:
+        """Get error rates per phase over the last N runs."""
+        rates = {}
+        for phase, history in self._phase_errors.items():
+            if not history:
+                continue
+            recent = history[-10:]  # Last 10 runs
+            failures = sum(1 for s in recent if not s)
+            error_rate = failures / len(recent)
+            rates[phase] = {
+                "error_rate": round(error_rate, 2),
+                "failures_last_10": failures,
+                "total_runs": len(history),
+                "is_broken": error_rate > PHASE_ERROR_RATE_THRESHOLD,
             }
-        finally:
-            await db.close()
-    except Exception as e:
-        return {"error": str(e)}
+        return rates
 
+    def check_phase_error_rates(self) -> list[IntegrityIssue]:
+        """Check if any phase has too-high error rate. Returns issues."""
+        issues = []
+        for phase, rate_info in self.get_phase_error_rates().items():
+            if rate_info["is_broken"]:
+                issues.append(IntegrityIssue(
+                    check_name="phase_error_rate",
+                    severity=SEVERITY_CRITICAL,
+                    message=(
+                        f"Phase '{phase}' has {rate_info['error_rate']:.0%} error rate "
+                        f"over last 10 runs ({rate_info['failures_last_10']} failures). "
+                        f"This phase is effectively broken."
+                    ),
+                    details=rate_info,
+                ))
+        return issues
 
-async def deep_pipeline_check() -> dict:
-    """
-    Full integrity suite for /health/deep endpoint.
-    Runs all deep checks and returns comprehensive diagnostics.
-    Can take several seconds.
-    """
-    import asyncio
+    # ──────────────────────────────────────────────────────────
+    # LOGGING & REPORTING
+    # ──────────────────────────────────────────────────────────
 
-    # Run lightweight checks first for the summary
-    lightweight = await lightweight_pipeline_check()
+    async def _log_issues(self) -> None:
+        """Log all issues from this run to the integrity_checks table."""
+        if not self._issues:
+            return
 
-    # Then run deep checks
-    deep_results = await asyncio.gather(
-        check_backtest_quality(),
-        check_paper_trade_accuracy(),
-        check_hypothesis_pipeline_flow(),
-        return_exceptions=True,
-    )
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                for issue in self._issues:
+                    await db.execute(
+                        "INSERT INTO integrity_checks "
+                        "(run_id, check_name, severity, message, details_json, auto_fix) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            self._run_count,
+                            issue.check_name,
+                            issue.severity,
+                            issue.message,
+                            json.dumps(issue.details),
+                            issue.auto_fix,
+                        ),
+                    )
+                await db.commit()
+        except Exception as e:
+            logger.error(f"Failed to log integrity issues: {e}", exc_info=True)
 
-    deep_names = ["backtest_quality", "paper_trade_accuracy", "hypothesis_pipeline_flow"]
-    deep_checks = {}
-    for name, result in zip(deep_names, deep_results):
-        if isinstance(result, Exception):
-            deep_checks[name] = {"error": str(result)}
+    def get_latest_report(self) -> dict:
+        """Get the latest integrity check results for API endpoints."""
+        if not self._last_run:
+            return {
+                "status": "not_run",
+                "message": "Integrity checks have not run yet",
+            }
+
+        critical_count = sum(1 for i in self._issues if i.severity == SEVERITY_CRITICAL)
+        warning_count = sum(1 for i in self._issues if i.severity == SEVERITY_WARNING)
+
+        # Also check phase error rates
+        phase_issues = self.check_phase_error_rates()
+        for pi in phase_issues:
+            critical_count += 1
+
+        all_issues = [i.to_dict() for i in self._issues] + [pi.to_dict() for pi in phase_issues]
+
+        if critical_count > 0:
+            status = "critical"
+        elif warning_count > 0:
+            status = "degraded"
         else:
-            deep_checks[name] = result
+            status = "ok"
 
-    return {
-        "summary": lightweight,
-        "deep": deep_checks,
-        "checked_at": datetime.now(timezone.utc).isoformat(),
-    }
+        return {
+            "status": status,
+            "healthy": critical_count == 0,
+            "last_run": self._last_run,
+            "run_count": self._run_count,
+            "critical_issues": critical_count,
+            "warning_issues": warning_count,
+            "issues": all_issues,
+            "phase_error_rates": self.get_phase_error_rates(),
+        }
+
+    async def get_history(self, limit: int = 50) -> list[dict]:
+        """Get recent integrity check history from the database."""
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                cursor = await db.execute(
+                    "SELECT run_id, check_name, severity, message, details_json, "
+                    "auto_fix, created_at "
+                    "FROM integrity_checks "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                )
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        "run_id": r[0],
+                        "check_name": r[1],
+                        "severity": r[2],
+                        "message": r[3],
+                        "details": json.loads(r[4]) if r[4] else {},
+                        "auto_fix": r[5],
+                        "created_at": r[6],
+                    }
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.error(f"Failed to fetch integrity history: {e}", exc_info=True)
+            return []
+
+
+# ── Singleton for use across the application ──
+_checker: Optional[PipelineIntegrityChecker] = None
+
+
+def get_checker() -> PipelineIntegrityChecker:
+    """Get or create the singleton integrity checker."""
+    global _checker
+    if _checker is None:
+        _checker = PipelineIntegrityChecker()
+    return _checker
+
+
+async def initialize() -> PipelineIntegrityChecker:
+    """Initialize the integrity checker and ensure its table exists."""
+    checker = get_checker()
+    await checker.ensure_table()
+    logger.info("Pipeline integrity checker initialized")
+    return checker

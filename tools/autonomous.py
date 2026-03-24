@@ -502,6 +502,12 @@ class ResearchLoop:
                 # Phase 8: System self-improvement (every N cycles)
                 await self._phase_system_improvement()
 
+                if not self._running:
+                    break
+
+                # Phase 9: Pipeline integrity check (every N cycles)
+                await self._phase_integrity_check()
+
                 logger.info(
                     f"Research cycle #{self._cycles} complete — "
                     f"sleeping {RESEARCH_CYCLE_INTERVAL}s"
@@ -906,8 +912,8 @@ class ResearchLoop:
                             date_ranges[row[0]] = {
                                 "from": row[1], "to": row[2], "records": row[3]
                             }
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Failed to query historical_odds_cache date ranges: {e}")
 
                 prompt = (
                     f"CALLISTO HYPOTHESIS GENERATION — Cycle #{self._cycles}\n\n"
@@ -1170,8 +1176,8 @@ class ResearchLoop:
                             f"Thesis: {h['thesis'][:200]}\n"
                             f"Status: LIVE — ready for real money"
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Telegram notification failed for proven hypothesis {h['name']}: {e}")
             except Exception as e:
                 logger.warning(f"Paper trade eval failed for {h['hypothesis_id']}: {e}")
 
@@ -1391,8 +1397,8 @@ class ResearchLoop:
                             )
                             rejected += 1
                             self._rejections += 1
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"Failed to reject hypothesis {hid}: {e}")
                     if rejected:
                         logger.info(
                             f"Research: Claude interpretation rejected {rejected} "
@@ -1420,8 +1426,8 @@ class ResearchLoop:
                                 )
                                 await db.commit()
                                 modified += 1
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"Failed to modify threshold for hypothesis {mod.get('id', '?')}: {e}")
                     if modified:
                         logger.info(
                             f"Research: Claude modified thresholds on {modified} hypotheses"
@@ -1533,7 +1539,7 @@ class ResearchLoop:
                                     )
                                 await db.commit()
                         except Exception as e:
-                            logger.debug(f"Prop scan failed for {event_id}: {e}")
+                            logger.warning(f"Prop scan failed for {event_id}: {e}", exc_info=True)
                     continue
 
                 # For game-level markets: use DK scraper (free), Odds API as fallback
@@ -1639,8 +1645,8 @@ class ResearchLoop:
             """)
             for r in await cursor.fetchall():
                 top_hypos.append(f"  {r[1]} [{r[3]}]: {r[4]} signals / {r[5]} events, avg_edge={r[6] or 0:.4f}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to query top hypotheses for deep work prompt: {e}")
 
         prompt = (
             f"CALLISTO AUTONOMOUS SYSTEM — DEEP WORK CYCLE #{self._cycles}\n"
@@ -1706,8 +1712,8 @@ class ResearchLoop:
                             )
                             rejected += 1
                             self._rejections += 1
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"Failed to reject hypothesis {hid} in deep work: {e}")
                     if rejected:
                         logger.info(f"Research: Claude rejected {rejected} hopeless hypotheses")
 
@@ -1724,8 +1730,8 @@ class ResearchLoop:
                                 model_config={"source": "claude_deep_work", "cycle": self._cycles},
                             )
                             created += 1
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"Failed to create hypothesis '{nh.get('name', '?')}' in deep work: {e}")
                     if created:
                         self._hypotheses_generated += created
                         logger.info(f"Research: Claude created {created} new hypotheses")
@@ -1754,13 +1760,13 @@ class ResearchLoop:
                             ),
                         )
                         await db.commit()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Failed to store raw deep analysis fallback: {e}")
 
             elif result.get("rate_limited"):
                 logger.info("Research: Claude rate limited — will retry next cycle")
         except Exception as e:
-            logger.warning(f"Claude deep work failed: {e}")
+            logger.warning(f"Claude deep work failed: {e}", exc_info=True)
 
     async def _phase_system_improvement(self) -> None:
         """Self-improvement phase — runs every SYSTEM_IMPROVEMENT_INTERVAL cycles.
@@ -1922,8 +1928,8 @@ class ResearchLoop:
                                 ),
                             )
                             stored += 1
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"Failed to store system improvement suggestion: {e}")
                     if stored:
                         await db.commit()
                         logger.info(
@@ -1939,9 +1945,60 @@ class ResearchLoop:
         except Exception as e:
             logger.warning(f"System improvement phase failed: {e}")
 
+    async def _phase_integrity_check(self) -> None:
+        """
+        Pipeline integrity check — detects silent failures that the
+        standard health check misses.
+
+        Runs every INTEGRITY_CHECK_INTERVAL_CYCLES cycles. Checks that
+        pipelines are not just running but producing valid, changing,
+        non-zero output.
+        """
+        from tools.pipeline_integrity import get_checker, INTEGRITY_CHECK_INTERVAL_CYCLES
+
+        if self._cycles % INTEGRITY_CHECK_INTERVAL_CYCLES != 0:
+            return
+
+        checker = get_checker()
+
+        try:
+            result = await checker.run_all_checks()
+
+            # If critical issues found, alert via Telegram
+            critical = result.get("issues", {}).get("critical", 0)
+            if critical > 0:
+                issue_details = result.get("issue_details", [])
+                critical_msgs = [
+                    i["message"] for i in issue_details
+                    if i.get("severity") == "CRITICAL"
+                ]
+                alert_text = (
+                    f"PIPELINE INTEGRITY ALERT: {critical} critical issues\n\n"
+                    + "\n\n".join(f"- {m}" for m in critical_msgs[:3])
+                )
+                try:
+                    await telegram.send_message(alert_text)
+                except Exception as e:
+                    logger.warning(f"Failed to send integrity alert via Telegram: {e}", exc_info=True)
+
+            # Also add phase error rate issues
+            phase_issues = checker.check_phase_error_rates()
+            if phase_issues:
+                logger.warning(
+                    f"PIPELINE INTEGRITY: {len(phase_issues)} phases with high error rates"
+                )
+
+        except Exception as e:
+            logger.error(f"Pipeline integrity check failed: {e}", exc_info=True)
+
     def get_status(self) -> dict:
         """Return research loop status."""
         from tools.claude_code import get_usage_stats as claude_stats
+        from tools.pipeline_integrity import get_checker
+
+        # Include pipeline integrity info
+        integrity_report = get_checker().get_latest_report()
+
         return {
             "running": self._running,
             "cycles_completed": self._cycles,
@@ -1952,6 +2009,7 @@ class ResearchLoop:
             "promotions": self._promotions,
             "rejections": self._rejections,
             "claude_code": claude_stats(),
+            "pipeline_integrity": integrity_report,
             "intervals": {
                 "research_cycle_seconds": RESEARCH_CYCLE_INTERVAL,
                 "data_collection_seconds": DATA_COLLECTION_INTERVAL,

@@ -34,19 +34,7 @@ from tools.embeddings import VectorStore
 from tools.hypothesis_generator import HypothesisGenerator
 from tools.data_collector import DataCollector
 from tools.health import SystemHealth
-
-# Pipeline integrity checks — safe import so API doesn't crash if module isn't ready
-try:
-    from tools.pipeline_integrity import lightweight_pipeline_check, deep_pipeline_check
-    _pipeline_integrity_available = True
-except ImportError:
-    _pipeline_integrity_available = False
-
-    async def lightweight_pipeline_check():
-        return {"overall": "ok", "note": "pipeline_integrity module not loaded"}
-
-    async def deep_pipeline_check():
-        return {"summary": {"overall": "ok", "note": "pipeline_integrity module not loaded"}, "deep": {}}
+from tools.pipeline_integrity import get_checker as get_integrity_checker, initialize as init_integrity
 
 load_dotenv()
 
@@ -166,6 +154,9 @@ async def lifespan(app: FastAPI):
         orchestrator=orchestrator_instance,
     )
     await research_loop.start()
+
+    # Pipeline integrity checker — detects silent failures
+    await init_integrity()
 
     # System health monitor — Layer 2 resilience
     system_health = SystemHealth()
@@ -1055,21 +1046,27 @@ async def health_check():
     Returns all subsystem statuses, circuit breaker states, error rates,
     and pipeline integrity (is the system producing expected output).
     The sentinel (Layer 3) polls this to detect problems.
+
+    A system with broken pipelines should NOT report "ok" — the pipeline
+    integrity checker downgrades the healthy flag if critical issues exist.
     """
     if not system_health:
         return {"healthy": False, "error": "Health monitor not initialized"}
     report = system_health.get_full_report()
 
-    # Pipeline integrity — lightweight checks only (must be fast)
+    # Pipeline integrity — use cached results from the last run (fast)
     try:
-        pipeline = await lightweight_pipeline_check()
-        report["pipeline_health"] = pipeline
-        # Degrade overall healthy flag if pipeline is broken
-        if pipeline.get("overall") == "BROKEN":
+        checker = get_integrity_checker()
+        integrity = checker.get_latest_report()
+        report["pipeline_integrity"] = integrity
+        # Degrade overall healthy flag if pipeline has critical issues
+        if not integrity.get("healthy", True):
             report["healthy"] = False
+            report["pipeline_broken"] = True
     except Exception as e:
-        report["pipeline_health"] = {
-            "overall": "DEGRADED",
+        logger.error(f"Pipeline integrity report failed: {e}", exc_info=True)
+        report["pipeline_integrity"] = {
+            "status": "error",
             "error": f"integrity check failed: {e}",
         }
 
@@ -1081,14 +1078,17 @@ async def health_check():
 @app.get("/health/deep")
 async def health_deep():
     """
-    Full pipeline integrity suite — thorough diagnostics.
-    Slower than /health. Runs deep analysis of backtest quality,
-    paper trade accuracy, hypothesis pipeline flow, etc.
-    Use this for debugging pipeline issues, not for polling.
+    Full pipeline integrity suite — runs ALL checks on demand.
+    Slower than /health (queries multiple tables). Use this for
+    debugging pipeline issues, not for polling.
+
+    Returns: complete integrity check results + subsystem health.
     """
     try:
-        result = await deep_pipeline_check()
+        checker = get_integrity_checker()
+        result = await checker.run_all_checks()
     except Exception as e:
+        logger.error(f"Deep health check failed: {e}", exc_info=True)
         result = {"error": f"deep check failed: {e}"}
 
     # Include Layer 2 subsystem status for complete picture
@@ -1096,6 +1096,18 @@ async def health_deep():
         result["subsystems"] = system_health.get_full_report()
 
     return result
+
+
+@app.get("/health/integrity/history")
+async def integrity_history(limit: int = 50):
+    """Get recent pipeline integrity check history."""
+    try:
+        checker = get_integrity_checker()
+        history = await checker.get_history(limit=limit)
+        return {"count": len(history), "checks": history}
+    except Exception as e:
+        logger.error(f"Integrity history fetch failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/claude/status")
@@ -1121,11 +1133,13 @@ async def full_system_status():
 
     # Pipeline integrity first — this is the most important signal
     try:
-        pipeline = await lightweight_pipeline_check()
-        status["pipeline_health"] = pipeline
+        checker = get_integrity_checker()
+        integrity = checker.get_latest_report()
+        status["pipeline_integrity"] = integrity
     except Exception as e:
-        status["pipeline_health"] = {
-            "overall": "DEGRADED",
+        logger.error(f"Pipeline integrity report failed in full-status: {e}", exc_info=True)
+        status["pipeline_integrity"] = {
+            "status": "error",
             "error": f"integrity check failed: {e}",
         }
 
@@ -1231,8 +1245,8 @@ async def admin_restart():
     send_msg = "Callisto restarting (code reload requested)"
     try:
         await telegram.send_message(send_msg)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.info(f"Telegram restart notification failed (non-critical): {e}")
 
     # Give time for this response to be sent, then exit
     async def _delayed_exit():

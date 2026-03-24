@@ -247,6 +247,7 @@ class DataCollector:
             resp.raise_for_status()
             scoreboard = resp.json()
         except Exception as e:
+            logger.warning(f"ESPN scoreboard fetch failed for {category}/{league} date={date}: {e}")
             return {"error": str(e), "players": 0}
 
         game_date_fmt = f"{date[:4]}-{date[4:6]}-{date[6:8]}"
@@ -379,8 +380,8 @@ class DataCollector:
                             ),
                         )
                         count += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.info(f"Player stat insert failed for {player_name}/{stat_type}: {e}")
 
             # Composite: PRA
             pts = float(stat_map.get("PTS", 0) or 0)
@@ -401,8 +402,8 @@ class DataCollector:
                         ),
                     )
                     count += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.info(f"PRA composite insert failed for {player_name}: {e}")
 
         # Football stat mapping
         elif category == "football":
@@ -423,8 +424,8 @@ class DataCollector:
                             (sport, event_id, game_date, player_name, team, key, val),
                         )
                         count += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.info(f"Football stat insert failed for {player_name}/{key}: {e}")
 
         return count
 
@@ -543,7 +544,7 @@ class DataCollector:
                     "details": item.get("details"),
                 })
         except Exception as e:
-            logger.debug(f"ESPN odds endpoint failed for {event_id}: {e}")
+            logger.warning(f"ESPN odds endpoint failed for {event_id}: {e}")
 
         # ── Win probabilities (live or pregame) ──
         probabilities = []
@@ -561,7 +562,7 @@ class DataCollector:
                     "sequence": item.get("sequenceNumber"),
                 })
         except Exception as e:
-            logger.debug(f"ESPN probabilities endpoint failed for {event_id}: {e}")
+            logger.warning(f"ESPN probabilities endpoint failed for {event_id}: {e}")
 
         if not odds_data and not probabilities:
             return None

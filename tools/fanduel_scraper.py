@@ -185,7 +185,7 @@ def _parse_fd_event(event: dict, markets: dict) -> Optional[dict]:
         return game
 
     except Exception as e:
-        logger.debug(f"Failed to parse FanDuel event: {e}")
+        logger.warning(f"Failed to parse FanDuel event: {e}")
         return None
 
 

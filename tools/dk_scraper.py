@@ -272,8 +272,8 @@ async def close_client() -> None:
     if _cffi_session is not None:
         try:
             _cffi_session.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.info(f"cffi session close error (non-critical): {e}")
         _cffi_session = None
 
 

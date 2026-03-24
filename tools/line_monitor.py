@@ -387,7 +387,7 @@ class LineMonitor:
                 logger.info(f"DK enrichment {sport}: updated {enriched}/{len(snapshot.get('games', []))} games")
 
         except Exception as e:
-            logger.debug(f"DK enrichment failed for {sport} (non-critical): {e}")
+            logger.warning(f"DK enrichment failed for {sport}: {e}", exc_info=True)
 
         return snapshot
 
@@ -443,7 +443,7 @@ class LineMonitor:
                 logger.info(f"FD enrichment {sport}: updated {enriched}/{len(snapshot.get('games', []))} games")
 
         except Exception as e:
-            logger.debug(f"FD enrichment failed for {sport} (non-critical): {e}")
+            logger.warning(f"FD enrichment failed for {sport}: {e}", exc_info=True)
 
         return snapshot
 
@@ -495,7 +495,7 @@ class LineMonitor:
                 logger.info(f"BetMGM enrichment {sport}: updated {enriched}/{len(snapshot.get('games', []))} games")
 
         except Exception as e:
-            logger.debug(f"BetMGM enrichment failed for {sport} (non-critical): {e}")
+            logger.warning(f"BetMGM enrichment failed for {sport}: {e}", exc_info=True)
 
         return snapshot
 

@@ -106,8 +106,8 @@ def _load_usage() -> None:
                 _monthly_requests = data.get("count", 0)
                 _month_key = current_month
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.info(f"Could not load OddsPapi usage tracker (resetting): {e}")
 
     # New month or no file — reset
     _monthly_requests = 0

@@ -64,8 +64,8 @@ for g in games:
                                 'rating': ev_result['rating'],
                                 'actionable': ev_result['actionable'],
                             })
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  WARN: ML edge calc failed for {away}@{home}: {e}")
 
     # --- Spreads ---
     if 'spreads' in dk and 'spreads' in fd:
@@ -96,8 +96,8 @@ for g in games:
                                     'rating': ev_result['rating'],
                                     'actionable': ev_result['actionable'],
                                 })
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"  WARN: Spread edge calc failed for {team} in {away}@{home}: {e}")
 
     # --- Totals ---
     if 'totals' in dk and 'totals' in fd:
@@ -131,8 +131,8 @@ for g in games:
                                     'rating': ev_result['rating'],
                                     'actionable': ev_result['actionable'],
                                 })
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"  WARN: Total edge calc failed for {away}@{home}: {e}")
 
 print(f'\nScanned {len(games)} games across ML, spreads, totals')
 print(f'Cross-book edges found (EV > 0%): {len(edges_found)}')

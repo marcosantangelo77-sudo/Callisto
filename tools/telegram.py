@@ -343,8 +343,8 @@ class TelegramListener:
             try:
                 async with _hx.AsyncClient(timeout=5) as c:
                     status_data = (await c.get("http://localhost:8420/system/full-status")).json()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.info(f"Could not fetch system status for Telegram response: {e}")
 
             rl = status_data.get("research_loop", {})
             hy = status_data.get("hypotheses", {})

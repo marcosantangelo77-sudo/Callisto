@@ -445,8 +445,8 @@ class BetExecutor:
                 err_path = SCREENSHOT_DIR / f"error_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.png"
                 await self._page.screenshot(path=str(err_path))
                 result["screenshot"] = str(err_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Error screenshot capture also failed: {e}")
             return result
 
     async def execute_bet(
@@ -541,8 +541,8 @@ class BetExecutor:
                     f"Bankroll: ${bankroll:.2f} → ${bankroll - stake:.2f}"
                 )
                 send_telegram(msg)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Telegram bet notification failed: {e}")
 
             return {
                 "success": True,

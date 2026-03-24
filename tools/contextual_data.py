@@ -198,6 +198,7 @@ async def get_team_roster(sport: str, team_id: str) -> dict:
             "players": players,
         }
     except Exception as e:
+        logger.warning(f"get_team_roster failed for {sport}/{team_id}: {e}")
         return {"error": str(e)}
 
 
@@ -257,6 +258,7 @@ async def get_scoreboard(sport: str = "basketball_ncaab") -> dict:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
+        logger.warning(f"get_scoreboard failed for {sport}: {e}")
         return {"error": str(e)}
 
 
@@ -360,6 +362,7 @@ async def get_weather(
         }
 
     except Exception as e:
+        logger.warning(f"get_weather failed for venue={venue}: {e}")
         return {"error": str(e)}
 
 

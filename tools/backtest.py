@@ -126,7 +126,7 @@ class BacktestEngine:
                 return better_snapshot
 
         except Exception as e:
-            logger.debug(f"Snapshot enrichment failed for {sport} {date_str}: {e}")
+            logger.warning(f"Snapshot enrichment failed for {sport} {date_str}: {e}", exc_info=True)
 
         return snapshot
 

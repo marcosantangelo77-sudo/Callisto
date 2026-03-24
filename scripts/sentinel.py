@@ -137,8 +137,8 @@ def send_telegram(message: str) -> None:
             headers={"Content-Type": "application/json"},
         )
         urllib.request.urlopen(req, timeout=10)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.info(f"Telegram notification failed (non-critical): {e}")
 
 
 def get_recent_logs(n_lines: int = 200) -> str:
@@ -238,8 +238,8 @@ async def _kill_api_process() -> None:
             if resp.status_code == 200:
                 logger.info("Graceful restart triggered via /admin/restart")
                 return
-    except Exception:
-        pass
+    except Exception as e:
+        logger.info(f"Graceful restart endpoint unavailable (falling back to kill): {e}")
 
     # 2. Fall back to killing the process on port 8420
     logger.info("Graceful restart unavailable — killing port 8420 process")
@@ -293,8 +293,8 @@ async def check_health() -> dict:
                     "source": "http",
                     "details": data,
                 }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Health HTTP check failed (trying file fallback): {e}")
 
     # Fall back to health file
     if HEALTH_FILE.exists():
@@ -315,8 +315,8 @@ async def check_health() -> dict:
                         "age_seconds": round(age),
                         "details": data,
                     }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Health file check failed: {e}")
 
     # Both failed — process is probably dead
     return {"alive": False, "healthy": False, "source": "none", "details": {}}
@@ -572,8 +572,8 @@ def apply_fix_safely(fix_data: dict) -> dict:
                 ["git", "stash", "pop"],
                 capture_output=True, cwd=str(CALLISTO_DIR),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Git stash pop failed after fix: {e}")
 
     state.total_fixes += 1
     state.fixes_applied.append({

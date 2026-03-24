@@ -6,11 +6,14 @@ Supports dual-mode tool call extraction: native Ollama tool_calls + Hermes XML f
 """
 
 import json
+import logging
 import os
 import re
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+logger = logging.getLogger("callisto.inference")
 
 import ollama
 from dotenv import load_dotenv
@@ -377,6 +380,7 @@ def execute_function_call(name: str, arguments: dict) -> Any:
     try:
         return FUNCTION_REGISTRY[name](**arguments)
     except Exception as e:
+        logger.error(f"Function call {name}({arguments}) failed: {e}", exc_info=True)
         return {"error": f"Function {name} failed: {str(e)}"}
 
 

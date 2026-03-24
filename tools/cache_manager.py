@@ -483,7 +483,7 @@ async def rotate_caches(db_path: str = DB_PATH, warm_days: int = 30):
                 try:
                     await db.execute(f"ALTER TABLE {table} ADD COLUMN archived BOOLEAN DEFAULT 0")
                 except Exception:
-                    pass  # Column already exists
+                    pass  # Expected: column already exists (ALTER TABLE doesn't have IF NOT EXISTS)
 
             # Archive old entries
             for table in ["ev_opportunities", "line_movements", "odds_snapshots"]:

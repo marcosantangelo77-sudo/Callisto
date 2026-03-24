@@ -570,8 +570,8 @@ def scrape_bref_nba_season(season_end_year: int) -> dict[str, list[dict]]:
                 month_tables = pd.read_html(StringIO(r.text))
                 tables.extend(month_tables)
                 months.append(m)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"    WARN: Failed to fetch {m}: {e}")
 
     if months:
         print(f"    Fetched months: {', '.join(months)}")

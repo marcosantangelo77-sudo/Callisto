@@ -472,8 +472,8 @@ class SystemHealth:
                 f"Subsystem disabled for {BREAKER_COOLDOWN}s.\n"
                 f"Other subsystems continue running."
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Telegram health alert failed for {subsystem}: {e}")
 
         # Subsystem-specific recovery
         if subsystem == "ollama":
@@ -494,8 +494,8 @@ class SystemHealth:
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 logger.info("SQLite WAL checkpoint forced")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"SQLite WAL checkpoint failed: {e}")
 
     # ── Public API ──
 
