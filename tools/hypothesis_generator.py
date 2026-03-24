@@ -336,6 +336,153 @@ HYPOTHESIS_TEMPLATES = [
             "min_edge": [1, 2, 3],
         },
     },
+    # ── MLB-specific templates ──
+    {
+        "id": "mlb_pitcher_prop_rest",
+        "name": "Starting pitcher {prop_type} on {rest_days}+ days rest",
+        "thesis": (
+            "Starting pitchers on {rest_days}+ days rest have {prop_type} lines "
+            "that don't fully account for the rest advantage. Extended rest improves "
+            "velocity retention, spin rate, and command through later innings. "
+            "Books set Over strikeout / Under earned run lines too conservatively. "
+            "Fair probability of the favorable side exceeds book implied by {min_edge}%+."
+        ),
+        "sport_filter": ["baseball_mlb"],
+        "market_type": "player_{prop_type}",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 3,
+            "context_factors": ["pitcher_rest_days", "pitch_count_recent"],
+        },
+        "variables": {
+            "prop_type": ["strikeouts", "earned_runs", "hits_allowed", "outs_recorded"],
+            "rest_days": [5, 6, 7],
+            "min_edge": [1, 2, 3],
+        },
+    },
+    {
+        "id": "mlb_opening_week_totals",
+        "name": "MLB opening week {weather_factor} total mispricing",
+        "thesis": (
+            "Early-season MLB games (first 2 weeks) in {weather_factor} conditions "
+            "see inflated or deflated run totals that books don't fully adjust for. "
+            "Pitchers are not fully stretched, bullpens are fresh, cold-weather parks "
+            "suppress offense. Under is +EV when {weather_factor} is present."
+        ),
+        "sport_filter": ["baseball_mlb"],
+        "market_type": "totals",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 3,
+            "context_factors": ["season_week", "weather", "park_factor"],
+        },
+        "variables": {
+            "weather_factor": ["cold (<55F)", "wind (15+ mph)", "rain/drizzle"],
+            "min_edge": [1, 1.5, 2],
+        },
+    },
+    {
+        "id": "mlb_schedule_spot",
+        "name": "MLB schedule spot {spot_type} spread value",
+        "thesis": (
+            "Teams in {spot_type} schedule situations show ATS performance that "
+            "diverges from book implied probability. Books underweight travel fatigue, "
+            "timezone shifts, and letdown/lookahead dynamics in MLB where the 162-game "
+            "schedule creates persistent schedule spot edges. ATS win rate exceeds "
+            "implied by {min_edge}%+."
+        ),
+        "sport_filter": ["baseball_mlb"],
+        "market_type": "spreads",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 3,
+            "context_factors": ["schedule_spot", "travel_distance", "timezone_shift"],
+        },
+        "variables": {
+            "spot_type": [
+                "3+ game road trip finale", "home after 7+ road games",
+                "day game after night game", "cross-country travel (3+ timezone shift)",
+            ],
+            "min_edge": [1, 1.5, 2],
+        },
+    },
+    {
+        "id": "mlb_park_factor_totals",
+        "name": "MLB park factor mispricing on totals at {park_type} parks",
+        "thesis": (
+            "Games at {park_type} parks have totals that don't fully reflect "
+            "park-specific run environment. Books adjust but lag behind the "
+            "true park factor, especially early season when lines are calibrated "
+            "to league-wide trends. Fair total probability diverges by {min_edge}%+."
+        ),
+        "sport_filter": ["baseball_mlb"],
+        "market_type": "totals",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 3,
+            "context_factors": ["park_factor", "altitude", "dimensions"],
+        },
+        "variables": {
+            "park_type": ["extreme hitter (Coors, Great American)", "extreme pitcher (Oracle, Petco)", "bandbox (Fenway, Yankee)"],
+            "min_edge": [1, 1.5, 2],
+        },
+    },
+    # ── NCAAW/WNBA identity/cohesion templates ──
+    {
+        "id": "ncaaw_cohesion_spread",
+        "name": "NCAAW {cohesion_factor} cohesion spread advantage",
+        "thesis": (
+            "Teams with strong {cohesion_factor} cohesion outperform their spread "
+            "implied probability. Thin NCAAW markets don't price intangible cohesion "
+            "factors — regional identity, institutional values, coaching tenure, and "
+            "roster stability create systematic edges. ATS win rate exceeds book "
+            "implied by {min_edge}%+."
+        ),
+        "sport_filter": ["basketball_ncaaw"],
+        "market_type": "spreads",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 2,
+            "context_factors": ["team_cohesion", "coaching_tenure", "roster_stability"],
+        },
+        "variables": {
+            "cohesion_factor": ["regional identity", "coaching stability (10+ years)", "roster continuity (low transfer portal)", "institutional values alignment"],
+            "min_edge": [1.5, 2, 3],
+        },
+    },
+    {
+        "id": "wnba_demographic_totals",
+        "name": "WNBA {factor} demographic composition total mispricing",
+        "thesis": (
+            "WNBA teams with {factor} demographic composition have game totals "
+            "that diverge from book expectations. Social cohesion drives pace, "
+            "defensive intensity, and chemistry in ways that thin WNBA markets "
+            "don't price. Fair total probability exceeds implied by {min_edge}%+."
+        ),
+        "sport_filter": ["basketball_wnba"],
+        "market_type": "totals",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 2,
+            "context_factors": ["demographic_composition", "team_cohesion", "pace"],
+        },
+        "variables": {
+            "factor": ["high regional identity", "strong institutional alignment", "veteran-heavy roster"],
+            "min_edge": [1.5, 2, 3],
+        },
+    },
     {
         "id": "consensus_divergence",
         "name": "Cross-book consensus divergence on {market_type}",

@@ -444,6 +444,17 @@ CREATE TABLE IF NOT EXISTS game_results (
 
 CREATE INDEX IF NOT EXISTS idx_game_results_lookup
     ON game_results(sport, game_date, home_team, away_team);
+
+CREATE TABLE IF NOT EXISTS research_focus_areas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sport TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 1,
+    subtopic TEXT,
+    reason TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

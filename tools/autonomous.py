@@ -23,6 +23,7 @@ for fast classification (Sentinel) and embeddings.
 import asyncio
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -352,10 +353,145 @@ RESEARCH_SPORTS = [
     "americanfootball_nfl",
     "basketball_ncaab",
     "basketball_ncaaw",
+    "basketball_wnba",
     "icehockey_nhl",
     "baseball_mlb",
     "golf_pga",
 ]
+
+# ── Research Focus Areas ──
+# Priority sports/topics that the loop should preferentially work on.
+# These are the defaults; they are overridden by DB-persisted focus areas
+# once loaded. Use the /research/focus API to update at runtime.
+DEFAULT_FOCUS_AREAS = [
+    {"sport": "baseball_mlb", "priority": 1, "subtopic": None, "reason": "Season starting, time-sensitive"},
+    {"sport": "golf_pga", "priority": 1, "subtopic": "masters", "reason": "Masters in April, time-sensitive"},
+    {"sport": "basketball_ncaaw", "priority": 1, "subtopic": "identity_cohesion", "reason": "Core thesis, thin markets"},
+    {"sport": "basketball_wnba", "priority": 2, "subtopic": "identity_cohesion", "reason": "Core thesis extension"},
+]
+
+
+class FocusAreaManager:
+    """Manages research focus areas — loads from DB, provides sorting helpers."""
+
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+        self._focus_areas: list[dict] = list(DEFAULT_FOCUS_AREAS)
+        self._loaded = False
+
+    async def load_from_db(self) -> None:
+        """Load focus areas from the database. Falls back to defaults if empty."""
+        import aiosqlite
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT sport, priority, subtopic, reason FROM research_focus_areas "
+                    "WHERE active = 1 ORDER BY priority ASC"
+                )
+                rows = await cursor.fetchall()
+                if rows:
+                    self._focus_areas = [
+                        {"sport": r[0], "priority": r[1], "subtopic": r[2], "reason": r[3]}
+                        for r in rows
+                    ]
+                    logger.info(f"Focus areas loaded from DB: {len(self._focus_areas)} active")
+                else:
+                    # Seed defaults into DB on first load
+                    await self._seed_defaults(db)
+                    logger.info(f"Focus areas seeded from defaults: {len(self._focus_areas)}")
+                self._loaded = True
+        except Exception as e:
+            logger.warning(f"Failed to load focus areas from DB, using defaults: {e}")
+            self._focus_areas = list(DEFAULT_FOCUS_AREAS)
+
+    async def _seed_defaults(self, db) -> None:
+        """Insert default focus areas into the DB."""
+        for fa in DEFAULT_FOCUS_AREAS:
+            await db.execute(
+                "INSERT OR IGNORE INTO research_focus_areas (sport, priority, subtopic, reason) "
+                "VALUES (?, ?, ?, ?)",
+                (fa["sport"], fa["priority"], fa.get("subtopic"), fa.get("reason")),
+            )
+        await db.commit()
+
+    async def get_focus_areas(self) -> list[dict]:
+        """Return current focus areas, loading from DB if needed."""
+        if not self._loaded:
+            await self.load_from_db()
+        return list(self._focus_areas)
+
+    async def set_focus_areas(self, areas: list[dict]) -> list[dict]:
+        """Replace all focus areas with new ones. Persists to DB."""
+        import aiosqlite
+        async with aiosqlite.connect(self.db_path) as db:
+            # Deactivate all existing
+            await db.execute("UPDATE research_focus_areas SET active = 0")
+            # Insert new ones
+            for fa in areas:
+                await db.execute(
+                    "INSERT INTO research_focus_areas (sport, priority, subtopic, reason, active) "
+                    "VALUES (?, ?, ?, ?, 1)",
+                    (fa["sport"], fa.get("priority", 1), fa.get("subtopic"), fa.get("reason")),
+                )
+            await db.commit()
+        self._focus_areas = list(areas)
+        logger.info(f"Focus areas updated: {len(areas)} areas set")
+        return self._focus_areas
+
+    def get_focus_sport_priority(self, sport: str) -> int:
+        """Return the priority for a sport (lower = higher priority). 999 if not a focus area."""
+        for fa in self._focus_areas:
+            if fa["sport"] == sport:
+                return fa["priority"]
+        return 999
+
+    def is_focus_sport(self, sport: str) -> bool:
+        """Return True if the sport is in the current focus areas."""
+        return any(fa["sport"] == sport for fa in self._focus_areas)
+
+    def get_focus_sports(self) -> list[str]:
+        """Return list of focus sport keys, ordered by priority."""
+        sorted_areas = sorted(self._focus_areas, key=lambda x: x.get("priority", 999))
+        return [fa["sport"] for fa in sorted_areas]
+
+    def sort_by_focus(self, items: list[dict], sport_key: str = "sport") -> list[dict]:
+        """Sort a list of dicts by focus area priority (focus sports first, then the rest)."""
+        def sort_key(item):
+            sport = item.get(sport_key, "")
+            focus_priority = self.get_focus_sport_priority(sport)
+            return focus_priority
+        return sorted(items, key=sort_key)
+
+    def get_ordered_research_sports(self) -> list[str]:
+        """Return RESEARCH_SPORTS reordered: focus sports first by priority, then the rest."""
+        focus_sports = self.get_focus_sports()
+        # Focus sports first (in priority order), then remaining RESEARCH_SPORTS
+        ordered = []
+        for fs in focus_sports:
+            if fs in RESEARCH_SPORTS and fs not in ordered:
+                ordered.append(fs)
+            elif fs not in RESEARCH_SPORTS and fs not in ordered:
+                # Focus area sport not in default list — add it
+                ordered.append(fs)
+        for rs in RESEARCH_SPORTS:
+            if rs not in ordered:
+                ordered.append(rs)
+        return ordered
+
+    def get_focus_context_for_prompt(self) -> str:
+        """Generate a text description of focus areas for Claude prompts."""
+        if not self._focus_areas:
+            return ""
+        lines = ["PRIORITY FOCUS AREAS (generate hypotheses for these FIRST):"]
+        for fa in sorted(self._focus_areas, key=lambda x: x.get("priority", 999)):
+            subtopic = f" [{fa['subtopic']}]" if fa.get("subtopic") else ""
+            reason = f" — {fa['reason']}" if fa.get("reason") else ""
+            lines.append(f"  P{fa['priority']}: {fa['sport']}{subtopic}{reason}")
+        return "\n".join(lines)
+
+
+# Global focus area manager instance
+focus_manager = FocusAreaManager()
 
 
 class ResearchLoop:
@@ -381,6 +517,7 @@ class ResearchLoop:
         data_collector,
         vector_store,
         orchestrator=None,
+        focus_area_manager: "FocusAreaManager | None" = None,
     ):
         self.hypothesis_manager = hypothesis_manager
         self.hypothesis_generator = hypothesis_generator
@@ -388,6 +525,7 @@ class ResearchLoop:
         self.data_collector = data_collector
         self.vector_store = vector_store
         self.orchestrator = orchestrator
+        self.focus_manager = focus_area_manager or focus_manager
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
@@ -417,6 +555,10 @@ class ResearchLoop:
         if self._running:
             return
         self._running = True
+        # Load focus areas from DB before starting the loop
+        await self.focus_manager.load_from_db()
+        focus_sports = self.focus_manager.get_focus_sports()
+        logger.info(f"Research focus areas loaded: {focus_sports}")
         self._task = asyncio.create_task(self._loop())
         logger.info("Research loop started — autonomous hypothesis machine online")
 
@@ -829,7 +971,9 @@ class ResearchLoop:
         today = datetime.now(timezone.utc)
         dates = [today - timedelta(days=d) for d in range(lookback_days)]
 
-        for sport in RESEARCH_SPORTS:
+        # Use focus-area-ordered sports: focus sports first for fresher data
+        ordered_sports = self.focus_manager.get_ordered_research_sports()
+        for sport in ordered_sports:
             try:
                 for dt in dates:
                     date_str = dt.strftime("%Y%m%d")
@@ -949,6 +1093,9 @@ class ResearchLoop:
                     except Exception as e:
                         logger.warning(f"Failed to query historical_odds_cache date ranges: {e}")
 
+                # Build focus area context for the prompt
+                focus_context = self.focus_manager.get_focus_context_for_prompt()
+
                 prompt = (
                     f"CALLISTO HYPOTHESIS GENERATION — Cycle #{self._cycles}\n\n"
                     f"You are the primary reasoning engine for an autonomous sports betting "
@@ -962,7 +1109,8 @@ class ResearchLoop:
                     f"  Model: consensus devig (power method) across 3+ books\n\n"
                     f"EXISTING HYPOTHESIS NAMES (avoid duplicates):\n"
                     f"  {json.dumps(existing_names[:50])}\n\n"
-                    f"FOCUS AREAS (edges that persist hours, not speed arb):\n"
+                    f"{focus_context}\n\n"
+                    f"EDGE TYPES (edges that persist hours, not speed arb):\n"
                     f"  - rest days, travel, altitude, back-to-backs\n"
                     f"  - referee tendencies, scheme matchups\n"
                     f"  - public betting % vs sharp money\n"
@@ -980,10 +1128,11 @@ class ResearchLoop:
                     f"]}}\n\n"
                     f"RULES:\n"
                     f"- Generate 3-5 hypotheses per call\n"
+                    f"- At least 2 hypotheses MUST be for the PRIORITY FOCUS AREAS listed above\n"
                     f"- Each must be testable with game-level odds data we have\n"
                     f"- Names must be unique (not in existing list)\n"
                     f"- Thesis must be specific and falsifiable\n"
-                    f"- Prefer sports with the most data (check date_ranges)\n"
+                    f"- Prefer focus area sports, then sports with the most data\n"
                 )
 
                 result = await claude_code_query(prompt)
@@ -1049,11 +1198,15 @@ class ResearchLoop:
         # ── FALLBACK: Template-based generation when Claude unavailable ──
         if not used_claude:
             logger.info("Research: using template fallback for hypothesis generation")
-            for sport in RESEARCH_SPORTS:
+            # Focus sports first with higher hypothesis quota, then the rest
+            ordered_sports = self.focus_manager.get_ordered_research_sports()
+            for sport in ordered_sports:
                 try:
+                    # Focus sports get 2x hypothesis quota
+                    quota = 40 if self.focus_manager.is_focus_sport(sport) else 20
                     created = await self.hypothesis_generator.generate_from_templates(
                         sport=sport,
-                        max_hypotheses=20,
+                        max_hypotheses=quota,
                         training_cutoff_date=training_period_end,
                     )
                     total_created += len(created)
@@ -1110,9 +1263,10 @@ class ResearchLoop:
         except Exception as e:
             logger.warning(f"Data quality pre-check failed: {e}")
 
-        # Backtest up to BACKTEST_BATCH_SIZE per cycle
+        # Sort drafts by focus area priority (focus sports first), then take batch
+        drafts = self.focus_manager.sort_by_focus(drafts, sport_key="sport")
         to_test = drafts[:BACKTEST_BATCH_SIZE]
-        logger.info(f"Research: backtesting {len(to_test)} hypotheses")
+        logger.info(f"Research: backtesting {len(to_test)} hypotheses (focus-area prioritized)")
 
         for h in to_test:
             if not self._running:
@@ -1832,6 +1986,9 @@ class ResearchLoop:
         except Exception as e:
             logger.warning(f"Failed to query top hypotheses for deep work prompt: {e}")
 
+        # Include focus area context
+        focus_context = self.focus_manager.get_focus_context_for_prompt()
+
         prompt = (
             f"CALLISTO AUTONOMOUS SYSTEM — DEEP WORK CYCLE #{self._cycles}\n"
             f"You are the reasoning engine for an autonomous research system.\n"
@@ -1843,6 +2000,7 @@ class ResearchLoop:
             f"  Odds cache: {json.dumps(metrics.get('odds_cache', {}))}\n"
             f"  Promotions: {self._promotions} | Rejections: {self._rejections}\n"
             f"  Cycles: {self._cycles} | Data collections: {self._data_collections}\n\n"
+            f"{focus_context}\n\n"
             f"TOP HYPOTHESES BY SIGNALS:\n"
             + ("\n".join(top_hypos) if top_hypos else "  (none with signals)") + "\n\n"
             f"RESPOND WITH EXACTLY THIS JSON STRUCTURE (no other text):\n"
@@ -1853,7 +2011,7 @@ class ResearchLoop:
             f'"pipeline_issues": ["issue description", ...]}}\n\n'
             f"RULES:\n"
             f"- reject_ids: hypotheses with 0 signals after 50+ events (data disproves them)\n"
-            f"- new_hypotheses: 3-5 NOVEL, testable with NBA/NFL game-level odds data\n"
+            f"- new_hypotheses: 3-5 NOVEL, testable — prioritize FOCUS AREA sports above\n"
             f"- pipeline_issues: specific, actionable problems you observe in the metrics\n"
             f"- Only include fields you have actionable items for\n"
         )
@@ -2205,6 +2363,7 @@ class ResearchLoop:
             "claude_escalations": self._claude_escalations,
             "promotions": self._promotions,
             "rejections": self._rejections,
+            "focus_areas": self.focus_manager._focus_areas,
             "claude_code": claude_stats(),
             "pipeline_integrity": integrity_report,
             "intervals": {

@@ -1011,6 +1011,28 @@ async def research_generate(sport: str = "basketball_nba", max_hypotheses: int =
     return {"generated": len(created), "hypotheses": created}
 
 
+@app.get("/research/focus")
+async def get_research_focus():
+    """Get current research focus areas."""
+    from tools.autonomous import focus_manager
+    areas = await focus_manager.get_focus_areas()
+    return {"focus_areas": areas, "ordered_sports": focus_manager.get_ordered_research_sports()}
+
+
+@app.post("/research/focus")
+async def set_research_focus(body: dict):
+    """Update research focus areas. Body: {"focus_areas": [{"sport": "...", "priority": 1, ...}]}"""
+    from tools.autonomous import focus_manager
+    areas = body.get("focus_areas", [])
+    if not areas:
+        raise HTTPException(status_code=400, detail="focus_areas list required")
+    for fa in areas:
+        if "sport" not in fa:
+            raise HTTPException(status_code=400, detail="Each focus area must have a 'sport' key")
+    updated = await focus_manager.set_focus_areas(areas)
+    return {"focus_areas": updated, "ordered_sports": focus_manager.get_ordered_research_sports()}
+
+
 @app.get("/embeddings/stats")
 async def embedding_stats(collection: Optional[str] = None):
     """Get embedding store statistics."""
