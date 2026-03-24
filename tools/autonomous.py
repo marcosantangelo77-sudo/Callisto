@@ -718,9 +718,9 @@ class ResearchLoop:
                             issues.append({"key": issue_key, "severity": "WARNING", "message": msg})
                     except (ValueError, TypeError):
                         pass
-            except Exception:
+            except Exception as e:
                 # odds_snapshots table may be in a different DB (line_monitor's)
-                pass
+                logger.info(f"DIAG: odds_snapshots freshness check skipped: {e}")
 
         except Exception as e:
             logger.warning(f"DIAG: freshness check failed: {e}")
