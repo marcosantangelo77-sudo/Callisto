@@ -340,9 +340,12 @@ class BacktestEngine:
 
         # For each unique line, find the opposite side and devig
         # Group by (market, point) to get both sides
+        # For spreads, sides have opposite-sign points (e.g., -7.5 and +7.5)
+        # so group by abs(point) to pair them correctly
         sides_by_line = {}
         for (mkt_key, name, point), books in lines_by_key.items():
-            line_key = (mkt_key, point)
+            group_point = abs(point) if point is not None and mkt_key == "spreads" else point
+            line_key = (mkt_key, group_point)
             if line_key not in sides_by_line:
                 sides_by_line[line_key] = {}
             sides_by_line[line_key][name] = books
