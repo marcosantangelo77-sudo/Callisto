@@ -58,6 +58,78 @@ class BacktestEngine:
         if self._db:
             await self._db.close()
 
+    async def _enrich_snapshot_with_multibook(
+        self,
+        sport: str,
+        date_str: str,
+        snapshot: dict,
+        target_book: str,
+    ) -> dict:
+        """Enrich a snapshot with multi-book data from odds_snapshots.
+
+        When the historical_odds_cache has only single-book "consensus" data
+        (common for older dates), check if odds_snapshots has a richer
+        multi-book snapshot for the same date and sport. If so, use that
+        instead — it has the target book + comparison books needed for
+        cross-book edge detection.
+
+        Returns the original snapshot if already multi-book or no better
+        data is available.
+        """
+        games = snapshot.get("games", [])
+        if not games:
+            return snapshot
+
+        # Check if snapshot already has multi-book data with the target book
+        max_books = 0
+        has_target = False
+        for g in games:
+            book_keys = {bm.get("key", "").lower() for bm in g.get("bookmakers", [])}
+            max_books = max(max_books, len(book_keys))
+            if target_book in book_keys:
+                has_target = True
+
+        if has_target and max_books >= 2:
+            # Already have multi-book data with target — use as-is
+            return snapshot
+
+        # Try to find a better snapshot in odds_snapshots for this date
+        # Look for snapshots on this date with the most games
+        try:
+            cursor = await self._db.execute(
+                "SELECT snapshot_json FROM odds_snapshots "
+                "WHERE sport = ? AND timestamp LIKE ? AND game_count > 0 "
+                "ORDER BY game_count DESC LIMIT 1",
+                (sport, f"{date_str}%"),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return snapshot
+
+            better_snapshot = json.loads(row[0])
+            better_games = better_snapshot.get("games", [])
+
+            # Verify the better snapshot actually has multi-book data
+            better_max_books = 0
+            better_has_target = False
+            for g in better_games:
+                book_keys = {bm.get("key", "").lower() for bm in g.get("bookmakers", [])}
+                better_max_books = max(better_max_books, len(book_keys))
+                if target_book in book_keys:
+                    better_has_target = True
+
+            if better_has_target and better_max_books > max_books:
+                logger.info(
+                    f"Enriched {sport} {date_str}: upgraded from {max_books} to "
+                    f"{better_max_books} books (from odds_snapshots)"
+                )
+                return better_snapshot
+
+        except Exception as e:
+            logger.debug(f"Snapshot enrichment failed for {sport} {date_str}: {e}")
+
+        return snapshot
+
     async def run_backtest(
         self,
         hypothesis_id: str,
@@ -143,12 +215,31 @@ class BacktestEngine:
 
         total_events = 0
         total_signals = 0
+        multibook_dates = 0
+        singlebook_skipped = 0
 
         for date_str in dates_in_range:
             snapshot = await self.historical_fetcher.fetch_historical_odds(
                 sport=sport, date=date_str, markets=fetch_markets,
             )
+
+            # Check if snapshot has multi-book data or only single-book "consensus"
+            snapshot = await self._enrich_snapshot_with_multibook(
+                sport, date_str, snapshot, target_book,
+            )
             games = snapshot.get("games", [])
+
+            # Track data quality
+            has_target = False
+            for g in games:
+                book_keys = {bm.get("key", "").lower() for bm in g.get("bookmakers", [])}
+                if target_book in book_keys and len(book_keys) >= 2:
+                    has_target = True
+                    break
+            if has_target:
+                multibook_dates += 1
+            else:
+                singlebook_skipped += 1
 
             for game in games:
                 events, signals = await self._process_game(
@@ -167,6 +258,11 @@ class BacktestEngine:
                 )
                 total_events += events
                 total_signals += signals
+
+        logger.info(
+            f"Backtest {run_id}: {multibook_dates} dates with multi-book data, "
+            f"{singlebook_skipped} dates with single-book only (no cross-book edges)"
+        )
 
         # Update run with totals
         completed = datetime.now(timezone.utc).isoformat()
@@ -251,6 +347,11 @@ class BacktestEngine:
         Process a single game: devig, compare, record predictions.
         Returns (events_processed, signals_generated).
 
+        Cross-book edge detection requires the target book AND at least one
+        other book in the data. When only a "consensus" book exists (old
+        historical data without the target book), we skip — there's no
+        cross-book edge to detect without pricing from both sides.
+
         Falls back to game-level markets (spreads/h2h/totals) when
         player prop data isn't available, since our free historical
         data is consensus game lines, not per-player props.
@@ -279,15 +380,39 @@ class BacktestEngine:
                 if not effective_market:
                     return 0, 0
 
-        # Adapt min_books: if we only have consensus data, accept 1
-        bookmaker_count = len(game.get("bookmakers", []))
-        effective_min_books = min(min_books, max(1, bookmaker_count))
-
-        # Adapt target_book: if target isn't in data, use whatever we have
         available_books = {bm.get("key", "").lower() for bm in game.get("bookmakers", [])}
-        effective_target = target_book
+        bookmaker_count = len(available_books)
+
+        # Cross-book edge detection requires the target book to be present
+        # in the data AND at least one other book to compare against.
+        # If we only have "consensus" (single-book old data), there's no
+        # cross-book edge to find — skip these games.
         if target_book not in available_books:
-            effective_target = next(iter(available_books), target_book)
+            if bookmaker_count == 1 and "consensus" in available_books:
+                # Single "consensus" book — no cross-book comparison possible.
+                # These events are noise without the target book's actual pricing.
+                return 0, 0
+            # Target not present but we have multiple other books — pick the
+            # closest retail book as target proxy (DK -> FanDuel -> BetMGM)
+            retail_fallbacks = ["fanduel", "betmgm", "caesars", "betrivers", "espnbet"]
+            effective_target = target_book
+            for fallback in retail_fallbacks:
+                if fallback in available_books:
+                    effective_target = fallback
+                    break
+            else:
+                # No retail book found — use whatever is available
+                effective_target = next(iter(available_books), target_book)
+        else:
+            effective_target = target_book
+
+        # Need at least 1 non-target book for cross-book comparison
+        non_target_books = available_books - {effective_target}
+        if not non_target_books:
+            return 0, 0
+
+        # Adapt min_books: need at least 1 non-target book for devig
+        effective_min_books = min(min_books, max(1, len(non_target_books)))
 
         return await self._process_game_lines(
             run_id, hypothesis_id, game, game_date, snapshot_time,
@@ -310,7 +435,15 @@ class BacktestEngine:
         config: dict,
         h_sport: str = "",
     ) -> tuple[int, int]:
-        """Process spreads/totals/h2h lines for a game."""
+        """Process spreads/totals/h2h lines for a game.
+
+        Uses cross-book edge detection when multi-book data is available:
+        1. Devig each non-target book to get fair probabilities
+        2. Find the BEST (sharpest) devigged line across non-target books
+        3. Also compute consensus (average) devigged fair value
+        4. Use the best line as the fair value — edges exist BETWEEN books
+        5. Fall back to consensus-only when only 1-2 non-target books exist
+        """
         home = game.get("home_team", "")
         away = game.get("away_team", "")
         bookmakers = game.get("bookmakers", [])
@@ -368,10 +501,10 @@ class BacktestEngine:
             if target_book not in common_books:
                 continue
 
-            # Devig each book and compute consensus fair values
+            # Devig each book and compute fair values
             # CRITICAL: exclude target book from consensus to avoid self-reference bias
-            fair_a_values = []
-            fair_b_values = []
+            fair_a_values = []  # (fair_prob_a, book_key)
+            fair_b_values = []  # (fair_prob_b, book_key)
             for bk in common_books:
                 if bk == target_book:
                     continue  # target book is what we compare AGAINST, not part of consensus
@@ -384,26 +517,60 @@ class BacktestEngine:
                         fair, _ = power_devig([dec_a, dec_b])
                     else:
                         fair = multiplicative_devig([dec_a, dec_b])
-                    fair_a_values.append(fair[0])
-                    fair_b_values.append(fair[1])
+                    fair_a_values.append((fair[0], bk))
+                    fair_b_values.append((fair[1], bk))
                 except (ValueError, ZeroDivisionError):
                     continue
 
-            if len(fair_a_values) < min_books:
+            non_target_count = len(fair_a_values)
+            if non_target_count < min_books:
                 continue
 
-            consensus_a = sum(fair_a_values) / len(fair_a_values)
-            consensus_b = sum(fair_b_values) / len(fair_b_values)
+            # --- Cross-book edge detection ---
+            # Two fair value estimates:
+            #   1. consensus = average devigged fair prob across all non-target books
+            #   2. best_line = sharpest (highest fair prob for each side) from any single book
+            #
+            # The best_line approach finds real cross-book edges:
+            #   If Pinnacle devigs to 55% on Team A but DK prices Team A at 50%,
+            #   that's a 5% edge. The consensus approach dilutes this with softer books.
+            #
+            # Strategy: use best_line when we have 3+ non-target books (reliable sharp signal),
+            # fall back to consensus when fewer books are available.
+
+            consensus_a = sum(v[0] for v in fair_a_values) / non_target_count
+            consensus_b = sum(v[0] for v in fair_b_values) / non_target_count
+
+            # Find the sharpest line for each side (highest devigged fair prob)
+            best_a_val, best_a_book = max(fair_a_values, key=lambda x: x[0])
+            best_b_val, best_b_book = max(fair_b_values, key=lambda x: x[0])
+
+            # Use cross-book best line when we have enough books for a reliable signal
+            use_crossbook = non_target_count >= 3
+            if use_crossbook:
+                # Best-line is the primary fair value — this is where edges live
+                fair_a = best_a_val
+                fair_b = best_b_val
+                edge_method = "cross_book_best_line"
+            else:
+                # With few books, consensus is more reliable
+                fair_a = consensus_a
+                fair_b = consensus_b
+                edge_method = "consensus_devig"
+
+            # Also track all contributing books for transparency
+            contributing_books_a = [bk for _, bk in fair_a_values]
+            contributing_books_b = [bk for _, bk in fair_b_values]
 
             # Evaluate both sides against target book
-            for side_name, consensus, target_books in [
-                (side_a_name, consensus_a, side_a_books),
-                (side_b_name, consensus_b, side_b_books),
+            for side_name, fair_val, consensus_val, best_val, best_book, target_books, contrib_books in [
+                (side_a_name, fair_a, consensus_a, best_a_val, best_a_book, side_a_books, contributing_books_a),
+                (side_b_name, fair_b, consensus_b, best_b_val, best_b_book, side_b_books, contributing_books_b),
             ]:
                 target_price = target_books[target_book]["price"]
                 target_implied = american_to_implied(target_price)
-                ev = ev_binary(consensus, american_to_decimal(target_price))
-                kelly = kelly_binary(consensus, american_to_decimal(target_price))
+                ev = ev_binary(fair_val, american_to_decimal(target_price))
+                kelly = kelly_binary(fair_val, american_to_decimal(target_price))
                 edge = ev  # Use EV as edge metric (accounts for vig in odds)
                 is_signal = ev >= edge_threshold
 
@@ -427,9 +594,19 @@ class BacktestEngine:
                         run_id, event_id, hypothesis_id, event_sport,
                         None, mkt_key, point, team, target_book,
                         target_price, round(target_implied, 6),
-                        round(consensus, 6),
-                        json.dumps({"books_used": len(fair_a_values), "target_excluded": True,
-                                    "method": devig_method, "home_team": home, "away_team": away}),
+                        round(fair_val, 6),
+                        json.dumps({
+                            "edge_method": edge_method,
+                            "books_used": non_target_count,
+                            "target_excluded": True,
+                            "devig_method": devig_method,
+                            "best_line_book": best_book,
+                            "best_line_fair_prob": round(best_val, 6),
+                            "consensus_fair_prob": round(consensus_val, 6),
+                            "contributing_books": contrib_books,
+                            "home_team": home,
+                            "away_team": away,
+                        }),
                         round(edge, 6), round(ev, 6), round(kelly, 6),
                         is_signal, game_date, snapshot_time,
                     ),
@@ -502,8 +679,9 @@ class BacktestEngine:
                 continue
 
             # Devig all books with both sides at this line
-            fair_overs = []
-            fair_unders = []
+            # Track (fair_prob, book_key) for cross-book best-line detection
+            fair_overs = []   # (fair_prob, book_key)
+            fair_unders = []  # (fair_prob, book_key)
             for bk_key, bk_data in books.items():
                 if bk_key == target_book:
                     continue  # exclude target book from consensus
@@ -516,24 +694,35 @@ class BacktestEngine:
                         fair, _ = power_devig([dec_o, dec_u])
                     else:
                         fair = multiplicative_devig([dec_o, dec_u])
-                    fair_overs.append(fair[0])
-                    fair_unders.append(fair[1])
+                    fair_overs.append((fair[0], bk_key))
+                    fair_unders.append((fair[1], bk_key))
                 except (ValueError, ZeroDivisionError):
                     continue
 
-            if len(fair_overs) < min_books:
+            non_target_count = len(fair_overs)
+            if non_target_count < min_books:
                 continue
 
-            consensus_over = sum(fair_overs) / len(fair_overs)
-            consensus_under = sum(fair_unders) / len(fair_unders)
+            consensus_over = sum(v[0] for v in fair_overs) / non_target_count
+            consensus_under = sum(v[0] for v in fair_unders) / non_target_count
 
-            for side, consensus, target_price in [
-                ("Over", consensus_over, target_data["Over"]),
-                ("Under", consensus_under, target_data["Under"]),
+            # Cross-book best line: sharpest devigged fair prob for each side
+            best_over_val, best_over_book = max(fair_overs, key=lambda x: x[0])
+            best_under_val, best_under_book = max(fair_unders, key=lambda x: x[0])
+
+            use_crossbook = non_target_count >= 3
+            contributing_books = [bk for _, bk in fair_overs]
+
+            for side, consensus, best_val, best_book, target_price in [
+                ("Over", consensus_over, best_over_val, best_over_book, target_data["Over"]),
+                ("Under", consensus_under, best_under_val, best_under_book, target_data["Under"]),
             ]:
+                fair_val = best_val if use_crossbook else consensus
+                edge_method = "cross_book_best_line" if use_crossbook else "consensus_devig"
+
                 target_implied = american_to_implied(target_price)
-                ev = ev_binary(consensus, american_to_decimal(target_price))
-                kelly = kelly_binary(consensus, american_to_decimal(target_price))
+                ev = ev_binary(fair_val, american_to_decimal(target_price))
+                kelly = kelly_binary(fair_val, american_to_decimal(target_price))
                 edge = ev  # Use EV as edge metric (accounts for vig in odds)
                 is_signal = ev >= edge_threshold
 
@@ -554,10 +743,15 @@ class BacktestEngine:
                         run_id, event_id, hypothesis_id, game.get("sport_key", ""),
                         player, mkt_key, line, side, target_book,
                         target_price, round(target_implied, 6),
-                        round(consensus, 6),
+                        round(fair_val, 6),
                         json.dumps({
-                            "books_used": len(fair_overs),
-                            "method": devig_method,
+                            "edge_method": edge_method,
+                            "books_used": non_target_count,
+                            "devig_method": devig_method,
+                            "best_line_book": best_book,
+                            "best_line_fair_prob": round(best_val, 6),
+                            "consensus_fair_prob": round(consensus, 6),
+                            "contributing_books": contributing_books,
                         }),
                         round(edge, 6), round(ev, 6), round(kelly, 6),
                         is_signal, game_date, snapshot_time,
