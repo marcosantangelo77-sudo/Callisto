@@ -28,6 +28,7 @@ from tools.math_utils import american_to_decimal, american_to_implied
 from tools.devig import devig_market, power_devig, multiplicative_devig
 from tools.ev import ev_binary, evaluate_edge
 from tools.sizing import kelly_binary
+from tools.temporal_analysis import validate_temporal_isolation
 
 load_dotenv()
 
@@ -160,6 +161,38 @@ class BacktestEngine:
         target_book = config.get("target_book", "draftkings")
         devig_method = config.get("devig_method", "power")
         min_books = config.get("consensus_min_books", 2)
+
+        # ── TEMPORAL ISOLATION ENFORCEMENT ──
+        # If the hypothesis was generated from data analysis, ensure the backtest
+        # date range doesn't overlap with the training period.
+        temporal_check = validate_temporal_isolation(config, start_date, end_date)
+        if not temporal_check.get("has_temporal_metadata", False):
+            logger.warning(
+                f"Hypothesis {hypothesis_id} has no temporal metadata — "
+                "legacy hypothesis, temporal isolation NOT enforced. "
+                "Re-generate this hypothesis with temporal_analysis to fix."
+            )
+        elif not temporal_check["valid"]:
+            adjusted = temporal_check.get("adjusted_start")
+            if adjusted:
+                logger.warning(
+                    f"Temporal overlap detected for {hypothesis_id}: "
+                    f"{temporal_check['reason']} Auto-adjusting start to {adjusted}."
+                )
+                start_date = adjusted
+            else:
+                return {
+                    "error": "Temporal isolation violated",
+                    "detail": temporal_check["reason"],
+                    "hypothesis_id": hypothesis_id,
+                }
+        else:
+            logger.info(
+                f"Temporal isolation verified for {hypothesis_id}: "
+                f"training ended {temporal_check.get('training_period_end')}, "
+                f"backtest starts {start_date} "
+                f"(gap: {temporal_check.get('gap_days_actual', '?')} days)"
+            )
 
         run_id = str(uuid.uuid4())[:12]
         now = datetime.now(timezone.utc).isoformat()

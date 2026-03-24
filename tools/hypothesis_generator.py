@@ -19,7 +19,7 @@ escalation handles the heavy statistical analysis when needed.
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import aiosqlite
@@ -389,16 +389,38 @@ class HypothesisGenerator:
         self,
         sport: str,
         max_hypotheses: int = 50,
+        training_cutoff_date: Optional[str] = None,
     ) -> list[dict]:
         """
         Generate hypotheses from templates for a given sport.
         Expands variable combinations and creates draft hypotheses.
         Skips combinations that already exist.
 
+        Args:
+            sport: Sport key (e.g., "basketball_nba")
+            max_hypotheses: Max hypotheses to create this call
+            training_cutoff_date: ISO date string (YYYY-MM-DD). Data up to this
+                date is the training set; backtests will use data after this date.
+                Defaults to 30 days before today.
+
         Returns list of created hypothesis summaries.
         """
         existing = await self.hypothesis_manager.list_hypotheses()
         existing_names = {h["name"] for h in existing}
+
+        # Compute temporal metadata
+        today = datetime.now(timezone.utc).date()
+        if training_cutoff_date:
+            try:
+                cutoff = datetime.strptime(training_cutoff_date, "%Y-%m-%d").date()
+            except ValueError:
+                cutoff = today - timedelta(days=30)
+        else:
+            cutoff = today - timedelta(days=30)
+
+        training_period_start = "2023-01-01"
+        training_period_end = str(cutoff)
+        forward_test_start = str(cutoff + timedelta(days=1))
 
         created = []
 
@@ -422,7 +444,7 @@ class HypothesisGenerator:
                 market_type = template["market_type"].format(**combo)
                 edge_threshold = combo.get("min_edge", 2) / 100.0
 
-                # Build model config
+                # Build model config with temporal metadata
                 model_config = {}
                 for k, v in template["model_config"].items():
                     if isinstance(v, str) and "{" in v:
@@ -439,6 +461,11 @@ class HypothesisGenerator:
                     except (ValueError, TypeError):
                         pass
 
+                # Attach temporal isolation metadata
+                model_config["training_period_start"] = training_period_start
+                model_config["training_period_end"] = training_period_end
+                model_config["forward_test_start"] = forward_test_start
+
                 try:
                     hid = await self.hypothesis_manager.create_hypothesis(
                         name=name,
@@ -447,13 +474,19 @@ class HypothesisGenerator:
                         market_type=market_type,
                         model_config=model_config,
                         edge_threshold=edge_threshold,
-                        notes=f"Auto-generated from template '{template['id']}'",
+                        notes=(
+                            f"Auto-generated from template '{template['id']}'. "
+                            f"Train: [{training_period_start}..{training_period_end}], "
+                            f"forward-test from {forward_test_start}."
+                        ),
                     )
                     created.append({
                         "hypothesis_id": hid,
                         "name": name,
                         "template": template["id"],
                         "variables": combo,
+                        "training_period_end": training_period_end,
+                        "forward_test_start": forward_test_start,
                     })
                     existing_names.add(name)
                 except Exception as e:
@@ -461,7 +494,8 @@ class HypothesisGenerator:
 
         logger.info(
             f"Generated {len(created)} hypotheses for {sport} "
-            f"from {len(HYPOTHESIS_TEMPLATES)} templates"
+            f"from {len(HYPOTHESIS_TEMPLATES)} templates "
+            f"(training cutoff: {training_period_end})"
         )
         return created
 
@@ -534,6 +568,13 @@ class HypothesisGenerator:
             # Tag which embedding data the hypothesis was derived from
             period_label = data_period or "all"
 
+            # Compute temporal isolation metadata for cluster-derived hypotheses
+            today = datetime.now(timezone.utc).date()
+            training_cutoff = today - timedelta(days=30)
+            training_period_start = "2023-01-01"
+            training_period_end = str(training_cutoff)
+            forward_test_start = str(training_cutoff + timedelta(days=1))
+
             try:
                 hid = await self.hypothesis_manager.create_hypothesis(
                     name=name,
@@ -548,11 +589,16 @@ class HypothesisGenerator:
                         "cluster_features": common,
                         "source_cluster_size": len(cluster),
                         "source_data_period": period_label,
+                        "training_period_start": training_period_start,
+                        "training_period_end": training_period_end,
+                        "forward_test_start": forward_test_start,
                     },
                     edge_threshold=abs(delta),
                     notes=(
                         f"Auto-discovered from {collection} cluster "
-                        f"(N={len(cluster)}, data_period={period_label})"
+                        f"(N={len(cluster)}, data_period={period_label}). "
+                        f"Train: [{training_period_start}..{training_period_end}], "
+                        f"forward-test from {forward_test_start}."
                     ),
                 )
                 created.append({
@@ -563,6 +609,8 @@ class HypothesisGenerator:
                     "expected_rate": round(expected_rate, 4),
                     "delta": round(delta, 4),
                     "data_period": period_label,
+                    "training_period_end": training_period_end,
+                    "forward_test_start": forward_test_start,
                 })
             except Exception as e:
                 logger.warning(f"Failed to create cluster hypothesis: {e}")
@@ -628,27 +676,46 @@ class HypothesisGenerator:
             logger.warning(f"Failed to parse Claude hypotheses: {e}")
             return []
 
+        # Temporal metadata for Claude-generated hypotheses
+        today = datetime.now(timezone.utc).date()
+        training_cutoff = today - timedelta(days=30)
+        training_period_start = "2023-01-01"
+        training_period_end = str(training_cutoff)
+        forward_test_start = str(training_cutoff + timedelta(days=1))
+
         created = []
         for h_raw in hypotheses_raw:
             try:
+                mc = h_raw.get("model_config", {
+                    "type": "consensus_devig",
+                    "devig_method": "power",
+                    "target_book": "draftkings",
+                    "consensus_min_books": 3,
+                })
+                # Inject temporal isolation metadata
+                mc["training_period_start"] = training_period_start
+                mc["training_period_end"] = training_period_end
+                mc["forward_test_start"] = forward_test_start
+
                 hid = await self.hypothesis_manager.create_hypothesis(
                     name=h_raw.get("name", "Unnamed"),
                     thesis=h_raw.get("thesis", ""),
                     sport=sport,
                     market_type=h_raw.get("market_type", "spreads"),
-                    model_config=h_raw.get("model_config", {
-                        "type": "consensus_devig",
-                        "devig_method": "power",
-                        "target_book": "draftkings",
-                        "consensus_min_books": 3,
-                    }),
+                    model_config=mc,
                     edge_threshold=float(h_raw.get("edge_threshold", 0.02)),
-                    notes="Auto-generated by Claude Code hypothesis engine",
+                    notes=(
+                        f"Auto-generated by Claude Code hypothesis engine. "
+                        f"Train: [{training_period_start}..{training_period_end}], "
+                        f"forward-test from {forward_test_start}."
+                    ),
                 )
                 created.append({
                     "hypothesis_id": hid,
                     "name": h_raw.get("name"),
                     "source": "claude_code",
+                    "training_period_end": training_period_end,
+                    "forward_test_start": forward_test_start,
                 })
             except Exception as e:
                 logger.warning(f"Failed to create Claude hypothesis: {e}")

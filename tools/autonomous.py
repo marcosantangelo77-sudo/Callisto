@@ -24,6 +24,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from tools import telegram
@@ -338,6 +339,12 @@ HYPOTHESIS_GEN_INTERVAL = 120       # 2 min between hypothesis generation — Cl
 BACKTEST_BATCH_SIZE = 20            # Hypotheses to backtest per cycle — higher throughput
 CLAUDE_ESCALATION_COOLDOWN = 10     # 10s cooldown — 45 calls/hr means ~80s natural spacing, let rate limiter govern
 SYSTEM_IMPROVEMENT_INTERVAL = 10    # Run system improvement every N cycles
+
+# ── Temporal isolation defaults ──
+# Hypotheses train on data before the cutoff, backtest on data after.
+# This prevents look-ahead bias / circular testing.
+DEFAULT_TRAINING_WINDOW_DAYS = 30    # Train on everything before (today - N days)
+BACKTEST_GAP_DAYS = 1                # Gap between training end and backtest start (avoids leakage)
 
 # Domains to research (ordered by data availability)
 RESEARCH_SPORTS = [
@@ -881,6 +888,33 @@ class ResearchLoop:
         total_created = 0
         used_claude = False
 
+        # ── Temporal isolation: compute training cutoff ──
+        # All hypotheses generated this cycle train on data before the cutoff.
+        # Backtests will only use data AFTER cutoff + gap.
+        today = datetime.now(timezone.utc).date()
+        training_cutoff = today - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
+        training_period_start = "2023-01-01"  # earliest cached data
+
+        # Try to use temporal_analysis module for walk-forward windows
+        try:
+            from tools.temporal_analysis import get_training_window
+            window = get_training_window()
+            if window:
+                training_period_start = window.get("start", training_period_start)
+                training_cutoff = datetime.strptime(
+                    window.get("end", str(training_cutoff)), "%Y-%m-%d"
+                ).date()
+                logger.info(f"Research: using temporal_analysis window {training_period_start} to {training_cutoff}")
+        except (ImportError, Exception) as e:
+            logger.debug(f"Research: temporal_analysis not available, using default window: {e}")
+
+        training_period_end = str(training_cutoff)
+        forward_test_start = str(training_cutoff + timedelta(days=BACKTEST_GAP_DAYS))
+        logger.info(
+            f"Research: temporal isolation — train [{training_period_start} .. {training_period_end}], "
+            f"forward-test from {forward_test_start}"
+        )
+
         # ── PRIMARY: Claude Code hypothesis generation ──
         from tools.claude_code import is_available as claude_available, claude_code_query
 
@@ -987,6 +1021,9 @@ class ResearchLoop:
                                     model_config={
                                         "source": "claude_primary_gen",
                                         "cycle": self._cycles,
+                                        "training_period_start": training_period_start,
+                                        "training_period_end": training_period_end,
+                                        "forward_test_start": forward_test_start,
                                     },
                                 )
                                 total_created += 1
@@ -1025,7 +1062,16 @@ class ResearchLoop:
         logger.info(f"Research: generated {total_created} new hypotheses")
 
     async def _phase_backtest(self) -> None:
-        """Backtest draft hypotheses that are ready."""
+        """Backtest draft hypotheses — enforcing temporal isolation.
+
+        The correct lifecycle:
+          1. Hypothesis was generated using data from [training_period_start .. training_period_end]
+          2. Backtest MUST only use data AFTER training_period_end + gap
+          3. This prevents circular testing (training and testing on same data)
+
+        Legacy hypotheses without temporal metadata get a conservative default:
+        backtest only the last 30 days (assumed to be unseen).
+        """
         # Get draft hypotheses that haven't been backtested
         drafts = await self.hypothesis_manager.list_hypotheses(status="draft")
 
@@ -1066,8 +1112,6 @@ class ResearchLoop:
         to_test = drafts[:BACKTEST_BATCH_SIZE]
         logger.info(f"Research: backtesting {len(to_test)} hypotheses")
 
-        from datetime import datetime, timedelta, timezone
-
         for h in to_test:
             if not self._running:
                 break
@@ -1100,8 +1144,43 @@ class ResearchLoop:
                 continue
 
             try:
-                end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                start_date = "2023-01-01"  # Full cached range
+                # ── Temporal isolation: determine forward-test date range ──
+                model_config = h.get("model_config", {})
+                if isinstance(model_config, str):
+                    try:
+                        model_config = json.loads(model_config)
+                    except (json.JSONDecodeError, TypeError):
+                        model_config = {}
+
+                has_temporal = (
+                    "training_period_end" in model_config
+                    and model_config["training_period_end"]
+                )
+
+                if has_temporal:
+                    # Forward-only backtest: start AFTER training period + gap
+                    training_end = model_config["training_period_end"]
+                    try:
+                        te_date = datetime.strptime(training_end, "%Y-%m-%d").date()
+                    except ValueError:
+                        te_date = datetime.now(timezone.utc).date() - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
+                    start_date = str(te_date + timedelta(days=BACKTEST_GAP_DAYS))
+                    end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    logger.info(
+                        f"Research: backtest {h['hypothesis_id']} forward-only "
+                        f"[{start_date} .. {end_date}] (trained up to {training_end})"
+                    )
+                else:
+                    # Legacy hypothesis without temporal metadata — conservative default
+                    logger.warning(
+                        f"Research: hypothesis {h['hypothesis_id']} has NO temporal metadata. "
+                        f"Defaulting to last {DEFAULT_TRAINING_WINDOW_DAYS} days only (conservative)."
+                    )
+                    end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    start_date = str(
+                        datetime.now(timezone.utc).date()
+                        - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
+                    )
 
                 result = await self.backtest_engine.run_backtest(
                     hypothesis_id=h["hypothesis_id"],
@@ -1110,8 +1189,33 @@ class ResearchLoop:
                     credit_budget=10,  # Conservative per-hypothesis
                 )
 
+                # Store temporal metadata in backtest result for integrity checking
                 self._backtests_run += 1
                 signals = result.get("signals_generated", 0)
+
+                # Update model_config with actual backtest range for audit trail
+                if has_temporal:
+                    model_config["backtest_period_start"] = start_date
+                    model_config["backtest_period_end"] = end_date
+                    model_config["temporal_isolation"] = True
+                else:
+                    model_config["backtest_period_start"] = start_date
+                    model_config["backtest_period_end"] = end_date
+                    model_config["temporal_isolation"] = False
+                    model_config["temporal_isolation_note"] = "legacy_hypothesis_conservative_default"
+
+                # Persist updated model_config
+                try:
+                    db = self.data_collector._db
+                    if db:
+                        await db.execute(
+                            "UPDATE hypotheses SET model_config = ? WHERE hypothesis_id = ?",
+                            (json.dumps(model_config), h["hypothesis_id"]),
+                        )
+                        await db.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to update temporal metadata for {h['hypothesis_id']}: {e}")
+
                 logger.info(
                     f"Research: backtest {h['hypothesis_id']} — "
                     f"{result.get('total_events', 0)} events, {signals} signals"
@@ -1121,8 +1225,43 @@ class ResearchLoop:
                     f"Backtest failed for {h['hypothesis_id']}: {e}"
                 )
 
+    @staticmethod
+    def _check_temporal_overlap(model_config: dict) -> Optional[str]:
+        """Check if training and backtest periods overlap. Returns error message or None."""
+        if isinstance(model_config, str):
+            try:
+                model_config = json.loads(model_config)
+            except (json.JSONDecodeError, TypeError):
+                return None
+        if not isinstance(model_config, dict):
+            return None
+
+        training_end = model_config.get("training_period_end")
+        backtest_start = model_config.get("backtest_period_start")
+
+        if not training_end or not backtest_start:
+            return None  # Can't check without both dates
+
+        try:
+            te = datetime.strptime(str(training_end), "%Y-%m-%d").date()
+            bs = datetime.strptime(str(backtest_start), "%Y-%m-%d").date()
+            if bs <= te:
+                return (
+                    f"TEMPORAL OVERLAP: backtest starts {bs} but training ends {te}. "
+                    f"Backtest results are contaminated by training data."
+                )
+        except ValueError:
+            pass
+
+        return None
+
     async def _phase_evaluate(self) -> None:
-        """Evaluate backtesting hypotheses for promotion or rejection."""
+        """Evaluate backtesting hypotheses for promotion or rejection.
+
+        Enforces temporal isolation: a hypothesis can only be promoted if
+        its backtest period does NOT overlap its training period. This
+        prevents circular testing from ever reaching paper trading or live.
+        """
         # First, resolve any unresolved backtest events from game_results
         try:
             resolution = await self.backtest_engine.resolve_from_game_results()
@@ -1138,6 +1277,26 @@ class ResearchLoop:
 
         for h in backtesting:
             try:
+                # ── Temporal isolation gate ──
+                model_config = h.get("model_config", {})
+                if isinstance(model_config, str):
+                    try:
+                        model_config = json.loads(model_config)
+                    except (json.JSONDecodeError, TypeError):
+                        model_config = {}
+
+                overlap_err = self._check_temporal_overlap(model_config)
+                if overlap_err:
+                    logger.error(
+                        f"Research: REJECTING {h['hypothesis_id']} — {overlap_err}"
+                    )
+                    await self.hypothesis_manager.update_status(
+                        h["hypothesis_id"], "rejected",
+                        f"auto:temporal_overlap — {overlap_err}"
+                    )
+                    self._rejections += 1
+                    continue
+
                 result = await self.hypothesis_manager.auto_promote(h["hypothesis_id"])
                 action = result.get("action", "held")
 
@@ -1158,10 +1317,32 @@ class ResearchLoop:
                     f"Evaluation failed for {h['hypothesis_id']}: {e}"
                 )
 
-        # Also evaluate paper trading hypotheses
+        # Also evaluate paper trading hypotheses — require BOTH backtest
+        # significance AND paper trading data on temporally isolated data
         paper = await self.hypothesis_manager.list_hypotheses(status="paper_trading")
         for h in paper:
             try:
+                # ── Temporal isolation gate for live promotion ──
+                model_config = h.get("model_config", {})
+                if isinstance(model_config, str):
+                    try:
+                        model_config = json.loads(model_config)
+                    except (json.JSONDecodeError, TypeError):
+                        model_config = {}
+
+                # Paper trades must be AFTER hypothesis creation date
+                # (this is inherently true since paper trades use live odds,
+                # but we verify the hypothesis has temporal isolation)
+                has_temporal = bool(model_config.get("training_period_end"))
+                has_backtest = bool(model_config.get("temporal_isolation"))
+
+                if not has_temporal and not has_backtest:
+                    # Legacy hypothesis — allow promotion but log warning
+                    logger.warning(
+                        f"Research: hypothesis {h['hypothesis_id']} lacks temporal "
+                        f"isolation metadata — allowing paper trade eval but flagging"
+                    )
+
                 result = await self.hypothesis_manager.auto_promote(h["hypothesis_id"])
                 action = result.get("action", "held")
                 if action == "promoted":
@@ -1174,7 +1355,8 @@ class ResearchLoop:
                         await telegram.send_message(
                             f"HYPOTHESIS PROVEN: {h['name']}\n"
                             f"Thesis: {h['thesis'][:200]}\n"
-                            f"Status: LIVE — ready for real money"
+                            f"Status: LIVE — ready for real money\n"
+                            f"Temporal isolation: {'YES' if has_temporal else 'LEGACY (no metadata)'}"
                         )
                     except Exception as e:
                         logger.warning(f"Telegram notification failed for proven hypothesis {h['name']}: {e}")
@@ -1727,7 +1909,20 @@ class ResearchLoop:
                                 sport=nh.get("sport", "basketball_nba"),
                                 market_type=nh.get("market_type", "spreads"),
                                 edge_threshold=nh.get("edge_threshold", 0.03),
-                                model_config={"source": "claude_deep_work", "cycle": self._cycles},
+                                model_config={
+                                    "source": "claude_deep_work",
+                                    "cycle": self._cycles,
+                                    "training_period_start": "2023-01-01",
+                                    "training_period_end": str(
+                                        datetime.now(timezone.utc).date()
+                                        - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
+                                    ),
+                                    "forward_test_start": str(
+                                        datetime.now(timezone.utc).date()
+                                        - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
+                                        + timedelta(days=BACKTEST_GAP_DAYS)
+                                    ),
+                                },
                             )
                             created += 1
                         except Exception as e:

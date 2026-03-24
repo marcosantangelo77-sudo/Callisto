@@ -215,9 +215,34 @@ class HypothesisManager:
         significance_level: float = 0.05,
         notes: str = "",
     ) -> str:
-        """Create a new hypothesis. Returns hypothesis_id."""
+        """Create a new hypothesis. Returns hypothesis_id.
+
+        Temporal metadata in model_config (set by temporal_analysis.py):
+            - training_period_start: First date used for pattern discovery
+            - training_period_end: Last date used for pattern discovery
+            - temporal_split_gap_days: Buffer days between train/test (default 7)
+
+        These fields are used by backtest.py to enforce temporal isolation.
+        """
         hid = str(uuid.uuid4())[:12]
         now = datetime.now(timezone.utc).isoformat()
+
+        # Log whether temporal metadata is present
+        has_temporal = bool(model_config.get("training_period_end"))
+        if not has_temporal:
+            logger.warning(
+                f"Hypothesis '{name}' created WITHOUT temporal metadata in model_config. "
+                "Backtest engine will not enforce temporal isolation. "
+                "Use temporal_analysis.generate_hypotheses_from_analysis() to auto-populate."
+            )
+        else:
+            logger.info(
+                f"Hypothesis '{name}' has temporal metadata: "
+                f"training {model_config.get('training_period_start')} "
+                f"to {model_config.get('training_period_end')}, "
+                f"gap {model_config.get('temporal_split_gap_days', 7)}d"
+            )
+
         await self._db.execute(
             "INSERT INTO hypotheses "
             "(hypothesis_id, name, thesis, sport, market_type, model_config, "
@@ -613,4 +638,29 @@ class HypothesisManager:
         # Readiness check
         report["promotion_readiness"] = await self.check_promotion_readiness(hypothesis_id)
 
+        # Temporal metadata
+        temporal = self.get_temporal_metadata(h)
+        if temporal:
+            report["temporal_metadata"] = temporal
+
         return report
+
+    @staticmethod
+    def get_temporal_metadata(hypothesis: dict) -> Optional[dict]:
+        """Extract temporal split metadata from a hypothesis's model_config.
+
+        Returns None if no temporal metadata exists (legacy hypothesis).
+        """
+        config = hypothesis.get("model_config", {})
+        training_end = config.get("training_period_end")
+        if not training_end:
+            return None
+        return {
+            "training_period_start": config.get("training_period_start"),
+            "training_period_end": training_end,
+            "temporal_split_gap_days": config.get("temporal_split_gap_days", 7),
+            "training_sample_size": config.get("training_sample_size"),
+            "training_hit_rate": config.get("training_hit_rate"),
+            "training_p_value": config.get("training_p_value"),
+            "has_temporal_isolation": True,
+        }
