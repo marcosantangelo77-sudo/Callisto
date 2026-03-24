@@ -455,6 +455,124 @@ CREATE TABLE IF NOT EXISTS research_focus_areas (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ──────────────────────────────────────────
+-- MASTERS HISTORICAL: tournament results 2010+
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS masters_historical (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    year INTEGER NOT NULL,
+    player TEXT NOT NULL,
+    position TEXT,
+    position_numeric INTEGER,
+    r1 INTEGER,
+    r2 INTEGER,
+    r3 INTEGER,
+    r4 INTEGER,
+    total INTEGER,
+    total_to_par INTEGER,
+    cut_made BOOLEAN,
+    sg_total REAL,
+    sg_putting REAL,
+    sg_approach REAL,
+    sg_around_green REAL,
+    sg_off_tee REAL,
+    sg_tee_to_green REAL,
+    masters_appearances INTEGER,
+    world_ranking INTEGER,
+    age INTEGER,
+    UNIQUE(year, player)
+);
+
+CREATE INDEX IF NOT EXISTS idx_masters_year ON masters_historical(year);
+CREATE INDEX IF NOT EXISTS idx_masters_player ON masters_historical(player);
+CREATE INDEX IF NOT EXISTS idx_masters_position ON masters_historical(year, position_numeric);
+
+-- ──────────────────────────────────────────
+-- PGA SEASON STATS: current form data
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS pga_season_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    year INTEGER NOT NULL,
+    player TEXT NOT NULL,
+    events_played INTEGER,
+    sg_total REAL,
+    sg_putting REAL,
+    sg_approach REAL,
+    sg_around_green REAL,
+    sg_off_tee REAL,
+    sg_tee_to_green REAL,
+    driving_distance REAL,
+    driving_accuracy REAL,
+    gir_pct REAL,
+    scrambling_pct REAL,
+    putting_avg REAL,
+    par5_scoring_avg REAL,
+    par3_scoring_avg REAL,
+    world_ranking INTEGER,
+    fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(year, player)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pga_stats_year ON pga_season_stats(year, player);
+
+-- ──────────────────────────────────────────
+-- MASTERS FIELD: expected/confirmed entrants
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS masters_field (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    year INTEGER NOT NULL,
+    player TEXT NOT NULL,
+    qualification_category TEXT,
+    world_ranking INTEGER,
+    confirmed BOOLEAN DEFAULT 0,
+    UNIQUE(year, player)
+);
+
+-- ──────────────────────────────────────────
+-- MASTERS BACKTEST RESULTS: LOO/rolling window
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS masters_backtest_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hypothesis_id TEXT NOT NULL,
+    method TEXT NOT NULL,
+    test_year INTEGER NOT NULL,
+    train_years TEXT NOT NULL,
+    predictions_json TEXT,
+    actuals_json TEXT,
+    top10_accuracy REAL,
+    top10_recall REAL,
+    cut_accuracy REAL,
+    rank_correlation REAL,
+    roi_vs_market REAL,
+    computed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(hypothesis_id, method, test_year)
+);
+
+CREATE INDEX IF NOT EXISTS idx_masters_bt_hypo
+    ON masters_backtest_results(hypothesis_id, method);
+
+-- ──────────────────────────────────────────
+-- MASTERS PREDICTIONS: pre-tournament rankings
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS masters_predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hypothesis_id TEXT,
+    year INTEGER NOT NULL,
+    player TEXT NOT NULL,
+    masters_fit_score REAL,
+    predicted_rank INTEGER,
+    top5_prob REAL,
+    top10_prob REAL,
+    top20_prob REAL,
+    cut_prob REAL,
+    win_prob REAL,
+    confidence_low INTEGER,
+    confidence_high INTEGER,
+    key_factors TEXT,
+    computed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(hypothesis_id, year, player)
+);
 """
 
 
