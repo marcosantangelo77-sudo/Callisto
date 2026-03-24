@@ -8,13 +8,16 @@ Two loops run concurrently:
 ResearchLoop cycle:
   - Collect post-game data (ESPN scores, box scores) — FREE
   - Embed game contexts and prop outcomes into vector store
-  - Generate hypotheses from templates + embedding clusters
+  - Generate hypotheses (Claude Code PRIMARY, templates FALLBACK)
   - Backtest hypotheses against historical data
   - Evaluate significance, auto-promote or auto-reject
-  - Escalate to Claude Code for heavy analysis when needed
+  - Claude interprets backtest results (signal vs noise, threshold mods)
   - Paper trade promoted hypotheses on live odds
+  - Claude deep analysis — actionable hypothesis/rejection work
+  - System self-improvement (every 10 cycles) — pipeline optimization
 
-This is the core autonomous research engine that runs without human input.
+Claude Code is the PRIMARY reasoning engine. Local models stay only
+for fast classification (Sentinel) and embeddings.
 """
 
 import asyncio
@@ -331,9 +334,10 @@ class AutonomousLoop:
 # Cadence controls — MAXIMUM THROUGHPUT (Karpathy loop: rate limit is the only governor)
 RESEARCH_CYCLE_INTERVAL = 60        # 1 min between cycles — tight as possible
 DATA_COLLECTION_INTERVAL = 300      # 5 min between data pulls — fresher data for live edges
-HYPOTHESIS_GEN_INTERVAL = 600       # 10 min between hypothesis generation — stay creative
+HYPOTHESIS_GEN_INTERVAL = 120       # 2 min between hypothesis generation — Claude drives, smaller batches
 BACKTEST_BATCH_SIZE = 20            # Hypotheses to backtest per cycle — higher throughput
-CLAUDE_ESCALATION_COOLDOWN = 60     # 1 min between Claude Code calls — push until rate limited
+CLAUDE_ESCALATION_COOLDOWN = 10     # 10s cooldown — 45 calls/hr means ~80s natural spacing, let rate limiter govern
+SYSTEM_IMPROVEMENT_INTERVAL = 10    # Run system improvement every N cycles
 
 # Domains to research (ordered by data availability)
 RESEARCH_SPORTS = [
@@ -348,16 +352,17 @@ RESEARCH_SPORTS = [
 
 class ResearchLoop:
     """
-    24/7 autonomous research engine.
+    24/7 autonomous research engine — Claude Code is the primary reasoning engine.
 
     Runs independently of AutonomousLoop. While AutonomousLoop handles
     real-time edge detection and alerting, ResearchLoop handles the
     slow, deep work: collecting data, discovering patterns, generating
-    and testing hypotheses, and escalating to Claude Code.
+    and testing hypotheses, interpreting results, and self-improving.
 
-    The local models (Architect/Manager) drive the cycle. Claude Code
-    is only called for tasks too heavy for local models (creative
-    hypothesis generation, complex statistical analysis).
+    Claude Code drives hypothesis generation, backtest interpretation,
+    and system improvement. Local models handle fast classification
+    (Sentinel) and embeddings only. Template generation is the fallback
+    when Claude is rate-limited.
     """
 
     def __init__(
@@ -469,6 +474,12 @@ class ResearchLoop:
                 if not self._running:
                     break
 
+                # Phase 5b: Claude interprets backtest results (signal vs noise)
+                await self._phase_interpret_backtests()
+
+                if not self._running:
+                    break
+
                 # Phase 6: Paper trade active hypotheses
                 await self._phase_paper_trade()
 
@@ -477,6 +488,12 @@ class ResearchLoop:
 
                 # Phase 7: Claude deep analysis — use remaining budget
                 await self._phase_claude_deep_work()
+
+                if not self._running:
+                    break
+
+                # Phase 8: System self-improvement (every N cycles)
+                await self._phase_system_improvement()
 
                 logger.info(
                     f"Research cycle #{self._cycles} complete — "
@@ -834,45 +851,32 @@ class ResearchLoop:
                 logger.warning(f"Embedding failed for context {ctx['id']}: {e}")
 
     async def _phase_generate_hypotheses(self) -> None:
-        """Generate new hypotheses from templates and clusters."""
+        """Generate new hypotheses — Claude Code PRIMARY, templates FALLBACK.
+
+        Claude Code is the primary hypothesis generator. Every cycle where
+        Claude is available, we ask it to generate hypotheses based on current
+        pipeline state, data stats, and what hasn't been tried. Template
+        generation is the fallback when Claude is rate-limited.
+        """
         now = time.time()
         if now - self._last_hypothesis_gen < HYPOTHESIS_GEN_INTERVAL:
             return
 
-        logger.info("Research: generating hypotheses")
+        logger.info("Research: generating hypotheses (Claude-primary)")
         self._last_hypothesis_gen = now
 
         total_created = 0
+        used_claude = False
 
-        # Template-based generation for each sport
-        for sport in RESEARCH_SPORTS:
-            try:
-                created = await self.hypothesis_generator.generate_from_templates(
-                    sport=sport, max_hypotheses=20,
-                )
-                total_created += len(created)
-            except Exception as e:
-                logger.warning(f"Template generation failed for {sport}: {e}")
+        # ── PRIMARY: Claude Code hypothesis generation ──
+        from tools.claude_code import is_available as claude_available, claude_code_query
 
-        # Cluster-based generation (needs enough embedded data)
-        try:
-            stats = await self.vector_store.get_collection_stats("prop_outcomes")
-            if isinstance(stats, dict) and stats.get("count", 0) >= 50:
-                cluster_created = await self.hypothesis_generator.generate_from_clusters(
-                    collection="prop_outcomes",
-                    min_cluster_size=10,
-                )
-                total_created += len(cluster_created)
-        except Exception as e:
-            logger.warning(f"Cluster generation failed: {e}")
-
-        # Claude Code escalation for creative hypotheses (if available + cooldown elapsed)
-        from tools.claude_code import is_available as claude_available
         if (now - self._last_claude_call > CLAUDE_ESCALATION_COOLDOWN
                 and claude_available()):
             try:
-                # Build data summary for Claude
+                # Gather context for Claude
                 all_hypos = await self.hypothesis_manager.list_hypotheses()
+                existing_names = [h["name"] for h in all_hypos]
                 draft_count = sum(1 for h in all_hypos if h["status"] == "draft")
                 active_count = sum(
                     1 for h in all_hypos
@@ -882,37 +886,127 @@ class ResearchLoop:
 
                 data_stats = await self.data_collector.get_collection_stats()
 
-                summary = (
-                    f"Callisto autonomous research status:\n"
-                    f"- {len(all_hypos)} total hypotheses "
-                    f"({draft_count} draft, {active_count} active, "
-                    f"{rejected_count} rejected)\n"
-                    f"- Data: {json.dumps(data_stats, indent=2)}\n"
-                    f"- Sports covered: {', '.join(RESEARCH_SPORTS)}\n"
-                    f"- Model: consensus devig (power method) across 3+ books\n"
-                    f"\nCallisto is a general-purpose autonomous agent. "
-                    f"Current sports focus: pre-game edges, player prop mispricing, "
-                    f"situational factors books don't price correctly. "
-                    f"Future domains: stocks, crypto, any quantifiable edge.\n"
-                    f"\nGenerate novel, testable hypotheses we haven't tried yet. "
-                    f"Focus on edges that persist for hours (pre-game props), "
-                    f"not speed-dependent arbitrage. Think about: "
-                    f"rest days, travel, altitude, referee tendencies, "
-                    f"public betting % vs sharp, weather, revenge games, "
-                    f"back-to-backs, divisional rivalry patterns, "
-                    f"line movement timing, closing line value patterns."
+                # Get date ranges per sport from DB
+                date_ranges = {}
+                db = self.data_collector._db
+                if db:
+                    try:
+                        cursor = await db.execute(
+                            "SELECT sport, MIN(snapshot_date), MAX(snapshot_date), COUNT(*) "
+                            "FROM historical_odds_cache GROUP BY sport"
+                        )
+                        for row in await cursor.fetchall():
+                            date_ranges[row[0]] = {
+                                "from": row[1], "to": row[2], "records": row[3]
+                            }
+                    except Exception:
+                        pass
+
+                prompt = (
+                    f"CALLISTO HYPOTHESIS GENERATION — Cycle #{self._cycles}\n\n"
+                    f"You are the primary reasoning engine for an autonomous sports betting "
+                    f"research system. Generate novel, testable hypotheses.\n\n"
+                    f"PIPELINE STATE:\n"
+                    f"  Total hypotheses: {len(all_hypos)} "
+                    f"({draft_count} draft, {active_count} active, {rejected_count} rejected)\n"
+                    f"  Sports: {', '.join(RESEARCH_SPORTS)}\n"
+                    f"  Data ranges: {json.dumps(date_ranges)}\n"
+                    f"  Collection stats: {json.dumps(data_stats)}\n"
+                    f"  Model: consensus devig (power method) across 3+ books\n\n"
+                    f"EXISTING HYPOTHESIS NAMES (avoid duplicates):\n"
+                    f"  {json.dumps(existing_names[:50])}\n\n"
+                    f"FOCUS AREAS (edges that persist hours, not speed arb):\n"
+                    f"  - rest days, travel, altitude, back-to-backs\n"
+                    f"  - referee tendencies, scheme matchups\n"
+                    f"  - public betting % vs sharp money\n"
+                    f"  - weather, revenge games, divisional rivalry\n"
+                    f"  - line movement timing, closing line value patterns\n"
+                    f"  - player prop mispricing (over/under on stats)\n"
+                    f"  - situational factors books underweight\n\n"
+                    f"RESPOND WITH EXACTLY THIS JSON (no other text):\n"
+                    f'{{"hypotheses": [\n'
+                    f'  {{"name": "unique_snake_case_name", '
+                    f'"thesis": "Clear testable statement", '
+                    f'"sport": "basketball_nba", '
+                    f'"market_type": "spreads|totals|h2h|player_props", '
+                    f'"edge_threshold": 0.03}}\n'
+                    f"]}}\n\n"
+                    f"RULES:\n"
+                    f"- Generate 3-5 hypotheses per call\n"
+                    f"- Each must be testable with game-level odds data we have\n"
+                    f"- Names must be unique (not in existing list)\n"
+                    f"- Thesis must be specific and falsifiable\n"
+                    f"- Prefer sports with the most data (check date_ranges)\n"
                 )
 
-                for sport in RESEARCH_SPORTS[:3]:  # Top 3 sports
-                    created = await self.hypothesis_generator.generate_from_claude(
-                        sport=sport, data_summary=summary,
+                result = await claude_code_query(prompt)
+                self._last_claude_call = time.time()
+                self._claude_escalations += 1
+
+                if result.get("content") and not result.get("error"):
+                    content = result["content"]
+                    try:
+                        # Extract JSON from response
+                        json_str = content
+                        if "```" in json_str:
+                            parts = json_str.split("```")
+                            for part in parts:
+                                stripped = part.strip()
+                                if stripped.startswith("json"):
+                                    stripped = stripped[4:].strip()
+                                if stripped.startswith("{"):
+                                    json_str = stripped
+                                    break
+                        elif "{" in json_str:
+                            start = json_str.index("{")
+                            end = json_str.rindex("}") + 1
+                            json_str = json_str[start:end]
+
+                        parsed = json.loads(json_str)
+                        for nh in parsed.get("hypotheses", []):
+                            try:
+                                await self.hypothesis_manager.create_hypothesis(
+                                    name=nh.get("name", f"claude_gen_{self._cycles}"),
+                                    thesis=nh.get("thesis", ""),
+                                    sport=nh.get("sport", "basketball_nba"),
+                                    market_type=nh.get("market_type", "spreads"),
+                                    edge_threshold=nh.get("edge_threshold", 0.03),
+                                    model_config={
+                                        "source": "claude_primary_gen",
+                                        "cycle": self._cycles,
+                                    },
+                                )
+                                total_created += 1
+                            except Exception as e:
+                                logger.warning(f"Failed to create Claude hypothesis: {e}")
+
+                        used_claude = True
+                        logger.info(
+                            f"Research: Claude generated {total_created} hypotheses"
+                        )
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.warning(
+                            f"Claude hypothesis response not valid JSON: {e}"
+                        )
+                elif result.get("rate_limited"):
+                    logger.info(
+                        "Research: Claude rate-limited during hypothesis gen — "
+                        "falling back to templates"
+                    )
+            except Exception as e:
+                logger.warning(f"Claude hypothesis generation failed: {e}")
+
+        # ── FALLBACK: Template-based generation when Claude unavailable ──
+        if not used_claude:
+            logger.info("Research: using template fallback for hypothesis generation")
+            for sport in RESEARCH_SPORTS:
+                try:
+                    created = await self.hypothesis_generator.generate_from_templates(
+                        sport=sport, max_hypotheses=20,
                     )
                     total_created += len(created)
-
-                self._last_claude_call = now
-                self._claude_escalations += 1
-            except Exception as e:
-                logger.warning(f"Claude escalation failed: {e}")
+                except Exception as e:
+                    logger.warning(f"Template generation failed for {sport}: {e}")
 
         self._hypotheses_generated += total_created
         logger.info(f"Research: generated {total_created} new hypotheses")
@@ -1055,6 +1149,178 @@ class ResearchLoop:
                         pass
             except Exception as e:
                 logger.warning(f"Paper trade eval failed for {h['hypothesis_id']}: {e}")
+
+    async def _phase_interpret_backtests(self) -> None:
+        """Claude interprets backtest results — signal vs noise, modifications.
+
+        Sends the top 10 hypotheses by signal count with their win/loss/edge
+        stats to Claude for interpretation. Claude identifies genuine signals,
+        rejects noise, and suggests threshold modifications.
+        """
+        from tools.claude_code import is_available as claude_available, claude_code_query
+
+        now = time.time()
+        if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
+            return
+        if not claude_available():
+            return
+
+        db = self.data_collector._db
+        if not db:
+            return
+
+        # Get top 10 hypotheses by signal count with stats
+        try:
+            cursor = await db.execute("""
+                SELECT h.hypothesis_id, h.name, h.thesis, h.sport, h.market_type,
+                       h.edge_threshold, h.status,
+                       COUNT(CASE WHEN be.signal_generated=1 THEN 1 END) as sigs,
+                       COUNT(*) as events,
+                       SUM(CASE WHEN be.actual_result='win' THEN 1 ELSE 0 END) as wins,
+                       SUM(CASE WHEN be.actual_result='loss' THEN 1 ELSE 0 END) as losses,
+                       SUM(CASE WHEN be.actual_result='push' THEN 1 ELSE 0 END) as pushes,
+                       AVG(CASE WHEN be.signal_generated=1 THEN be.edge END) as avg_edge,
+                       AVG(CASE WHEN be.signal_generated=1 THEN be.ev_pct END) as avg_ev
+                FROM hypotheses h
+                LEFT JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id
+                WHERE h.status IN ('backtesting', 'paper_trading')
+                GROUP BY h.hypothesis_id
+                HAVING events > 0
+                ORDER BY sigs DESC, events DESC
+                LIMIT 10
+            """)
+            rows = await cursor.fetchall()
+        except Exception as e:
+            logger.warning(f"Failed to query backtest stats for interpretation: {e}")
+            return
+
+        if not rows:
+            logger.info("Research: no hypotheses with backtest data for interpretation")
+            return
+
+        # Format hypothesis data for Claude
+        hypo_data = []
+        for r in rows:
+            h_id, name, thesis, sport, mkt, thresh, status = r[0], r[1], r[2], r[3], r[4], r[5], r[6]
+            sigs, events, wins, losses, pushes = r[7] or 0, r[8] or 0, r[9] or 0, r[10] or 0, r[11] or 0
+            avg_edge, avg_ev = r[12] or 0, r[13] or 0
+            resolved = wins + losses + pushes
+            hit_rate = wins / max(resolved, 1)
+            hypo_data.append({
+                "id": h_id, "name": name, "thesis": thesis[:200],
+                "sport": sport, "market": mkt, "threshold": thresh,
+                "status": status, "signals": sigs, "events": events,
+                "wins": wins, "losses": losses, "pushes": pushes,
+                "hit_rate": round(hit_rate, 4),
+                "avg_edge": round(avg_edge, 5),
+                "avg_ev": round(avg_ev, 5),
+            })
+
+        prompt = (
+            f"CALLISTO BACKTEST INTERPRETATION — Cycle #{self._cycles}\n\n"
+            f"You are analyzing backtest results for an autonomous betting research system.\n"
+            f"Determine which hypotheses show genuine signal vs random noise.\n\n"
+            f"HYPOTHESIS BACKTEST RESULTS (top 10 by signal count):\n"
+            f"{json.dumps(hypo_data, indent=2)}\n\n"
+            f"STATISTICAL CONTEXT:\n"
+            f"- A fair coin has ~50% hit rate. Signal needs to beat that consistently.\n"
+            f"- With <30 resolved bets, results are mostly noise (wide confidence intervals).\n"
+            f"- avg_edge > 0.03 with hit_rate > 0.53 over 50+ resolved is promising.\n"
+            f"- 0 signals after 50+ events means the hypothesis never fires — reject it.\n"
+            f"- Low signal rate (<5%) with poor hit rate means the threshold may be wrong.\n\n"
+            f"RESPOND WITH EXACTLY THIS JSON (no other text):\n"
+            f'{{"reject": ["hypothesis_id1", "hypothesis_id2"], '
+            f'"modify": [{{"id": "hypothesis_id", "new_threshold": 0.025, "reason": "..."}}], '
+            f'"insights": "Brief analysis of what patterns are working and what isn\'t"}}\n\n'
+            f"RULES:\n"
+            f"- reject: hypotheses that are clearly noise (0 signals, or terrible hit rate with enough data)\n"
+            f"- modify: promising hypotheses that need threshold adjustments\n"
+            f"- Only include fields you have actionable items for\n"
+        )
+
+        try:
+            result = await claude_code_query(prompt)
+            self._last_claude_call = time.time()
+            self._claude_escalations += 1
+
+            if result.get("content") and not result.get("error"):
+                content = result["content"]
+                try:
+                    # Extract JSON
+                    json_str = content
+                    if "```" in json_str:
+                        parts = json_str.split("```")
+                        for part in parts:
+                            stripped = part.strip()
+                            if stripped.startswith("json"):
+                                stripped = stripped[4:].strip()
+                            if stripped.startswith("{"):
+                                json_str = stripped
+                                break
+                    elif "{" in json_str:
+                        start = json_str.index("{")
+                        end = json_str.rindex("}") + 1
+                        json_str = json_str[start:end]
+
+                    actions = json.loads(json_str)
+
+                    # Act: Reject noise hypotheses
+                    rejected = 0
+                    for hid in actions.get("reject", []):
+                        try:
+                            await self.hypothesis_manager.update_status(
+                                hid, "rejected", "claude_interpret_backtests"
+                            )
+                            rejected += 1
+                            self._rejections += 1
+                        except Exception:
+                            pass
+                    if rejected:
+                        logger.info(
+                            f"Research: Claude interpretation rejected {rejected} "
+                            f"noise hypotheses"
+                        )
+
+                    # Act: Modify thresholds for promising hypotheses
+                    modified = 0
+                    for mod in actions.get("modify", []):
+                        try:
+                            hid = mod.get("id")
+                            new_thresh = mod.get("new_threshold")
+                            reason = mod.get("reason", "claude_threshold_adjust")
+                            if hid and new_thresh is not None:
+                                await db.execute(
+                                    "UPDATE hypotheses SET edge_threshold = ?, "
+                                    "notes = COALESCE(notes, '') || ? "
+                                    "WHERE hypothesis_id = ?",
+                                    (
+                                        new_thresh,
+                                        f"\n[cycle {self._cycles}] threshold adjusted "
+                                        f"to {new_thresh}: {reason}",
+                                        hid,
+                                    ),
+                                )
+                                await db.commit()
+                                modified += 1
+                        except Exception:
+                            pass
+                    if modified:
+                        logger.info(
+                            f"Research: Claude modified thresholds on {modified} hypotheses"
+                        )
+
+                    # Log insights
+                    insights = actions.get("insights", "")
+                    if insights:
+                        logger.info(f"Research: Claude backtest insights — {insights[:300]}")
+
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Claude interpretation response not valid JSON: {e}")
+
+            elif result.get("rate_limited"):
+                logger.info("Research: Claude rate-limited during backtest interpretation")
+        except Exception as e:
+            logger.warning(f"Claude backtest interpretation failed: {e}")
 
     async def _phase_paper_trade(self) -> None:
         """Generate paper trade signals for promoted hypotheses.
@@ -1304,6 +1570,183 @@ class ResearchLoop:
                 logger.info("Research: Claude rate limited — will retry next cycle")
         except Exception as e:
             logger.warning(f"Claude deep work failed: {e}")
+
+    async def _phase_system_improvement(self) -> None:
+        """Self-improvement phase — runs every SYSTEM_IMPROVEMENT_INTERVAL cycles.
+
+        Asks Claude to review pipeline metrics and suggest specific code
+        improvements. Stores suggestions in a system_improvements table.
+        This is how the system learns to improve itself over time.
+        """
+        if self._cycles % SYSTEM_IMPROVEMENT_INTERVAL != 0:
+            return
+
+        from tools.claude_code import is_available as claude_available, claude_code_query
+
+        now = time.time()
+        if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
+            return
+        if not claude_available():
+            return
+
+        db = self.data_collector._db
+        if not db:
+            return
+
+        # Ensure system_improvements table exists
+        try:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS system_improvements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cycle INTEGER NOT NULL,
+                    category TEXT NOT NULL,
+                    suggestion TEXT NOT NULL,
+                    priority TEXT NOT NULL DEFAULT 'medium',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    implemented_at DATETIME
+                )
+            """)
+            await db.commit()
+        except Exception as e:
+            logger.warning(f"Failed to create system_improvements table: {e}")
+            return
+
+        # Gather comprehensive pipeline metrics
+        metrics = {}
+        try:
+            # Hypothesis pipeline funnel
+            cursor = await db.execute(
+                "SELECT status, COUNT(*) FROM hypotheses GROUP BY status"
+            )
+            metrics["hypothesis_funnel"] = {r[0]: r[1] for r in await cursor.fetchall()}
+
+            # Backtest throughput
+            cursor = await db.execute(
+                "SELECT COUNT(*) total, "
+                "SUM(CASE WHEN signal_generated=1 THEN 1 ELSE 0 END) signals, "
+                "SUM(CASE WHEN actual_result='win' THEN 1 ELSE 0 END) wins, "
+                "SUM(CASE WHEN actual_result='loss' THEN 1 ELSE 0 END) losses, "
+                "SUM(CASE WHEN actual_result IS NULL THEN 1 ELSE 0 END) unresolved "
+                "FROM backtest_events"
+            )
+            row = await cursor.fetchone()
+            if row:
+                metrics["backtest_totals"] = {
+                    "events": row[0] or 0, "signals": row[1] or 0,
+                    "wins": row[2] or 0, "losses": row[3] or 0,
+                    "unresolved": row[4] or 0,
+                }
+
+            # Data coverage
+            cursor = await db.execute(
+                "SELECT sport, COUNT(*), MIN(snapshot_date), MAX(snapshot_date) "
+                "FROM historical_odds_cache GROUP BY sport"
+            )
+            metrics["data_coverage"] = {
+                r[0]: {"records": r[1], "from": r[2], "to": r[3]}
+                for r in await cursor.fetchall()
+            }
+
+            # Loop performance
+            metrics["loop_stats"] = {
+                "cycles": self._cycles,
+                "data_collections": self._data_collections,
+                "hypotheses_generated": self._hypotheses_generated,
+                "backtests_run": self._backtests_run,
+                "claude_escalations": self._claude_escalations,
+                "promotions": self._promotions,
+                "rejections": self._rejections,
+            }
+
+            # Previous improvements (to avoid repetition)
+            cursor = await db.execute(
+                "SELECT suggestion FROM system_improvements "
+                "ORDER BY created_at DESC LIMIT 20"
+            )
+            metrics["recent_suggestions"] = [r[0] for r in await cursor.fetchall()]
+
+        except Exception as e:
+            logger.warning(f"Failed to gather metrics for system improvement: {e}")
+
+        prompt = (
+            f"CALLISTO SYSTEM IMPROVEMENT REVIEW — Cycle #{self._cycles}\n\n"
+            f"You are reviewing the autonomous research pipeline to suggest "
+            f"specific, implementable improvements.\n\n"
+            f"PIPELINE METRICS:\n{json.dumps(metrics, indent=2)}\n\n"
+            f"RECENT SUGGESTIONS (already made, avoid repeating):\n"
+            f"{json.dumps(metrics.get('recent_suggestions', []))}\n\n"
+            f"RESPOND WITH EXACTLY THIS JSON (no other text):\n"
+            f'{{"improvements": [\n'
+            f'  {{"category": "data_collection|hypothesis_gen|backtesting|evaluation|infrastructure", '
+            f'"suggestion": "Specific actionable improvement", '
+            f'"priority": "high|medium|low", '
+            f'"rationale": "Why this would help based on the metrics"}}\n'
+            f"]}}\n\n"
+            f"RULES:\n"
+            f"- 2-4 suggestions per review\n"
+            f"- Each must be specific and implementable (not vague)\n"
+            f"- Prioritize based on biggest impact on pipeline throughput\n"
+            f"- Focus on: signal rate, data quality, hypothesis diversity, "
+            f"promotion rate, resolution rate\n"
+            f"- Do NOT repeat recent suggestions\n"
+        )
+
+        try:
+            result = await claude_code_query(prompt)
+            self._last_claude_call = time.time()
+            self._claude_escalations += 1
+
+            if result.get("content") and not result.get("error"):
+                content = result["content"]
+                try:
+                    json_str = content
+                    if "```" in json_str:
+                        parts = json_str.split("```")
+                        for part in parts:
+                            stripped = part.strip()
+                            if stripped.startswith("json"):
+                                stripped = stripped[4:].strip()
+                            if stripped.startswith("{"):
+                                json_str = stripped
+                                break
+                    elif "{" in json_str:
+                        start = json_str.index("{")
+                        end = json_str.rindex("}") + 1
+                        json_str = json_str[start:end]
+
+                    parsed = json.loads(json_str)
+                    stored = 0
+                    for imp in parsed.get("improvements", []):
+                        try:
+                            await db.execute(
+                                "INSERT INTO system_improvements "
+                                "(cycle, category, suggestion, priority) "
+                                "VALUES (?, ?, ?, ?)",
+                                (
+                                    self._cycles,
+                                    imp.get("category", "general"),
+                                    imp.get("suggestion", ""),
+                                    imp.get("priority", "medium"),
+                                ),
+                            )
+                            stored += 1
+                        except Exception:
+                            pass
+                    if stored:
+                        await db.commit()
+                        logger.info(
+                            f"Research: system improvement stored {stored} suggestions "
+                            f"at cycle #{self._cycles}"
+                        )
+
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"System improvement response not valid JSON: {e}")
+
+            elif result.get("rate_limited"):
+                logger.info("Research: Claude rate-limited during system improvement")
+        except Exception as e:
+            logger.warning(f"System improvement phase failed: {e}")
 
     def get_status(self) -> dict:
         """Return research loop status."""
