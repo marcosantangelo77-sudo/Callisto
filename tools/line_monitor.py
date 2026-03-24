@@ -36,6 +36,8 @@ from tools.parlay_scanner import find_correlated_parlay_edges, analyze_live_over
 from tools import telegram
 from tools.dk_scraper import scrape_dk_odds
 from tools.fanduel_scraper import scrape_fd_odds
+from tools.betmgm_scraper import scrape_betmgm_odds
+from tools.odds_api_io import get_odds as odds_api_io_get_odds, get_usage_status as odds_api_io_usage
 from tools.oddspapi import get_odds as oddspapi_get_odds, get_usage_status as oddspapi_usage
 
 load_dotenv()
@@ -201,76 +203,90 @@ class LineMonitor:
                 await asyncio.sleep(30)
 
     async def _snapshot_sport_fallback(self, sport: str) -> None:
-        """Take an odds snapshot using free sources (DK + FanDuel scrapers, then OddsPapi).
+        """Take an odds snapshot using free sources — full cascade.
 
         Called when Odds API credits are exhausted or unavailable.
-        Strategy: merge DraftKings + FanDuel (both free, unlimited) for multi-book
-        coverage. Falls back to OddsPapi (250/month free) if both scrapers fail.
+        Cascade (all free):
+          1. DraftKings scraper (unlimited)
+          2. FanDuel scraper (unlimited)
+          3. BetMGM scraper (unlimited)
+          4. Odds-API.io (100 req/hr free)
+          5. OddsPapi (250/month free)
+        Merges all successful sources for maximum multi-book coverage.
         """
-        logger.info(f"FREE MODE: scraping {sport} via DK + FanDuel (0 credits)")
-        new_snapshot = None
-        dk_data = None
-        fd_data = None
+        logger.info(f"FREE MODE: scraping {sport} via free source cascade (0 paid credits)")
+        scraped = {}  # source_name -> data
 
-        # 1. Try DraftKings scraper — free and unlimited
+        # 1. DraftKings — free and unlimited
         try:
             dk_data = await scrape_dk_odds(sport)
-            if dk_data.get("error") or dk_data.get("game_count", 0) == 0:
-                logger.warning(f"DK scraper returned no data for {sport}: {dk_data.get('error', 'empty')}")
-                dk_data = None
-            else:
+            if not dk_data.get("error") and dk_data.get("game_count", 0) > 0:
+                scraped["dk"] = dk_data
                 logger.info(f"DK scraper {sport}: {dk_data['game_count']} games")
         except Exception as e:
             logger.warning(f"DK scraper failed for {sport}: {e}")
 
-        # 2. Try FanDuel scraper — free and unlimited
+        # 2. FanDuel — free and unlimited
         try:
             fd_data = await scrape_fd_odds(sport)
-            if fd_data.get("error") or fd_data.get("game_count", 0) == 0:
-                logger.warning(f"FanDuel scraper returned no data for {sport}: {fd_data.get('error', 'empty')}")
-                fd_data = None
-            else:
+            if not fd_data.get("error") and fd_data.get("game_count", 0) > 0:
+                scraped["fd"] = fd_data
                 logger.info(f"FanDuel scraper {sport}: {fd_data['game_count']} games")
         except Exception as e:
             logger.warning(f"FanDuel scraper failed for {sport}: {e}")
 
-        # 3. Merge results — DK as base, enrich with FanDuel bookmaker entries
-        if dk_data and fd_data:
-            new_snapshot = self._merge_free_snapshots(dk_data, fd_data)
-            logger.info(
-                f"Fallback snapshot {sport}: merged DK ({dk_data['game_count']}) + "
-                f"FanDuel ({fd_data['game_count']}) = {new_snapshot['game_count']} games"
-            )
-        elif dk_data:
-            new_snapshot = dk_data
-            logger.info(f"Fallback snapshot {sport} via DraftKings only: {dk_data['game_count']} games")
-        elif fd_data:
-            new_snapshot = fd_data
-            logger.info(f"Fallback snapshot {sport} via FanDuel only: {fd_data['game_count']} games")
+        # 3. BetMGM — free and unlimited
+        try:
+            mgm_data = await scrape_betmgm_odds(sport)
+            if not mgm_data.get("error") and mgm_data.get("game_count", 0) > 0:
+                scraped["mgm"] = mgm_data
+                logger.info(f"BetMGM scraper {sport}: {mgm_data['game_count']} games")
+        except Exception as e:
+            logger.warning(f"BetMGM scraper failed for {sport}: {e}")
 
-        # 4. If both scrapers failed, try OddsPapi — 250/month free
-        if new_snapshot is None:
+        # 4. Odds-API.io — 100 req/hr free (72K/month)
+        if not scraped:
+            try:
+                usage = odds_api_io_usage()
+                if usage.get("requests_remaining", 0) > 0 and usage.get("api_key_set"):
+                    io_data = await odds_api_io_get_odds(sport)
+                    if not io_data.get("error") and io_data.get("game_count", 0) > 0:
+                        scraped["odds_api_io"] = io_data
+                        logger.info(f"Odds-API.io {sport}: {io_data['game_count']} games")
+            except Exception as e:
+                logger.warning(f"Odds-API.io failed for {sport}: {e}")
+
+        # 5. OddsPapi — 250/month free (last resort)
+        if not scraped:
             try:
                 usage = oddspapi_usage()
                 if usage.get("requests_remaining", 0) > 0 and usage.get("api_key_set"):
                     op_data = await oddspapi_get_odds(sport)
                     if not op_data.get("error") and op_data.get("game_count", 0) > 0:
-                        new_snapshot = op_data
+                        scraped["oddspapi"] = op_data
                         logger.info(
-                            f"Fallback snapshot {sport} via OddsPapi: {op_data['game_count']} games "
-                            f"({usage['requests_remaining'] - 1} OddsPapi requests left)"
+                            f"OddsPapi {sport}: {op_data['game_count']} games "
+                            f"({usage['requests_remaining'] - 1} left)"
                         )
-                else:
-                    logger.info(f"OddsPapi unavailable for {sport}: key_set={usage.get('api_key_set')}, remaining={usage.get('requests_remaining')}")
             except Exception as e:
                 logger.warning(f"OddsPapi failed for {sport}: {e}")
 
-        # 5. If everything failed, log and skip
-        if new_snapshot is None:
+        # Merge all successful sources
+        if not scraped:
             logger.warning(f"All fallback sources failed for {sport} — skipping snapshot")
             return
 
-        # Process the snapshot through the standard pipeline
+        sources = list(scraped.values())
+        new_snapshot = sources[0]
+        for extra in sources[1:]:
+            new_snapshot = self._merge_free_snapshots(new_snapshot, extra)
+
+        new_snapshot["source"] = f"free_cascade_{'_'.join(scraped.keys())}"
+        logger.info(
+            f"Fallback snapshot {sport}: merged {list(scraped.keys())} = "
+            f"{new_snapshot.get('game_count', 0)} games"
+        )
+
         await self._process_snapshot(sport, new_snapshot)
 
     async def _snapshot_sport(self, sport: str) -> None:
@@ -295,11 +311,10 @@ class LineMonitor:
                 await self._snapshot_sport_fallback(sport)
                 return
 
-            # Enrich with fresh DK scraper data (free, always)
+            # Enrich with fresh scraper data from all free sources (always)
             new_snapshot = await self._enrich_with_dk(sport, new_snapshot)
-
-            # Enrich with fresh FanDuel scraper data (free, always)
             new_snapshot = await self._enrich_with_fd(sport, new_snapshot)
+            new_snapshot = await self._enrich_with_mgm(sport, new_snapshot)
 
             await self._process_snapshot(sport, new_snapshot)
 
@@ -419,45 +434,91 @@ class LineMonitor:
 
         return snapshot
 
-    def _merge_free_snapshots(self, dk_data: dict, fd_data: dict) -> dict:
-        """Merge DraftKings and FanDuel scraper results into one multi-book snapshot.
+    async def _enrich_with_mgm(self, sport: str, snapshot: dict) -> dict:
+        """Merge fresh BetMGM scraper data into an odds snapshot.
 
-        Uses DK as the base (typically has more complete game data), then
-        adds FanDuel bookmaker entries to matching games. FanDuel-only games
-        are appended so nothing is lost.
+        Same pattern as _enrich_with_dk/_enrich_with_fd.
+        """
+        try:
+            mgm_data = await scrape_betmgm_odds(sport)
+            if mgm_data.get("error") or not mgm_data.get("games"):
+                return snapshot
+
+            mgm_by_matchup = {}
+            for mgm_game in mgm_data["games"]:
+                key = self._matchup_key(mgm_game.get("home_team", ""), mgm_game.get("away_team", ""))
+                if key:
+                    mgm_by_matchup[key] = mgm_game
+
+            enriched = 0
+            for game in snapshot.get("games", []):
+                key = self._matchup_key(game.get("home_team", ""), game.get("away_team", ""))
+                if not key or key not in mgm_by_matchup:
+                    continue
+
+                mgm_game = mgm_by_matchup[key]
+                mgm_bookmaker = None
+                for bm in mgm_game.get("bookmakers", []):
+                    if bm.get("key") == "betmgm":
+                        mgm_bookmaker = bm
+                        break
+
+                if not mgm_bookmaker:
+                    continue
+
+                replaced = False
+                for i, bm in enumerate(game.get("bookmakers", [])):
+                    if bm.get("key", "").lower() in ("betmgm", "bet_mgm"):
+                        game["bookmakers"][i] = mgm_bookmaker
+                        replaced = True
+                        break
+
+                if not replaced:
+                    game.setdefault("bookmakers", []).append(mgm_bookmaker)
+
+                enriched += 1
+
+            if enriched > 0:
+                logger.info(f"BetMGM enrichment {sport}: updated {enriched}/{len(snapshot.get('games', []))} games")
+
+        except Exception as e:
+            logger.debug(f"BetMGM enrichment failed for {sport} (non-critical): {e}")
+
+        return snapshot
+
+    def _merge_free_snapshots(self, base_data: dict, extra_data: dict) -> dict:
+        """Merge two odds snapshots into one multi-book snapshot.
+
+        Uses base_data as the foundation, then adds bookmaker entries from
+        extra_data to matching games. Extra-only games are appended.
+        Works with any pair of sources (DK+FD, DK+MGM, etc.).
         """
         merged = {
-            "sport": dk_data.get("sport", fd_data.get("sport", "")),
-            "games": list(dk_data.get("games", [])),
-            "source": "free_scrapers_dk+fd",
+            "sport": base_data.get("sport", extra_data.get("sport", "")),
+            "games": [dict(g) for g in base_data.get("games", [])],
+            "source": "merged",
             "credits": {"remaining": None, "used": None, "api_key_set": True},
         }
 
-        # Build matchup lookup from DK games
-        dk_by_matchup = {}
+        # Build matchup lookup from base games
+        base_by_matchup = {}
         for i, game in enumerate(merged["games"]):
             key = self._matchup_key(game.get("home_team", ""), game.get("away_team", ""))
             if key:
-                dk_by_matchup[key] = i
+                base_by_matchup[key] = i
 
-        fd_only_games = []
-        for fd_game in fd_data.get("games", []):
-            key = self._matchup_key(fd_game.get("home_team", ""), fd_game.get("away_team", ""))
-            if key and key in dk_by_matchup:
-                # Merge FanDuel bookmaker into existing DK game
-                idx = dk_by_matchup[key]
-                fd_bookmaker = None
-                for bm in fd_game.get("bookmakers", []):
-                    if bm.get("key") == "fanduel":
-                        fd_bookmaker = bm
-                        break
-                if fd_bookmaker:
-                    merged["games"][idx].setdefault("bookmakers", []).append(fd_bookmaker)
+        extra_only_games = []
+        for extra_game in extra_data.get("games", []):
+            key = self._matchup_key(extra_game.get("home_team", ""), extra_game.get("away_team", ""))
+            if key and key in base_by_matchup:
+                idx = base_by_matchup[key]
+                # Add all bookmakers from extra source
+                for bm in extra_game.get("bookmakers", []):
+                    merged["games"][idx].setdefault("bookmakers", []).append(bm)
             else:
-                # FanDuel-only game — include it
-                fd_only_games.append(fd_game)
+                extra_only_games.append(extra_game)
 
-        merged["games"].extend(fd_only_games)
+        merged["games"].extend(extra_only_games)
         merged["game_count"] = len(merged["games"])
 
         return merged
