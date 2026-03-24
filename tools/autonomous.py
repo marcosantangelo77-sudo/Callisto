@@ -1056,11 +1056,9 @@ class ResearchLoop:
         """
         Karpathy-style: maximize Claude Code throughput.
 
-        If Claude is available and we have budget, run deep analysis tasks:
-        - Analyze backtest results for patterns
-        - Review and refine hypotheses
-        - Generate novel research directions
-        - Self-improve: analyze what's working and what isn't
+        Claude is NOT used for generic analysis text. Every call must produce
+        ACTIONABLE output: hypotheses to create, hypotheses to reject, or
+        specific pipeline fixes. If it can't act, it shouldn't call.
         """
         from tools.claude_code import is_available as claude_available, claude_code_query
         import time as _time
@@ -1071,80 +1069,179 @@ class ResearchLoop:
         if not claude_available():
             return
 
-        logger.info("Research: Claude deep work phase — maximizing throughput")
+        logger.info("Research: Claude deep work phase — actionable output only")
 
-        # Task 1: Analyze what's working in our hypotheses
-        all_hypos = await self.hypothesis_manager.list_hypotheses()
-        backtesting = [h for h in all_hypos if h["status"] == "backtesting"]
-        draft = [h for h in all_hypos if h["status"] == "draft"]
+        # Gather pipeline metrics for Claude
+        db = self.data_collector._db
+        metrics = {}
+        try:
+            # Backtest signal rate
+            row = await db.execute_fetchone(
+                "SELECT COUNT(*) total, SUM(CASE WHEN signal_generated=1 THEN 1 ELSE 0 END) signals "
+                "FROM backtest_events"
+            ) if hasattr(db, 'execute_fetchone') else None
+            if not row:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) total, SUM(CASE WHEN signal_generated=1 THEN 1 ELSE 0 END) signals "
+                    "FROM backtest_events"
+                )
+                row = await cursor.fetchone()
+            metrics["bt_events"] = row[0] if row else 0
+            metrics["bt_signals"] = row[1] if row else 0
 
-        if backtesting or draft:
-            hypo_summary = []
-            for h in (backtesting + draft)[:10]:
-                hypo_summary.append(f"- [{h['status']}] {h['name']}: {h['thesis'][:100]}")
-
-            data_stats = await self.data_collector.get_collection_stats()
-
-            prompt = (
-                f"Callisto autonomous research — deep analysis cycle #{self._cycles}\n\n"
-                f"Current hypotheses ({len(all_hypos)} total):\n"
-                + "\n".join(hypo_summary) + "\n\n"
-                f"Data available: {json.dumps(data_stats, indent=2)}\n\n"
-                f"Backtests so far: {self._backtests_run} run, "
-                f"{self._promotions} promoted, {self._rejections} rejected\n\n"
-                f"TASKS (do all):\n"
-                f"1. Analyze the hypothesis list — which are most promising? "
-                f"Which should be discarded as untestable with our data?\n"
-                f"2. Suggest 3 NOVEL hypotheses we haven't tried that are "
-                f"testable with NBA/NFL game results + historical odds data.\n"
-                f"3. What data sources should we acquire next to unlock "
-                f"higher-value hypotheses? (player props, referee data, "
-                f"weather, public betting %, injury reports)\n"
-                f"4. Identify any improvements to Callisto's research "
-                f"methodology itself — how can the loop be more effective?\n\n"
-                f"Be specific and actionable. No general advice."
+            # Avg books in historical odds
+            cursor = await db.execute(
+                "SELECT sport, COUNT(*) FROM historical_odds_cache GROUP BY sport"
             )
+            metrics["odds_cache"] = {r[0]: r[1] for r in await cursor.fetchall()}
 
-            try:
-                result = await claude_code_query(prompt)
-                self._last_claude_call = _time.time()
-                self._claude_escalations += 1
+            # Hypothesis stats
+            cursor = await db.execute(
+                "SELECT status, COUNT(*) FROM hypotheses GROUP BY status"
+            )
+            metrics["hypo_status"] = {r[0]: r[1] for r in await cursor.fetchall()}
+        except Exception as e:
+            logger.warning(f"Failed to gather metrics for deep work: {e}")
 
-                if result.get("content") and not result.get("error"):
-                    content = result["content"]
-                    logger.info(
-                        f"Research: Claude deep analysis complete — "
-                        f"{len(content)} chars response"
-                    )
+        # Get top backtesting hypotheses by signal count
+        top_hypos = []
+        try:
+            cursor = await db.execute("""
+                SELECT h.hypothesis_id, h.name, h.thesis, h.sport,
+                       COUNT(CASE WHEN be.signal_generated=1 THEN 1 END) as sigs,
+                       COUNT(*) as events,
+                       AVG(CASE WHEN be.signal_generated=1 THEN be.edge END) as avg_edge
+                FROM hypotheses h
+                LEFT JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id
+                WHERE h.status = 'backtesting'
+                GROUP BY h.hypothesis_id
+                ORDER BY sigs DESC, events DESC
+                LIMIT 15
+            """)
+            for r in await cursor.fetchall():
+                top_hypos.append(f"  {r[1]} [{r[3]}]: {r[4]} signals / {r[5]} events, avg_edge={r[6] or 0:.4f}")
+        except Exception:
+            pass
 
-                    # Parse any suggested hypotheses and create them
-                    # Store the analysis for reference
+        prompt = (
+            f"CALLISTO AUTONOMOUS SYSTEM — DEEP WORK CYCLE #{self._cycles}\n"
+            f"You are the reasoning engine for an autonomous research system.\n"
+            f"Your output MUST be structured JSON that the system can parse and act on.\n\n"
+            f"PIPELINE STATE:\n"
+            f"  Backtest events: {metrics.get('bt_events', 0)} total, "
+            f"{metrics.get('bt_signals', 0)} signals ({(metrics.get('bt_signals',0) / max(1,metrics.get('bt_events',1))) * 100:.1f}%)\n"
+            f"  Hypothesis status: {json.dumps(metrics.get('hypo_status', {}))}\n"
+            f"  Odds cache: {json.dumps(metrics.get('odds_cache', {}))}\n"
+            f"  Promotions: {self._promotions} | Rejections: {self._rejections}\n"
+            f"  Cycles: {self._cycles} | Data collections: {self._data_collections}\n\n"
+            f"TOP HYPOTHESES BY SIGNALS:\n"
+            + ("\n".join(top_hypos) if top_hypos else "  (none with signals)") + "\n\n"
+            f"RESPOND WITH EXACTLY THIS JSON STRUCTURE (no other text):\n"
+            f'{{"reject_ids": ["hypothesis_id1", ...], '
+            f'"promising_sports": ["sport1", ...], '
+            f'"new_hypotheses": [{{"name": "...", "thesis": "...", "sport": "...", '
+            f'"market_type": "...", "edge_threshold": 0.03}}], '
+            f'"pipeline_issues": ["issue description", ...]}}\n\n'
+            f"RULES:\n"
+            f"- reject_ids: hypotheses with 0 signals after 50+ events (data disproves them)\n"
+            f"- new_hypotheses: 3-5 NOVEL, testable with NBA/NFL game-level odds data\n"
+            f"- pipeline_issues: specific, actionable problems you observe in the metrics\n"
+            f"- Only include fields you have actionable items for\n"
+        )
+
+        try:
+            result = await claude_code_query(prompt)
+            self._last_claude_call = _time.time()
+            self._claude_escalations += 1
+
+            if result.get("content") and not result.get("error"):
+                content = result["content"]
+                logger.info(f"Research: Claude deep work response — {len(content)} chars")
+
+                # Parse and ACT on the structured response
+                try:
+                    # Extract JSON from response (may have markdown fences)
+                    json_str = content
+                    if "```" in json_str:
+                        parts = json_str.split("```")
+                        for part in parts:
+                            stripped = part.strip()
+                            if stripped.startswith("json"):
+                                stripped = stripped[4:].strip()
+                            if stripped.startswith("{"):
+                                json_str = stripped
+                                break
+                    elif "{" in json_str:
+                        start = json_str.index("{")
+                        end = json_str.rindex("}") + 1
+                        json_str = json_str[start:end]
+
+                    actions = json.loads(json_str)
+
+                    # Act 1: Reject hopeless hypotheses
+                    rejected = 0
+                    for hid in actions.get("reject_ids", []):
+                        try:
+                            await self.hypothesis_manager.update_status(
+                                hid, "rejected", "claude_deep_work"
+                            )
+                            rejected += 1
+                            self._rejections += 1
+                        except Exception:
+                            pass
+                    if rejected:
+                        logger.info(f"Research: Claude rejected {rejected} hopeless hypotheses")
+
+                    # Act 2: Create new hypotheses
+                    created = 0
+                    for nh in actions.get("new_hypotheses", []):
+                        try:
+                            await self.hypothesis_manager.create_hypothesis(
+                                name=nh.get("name", "claude_generated"),
+                                thesis=nh.get("thesis", ""),
+                                sport=nh.get("sport", "basketball_nba"),
+                                market_type=nh.get("market_type", "spreads"),
+                                edge_threshold=nh.get("edge_threshold", 0.03),
+                                model_config={"source": "claude_deep_work", "cycle": self._cycles},
+                            )
+                            created += 1
+                        except Exception:
+                            pass
+                    if created:
+                        self._hypotheses_generated += created
+                        logger.info(f"Research: Claude created {created} new hypotheses")
+
+                    # Act 3: Log pipeline issues for next self-diagnostic
+                    for issue in actions.get("pipeline_issues", []):
+                        logger.warning(f"Research: Claude identified issue — {issue}")
+
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Claude deep work returned non-JSON: {e}")
+                    # Still store the raw analysis as fallback
                     try:
-                        await self.data_collector._db.execute(
+                        await db.execute(
                             "INSERT INTO game_contexts "
                             "(sport, game_date, home_team, away_team, context, embedded) "
                             "VALUES (?, ?, ?, ?, ?, 1)",
                             (
                                 "meta_research",
                                 _time.strftime("%Y-%m-%d"),
-                                "callisto",
-                                "self_analysis",
+                                "callisto", "self_analysis",
                                 json.dumps({
                                     "type": "claude_deep_analysis",
                                     "cycle": self._cycles,
-                                    "analysis": content[:5000],
-                                    "timestamp": _time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                    "raw": content[:5000],
                                 }),
                             ),
                         )
-                        await self.data_collector._db.commit()
-                    except Exception as e:
-                        logger.warning(f"Failed to store deep work analysis: {e}")
+                        await db.commit()
+                    except Exception:
+                        pass
 
-                elif result.get("rate_limited"):
-                    logger.info("Research: Claude rate limited during deep work — will retry next cycle")
-            except Exception as e:
-                logger.warning(f"Claude deep work failed: {e}")
+            elif result.get("rate_limited"):
+                logger.info("Research: Claude rate limited — will retry next cycle")
+        except Exception as e:
+            logger.warning(f"Claude deep work failed: {e}")
 
     def get_status(self) -> dict:
         """Return research loop status."""
