@@ -1191,6 +1191,61 @@ async def admin_restart():
     return {"status": "restarting", "message": "Watchdog will restart with new code in ~15 seconds"}
 
 
+# ---------------------------------------------------------------------------
+# Bet executor endpoints
+# ---------------------------------------------------------------------------
+_executor = None
+
+
+async def _get_executor():
+    global _executor
+    if _executor is None:
+        from tools.bet_executor import BetExecutor
+        _executor = BetExecutor()
+        await _executor.initialize()
+    return _executor
+
+
+@app.get("/executor/status")
+async def executor_status():
+    """Get bet executor status."""
+    ex = await _get_executor()
+    return await ex.status()
+
+
+@app.post("/executor/enable")
+async def executor_enable():
+    """Enable the bet executor — live bets will be placed."""
+    ex = await _get_executor()
+    ex.enable()
+    # Wire into research loop if available
+    if hasattr(app.state, "research_loop"):
+        app.state.research_loop._bet_executor = ex
+    return {"status": "enabled", "message": "Bet executor is now LIVE — bets will be placed automatically"}
+
+
+@app.post("/executor/disable")
+async def executor_disable():
+    """Disable the bet executor — no bets will be placed."""
+    ex = await _get_executor()
+    ex.disable()
+    return {"status": "disabled", "message": "Bet executor disabled — no bets will be placed"}
+
+
+@app.post("/executor/login")
+async def executor_login():
+    """Launch browser for DraftKings login. Browser opens visible for manual login."""
+    ex = await _get_executor()
+    logged_in = await ex.ensure_logged_in()
+    if logged_in:
+        return {"status": "logged_in", "message": "DraftKings session active"}
+    else:
+        return {
+            "status": "login_required",
+            "message": "Browser opened — please log into DraftKings manually. Session will persist.",
+        }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("api:app", host="0.0.0.0", port=CALLISTO_PORT, reload=False)

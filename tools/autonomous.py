@@ -487,6 +487,12 @@ class ResearchLoop:
                 if not self._running:
                     break
 
+                # Phase 6b: Execute live bets on proven hypotheses
+                await self._phase_live_execute()
+
+                if not self._running:
+                    break
+
                 # Phase 7: Claude deep analysis — use remaining budget
                 await self._phase_claude_deep_work()
 
@@ -1168,6 +1174,99 @@ class ResearchLoop:
                         pass
             except Exception as e:
                 logger.warning(f"Paper trade eval failed for {h['hypothesis_id']}: {e}")
+
+    async def _phase_live_execute(self) -> None:
+        """Execute bets on live (proven) hypotheses using the bet executor.
+
+        Scans live odds for signals matching live hypotheses, then places
+        real bets via Playwright browser automation on DraftKings.
+        Only runs if the executor is enabled and logged in.
+        """
+        try:
+            from tools.bet_executor import BetExecutor
+        except ImportError:
+            return
+
+        # Check if executor is available (initialized externally)
+        executor = getattr(self, "_bet_executor", None)
+        if not executor or not executor.is_enabled:
+            return
+
+        live = await self.hypothesis_manager.list_hypotheses(status="live")
+        if not live:
+            return
+
+        logger.info(f"Research: scanning {len(live)} live hypotheses for bet signals")
+
+        # Cache live odds per sport
+        odds_cache: dict[str, dict] = {}
+
+        for h in live:
+            if not self._running:
+                break
+
+            try:
+                sport = h["sport"]
+                market = h.get("market_type", "")
+
+                # Get live odds (DK scraper for game-level, Odds API for props)
+                if sport not in odds_cache:
+                    if market.startswith("player_"):
+                        from tools.odds_api import get_odds
+                        odds_data = await get_odds(sport=sport, regions="us", markets="h2h,spreads,totals")
+                    else:
+                        from tools.dk_scraper import scrape_dk_odds
+                        odds_data = await scrape_dk_odds(sport)
+                        if odds_data.get("error") or not odds_data.get("games"):
+                            from tools.odds_api import get_odds
+                            odds_data = await get_odds(sport=sport, regions="us", markets="h2h,spreads,totals")
+
+                    if not odds_data.get("error"):
+                        odds_cache[sport] = odds_data
+
+                odds_data = odds_cache.get(sport)
+                if not odds_data:
+                    continue
+
+                # Generate signals using the backtest engine's paper trade logic
+                signals = await self.backtest_engine.generate_paper_trade_signal(
+                    hypothesis_id=h["hypothesis_id"],
+                    live_odds=odds_data,
+                )
+
+                if not signals:
+                    continue
+
+                # Execute each signal
+                for signal in signals:
+                    if not self._running:
+                        break
+
+                    result = await executor.execute_bet(
+                        sport=sport,
+                        team=signal.get("team", ""),
+                        market=signal.get("market", market),
+                        side=signal.get("side", ""),
+                        odds=signal.get("book_odds_american", 0),
+                        fair_prob=signal.get("model_fair_prob", 0.5),
+                        edge=signal.get("edge", 0),
+                        hypothesis_id=h["hypothesis_id"],
+                        event_id=signal.get("event_id", ""),
+                        game_description=signal.get("game_description", ""),
+                    )
+
+                    if result.get("success"):
+                        logger.info(
+                            f"LIVE BET PLACED: {signal.get('team')} "
+                            f"${result.get('stake', 0):.2f} @ {signal.get('book_odds_american')}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Live bet failed: {result.get('reason', 'unknown')}"
+                        )
+
+            except Exception as e:
+                logger.warning(f"Live execution failed for {h['hypothesis_id']}: {e}")
 
     async def _phase_interpret_backtests(self) -> None:
         """Claude interprets backtest results — signal vs noise, modifications.
