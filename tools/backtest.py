@@ -927,6 +927,66 @@ class BacktestEngine:
 
         return None
 
+    @staticmethod
+    def _normalize_team(name: str) -> str:
+        """Normalize team name for fuzzy matching across data sources.
+
+        Handles differences between Odds API names (e.g. "Los Angeles Dodgers")
+        and ESPN names (e.g. "LA Dodgers", "Athletics", etc.).
+        """
+        if not name:
+            return ""
+        n = name.strip().lower()
+        # Common abbreviation mappings
+        replacements = {
+            "los angeles": "la",
+            "new york": "ny",
+            "san francisco": "sf",
+            "san antonio": "sa",
+            "san diego": "sd",
+            "golden state": "gs",
+            "oklahoma city": "okc",
+            "portland trail blazers": "portland blazers",
+            "brooklyn": "bkn",
+        }
+        for full, abbrev in replacements.items():
+            if n.startswith(full):
+                n = abbrev + n[len(full):]
+                break
+        # Strip common prefixes/suffixes and extra whitespace
+        n = " ".join(n.split())
+        return n
+
+    @staticmethod
+    def _team_matches(name_a: str, name_b: str) -> bool:
+        """Check if two team names refer to the same team.
+
+        Handles: exact match, normalized match, last-word (mascot) match,
+        and substring containment for abbreviated names.
+        """
+        if not name_a or not name_b:
+            return False
+        if name_a == name_b:
+            return True
+
+        a = BacktestEngine._normalize_team(name_a)
+        b = BacktestEngine._normalize_team(name_b)
+
+        if a == b:
+            return True
+
+        # Last word (mascot) match — "LA Dodgers" vs "Los Angeles Dodgers"
+        a_last = a.rsplit(None, 1)[-1] if a else ""
+        b_last = b.rsplit(None, 1)[-1] if b else ""
+        if a_last == b_last and len(a_last) > 3:
+            return True
+
+        # Substring: "Athletics" matches "Oakland Athletics" or "Athletics"
+        if a in b or b in a:
+            return True
+
+        return False
+
     async def resolve_from_game_results(
         self,
         run_id: Optional[str] = None,
@@ -934,7 +994,7 @@ class BacktestEngine:
     ) -> dict:
         """
         Resolve backtest events using the local game_results table.
-        No API calls needed — matches on game_date + teams.
+        No API calls needed — matches on game_date + teams with fuzzy name matching.
 
         If run_id is given, resolves only that run's events.
         If sport is given without run_id, resolves all unresolved events for that sport.
@@ -963,19 +1023,22 @@ class BacktestEngine:
         if not unresolved:
             return {"resolved": 0, "unresolved": 0}
 
-        # Build a lookup of game results: (sport, date, home, away) -> scores
+        # Build a lookup of game results indexed by (sport, date) -> list of games
         result_cursor = await self._db.execute(
             "SELECT sport, game_date, home_team, away_team, home_score, away_score "
             "FROM game_results",
         )
         result_rows = await result_cursor.fetchall()
-        game_lookup = {}
+
+        # Index by (sport, date) for fuzzy team matching
+        from collections import defaultdict
+        games_by_date = defaultdict(list)
         for r_sport, r_date, r_home, r_away, r_hscore, r_ascore in result_rows:
-            game_lookup[(r_sport, r_date, r_home, r_away)] = (r_hscore, r_ascore)
-            # Also index by just (date, home, away) for events with empty sport
-            game_lookup[("", r_date, r_home, r_away)] = (r_hscore, r_ascore)
+            games_by_date[(r_sport, r_date)].append((r_home, r_away, r_hscore, r_ascore))
+            games_by_date[("", r_date)].append((r_home, r_away, r_hscore, r_ascore))
 
         resolved_count = 0
+        match_failures = 0
         for ev_id, event_id, ev_sport, market, side, line, game_date, model_factors in unresolved:
             # Extract home/away from event_id or model_factors
             home_team = ""
@@ -997,12 +1060,23 @@ class BacktestEngine:
             if not home_team or not away_team:
                 continue
 
-            # Look up game result
-            scores = (
-                game_lookup.get((ev_sport, game_date, home_team, away_team))
-                or game_lookup.get(("", game_date, home_team, away_team))
-            )
+            # Fuzzy match: find the game in results for this date
+            scores = None
+            candidates = games_by_date.get((ev_sport, game_date), [])
+            if not candidates:
+                candidates = games_by_date.get(("", game_date), [])
+
+            for r_home, r_away, r_hscore, r_ascore in candidates:
+                if self._team_matches(home_team, r_home) and self._team_matches(away_team, r_away):
+                    scores = (r_hscore, r_ascore)
+                    break
+                # Also try swapped home/away (data source differences)
+                if self._team_matches(home_team, r_away) and self._team_matches(away_team, r_home):
+                    scores = (r_ascore, r_hscore)
+                    break
+
             if not scores:
+                match_failures += 1
                 continue
 
             home_score, away_score = scores
@@ -1020,6 +1094,11 @@ class BacktestEngine:
                 resolved_count += 1
 
         await self._db.commit()
+        if match_failures > 0:
+            logger.warning(
+                f"Resolution: {match_failures}/{len(unresolved)} events could not match "
+                f"to game_results (missing game data or team name mismatch)"
+            )
         logger.info(f"Resolved {resolved_count}/{len(unresolved)} backtest events from game_results")
         return {"resolved": resolved_count, "unresolved": len(unresolved) - resolved_count}
 
@@ -1037,6 +1116,11 @@ class BacktestEngine:
             return []
 
         config = h["model_config"]
+        if isinstance(config, str):
+            try:
+                config = json.loads(config)
+            except (json.JSONDecodeError, TypeError):
+                config = {}
         target_book = config.get("target_book", "draftkings")
         edge_threshold = h["edge_threshold"]
         devig_method = config.get("devig_method", "power")
@@ -1076,6 +1160,7 @@ class BacktestEngine:
                     devig_method=devig_method,
                     min_books=min_books,
                     config=config,
+                    h_sport=h.get("sport", ""),
                 )
 
         # Retrieve signals that were just generated with run_id="paper"

@@ -1385,11 +1385,22 @@ class ResearchLoop:
                         - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
                     )
 
+                # Never backtest against today — games haven't finished
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                if end_date >= today:
+                    end_date = str(datetime.now(timezone.utc).date() - timedelta(days=1))
+                if start_date > end_date:
+                    logger.info(
+                        f"Research: skipping backtest for {h['hypothesis_id']} — "
+                        f"no historical date range available (start={start_date} > end={end_date})"
+                    )
+                    continue
+
                 result = await self.backtest_engine.run_backtest(
                     hypothesis_id=h["hypothesis_id"],
                     start_date=start_date,
                     end_date=end_date,
-                    credit_budget=10,  # Conservative per-hypothesis
+                    credit_budget=30,  # Enough for ~10 dates × 3 markets
                 )
 
                 # Store temporal metadata in backtest result for integrity checking
@@ -1419,10 +1430,17 @@ class ResearchLoop:
                 except Exception as e:
                     logger.warning(f"Failed to update temporal metadata for {h['hypothesis_id']}: {e}")
 
-                logger.info(
-                    f"Research: backtest {h['hypothesis_id']} — "
-                    f"{result.get('total_events', 0)} events, {signals} signals"
-                )
+                total_events = result.get("total_events", 0)
+                if total_events == 0:
+                    logger.warning(
+                        f"Research: backtest {h['hypothesis_id']} produced 0 events "
+                        f"({start_date} to {end_date}) — no historical odds data for {sport}?"
+                    )
+                else:
+                    logger.info(
+                        f"Research: backtest {h['hypothesis_id']} — "
+                        f"{total_events} events, {signals} signals"
+                    )
             except Exception as e:
                 logger.warning(
                     f"Backtest failed for {h['hypothesis_id']}: {e}"
@@ -1868,7 +1886,16 @@ class ResearchLoop:
                         live_odds = await get_odds(
                             sport=sport, regions="us", markets="h2h",
                         )
-                        if not live_odds.get("error"):
+                        if live_odds.get("error"):
+                            logger.warning(
+                                f"Paper trade: Odds API failed for {sport} props: "
+                                f"{live_odds.get('error')} — skipping prop hypotheses"
+                            )
+                        elif not live_odds.get("games"):
+                            logger.warning(
+                                f"Paper trade: Odds API returned 0 games for {sport}"
+                            )
+                        else:
                             odds_cache[sport] = live_odds
                     games = odds_cache.get(sport, {}).get("games", [])
                     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -1961,7 +1988,8 @@ class ResearchLoop:
                             logger.warning(f"Prop scan failed for {event_id}: {e}", exc_info=True)
                     continue
 
-                # For game-level markets: use DK scraper (free), Odds API as fallback
+                # For game-level markets: use DK scraper (free), Odds API as fallback,
+                # line_monitor cached snapshots as last resort
                 if sport not in odds_cache:
                     from tools.dk_scraper import scrape_dk_odds
                     live_odds = await scrape_dk_odds(sport)
@@ -1974,7 +2002,23 @@ class ResearchLoop:
                             markets="h2h,spreads,totals",
                         )
 
-                    if not live_odds.get("error"):
+                    # Last resort: use line monitor's cached snapshot
+                    if live_odds.get("error") or not live_odds.get("games"):
+                        if hasattr(self, 'line_monitor') and self.line_monitor:
+                            snap = self.line_monitor._snapshots.get(sport, {})
+                            if snap and not snap.get("error") and snap.get("games"):
+                                live_odds = snap
+                                logger.info(
+                                    f"Paper trade: using line_monitor cached snapshot for {sport} "
+                                    f"({len(snap.get('games', []))} games)"
+                                )
+
+                    if live_odds.get("error") or not live_odds.get("games"):
+                        logger.warning(
+                            f"Paper trade: no odds available for {sport} — "
+                            f"DK scraper, Odds API, and line_monitor all failed"
+                        )
+                    else:
                         odds_cache[sport] = live_odds
 
                 live_odds = odds_cache.get(sport)

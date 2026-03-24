@@ -746,6 +746,46 @@ class PipelineIntegrityChecker:
                         f"backtest_events=0 but {tested_hypos} hypotheses have been through testing"
                     )
 
+                # Check for backtest runs that completed but never resolved results
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM backtest_runs WHERE completed_at IS NOT NULL"
+                )
+                completed_runs = (await cursor.fetchone())[0]
+
+                if completed_runs > 0:
+                    cursor = await db.execute(
+                        "SELECT COUNT(*) FROM backtest_runs "
+                        "WHERE completed_at IS NOT NULL "
+                        "AND total_events > 0 "
+                        "AND (actual_win = 0 AND actual_loss = 0 AND hit_rate IS NULL)"
+                    )
+                    null_result_runs = (await cursor.fetchone())[0]
+
+                    if null_result_runs > 0:
+                        pct = null_result_runs / completed_runs * 100
+                        severity = SEVERITY_CRITICAL if pct > 50 else SEVERITY_WARNING
+                        zero_checks.append(
+                            f"backtest_results_null: {null_result_runs}/{completed_runs} "
+                            f"completed runs ({pct:.0f}%) have events but 0 wins, "
+                            f"0 losses, null hit_rate — resolution pipeline broken"
+                        )
+                        # Promote to its own issue if critical
+                        if severity == SEVERITY_CRITICAL:
+                            self._issues.append(IntegrityIssue(
+                                check_name="backtest_resolution_failure",
+                                severity=SEVERITY_CRITICAL,
+                                message=(
+                                    f"Backtest resolution completely broken: "
+                                    f"{null_result_runs}/{completed_runs} runs "
+                                    f"have events but zero resolved results"
+                                ),
+                                details={
+                                    "null_result_runs": null_result_runs,
+                                    "completed_runs": completed_runs,
+                                    "pct_broken": round(pct, 1),
+                                },
+                            ))
+
                 if zero_checks:
                     self._issues.append(IntegrityIssue(
                         check_name="zero_metric_detection",
