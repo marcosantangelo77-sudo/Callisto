@@ -10,3 +10,7 @@ dist/
 build/
 logs/
 .claude/
+
+# Temp data dumps
+_*.json
+live_odds_dump.json
