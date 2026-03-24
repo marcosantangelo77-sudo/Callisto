@@ -402,10 +402,10 @@ class BacktestEngine:
             ]:
                 target_price = target_books[target_book]["price"]
                 target_implied = american_to_implied(target_price)
-                edge = consensus - target_implied
                 ev = ev_binary(consensus, american_to_decimal(target_price))
                 kelly = kelly_binary(consensus, american_to_decimal(target_price))
-                is_signal = edge >= edge_threshold
+                edge = ev  # Use EV as edge metric (accounts for vig in odds)
+                is_signal = ev >= edge_threshold
 
                 events += 1
                 if is_signal:
@@ -532,10 +532,10 @@ class BacktestEngine:
                 ("Under", consensus_under, target_data["Under"]),
             ]:
                 target_implied = american_to_implied(target_price)
-                edge = consensus - target_implied
                 ev = ev_binary(consensus, american_to_decimal(target_price))
                 kelly = kelly_binary(consensus, american_to_decimal(target_price))
-                is_signal = edge >= edge_threshold
+                edge = ev  # Use EV as edge metric (accounts for vig in odds)
+                is_signal = ev >= edge_threshold
 
                 events += 1
                 if is_signal:
