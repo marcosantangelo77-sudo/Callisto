@@ -362,21 +362,26 @@ def _parse_game(game_data: dict, sport: str) -> Optional[dict]:
     home_team_raw = None
     away_team_raw = None
     for team in teams:
-        if team.get("is_home"):
-            home_team_raw = team.get("display_name", team.get("full_name", ""))
-        else:
-            away_team_raw = team.get("display_name", team.get("full_name", ""))
+        # Prefer full_name (e.g. "Charlotte Hornets") over display_name ("Hornets")
+        name = team.get("full_name") or team.get("display_name", "")
+        if team.get("is_home") is True:
+            home_team_raw = name
+        elif team.get("is_away") is True:
+            away_team_raw = name
 
-    # Fallback: if is_home not set, assume first=away, second=home (Action Network convention)
+    # Fallback: if is_home/is_away not set, use position (first=away, second=home)
     if home_team_raw is None or away_team_raw is None:
         if len(teams) >= 2:
-            away_team_raw = away_team_raw or teams[0].get("display_name", "Unknown")
-            home_team_raw = home_team_raw or teams[1].get("display_name", "Unknown")
+            t0 = teams[0].get("full_name") or teams[0].get("display_name", "Unknown")
+            t1 = teams[1].get("full_name") or teams[1].get("display_name", "Unknown")
+            away_team_raw = away_team_raw or t0
+            home_team_raw = home_team_raw or t1
         else:
             return None
 
-    home_team = _resolve_team_name(home_team_raw, sport)
-    away_team = _resolve_team_name(away_team_raw, sport)
+    # If full_name was available, use it directly; otherwise resolve short name
+    home_team = home_team_raw if " " in home_team_raw else _resolve_team_name(home_team_raw, sport)
+    away_team = away_team_raw if " " in away_team_raw else _resolve_team_name(away_team_raw, sport)
 
     # Commence time
     start_time = game_data.get("start_time", "")
@@ -546,15 +551,18 @@ def _extract_public_betting(game_data: dict, sport: str) -> Optional[dict]:
     home_team_raw = None
     away_team_raw = None
     for team in teams:
-        if team.get("is_home"):
-            home_team_raw = team.get("display_name", "")
-        else:
-            away_team_raw = team.get("display_name", "")
+        name = team.get("full_name") or team.get("display_name", "")
+        if team.get("is_home") is True:
+            home_team_raw = name
+        elif team.get("is_away") is True:
+            away_team_raw = name
 
     if not home_team_raw or not away_team_raw:
         if len(teams) >= 2:
-            away_team_raw = away_team_raw or teams[0].get("display_name", "Unknown")
-            home_team_raw = home_team_raw or teams[1].get("display_name", "Unknown")
+            t0 = teams[0].get("full_name") or teams[0].get("display_name", "Unknown")
+            t1 = teams[1].get("full_name") or teams[1].get("display_name", "Unknown")
+            away_team_raw = away_team_raw or t0
+            home_team_raw = home_team_raw or t1
         else:
             return None
 
