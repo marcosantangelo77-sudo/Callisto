@@ -552,7 +552,11 @@ class BacktestEngine:
                         fair = multiplicative_devig([dec_a, dec_b])
                     fair_a_values.append((fair[0], bk))
                     fair_b_values.append((fair[1], bk))
-                except (ValueError, ZeroDivisionError):
+                except (ValueError, ZeroDivisionError) as e:
+                    logger.warning(
+                        f"Devig failed for book={bk}, market={mkt_key}, "
+                        f"prices=({price_a}, {price_b}): {e}"
+                    )
                     continue
 
             non_target_count = len(fair_a_values)
@@ -729,7 +733,11 @@ class BacktestEngine:
                         fair = multiplicative_devig([dec_o, dec_u])
                     fair_overs.append((fair[0], bk_key))
                     fair_unders.append((fair[1], bk_key))
-                except (ValueError, ZeroDivisionError):
+                except (ValueError, ZeroDivisionError) as e:
+                    logger.warning(
+                        f"Devig failed for book={bk_key}, market={mkt_key}, "
+                        f"prices=(Over={bk_data['Over']}, Under={bk_data['Under']}): {e}"
+                    )
                     continue
 
             non_target_count = len(fair_overs)
@@ -1102,6 +1110,41 @@ class BacktestEngine:
                     event.get("kelly_fraction"), today,
                 ),
             )
+            # Also insert into signals table
+            edge_val = event.get("edge", 0) or 0
+            if edge_val > 0.05:
+                confidence = "high"
+            elif edge_val > 0.03:
+                confidence = "medium"
+            else:
+                confidence = "low"
+            await self._db.execute(
+                "INSERT INTO signals "
+                "(event_id, sport, signal_type, team, market, book, "
+                "odds_american, fair_probability, fair_prob_source, "
+                "edge_pct, ev_pct, confidence, kelly_fraction, "
+                "recommended_stake, status, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event.get("event_id"),
+                    event["sport"],
+                    "paper_trade",
+                    event["side"],
+                    event["market"],
+                    event["book"],
+                    event.get("book_odds_american", 0),
+                    event.get("model_fair_prob", 0),
+                    "cross_book_devig",
+                    edge_val,
+                    event.get("ev_pct", 0) or 0,
+                    confidence,
+                    event.get("kelly_fraction"),
+                    None,
+                    "paper",
+                    f"hypothesis_id={hypothesis_id}, trade_id={trade_id}",
+                ),
+            )
+
             signals.append({
                 "trade_id": trade_id,
                 **event,

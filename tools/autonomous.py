@@ -1875,6 +1875,40 @@ class ResearchLoop:
                                             today,
                                         ),
                                     )
+                                    # Also insert into signals table
+                                    edge_val = round(edge_info.get("edge_pct", 0) / 100, 6)
+                                    if edge_val > 0.05:
+                                        sig_confidence = "high"
+                                    elif edge_val > 0.03:
+                                        sig_confidence = "medium"
+                                    else:
+                                        sig_confidence = "low"
+                                    await db.execute(
+                                        "INSERT INTO signals "
+                                        "(event_id, sport, signal_type, team, market, book, "
+                                        "odds_american, fair_probability, fair_prob_source, "
+                                        "edge_pct, ev_pct, confidence, kelly_fraction, "
+                                        "recommended_stake, status, notes) "
+                                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                        (
+                                            event_id,
+                                            sport,
+                                            "paper_trade",
+                                            edge_info.get("side", ""),
+                                            market,
+                                            "draftkings",
+                                            edge_info.get("target_price", 0),
+                                            edge_info.get("fair_probability", 0),
+                                            "cross_book_devig",
+                                            edge_val,
+                                            round(edge_info.get("ev_per_100", 0) / 100, 6),
+                                            sig_confidence,
+                                            edge_info.get("kelly_fraction", 0),
+                                            None,
+                                            "paper",
+                                            f"hypothesis_id={h['hypothesis_id']}, trade_id={trade_id}",
+                                        ),
+                                    )
                                 await db.commit()
                         except Exception as e:
                             logger.warning(f"Prop scan failed for {event_id}: {e}", exc_info=True)
