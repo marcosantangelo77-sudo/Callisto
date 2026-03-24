@@ -1,0 +1,613 @@
+"""
+Hypothesis lifecycle manager — define, test, promote, or reject betting theses.
+
+Pipeline:  draft → backtesting → paper_trading → live → retired
+           ↘ rejected (at any stage if data actively disproves)
+
+Every promotion gate requires:
+  - Minimum sample size met
+  - Statistical significance (p < threshold)
+  - Positive CLV rate
+
+No scipy dependency — all statistical tests implemented in pure Python.
+"""
+
+import json
+import logging
+import math
+import os
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
+
+import aiosqlite
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger("callisto.hypothesis")
+
+DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+
+# Promotion gates: {transition: {min_n, max_p, min_clv_rate, extras}}
+PROMOTION_GATES = {
+    "backtesting→paper_trading": {
+        "min_signals": 1000,
+        "max_p_value": 0.05,
+        "min_clv_rate": 0.50,
+        "min_sharpe": 0.5,
+    },
+    "paper_trading→live": {
+        "min_signals": 200,
+        "max_p_value": 0.05,
+        "min_clv_rate": 0.55,
+        "max_drawdown": 0.25,
+        "min_days": 30,
+    },
+}
+
+# Auto-rejection: if p > 0.20 with N > 100, the data disproves the thesis
+AUTO_REJECT_P = 0.20
+AUTO_REJECT_MIN_N = 100
+
+STAGE_ORDER = ["draft", "backtesting", "paper_trading", "live", "retired"]
+
+
+# ──────────────────────────────────────────────────
+# PURE PYTHON STATISTICS
+# ──────────────────────────────────────────────────
+
+def _erfc(x: float) -> float:
+    """Complementary error function approximation (Abramowitz & Stegun 7.1.26)."""
+    t = 1.0 / (1.0 + 0.3275911 * abs(x))
+    poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 +
+           t * (-1.453152027 + t * 1.061405429))))
+    result = poly * math.exp(-x * x)
+    return result if x >= 0 else 2.0 - result
+
+
+def _norm_cdf(x: float) -> float:
+    """Standard normal CDF."""
+    return 0.5 * _erfc(-x / math.sqrt(2))
+
+
+def _norm_sf(x: float) -> float:
+    """Standard normal survival function: P(Z > x)."""
+    return 1.0 - _norm_cdf(x)
+
+
+def binomial_pvalue(wins: int, total: int, expected_rate: float) -> float:
+    """
+    One-sided binomial test using normal approximation with continuity correction.
+    H0: true win rate = expected_rate
+    H1: true win rate > expected_rate
+    Valid for N > 30.
+    """
+    if total < 1 or expected_rate <= 0 or expected_rate >= 1:
+        return 1.0
+    mean = total * expected_rate
+    std = math.sqrt(total * expected_rate * (1 - expected_rate))
+    if std < 1e-9:
+        return 1.0
+    z = (wins - 0.5 - mean) / std
+    return _norm_sf(z)
+
+
+def ttest_one_sample(values: list[float]) -> tuple[float, float]:
+    """
+    One-sample t-test: is mean(values) significantly > 0?
+    Returns (t_statistic, p_value).
+    Uses normal approximation (valid for N > 30).
+    """
+    n = len(values)
+    if n < 2:
+        return 0.0, 1.0
+    mean = sum(values) / n
+    var = sum((v - mean) ** 2 for v in values) / (n - 1)
+    if var < 1e-12:
+        if abs(mean) < 1e-12:
+            return 0.0, 1.0
+        # Zero variance but nonzero mean: perfectly significant
+        return float("inf") if mean > 0 else float("-inf"), 0.0 if mean > 0 else 1.0
+    se = math.sqrt(var / n)
+    t = mean / se
+    p = _norm_sf(t)
+    return t, p
+
+
+def z_score(observed: int, total: int, expected_rate: float) -> float:
+    """Z-score for observed vs expected proportion."""
+    if total < 1 or expected_rate <= 0 or expected_rate >= 1:
+        return 0.0
+    std = math.sqrt(expected_rate * (1 - expected_rate) / total)
+    if std < 1e-9:
+        return 0.0
+    return (observed / total - expected_rate) / std
+
+
+def sharpe_ratio(returns: list[float]) -> float:
+    """Sharpe ratio (not annualized — daily or per-bet)."""
+    if len(returns) < 2:
+        return 0.0
+    mean = sum(returns) / len(returns)
+    var = sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)
+    std = math.sqrt(var) if var > 0 else 0
+    return mean / std if std > 1e-9 else 0.0
+
+
+def max_drawdown(returns: list[float]) -> float:
+    """Maximum drawdown from a series of per-bet returns."""
+    if not returns:
+        return 0.0
+    cumulative = 0.0
+    peak = 0.0
+    worst = 0.0
+    for r in returns:
+        cumulative += r
+        if cumulative > peak:
+            peak = cumulative
+        dd = (peak - cumulative) / max(peak, 1.0) if peak > 0 else 0.0
+        if dd > worst:
+            worst = dd
+    return worst
+
+
+def calibration_bins(
+    predictions: list[tuple[float, bool]], n_bins: int = 10,
+) -> list[dict]:
+    """
+    Bin predictions by predicted probability, compare to observed hit rate.
+    Returns list of {bin_start, bin_end, count, predicted_avg, observed_rate}.
+    """
+    if not predictions:
+        return []
+    sorted_preds = sorted(predictions, key=lambda x: x[0])
+    bin_size = max(len(sorted_preds) // n_bins, 1)
+    bins = []
+    for i in range(0, len(sorted_preds), bin_size):
+        chunk = sorted_preds[i:i + bin_size]
+        probs = [p for p, _ in chunk]
+        outcomes = [o for _, o in chunk]
+        bins.append({
+            "bin_start": round(min(probs), 4),
+            "bin_end": round(max(probs), 4),
+            "count": len(chunk),
+            "predicted_avg": round(sum(probs) / len(probs), 4),
+            "observed_rate": round(sum(outcomes) / len(outcomes), 4) if outcomes else 0,
+        })
+    return bins
+
+
+# ──────────────────────────────────────────────────
+# HYPOTHESIS MANAGER
+# ──────────────────────────────────────────────────
+
+class HypothesisManager:
+    """Manages hypothesis lifecycle: draft → backtest → paper_trade → live → retired."""
+
+    def __init__(self, db_path: str = DB_PATH):
+        self.db_path = db_path
+        self._db: Optional[aiosqlite.Connection] = None
+
+    async def initialize(self) -> None:
+        self._db = await aiosqlite.connect(self.db_path)
+        logger.info("Hypothesis manager initialized")
+
+    async def close(self) -> None:
+        if self._db:
+            await self._db.close()
+
+    # ── CRUD ──
+
+    async def create_hypothesis(
+        self,
+        name: str,
+        thesis: str,
+        sport: str,
+        market_type: str,
+        model_config: dict,
+        edge_threshold: float = 0.02,
+        min_sample_size: int = 1000,
+        significance_level: float = 0.05,
+        notes: str = "",
+    ) -> str:
+        """Create a new hypothesis. Returns hypothesis_id."""
+        hid = str(uuid.uuid4())[:12]
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            "INSERT INTO hypotheses "
+            "(hypothesis_id, name, thesis, sport, market_type, model_config, "
+            "edge_threshold, status, min_sample_size, significance_level, "
+            "created_at, updated_at, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)",
+            (hid, name, thesis, sport, market_type, json.dumps(model_config),
+             edge_threshold, min_sample_size, significance_level, now, now, notes),
+        )
+        await self._db.commit()
+        logger.info(f"Hypothesis created: {hid} — {name}")
+        return hid
+
+    async def get_hypothesis(self, hypothesis_id: str) -> Optional[dict]:
+        cursor = await self._db.execute(
+            "SELECT * FROM hypotheses WHERE hypothesis_id = ?",
+            (hypothesis_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in cursor.description]
+        h = dict(zip(cols, row))
+        h["model_config"] = json.loads(h["model_config"]) if h["model_config"] else {}
+        return h
+
+    async def list_hypotheses(self, status: Optional[str] = None) -> list[dict]:
+        if status:
+            cursor = await self._db.execute(
+                "SELECT * FROM hypotheses WHERE status = ? ORDER BY updated_at DESC",
+                (status,),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT * FROM hypotheses ORDER BY updated_at DESC"
+            )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        result = []
+        for row in rows:
+            h = dict(zip(cols, row))
+            h["model_config"] = json.loads(h["model_config"]) if h["model_config"] else {}
+            result.append(h)
+        return result
+
+    async def update_status(
+        self, hypothesis_id: str, new_status: str, promoted_by: str = "manual",
+    ) -> dict:
+        """Move a hypothesis to a new status."""
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            "UPDATE hypotheses SET status = ?, updated_at = ?, "
+            "promoted_at = ?, promoted_by = ? WHERE hypothesis_id = ?",
+            (new_status, now, now, promoted_by, hypothesis_id),
+        )
+        await self._db.commit()
+        logger.info(f"Hypothesis {hypothesis_id} → {new_status} (by {promoted_by})")
+        return {"hypothesis_id": hypothesis_id, "new_status": new_status}
+
+    # ── STATISTICAL EVALUATION ──
+
+    async def evaluate_significance(
+        self, hypothesis_id: str, stage: str = "backtest",
+    ) -> dict:
+        """
+        Run all statistical tests on a hypothesis at a given stage.
+        Returns comprehensive significance report.
+        """
+        if stage == "backtest":
+            events = await self._get_backtest_signals(hypothesis_id)
+        elif stage == "paper_trade":
+            events = await self._get_paper_trades(hypothesis_id)
+        else:
+            return {"error": f"Unknown stage: {stage}"}
+
+        if not events:
+            return {
+                "hypothesis_id": hypothesis_id,
+                "stage": stage,
+                "sample_size": 0,
+                "is_significant": False,
+                "recommendation": "No data yet.",
+            }
+
+        # Extract core metrics
+        wins = sum(1 for e in events if e["actual_result"] == "won")
+        losses = sum(1 for e in events if e["actual_result"] == "lost")
+        pushes = sum(1 for e in events if e["actual_result"] == "push")
+        resolved = wins + losses + pushes
+        unresolved = len(events) - resolved
+
+        if resolved < 2:
+            return {
+                "hypothesis_id": hypothesis_id,
+                "stage": stage,
+                "sample_size": resolved,
+                "is_significant": False,
+                "recommendation": f"Need more resolved events (have {resolved}).",
+            }
+
+        decided = wins + losses
+        hit_rate = wins / decided if decided > 0 else 0
+
+        # Expected hit rate = average of book implied probabilities for signals
+        expected_rates = [e["book_implied_prob"] for e in events if e.get("book_implied_prob")]
+        expected_rate = sum(expected_rates) / len(expected_rates) if expected_rates else 0.50
+
+        # Per-bet returns for t-test and Sharpe
+        returns = []
+        for e in events:
+            if e["actual_result"] == "won":
+                from tools.math_utils import american_to_decimal
+                dec = american_to_decimal(e["book_odds_american"])
+                returns.append(dec - 1)  # profit on $1 bet
+            elif e["actual_result"] == "lost":
+                returns.append(-1.0)
+            elif e["actual_result"] == "push":
+                returns.append(0.0)
+
+        # CLV metrics
+        clv_values = [e.get("clv_implied", 0) for e in events if e.get("clv_implied") is not None]
+        avg_clv = sum(clv_values) / len(clv_values) if clv_values else 0
+        positive_clv_rate = (
+            sum(1 for v in clv_values if v > 0) / len(clv_values) if clv_values else 0
+        )
+
+        # Edge and EV
+        edges = [e["edge"] for e in events if e.get("edge") is not None]
+        evs = [e["ev_pct"] for e in events if e.get("ev_pct") is not None]
+        avg_edge = sum(edges) / len(edges) if edges else 0
+        avg_ev = sum(evs) / len(evs) if evs else 0
+
+        # Statistical tests
+        p_binomial = binomial_pvalue(wins, decided, expected_rate)
+        t_stat, p_ttest = ttest_one_sample(returns)
+        z = z_score(wins, decided, expected_rate)
+        sr = sharpe_ratio(returns)
+        mdd = max_drawdown(returns)
+
+        # ROI
+        total_staked = len(returns)  # $1 per bet
+        total_returned = sum(r + 1 for r in returns if r > -1) + sum(0 for r in returns if r <= -1)
+        roi = (sum(returns) / total_staked * 100) if total_staked > 0 else 0
+
+        # Significance determination
+        h = await self.get_hypothesis(hypothesis_id)
+        sig_level = h["significance_level"] if h else 0.05
+        is_significant = (
+            p_binomial < sig_level
+            and p_ttest < sig_level
+            and decided >= (h["min_sample_size"] if h else 1000)
+        )
+
+        # Calibration
+        preds = []
+        for e in events:
+            if e["actual_result"] in ("won", "lost"):
+                preds.append((e["model_fair_prob"], e["actual_result"] == "won"))
+        cal_bins = calibration_bins(preds)
+
+        # Recommendation
+        if is_significant and avg_clv > 0:
+            rec = "PROMOTE — statistically significant edge with positive CLV."
+        elif decided < 100:
+            rec = "WAIT — insufficient sample size for conclusion."
+        elif p_binomial > AUTO_REJECT_P and decided > AUTO_REJECT_MIN_N:
+            rec = "REJECT — data actively disproves this thesis."
+        elif p_binomial < sig_level:
+            rec = "PROMISING — significant p-value, but check CLV and drawdown."
+        else:
+            rec = "INCONCLUSIVE — continue collecting data."
+
+        report = {
+            "hypothesis_id": hypothesis_id,
+            "stage": stage,
+            "sample_size": resolved,
+            "unresolved": unresolved,
+            "results": {
+                "wins": wins,
+                "losses": losses,
+                "pushes": pushes,
+                "hit_rate": round(hit_rate, 4),
+                "expected_rate": round(expected_rate, 4),
+            },
+            "significance": {
+                "p_value_binomial": round(p_binomial, 6),
+                "p_value_ttest": round(p_ttest, 6),
+                "z_score": round(z, 4),
+                "is_significant": is_significant,
+                "significance_level": sig_level,
+            },
+            "edge_metrics": {
+                "avg_edge": round(avg_edge, 4),
+                "avg_ev": round(avg_ev, 4),
+                "roi_pct": round(roi, 2),
+            },
+            "clv": {
+                "avg_clv": round(avg_clv, 4),
+                "positive_clv_rate": round(positive_clv_rate, 4),
+                "clv_sample_size": len(clv_values),
+            },
+            "risk": {
+                "sharpe_ratio": round(sr, 4),
+                "max_drawdown": round(mdd, 4),
+            },
+            "calibration": cal_bins,
+            "recommendation": rec,
+        }
+
+        # Store in hypothesis_stats
+        now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            "INSERT INTO hypothesis_stats "
+            "(hypothesis_id, stage, computed_at, total_n, signals_n, win, loss, push_, "
+            "hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi_pct, "
+            "sharpe, max_drawdown, p_value, is_significant) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (hypothesis_id, stage, now, resolved, resolved, wins, losses, pushes,
+             hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi,
+             sr, mdd, p_binomial, is_significant),
+        )
+        await self._db.commit()
+
+        return report
+
+    async def check_promotion_readiness(self, hypothesis_id: str) -> dict:
+        """Check if a hypothesis meets criteria to advance to next stage."""
+        h = await self.get_hypothesis(hypothesis_id)
+        if not h:
+            return {"error": "Hypothesis not found"}
+
+        status = h["status"]
+        if status in ("live", "retired", "rejected"):
+            return {"ready": False, "reason": f"Cannot promote from {status}"}
+
+        if status == "draft":
+            return {"ready": True, "next_stage": "backtesting", "reason": "Draft → backtesting requires no data."}
+
+        # Determine transition and evaluate
+        if status == "backtesting":
+            transition = "backtesting→paper_trading"
+            stage = "backtest"
+        elif status == "paper_trading":
+            transition = "paper_trading→live"
+            stage = "paper_trade"
+        else:
+            return {"ready": False, "reason": f"Unknown status: {status}"}
+
+        gate = PROMOTION_GATES[transition]
+        report = await self.evaluate_significance(hypothesis_id, stage)
+
+        checks = []
+        ready = True
+
+        # Sample size
+        n = report.get("sample_size", 0)
+        required_n = gate["min_signals"]
+        if n < required_n:
+            checks.append(f"FAIL: {n}/{required_n} signals")
+            ready = False
+        else:
+            checks.append(f"PASS: {n}/{required_n} signals")
+
+        # P-value
+        p = report.get("significance", {}).get("p_value_binomial", 1.0)
+        max_p = gate["max_p_value"]
+        if p > max_p:
+            checks.append(f"FAIL: p-value {p:.4f} > {max_p}")
+            ready = False
+        else:
+            checks.append(f"PASS: p-value {p:.4f} < {max_p}")
+
+        # CLV rate
+        clv_rate = report.get("clv", {}).get("positive_clv_rate", 0)
+        min_clv = gate["min_clv_rate"]
+        if clv_rate < min_clv:
+            checks.append(f"FAIL: CLV rate {clv_rate:.1%} < {min_clv:.0%}")
+            ready = False
+        else:
+            checks.append(f"PASS: CLV rate {clv_rate:.1%} >= {min_clv:.0%}")
+
+        # Sharpe (backtest only)
+        if "min_sharpe" in gate:
+            sr = report.get("risk", {}).get("sharpe_ratio", 0)
+            if sr < gate["min_sharpe"]:
+                checks.append(f"FAIL: Sharpe {sr:.2f} < {gate['min_sharpe']}")
+                ready = False
+            else:
+                checks.append(f"PASS: Sharpe {sr:.2f}")
+
+        # Max drawdown (paper trade only)
+        if "max_drawdown" in gate:
+            mdd = report.get("risk", {}).get("max_drawdown", 1.0)
+            if mdd > gate["max_drawdown"]:
+                checks.append(f"FAIL: Drawdown {mdd:.1%} > {gate['max_drawdown']:.0%}")
+                ready = False
+            else:
+                checks.append(f"PASS: Drawdown {mdd:.1%}")
+
+        # Auto-rejection check
+        should_reject = (
+            p > AUTO_REJECT_P and n > AUTO_REJECT_MIN_N
+        )
+
+        next_stage = STAGE_ORDER[STAGE_ORDER.index(status) + 1] if ready else None
+
+        return {
+            "hypothesis_id": hypothesis_id,
+            "current_status": status,
+            "ready": ready,
+            "next_stage": next_stage,
+            "should_reject": should_reject,
+            "checks": checks,
+            "report_summary": {
+                "n": n,
+                "p_value": round(p, 6),
+                "hit_rate": report.get("results", {}).get("hit_rate", 0),
+                "roi_pct": report.get("edge_metrics", {}).get("roi_pct", 0),
+                "clv_rate": clv_rate,
+            },
+        }
+
+    async def auto_promote(self, hypothesis_id: str) -> dict:
+        """If criteria met, advance to next stage. Returns result."""
+        readiness = await self.check_promotion_readiness(hypothesis_id)
+
+        if readiness.get("should_reject"):
+            await self.update_status(hypothesis_id, "rejected", "auto")
+            return {"action": "rejected", "reason": "Data actively disproves thesis."}
+
+        if readiness.get("ready"):
+            next_stage = readiness["next_stage"]
+            await self.update_status(hypothesis_id, next_stage, "auto")
+            return {"action": "promoted", "new_status": next_stage}
+
+        return {"action": "held", "checks": readiness.get("checks", [])}
+
+    # ── DATA ACCESSORS ──
+
+    async def _get_backtest_signals(self, hypothesis_id: str) -> list[dict]:
+        """Get all backtest events that generated signals."""
+        cursor = await self._db.execute(
+            "SELECT * FROM backtest_events "
+            "WHERE hypothesis_id = ? AND signal_generated = 1 "
+            "ORDER BY game_date",
+            (hypothesis_id,),
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+
+    async def _get_paper_trades(self, hypothesis_id: str) -> list[dict]:
+        """Get all paper trades for a hypothesis."""
+        cursor = await self._db.execute(
+            "SELECT * FROM paper_trades WHERE hypothesis_id = ? ORDER BY game_date",
+            (hypothesis_id,),
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+
+    async def get_hypothesis_report(self, hypothesis_id: str) -> dict:
+        """Full report across all stages."""
+        h = await self.get_hypothesis(hypothesis_id)
+        if not h:
+            return {"error": "Hypothesis not found"}
+
+        report = {"hypothesis": h, "stages": {}}
+
+        # Backtest stats
+        bt_cursor = await self._db.execute(
+            "SELECT * FROM backtest_runs WHERE hypothesis_id = ? ORDER BY completed_at DESC LIMIT 5",
+            (hypothesis_id,),
+        )
+        bt_rows = await bt_cursor.fetchall()
+        if bt_rows:
+            bt_cols = [d[0] for d in bt_cursor.description]
+            report["stages"]["backtest"] = {
+                "runs": [dict(zip(bt_cols, r)) for r in bt_rows],
+            }
+
+        # Latest significance per stage
+        for stage in ["backtest", "paper_trade"]:
+            stats_cursor = await self._db.execute(
+                "SELECT * FROM hypothesis_stats "
+                "WHERE hypothesis_id = ? AND stage = ? ORDER BY computed_at DESC LIMIT 1",
+                (hypothesis_id, stage),
+            )
+            stats_row = await stats_cursor.fetchone()
+            if stats_row:
+                stats_cols = [d[0] for d in stats_cursor.description]
+                report["stages"][f"{stage}_latest_stats"] = dict(zip(stats_cols, stats_row))
+
+        # Readiness check
+        report["promotion_readiness"] = await self.check_promotion_readiness(hypothesis_id)
+
+        return report

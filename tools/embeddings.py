@@ -1,0 +1,443 @@
+"""
+Semantic embedding engine — nomic-embed-text via Ollama + SQLite vector store.
+
+This is the pattern-discovery backbone of the autonomous research loop.
+Embeddings let Callisto:
+  1. Represent game contexts, prop lines, and historical outcomes as vectors
+  2. Find similar situations via cosine similarity (no external vector DB needed)
+  3. Cluster contexts to discover recurring mispricing patterns
+  4. Generate hypotheses from statistical anomalies in clusters
+
+Vector storage: SQLite with JSON-serialized float arrays. Pure Python cosine
+similarity. No numpy/faiss dependency — keeps the stack minimal.
+
+Model: nomic-embed-text (137M params, 768-dim) via Ollama REST API.
+Throughput: ~200 embeddings/sec on CPU, batched.
+"""
+
+import hashlib
+import json
+import logging
+import math
+import os
+from typing import Optional
+
+import aiosqlite
+import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger("callisto.embeddings")
+
+OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+EMBED_DIM = 768  # nomic-embed-text output dimension
+
+_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=60.0)
+    return _client
+
+
+async def close_client() -> None:
+    global _client
+    if _client and not _client.is_closed:
+        await _client.aclose()
+        _client = None
+
+
+def _content_hash(text: str) -> str:
+    """SHA-256 hash of content for dedup."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two vectors. Pure Python."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a < 1e-9 or norm_b < 1e-9:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+async def embed_text(text: str) -> list[float]:
+    """Get embedding vector for a single text string via Ollama."""
+    client = _get_client()
+    resp = await client.post(
+        f"{OLLAMA_BASE}/api/embed",
+        json={"model": EMBED_MODEL, "input": text},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    embeddings = data.get("embeddings", [])
+    if not embeddings:
+        raise ValueError(f"No embedding returned for text: {text[:50]}...")
+    return embeddings[0]
+
+
+async def embed_batch(texts: list[str], batch_size: int = 32) -> list[list[float]]:
+    """Embed multiple texts in batches."""
+    all_embeddings = []
+    client = _get_client()
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        resp = await client.post(
+            f"{OLLAMA_BASE}/api/embed",
+            json={"model": EMBED_MODEL, "input": batch},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        all_embeddings.extend(data.get("embeddings", []))
+    return all_embeddings
+
+
+class VectorStore:
+    """SQLite-backed vector store with cosine similarity search."""
+
+    def __init__(self, db_path: str = DB_PATH):
+        self.db_path = db_path
+        self._db: Optional[aiosqlite.Connection] = None
+
+    async def initialize(self) -> None:
+        self._db = await aiosqlite.connect(self.db_path)
+        logger.info("Vector store initialized")
+
+    async def close(self) -> None:
+        if self._db:
+            await self._db.close()
+
+    async def store(
+        self,
+        collection: str,
+        text: str,
+        embedding: list[float],
+        metadata: Optional[dict] = None,
+    ) -> int:
+        """Store a text + embedding. Returns row ID. Deduplicates by content hash."""
+        content_hash = _content_hash(text)
+        cursor = await self._db.execute(
+            "INSERT OR IGNORE INTO embeddings "
+            "(collection, content_hash, content_text, embedding_json, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                collection,
+                content_hash,
+                text,
+                json.dumps(embedding),
+                json.dumps(metadata) if metadata else None,
+            ),
+        )
+        await self._db.commit()
+        return cursor.lastrowid
+
+    async def store_batch(
+        self,
+        collection: str,
+        items: list[tuple[str, list[float], Optional[dict]]],
+    ) -> int:
+        """Store multiple (text, embedding, metadata) tuples. Returns count stored."""
+        count = 0
+        for text, embedding, metadata in items:
+            content_hash = _content_hash(text)
+            cursor = await self._db.execute(
+                "INSERT OR IGNORE INTO embeddings "
+                "(collection, content_hash, content_text, embedding_json, metadata_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    collection,
+                    content_hash,
+                    text,
+                    json.dumps(embedding),
+                    json.dumps(metadata) if metadata else None,
+                ),
+            )
+            if cursor.rowcount > 0:
+                count += 1
+        await self._db.commit()
+        return count
+
+    async def search(
+        self,
+        collection: str,
+        query_embedding: list[float],
+        top_k: int = 10,
+        min_similarity: float = 0.0,
+    ) -> list[dict]:
+        """
+        Find the top_k most similar items in a collection.
+
+        Loads all embeddings and computes cosine similarity in Python.
+        For collections < 100K items this is fast enough (~50ms for 10K).
+        """
+        cursor = await self._db.execute(
+            "SELECT id, content_text, embedding_json, metadata_json "
+            "FROM embeddings WHERE collection = ?",
+            (collection,),
+        )
+        rows = await cursor.fetchall()
+
+        results = []
+        for row_id, text, emb_json, meta_json in rows:
+            emb = json.loads(emb_json)
+            sim = cosine_similarity(query_embedding, emb)
+            if sim >= min_similarity:
+                results.append({
+                    "id": row_id,
+                    "text": text,
+                    "similarity": round(sim, 6),
+                    "metadata": json.loads(meta_json) if meta_json else None,
+                })
+
+        results.sort(key=lambda x: x["similarity"], reverse=True)
+        return results[:top_k]
+
+    async def search_text(
+        self,
+        collection: str,
+        query_text: str,
+        top_k: int = 10,
+        min_similarity: float = 0.0,
+    ) -> list[dict]:
+        """Search by text — embeds the query first, then searches."""
+        query_emb = await embed_text(query_text)
+        return await self.search(collection, query_emb, top_k, min_similarity)
+
+    async def get_all(self, collection: str) -> list[dict]:
+        """Get all items in a collection (without embeddings for memory efficiency)."""
+        cursor = await self._db.execute(
+            "SELECT id, content_text, metadata_json FROM embeddings WHERE collection = ?",
+            (collection,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": row_id,
+                "text": text,
+                "metadata": json.loads(meta_json) if meta_json else None,
+            }
+            for row_id, text, meta_json in rows
+        ]
+
+    async def get_collection_stats(self, collection: Optional[str] = None) -> dict:
+        """Get stats about stored embeddings."""
+        if collection:
+            cursor = await self._db.execute(
+                "SELECT COUNT(*) FROM embeddings WHERE collection = ?",
+                (collection,),
+            )
+            count = (await cursor.fetchone())[0]
+            return {"collection": collection, "count": count}
+
+        cursor = await self._db.execute(
+            "SELECT collection, COUNT(*) as count "
+            "FROM embeddings GROUP BY collection ORDER BY count DESC"
+        )
+        rows = await cursor.fetchall()
+        return {
+            "collections": {col: cnt for col, cnt in rows},
+            "total": sum(cnt for _, cnt in rows),
+        }
+
+    async def delete_collection(self, collection: str) -> int:
+        """Delete all embeddings in a collection. Returns count deleted."""
+        cursor = await self._db.execute(
+            "DELETE FROM embeddings WHERE collection = ?",
+            (collection,),
+        )
+        await self._db.commit()
+        return cursor.rowcount
+
+    async def cluster_by_similarity(
+        self,
+        collection: str,
+        threshold: float = 0.85,
+    ) -> list[list[dict]]:
+        """
+        Simple single-linkage clustering by cosine similarity.
+        Groups items where similarity >= threshold.
+
+        Returns list of clusters, each cluster is a list of items.
+        Good enough for finding recurring game context patterns.
+        """
+        cursor = await self._db.execute(
+            "SELECT id, content_text, embedding_json, metadata_json "
+            "FROM embeddings WHERE collection = ?",
+            (collection,),
+        )
+        rows = await cursor.fetchall()
+
+        items = []
+        for row_id, text, emb_json, meta_json in rows:
+            items.append({
+                "id": row_id,
+                "text": text,
+                "embedding": json.loads(emb_json),
+                "metadata": json.loads(meta_json) if meta_json else None,
+            })
+
+        if not items:
+            return []
+
+        # Single-linkage clustering
+        assigned = [False] * len(items)
+        clusters = []
+
+        for i in range(len(items)):
+            if assigned[i]:
+                continue
+            cluster = [items[i]]
+            assigned[i] = True
+
+            for j in range(i + 1, len(items)):
+                if assigned[j]:
+                    continue
+                # Check similarity to any item in current cluster
+                for member in cluster:
+                    sim = cosine_similarity(
+                        member["embedding"], items[j]["embedding"]
+                    )
+                    if sim >= threshold:
+                        cluster.append(items[j])
+                        assigned[j] = True
+                        break
+
+            clusters.append(cluster)
+
+        # Sort by cluster size descending, strip embeddings from output
+        clusters.sort(key=len, reverse=True)
+        return [
+            [
+                {
+                    "id": item["id"],
+                    "text": item["text"],
+                    "metadata": item["metadata"],
+                }
+                for item in cluster
+            ]
+            for cluster in clusters
+            if len(cluster) >= 2  # Only return clusters with 2+ items
+        ]
+
+
+# ── Convenience functions for the autonomous loop ──
+
+async def embed_game_context(
+    store: VectorStore,
+    sport: str,
+    game_date: str,
+    home_team: str,
+    away_team: str,
+    context: dict,
+) -> int:
+    """
+    Embed a game context into the 'game_contexts' collection.
+
+    The context dict should contain structured info like:
+      - injuries, rest days, travel, pace, defensive rating, etc.
+      - prop lines and devigged fair values
+      - final scores and key player stats
+
+    We serialize it into a natural language description for embedding.
+    """
+    # Build a textual representation for embedding
+    parts = [
+        f"{sport} game on {game_date}: {away_team} at {home_team}",
+    ]
+    if context.get("home_score") is not None:
+        parts.append(
+            f"Final: {home_team} {context['home_score']}, "
+            f"{away_team} {context['away_score']}"
+        )
+    if context.get("total"):
+        parts.append(f"Total: {context['total']}")
+    if context.get("spread"):
+        parts.append(f"Spread: {home_team} {context['spread']}")
+    if context.get("injuries"):
+        parts.append(f"Injuries: {', '.join(context['injuries'][:5])}")
+    if context.get("rest_days_home") is not None:
+        parts.append(
+            f"Rest: {home_team} {context['rest_days_home']}d, "
+            f"{away_team} {context.get('rest_days_away', '?')}d"
+        )
+    if context.get("key_props"):
+        for prop in context["key_props"][:5]:
+            parts.append(
+                f"Prop: {prop['player']} {prop['market']} "
+                f"{prop.get('line', '?')} (fair={prop.get('fair_prob', '?')})"
+            )
+
+    text = " | ".join(parts)
+    embedding = await embed_text(text)
+
+    metadata = {
+        "sport": sport,
+        "game_date": game_date,
+        "home_team": home_team,
+        "away_team": away_team,
+        **{k: v for k, v in context.items() if k not in ("key_props", "injuries")},
+    }
+
+    return await store.store("game_contexts", text, embedding, metadata)
+
+
+async def embed_prop_outcome(
+    store: VectorStore,
+    sport: str,
+    game_date: str,
+    player: str,
+    market: str,
+    line: float,
+    fair_prob_over: float,
+    book_implied_over: float,
+    actual_stat: Optional[float] = None,
+    context: Optional[dict] = None,
+) -> int:
+    """
+    Embed a prop outcome for pattern discovery.
+
+    Encodes: player, market type, line value, edge size, and whether
+    the prop hit. This lets us find clusters of similar prop situations.
+    """
+    edge = fair_prob_over - book_implied_over
+    hit = actual_stat > line if actual_stat is not None and line else None
+
+    parts = [
+        f"{sport} prop {game_date}: {player} {market} {line}",
+        f"Fair over: {fair_prob_over:.3f}, Book implied: {book_implied_over:.3f}",
+        f"Edge: {edge:.3f} ({edge*100:.1f}%)",
+    ]
+    if actual_stat is not None:
+        parts.append(f"Actual: {actual_stat}, Hit: {hit}")
+    if context:
+        if context.get("minutes"):
+            parts.append(f"Minutes: {context['minutes']}")
+        if context.get("opponent"):
+            parts.append(f"vs {context['opponent']}")
+        if context.get("home_away"):
+            parts.append(f"({context['home_away']})")
+
+    text = " | ".join(parts)
+    embedding = await embed_text(text)
+
+    metadata = {
+        "sport": sport,
+        "game_date": game_date,
+        "player": player,
+        "market": market,
+        "line": line,
+        "fair_prob_over": fair_prob_over,
+        "book_implied_over": book_implied_over,
+        "edge": round(edge, 4),
+        "actual_stat": actual_stat,
+        "hit": hit,
+        **(context or {}),
+    }
+
+    return await store.store("prop_outcomes", text, embedding, metadata)
