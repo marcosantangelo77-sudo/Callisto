@@ -742,7 +742,25 @@ async def sentinel_loop() -> None:
                     f"{recent_crashes}/{CRASH_THRESHOLD} crashes in window"
                 )
 
-                # Check for crash loop
+                # AUTO-RESTART: If process is dead, restart it directly.
+                # Don't wait for watchdog.bat — the sentinel IS the watchdog.
+                if recent_crashes < CRASH_THRESHOLD:
+                    logger.info("Restarting Callisto API directly...")
+                    try:
+                        subprocess.Popen(
+                            [sys.executable, str(CALLISTO_DIR / "api.py")],
+                            cwd=str(CALLISTO_DIR),
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                        )
+                        send_telegram(f"Auto-restarted Callisto API (crash #{recent_crashes})")
+                        logger.info("Restart command issued — waiting 30s for startup")
+                        await asyncio.sleep(30)  # Give it time to start
+                    except Exception as e:
+                        logger.error(f"Failed to restart API: {e}")
+
+                # Check for crash loop (5+ crashes in 10 min)
                 if recent_crashes >= CRASH_THRESHOLD:
                     await handle_crash_loop()
 
