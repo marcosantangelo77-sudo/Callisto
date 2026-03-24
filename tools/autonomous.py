@@ -1447,6 +1447,8 @@ class ResearchLoop:
         current lines, with Odds API as enrichment for cross-book data.
         This saves API credits while keeping paper trades accurate.
         """
+        from datetime import datetime, timezone
+
         paper = await self.hypothesis_manager.list_hypotheses(status="paper_trading")
 
         if not paper:
@@ -1467,8 +1469,9 @@ class ResearchLoop:
 
                 # For player props: use Odds API prop scanner (DK scraper has no props)
                 if market.startswith("player_"):
-                    from tools.prop_scanner import scan_props
+                    from tools.prop_scanner import scan_props_ev
                     from tools.odds_api import get_odds
+                    import uuid as _uuid
                     # Get upcoming games for this sport
                     if sport not in odds_cache:
                         live_odds = await get_odds(
@@ -1477,12 +1480,14 @@ class ResearchLoop:
                         if not live_odds.get("error"):
                             odds_cache[sport] = live_odds
                     games = odds_cache.get(sport, {}).get("games", [])
+                    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    now_iso = datetime.now(timezone.utc).isoformat()
                     for game in games[:3]:  # Limit to 3 games to conserve credits
                         event_id = game.get("id")
                         if not event_id:
                             continue
                         try:
-                            result = await scan_props(
+                            result = await scan_props_ev(
                                 sport=sport,
                                 event_id=event_id,
                                 target_book="draftkings",
@@ -1495,6 +1500,38 @@ class ResearchLoop:
                                     f"Research: {len(edges)} prop edges for "
                                     f"{h['hypothesis_id']} in game {event_id}"
                                 )
+                                # Record each edge as a paper trade
+                                db = self.data_collector._db
+                                for edge_info in edges:
+                                    trade_id = str(_uuid.uuid4())[:12]
+                                    await db.execute(
+                                        "INSERT OR IGNORE INTO paper_trades "
+                                        "(trade_id, hypothesis_id, event_id, sport, player, market, "
+                                        "line, side, book, signal_time, signal_odds_american, "
+                                        "signal_implied_prob, model_fair_prob, edge, ev_pct, "
+                                        "kelly_fraction, game_date) "
+                                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                        (
+                                            trade_id,
+                                            h["hypothesis_id"],
+                                            event_id,
+                                            sport,
+                                            edge_info.get("player"),
+                                            market,
+                                            edge_info.get("line"),
+                                            edge_info.get("side", ""),
+                                            "draftkings",
+                                            now_iso,
+                                            edge_info.get("target_price", 0),
+                                            edge_info.get("target_implied", 0),
+                                            edge_info.get("fair_probability", 0),
+                                            round(edge_info.get("edge_pct", 0) / 100, 6),
+                                            round(edge_info.get("ev_per_100", 0) / 100, 6),
+                                            edge_info.get("kelly_fraction", 0),
+                                            today,
+                                        ),
+                                    )
+                                await db.commit()
                         except Exception as e:
                             logger.debug(f"Prop scan failed for {event_id}: {e}")
                     continue
