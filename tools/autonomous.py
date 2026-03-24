@@ -115,7 +115,7 @@ class AutonomousLoop:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Autonomous loop error: {e}")
+                logger.error(f"Autonomous loop error: {e}", exc_info=True)
                 await asyncio.sleep(30)
 
     def _find_analysis_candidates(self) -> list[dict]:
@@ -296,7 +296,7 @@ class AutonomousLoop:
         except asyncio.TimeoutError:
             logger.warning(f"Autonomous: session timed out for {team} {market}")
         except Exception as e:
-            logger.error(f"Autonomous: session failed for {team} {market}: {e}")
+            logger.error(f"Autonomous: session failed for {team} {market}: {e}", exc_info=True)
 
     def _cleanup_dedup(self) -> None:
         """Remove old entries from the dedup cache."""
