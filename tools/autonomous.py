@@ -509,12 +509,12 @@ class ResearchLoop:
         # ── 1. Data quality: avg books per record per sport ──
         try:
             cursor = await db.execute(
-                "SELECT sport, COUNT(*) as cnt, response_json "
+                "SELECT sport, COUNT(*) as cnt "
                 "FROM historical_odds_cache GROUP BY sport"
             )
             rows = await cursor.fetchall()
             for row in rows:
-                sport, cnt, sample_json = row[0], row[1], row[2]
+                sport, cnt = row[0], row[1]
                 # Sample up to 50 records to estimate avg books
                 sample_cursor = await db.execute(
                     "SELECT response_json FROM historical_odds_cache "
@@ -524,32 +524,55 @@ class ResearchLoop:
                 samples = await sample_cursor.fetchall()
                 total_books = 0
                 parsed = 0
+                scores_only = 0
+                usable = 0
                 for (rj,) in samples:
                     try:
                         data = json.loads(rj) if isinstance(rj, str) else rj
-                        # Odds API format: list of games, each with bookmakers
-                        if isinstance(data, list):
-                            for game in data:
-                                total_books += len(game.get("bookmakers", []))
-                                parsed += 1
-                        elif isinstance(data, dict):
-                            total_books += len(data.get("bookmakers", []))
+                        # Cached format: {"games": [...], "sport": "...", ...}
+                        # Each game has a "bookmakers" list
+                        games = []
+                        if isinstance(data, dict) and "games" in data:
+                            games = data["games"]
+                        elif isinstance(data, list):
+                            games = data
+                        elif isinstance(data, dict) and "bookmakers" in data:
+                            games = [data]
+
+                        record_books = 0
+                        for game in games:
+                            bm_count = len(game.get("bookmakers", []))
+                            total_books += bm_count
+                            record_books = max(record_books, bm_count)
                             parsed += 1
+                        if record_books == 0:
+                            scores_only += 1
+                        elif record_books >= 2:
+                            usable += 1
                     except (json.JSONDecodeError, TypeError):
                         continue
                 avg_books = total_books / max(parsed, 1)
-                if avg_books < 2:
-                    issue_key = f"low_books_{sport}"
+                if scores_only > 0 and usable == 0:
+                    issue_key = f"scores_only_{sport}"
                     msg = (
-                        f"DIAG: {sport} has avg {avg_books:.1f} books/record "
-                        f"({cnt} cached records) — backtests against <2 books are useless"
+                        f"DIAG: {sport} has {cnt} cached records but ALL are "
+                        f"scores-only (0 bookmakers) — no odds data for backtesting"
                     )
                     logger.warning(msg)
                     issues.append({"key": issue_key, "severity": "CRITICAL", "message": msg})
+                elif avg_books < 2:
+                    issue_key = f"low_books_{sport}"
+                    msg = (
+                        f"DIAG: {sport} has avg {avg_books:.1f} books/game "
+                        f"({cnt} records, {usable}/{len(samples)} usable) — "
+                        f"backtests against <2 books are unreliable"
+                    )
+                    logger.warning(msg)
+                    issues.append({"key": issue_key, "severity": "WARNING", "message": msg})
                 else:
                     logger.info(
-                        f"DIAG: {sport} data quality OK — avg {avg_books:.1f} books/record "
-                        f"({cnt} records)"
+                        f"DIAG: {sport} data quality OK — avg {avg_books:.1f} books/game "
+                        f"({cnt} records, {usable}/{len(samples)} usable)"
                     )
         except Exception as e:
             logger.warning(f"DIAG: data quality check failed: {e}")
@@ -902,6 +925,36 @@ class ResearchLoop:
         if not drafts:
             return
 
+        # Pre-check which sports have usable odds (>=2 books)
+        sports_with_odds = set()
+        try:
+            db = self.data_collector._db
+            if db:
+                cursor = await db.execute(
+                    "SELECT DISTINCT sport FROM historical_odds_cache"
+                )
+                for (sport,) in await cursor.fetchall():
+                    # Quick sample: does this sport have any multi-book records?
+                    check = await db.execute(
+                        "SELECT response_json FROM historical_odds_cache "
+                        "WHERE sport = ? ORDER BY RANDOM() LIMIT 5",
+                        (sport,),
+                    )
+                    for (rj,) in await check.fetchall():
+                        try:
+                            data = json.loads(rj) if isinstance(rj, str) else rj
+                            games = data.get("games", []) if isinstance(data, dict) else data
+                            for g in games:
+                                if len(g.get("bookmakers", [])) >= 2:
+                                    sports_with_odds.add(sport)
+                                    break
+                        except (json.JSONDecodeError, TypeError):
+                            continue
+                        if sport in sports_with_odds:
+                            break
+        except Exception as e:
+            logger.warning(f"Data quality pre-check failed: {e}")
+
         # Backtest up to BACKTEST_BATCH_SIZE per cycle
         to_test = drafts[:BACKTEST_BATCH_SIZE]
         logger.info(f"Research: backtesting {len(to_test)} hypotheses")
@@ -909,6 +962,15 @@ class ResearchLoop:
         for h in to_test:
             if not self._running:
                 break
+
+            # Skip hypotheses for sports with no usable multi-book data
+            sport = h.get("sport", "")
+            if sports_with_odds and sport not in sports_with_odds:
+                logger.info(
+                    f"Research: skipping backtest for {h['hypothesis_id']} — "
+                    f"{sport} has no multi-book odds data yet"
+                )
+                continue
 
             try:
                 # Use full available historical data range for backtest

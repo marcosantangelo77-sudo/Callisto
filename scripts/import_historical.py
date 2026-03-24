@@ -782,16 +782,11 @@ def import_nba_bref(conn: sqlite3.Connection, seasons: list[int] = None):
                 print(f"  No data for {season_year-1}-{str(season_year)[-2:]} season")
                 continue
 
-            # Insert into game_results (scores)
+            # Insert into game_results (scores) — NOT into historical_odds_cache
+            # since basketball-reference has no odds data and scores-only records
+            # block real multi-book odds from being written for those dates
             ins = insert_game_results(conn, "basketball_nba", games_by_date, "basketball-reference")
             print(f"  Results: {ins} inserted for {season_year-1}-{str(season_year)[-2:]}")
-
-            # Also insert into odds cache (without odds) for date-level tracking
-            ins_odds, skip = insert_odds_data(
-                conn, "basketball_nba", games_by_date, "basketball-reference",
-                market_type="scores_only",
-            )
-            print(f"  Cache entries: {ins_odds} inserted, {skip} skipped")
 
             # Be polite to bref
             if season_year != seasons[-1]:
