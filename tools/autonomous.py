@@ -330,7 +330,7 @@ class AutonomousLoop:
 
 # Cadence controls — MAXIMUM THROUGHPUT (Karpathy loop: rate limit is the only governor)
 RESEARCH_CYCLE_INTERVAL = 60        # 1 min between cycles — tight as possible
-DATA_COLLECTION_INTERVAL = 900      # 15 min between data pulls — fresher data
+DATA_COLLECTION_INTERVAL = 300      # 5 min between data pulls — fresher data for live edges
 HYPOTHESIS_GEN_INTERVAL = 600       # 10 min between hypothesis generation — stay creative
 BACKTEST_BATCH_SIZE = 20            # Hypotheses to backtest per cycle — higher throughput
 CLAUDE_ESCALATION_COOLDOWN = 60     # 1 min between Claude Code calls — push until rate limited
@@ -384,6 +384,9 @@ class ResearchLoop:
         self._last_hypothesis_gen = 0.0
         self._last_claude_call = 0.0
 
+        # Bulk backfill tracking — one-time 30-day seed when data is thin
+        self._bulk_backfill_done = False
+
         # Counters
         self._cycles = 0
         self._data_collections = 0
@@ -392,6 +395,9 @@ class ResearchLoop:
         self._claude_escalations = 0
         self._promotions = 0
         self._rejections = 0
+
+        # Self-diagnostics — track already-escalated issues to avoid spam
+        self._diagnostic_issues: set[str] = set()
 
     async def start(self) -> None:
         """Start the research loop."""
@@ -426,6 +432,12 @@ class ResearchLoop:
             try:
                 self._cycles += 1
                 logger.info(f"Research cycle #{self._cycles} starting")
+
+                # Phase 0: Self-diagnose pipeline health
+                await self._phase_self_diagnose()
+
+                if not self._running:
+                    break
 
                 # Phase 1: Collect data (if due)
                 await self._phase_collect_data()
@@ -478,30 +490,295 @@ class ResearchLoop:
                 logger.error(f"Research loop error: {e}", exc_info=True)
                 await asyncio.sleep(120)
 
+    async def _phase_self_diagnose(self) -> None:
+        """
+        Self-diagnostic phase — detects broken pipelines BEFORE wasting cycles.
+
+        Checks data quality, pipeline throughput, and data freshness.
+        Escalates critical issues to Claude Code exactly once per issue.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        db = self.data_collector._db
+        if db is None:
+            logger.warning("DIAG: data_collector DB not initialized, skipping diagnostics")
+            return
+
+        issues: list[dict] = []  # {"key": str, "severity": str, "message": str}
+
+        # ── 1. Data quality: avg books per record per sport ──
+        try:
+            cursor = await db.execute(
+                "SELECT sport, COUNT(*) as cnt, response_json "
+                "FROM historical_odds_cache GROUP BY sport"
+            )
+            rows = await cursor.fetchall()
+            for row in rows:
+                sport, cnt, sample_json = row[0], row[1], row[2]
+                # Sample up to 50 records to estimate avg books
+                sample_cursor = await db.execute(
+                    "SELECT response_json FROM historical_odds_cache "
+                    "WHERE sport = ? ORDER BY RANDOM() LIMIT 50",
+                    (sport,),
+                )
+                samples = await sample_cursor.fetchall()
+                total_books = 0
+                parsed = 0
+                for (rj,) in samples:
+                    try:
+                        data = json.loads(rj) if isinstance(rj, str) else rj
+                        # Odds API format: list of games, each with bookmakers
+                        if isinstance(data, list):
+                            for game in data:
+                                total_books += len(game.get("bookmakers", []))
+                                parsed += 1
+                        elif isinstance(data, dict):
+                            total_books += len(data.get("bookmakers", []))
+                            parsed += 1
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                avg_books = total_books / max(parsed, 1)
+                if avg_books < 2:
+                    issue_key = f"low_books_{sport}"
+                    msg = (
+                        f"DIAG: {sport} has avg {avg_books:.1f} books/record "
+                        f"({cnt} cached records) — backtests against <2 books are useless"
+                    )
+                    logger.warning(msg)
+                    issues.append({"key": issue_key, "severity": "CRITICAL", "message": msg})
+                else:
+                    logger.info(
+                        f"DIAG: {sport} data quality OK — avg {avg_books:.1f} books/record "
+                        f"({cnt} records)"
+                    )
+        except Exception as e:
+            logger.warning(f"DIAG: data quality check failed: {e}")
+
+        # ── 1b. Check game_results overlap with odds data ──
+        try:
+            cursor = await db.execute(
+                "SELECT h.sport, COUNT(DISTINCT h.snapshot_date) as odds_dates, "
+                "COUNT(DISTINCT g.game_date) as result_dates "
+                "FROM historical_odds_cache h "
+                "LEFT JOIN game_results g ON h.sport = g.sport "
+                "AND h.snapshot_date = g.game_date "
+                "GROUP BY h.sport"
+            )
+            for row in await cursor.fetchall():
+                sport, odds_dates, result_dates = row[0], row[1], row[2]
+                if odds_dates > 0 and result_dates == 0:
+                    issue_key = f"no_results_overlap_{sport}"
+                    msg = (
+                        f"DIAG: {sport} has {odds_dates} odds dates but 0 matching "
+                        f"game_results dates — backtest resolution will fail"
+                    )
+                    logger.warning(msg)
+                    issues.append({"key": issue_key, "severity": "WARNING", "message": msg})
+        except Exception as e:
+            logger.warning(f"DIAG: date overlap check failed: {e}")
+
+        # ── 2. Pipeline throughput ──
+        try:
+            if self._hypotheses_generated > 0 and self._backtests_run > 0:
+                # Check total signals across all backtest events
+                cursor = await db.execute(
+                    "SELECT COUNT(*) as total, "
+                    "SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) as signals "
+                    "FROM backtest_events"
+                )
+                row = await cursor.fetchone()
+                if row:
+                    total_events, total_signals = row[0] or 0, row[1] or 0
+                    if total_events > 0:
+                        signal_rate = total_signals / total_events
+                        if signal_rate < 0.01:
+                            issue_key = "low_signal_rate"
+                            msg = (
+                                f"DIAG: signal rate {signal_rate:.2%} "
+                                f"({total_signals}/{total_events} events) — "
+                                f"<1% signal generation indicates broken hypothesis logic"
+                            )
+                            logger.warning(msg)
+                            issues.append({"key": issue_key, "severity": "WARNING", "message": msg})
+
+            if self._backtests_run >= 100 and self._promotions == 0:
+                issue_key = "zero_promotions"
+                msg = (
+                    f"DIAG: 0 promotions after {self._backtests_run} backtests — "
+                    f"promotion gates may be too strict or data insufficient"
+                )
+                logger.warning(msg)
+                issues.append({"key": issue_key, "severity": "WARNING", "message": msg})
+        except Exception as e:
+            logger.warning(f"DIAG: throughput check failed: {e}")
+
+        # ── 3. Data freshness ──
+        try:
+            now = datetime.now(timezone.utc)
+
+            # Latest game_context
+            cursor = await db.execute(
+                "SELECT MAX(game_date) FROM game_contexts WHERE sport != 'meta_research'"
+            )
+            row = await cursor.fetchone()
+            if row and row[0]:
+                try:
+                    latest_ctx = datetime.strptime(str(row[0]), "%Y-%m-%d").replace(
+                        tzinfo=timezone.utc
+                    )
+                    age_days = (now - latest_ctx).days
+                    if age_days > 2:
+                        issue_key = "stale_game_contexts"
+                        msg = (
+                            f"DIAG: latest game_context is {age_days} days old "
+                            f"({row[0]}) — data collection may be broken"
+                        )
+                        logger.warning(msg)
+                        issues.append({"key": issue_key, "severity": "WARNING", "message": msg})
+                except ValueError:
+                    pass
+            else:
+                issue_key = "no_game_contexts"
+                msg = "DIAG: no game_contexts found at all — data collection has never succeeded"
+                logger.warning(msg)
+                issues.append({"key": issue_key, "severity": "CRITICAL", "message": msg})
+
+            # Latest odds_snapshot (from line_monitor's table)
+            try:
+                cursor = await db.execute(
+                    "SELECT MAX(timestamp) FROM odds_snapshots"
+                )
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    try:
+                        latest_snap = datetime.fromisoformat(str(row[0]).replace("Z", "+00:00"))
+                        if latest_snap.tzinfo is None:
+                            latest_snap = latest_snap.replace(tzinfo=timezone.utc)
+                        age_hours = (now - latest_snap).total_seconds() / 3600
+                        if age_hours > 1:
+                            issue_key = "stale_odds_snapshots"
+                            msg = (
+                                f"DIAG: latest odds_snapshot is {age_hours:.1f}h old — "
+                                f"snapshot collection may be failing"
+                            )
+                            logger.warning(msg)
+                            issues.append({"key": issue_key, "severity": "WARNING", "message": msg})
+                    except (ValueError, TypeError):
+                        pass
+            except Exception:
+                # odds_snapshots table may be in a different DB (line_monitor's)
+                pass
+
+        except Exception as e:
+            logger.warning(f"DIAG: freshness check failed: {e}")
+
+        # ── 4. Escalate critical issues to Claude Code (once per issue) ──
+        new_critical = [
+            i for i in issues
+            if i["severity"] == "CRITICAL" and i["key"] not in self._diagnostic_issues
+        ]
+        if new_critical:
+            from tools.claude_code import is_available as claude_available, claude_code_query
+
+            if claude_available():
+                diag_report = (
+                    "CALLISTO SELF-DIAGNOSTIC — CRITICAL ISSUES DETECTED\n\n"
+                    + "\n".join(
+                        f"[{i['severity']}] {i['message']}" for i in issues
+                    )
+                    + "\n\nPipeline state:\n"
+                    f"- Cycles: {self._cycles}\n"
+                    f"- Hypotheses generated: {self._hypotheses_generated}\n"
+                    f"- Backtests run: {self._backtests_run}\n"
+                    f"- Promotions: {self._promotions}\n"
+                    f"- Rejections: {self._rejections}\n\n"
+                    f"Analyze these diagnostics and suggest specific fixes. "
+                    f"Focus on: which data is missing, what to collect, "
+                    f"and whether the pipeline should pause or adjust parameters."
+                )
+                try:
+                    result = await claude_code_query(diag_report)
+                    self._last_claude_call = time.time()
+                    if result.get("content") and not result.get("error"):
+                        logger.info(
+                            f"DIAG: Claude analysis received — "
+                            f"{len(result['content'])} chars"
+                        )
+                    # Mark all critical issues as escalated regardless of response
+                    for i in new_critical:
+                        self._diagnostic_issues.add(i["key"])
+                except Exception as e:
+                    logger.warning(f"DIAG: Claude escalation failed: {e}")
+            else:
+                # Can't escalate now — don't mark as escalated, try next cycle
+                logger.warning(
+                    f"DIAG: {len(new_critical)} critical issues but Claude unavailable "
+                    f"— will retry next cycle"
+                )
+
+        # Mark non-critical issues as seen too (no re-escalation)
+        for i in issues:
+            if i["severity"] != "CRITICAL":
+                self._diagnostic_issues.add(i["key"])
+
+        if not issues:
+            logger.info("DIAG: all pipeline health checks passed")
+
     async def _phase_collect_data(self) -> None:
-        """Collect post-game data from ESPN (free)."""
+        """Collect post-game data from ESPN (free).
+
+        Normal cadence: last 7 days every DATA_COLLECTION_INTERVAL.
+        Bulk backfill: if game_contexts < 100, one-time 30-day pull to seed the system.
+        """
+        from datetime import datetime, timedelta, timezone
+
         now = time.time()
         if now - self._last_data_collect < DATA_COLLECTION_INTERVAL:
             return
 
-        logger.info("Research: collecting post-game data")
         self._last_data_collect = now
+
+        # Determine how far back to collect
+        lookback_days = 7  # default: rolling 7-day window
+
+        # One-time bulk backfill when data is thin
+        if not self._bulk_backfill_done:
+            try:
+                stats = await self.data_collector.get_collection_stats()
+                total_contexts = sum(
+                    row.get("count", 0)
+                    for row in stats.get("game_contexts", [])
+                )
+                if total_contexts < 100:
+                    lookback_days = 30
+                    logger.info(
+                        f"Research: bulk backfill triggered — only {total_contexts} "
+                        f"game contexts, collecting last 30 days"
+                    )
+                else:
+                    logger.info(
+                        f"Research: {total_contexts} game contexts already present, "
+                        f"skipping bulk backfill"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not check collection stats for backfill: {e}")
+            self._bulk_backfill_done = True
+
+        logger.info(f"Research: collecting post-game data (last {lookback_days} days)")
+
+        today = datetime.now(timezone.utc)
+        dates = [today - timedelta(days=d) for d in range(lookback_days)]
 
         for sport in RESEARCH_SPORTS:
             try:
-                # Collect yesterday's and today's games
-                from datetime import datetime, timedelta, timezone
-                today = datetime.now(timezone.utc)
-                yesterday = today - timedelta(days=1)
-
-                for dt in [yesterday, today]:
+                for dt in dates:
                     date_str = dt.strftime("%Y%m%d")
                     scores = await self.data_collector.collect_scores(sport, date_str)
                     if scores.get("completed", 0) > 0:
                         await self.data_collector.collect_box_scores(sport, date_str)
 
-                # Resolve any pending paper trades
-                for dt in [yesterday, today]:
+                # Resolve pending paper trades for the same window
+                for dt in dates:
                     date_fmt = dt.strftime("%Y-%m-%d")
                     await self.data_collector.resolve_prop_outcomes(sport, date_fmt)
 
