@@ -27,7 +27,7 @@ from agp import (
 from inference import get_architect, get_manager, get_sentinel, execute_function_call, _parse_json_response
 from memory import MemoryStore
 from tools.search import web_search
-from tools.claude_code import claude_code_query, claude_code_available
+from tools.claude_code import claude_code_query, claude_code_available, is_available as claude_available
 from tools.odds_api import (
     get_odds as odds_get_odds,
     get_scores as odds_get_scores,
@@ -766,23 +766,23 @@ class Orchestrator:
             t_contra = time.monotonic() - t0
             logger.info(f"Session {session.session_id}: step 5 — {len(contradictions)} contradictions [{t_contra:.1f}s]")
 
-            # Step 6: Synthesis (Architect) + Claude Code Escalation + Manager Review
+            # Step 6: Synthesis (Claude Code primary, local fallback) + Enhancement + Manager Review
             session.advance_to(SessionStep.SYNTHESIS)
             summary = await self._step_synthesize(session, used_tools)
             t_synth = time.monotonic() - t0
             logger.info(
                 f"Session {session.session_id}: step 6a — "
-                f"local confidence={summary.confidence_score} [{t_synth:.1f}s]"
+                f"synthesis confidence={summary.confidence_score} [{t_synth:.1f}s]"
             )
 
-            # Tier 2 escalation: Claude Code for low-confidence sessions
+            # Claude Code enhancement pass — always attempted when available
             summary, escalated = await self._step_escalate_to_claude(session, summary)
             if escalated:
                 used_tools = True  # Claude Code counts as a tool
                 t_escalate = time.monotonic() - t0
                 logger.info(
                     f"Session {session.session_id}: step 6b — "
-                    f"Claude Code escalation → confidence={summary.confidence_score} [{t_escalate:.1f}s]"
+                    f"Claude Code enhancement → confidence={summary.confidence_score} [{t_escalate:.1f}s]"
                 )
 
             summary = await self._step_manager_review(session, summary, used_tools)
@@ -884,7 +884,11 @@ class Orchestrator:
     async def _step_collect_evidence(
         self, session: AGPSession, search_results: list[dict]
     ) -> tuple[list[Evidence], bool]:
-        """Architect analyzes search results and extracts structured evidence."""
+        """Architect analyzes search results and extracts structured evidence.
+
+        Claude Code is the PRIMARY reasoning engine. Local models are the fallback
+        when Claude is rate-limited or unavailable.
+        """
         used_tools = len(search_results) > 0
 
         if search_results:
@@ -901,6 +905,62 @@ class Orchestrator:
                 "No web results. All evidence is INFERRED. "
                 "Source class=INFERRED, max confidence=0.55."
             )
+
+        # ── Claude Code PRIMARY path ──
+        if claude_available():
+            logger.info(f"Session {session.session_id}: step 4 using Claude Code (primary)")
+            claude_prompt = (
+                f"Domain: {session.domain.value} | Scope: {session.scope}\n\n"
+                f"{search_context}\n\n"
+                f"For each piece of evidence, provide: content (1 sentence), "
+                f"source_class (SECONDARY if from web results, INFERRED if from your training), "
+                f"confidence_score (0.0-1.0, max 0.55 for INFERRED, max 0.75 for SECONDARY), "
+                f"source_name (URL if available).\n"
+                f'Respond with JSON: {{"evidence":[{{"content":"...","source_class":"SECONDARY",'
+                f'"confidence_score":0.7,"source_name":"url"}}]}}'
+            )
+            claude_context = (
+                f"You are the evidence collection agent in an AGP (Agentic Governance Protocol) session. "
+                f"Analyze the provided web search results and extract structured evidence items. "
+                f"Be rigorous: only claim SECONDARY for web-sourced evidence, INFERRED for reasoning."
+            )
+            result = await claude_code_query(claude_prompt, system_context=claude_context, timeout=120)
+
+            if not result.get("error") and not result.get("rate_limited"):
+                used_tools = True
+                content = result.get("content", "")
+                parsed = _parse_json_response(content) if content else None
+                evidence_list = []
+                if parsed and isinstance(parsed, dict) and "evidence" in parsed:
+                    for item in parsed["evidence"]:
+                        try:
+                            source_class = SourceClass(item.get("source_class", "INFERRED"))
+                            raw_confidence = float(item.get("confidence_score", 0.3))
+                            confidence = _clamp_confidence(raw_confidence, source_class.value)
+                            ev = Evidence(
+                                content=item.get("content", ""),
+                                source_class=source_class,
+                                confidence_score=confidence,
+                                domain=session.domain,
+                                origin_agent="claude_code",
+                                source_name=item.get("source_name", ""),
+                            )
+                            evidence_list.append(ev)
+                        except (ValueError, KeyError) as e:
+                            logger.warning(f"Skipping malformed evidence from Claude: {e}")
+                if evidence_list:
+                    logger.info(f"Session {session.session_id}: Claude Code extracted {len(evidence_list)} evidence items")
+                    return evidence_list, used_tools
+                else:
+                    logger.warning(f"Session {session.session_id}: Claude Code returned no parseable evidence, falling back to local")
+            else:
+                logger.info(
+                    f"Session {session.session_id}: Claude Code unavailable for evidence collection "
+                    f"(error={result.get('error')}), falling back to local model"
+                )
+
+        # ── Local model FALLBACK path ──
+        logger.info(f"Session {session.session_id}: step 4 using local model (fallback)")
 
         tool_prompt = ""
         if not self.architect.config.supports_native_tools:
@@ -1240,12 +1300,70 @@ class Orchestrator:
         return contradictions
 
     async def _step_synthesize(self, session: AGPSession, used_tools: bool) -> SessionSummary:
-        """Architect synthesizes evidence into a conclusion."""
+        """Architect synthesizes evidence into a conclusion.
+
+        Claude Code is the PRIMARY reasoning engine. Local models are the fallback
+        when Claude is rate-limited or unavailable.
+        """
         evidence_compact = _json_compact([e.to_dict() for e in session.evidence])
 
         tool_warning = ""
         if not used_tools:
             tool_warning = "\nNo real-time sources. All INFERRED. Max confidence=0.55.\n"
+
+        # ── Claude Code PRIMARY path ──
+        if claude_available():
+            logger.info(f"Session {session.session_id}: step 6 synthesis using Claude Code (primary)")
+            claude_prompt = (
+                f"Synthesize the following evidence into a conclusion.\n"
+                f"Domain: {session.domain.value} | Scope: {session.scope}\n"
+                f"Evidence ({len(session.evidence)}):\n{evidence_compact}\n"
+                f"Contradictions: {len(session.contradictions)}\n"
+                f"{tool_warning}"
+                f'Respond with JSON: {{"conclusion":"...","confidence_score":0.0-1.0}}'
+            )
+            claude_context = (
+                f"You are the synthesis agent in an AGP (Agentic Governance Protocol) session. "
+                f"Synthesize all evidence into a coherent conclusion with calibrated confidence. "
+                f"Confidence ceilings: INFERRED max=0.55, SECONDARY max=0.75, PRIMARY max=1.0. "
+                f"Be honest about uncertainty — never inflate confidence beyond what evidence supports."
+            )
+            result = await claude_code_query(claude_prompt, system_context=claude_context, timeout=120)
+
+            if not result.get("error") and not result.get("rate_limited"):
+                content = result.get("content", "")
+                parsed = _parse_json_response(content) if content else None
+
+                conclusion = "No synthesis produced."
+                confidence = 0.30
+                if parsed and isinstance(parsed, dict):
+                    conclusion = parsed.get("conclusion", conclusion)
+                    confidence = float(parsed.get("confidence_score", confidence))
+                elif content:
+                    # Claude responded but not in JSON — use raw text
+                    conclusion = content[:1000]
+                    confidence = 0.70
+
+                best_sc = _best_source_class(session.evidence, used_tools)
+                confidence = _clamp_confidence(confidence, best_sc)
+
+                logger.info(f"Session {session.session_id}: Claude Code synthesis confidence={confidence}")
+                return SessionSummary(
+                    scope=session.scope,
+                    domain=session.domain,
+                    conclusion=conclusion,
+                    confidence_score=confidence,
+                    evidence_count=len(session.evidence),
+                    contradiction_count=len(session.contradictions),
+                )
+            else:
+                logger.info(
+                    f"Session {session.session_id}: Claude Code unavailable for synthesis "
+                    f"(error={result.get('error')}), falling back to local model"
+                )
+
+        # ── Local model FALLBACK path ──
+        logger.info(f"Session {session.session_id}: step 6 synthesis using local model (fallback)")
 
         messages = [
             {"role": "system", "content": self._architect_system_prompt()},
@@ -1282,26 +1400,26 @@ class Orchestrator:
     async def _step_escalate_to_claude(
         self, session: AGPSession, summary: SessionSummary
     ) -> tuple[SessionSummary, bool]:
-        """Escalate to Claude Code when local confidence is below threshold.
+        """Claude Code enhancement pass — ALWAYS attempted when available.
 
-        Returns updated summary and whether escalation occurred.
-        Only triggers when:
-        - Confidence is below ESCALATION_THRESHOLD
-        - Claude Code CLI is available
+        Claude Code is the primary reasoning engine. This step enhances or
+        replaces the local synthesis with Claude's analysis. Only skipped
+        when Claude is rate-limited or unavailable.
+
+        Returns updated summary and whether enhancement occurred.
         """
-        if summary.confidence_score >= ESCALATION_THRESHOLD:
-            return summary, False
-
         if not await claude_code_available():
-            logger.info("Escalation skipped: Claude Code CLI not available")
+            logger.info("Claude enhancement skipped: Claude Code CLI not available")
             return summary, False
 
+        is_low_confidence = summary.confidence_score < ESCALATION_THRESHOLD
         logger.info(
-            f"Session {session.session_id}: escalating to Claude Code "
-            f"(confidence {summary.confidence_score} < {ESCALATION_THRESHOLD})"
+            f"Session {session.session_id}: Claude Code enhancement pass "
+            f"(current confidence={summary.confidence_score}, "
+            f"low_conf={is_low_confidence})"
         )
 
-        # Build concise context — keep under 2K tokens for fast escalation
+        # Build concise context — keep under 2K tokens for fast processing
         evidence_summary = "\n".join(
             f"- [{e.source_class.value}] {e.content[:150]}"
             for e in session.evidence[:6]
@@ -1309,22 +1427,31 @@ class Orchestrator:
         context = (
             f"Domain: {session.domain.value}\n"
             f"Question: {session.scope}\n"
-            f"Local synthesis (conf={summary.confidence_score}):\n"
+            f"Prior synthesis (conf={summary.confidence_score}):\n"
             f"{summary.conclusion[:500]}\n\n"
             f"Evidence ({len(session.evidence)} items):\n{evidence_summary}\n"
             f"Contradictions: {len(session.contradictions)}"
         )
-        prompt = (
-            f"The local AI got low confidence ({summary.confidence_score}). "
-            f"Give a concise, well-supported analysis. "
-            f"Respond with JSON: {{\"conclusion\":\"...\",\"confidence_score\":0.0-1.0,"
-            f"\"key_findings\":[\"...\"],\"gaps\":[\"...\"]}}"
-        )
+        if is_low_confidence:
+            prompt = (
+                f"The prior synthesis has low confidence ({summary.confidence_score}). "
+                f"Provide a superior, well-supported analysis that addresses the gaps. "
+                f"Respond with JSON: {{\"conclusion\":\"...\",\"confidence_score\":0.0-1.0,"
+                f"\"key_findings\":[\"...\"],\"gaps\":[\"...\"]}}"
+            )
+        else:
+            prompt = (
+                f"Review and enhance the prior synthesis (confidence={summary.confidence_score}). "
+                f"Strengthen the analysis, identify any missed nuances, and provide your own "
+                f"calibrated confidence. If the prior synthesis is solid, confirm it with your reasoning. "
+                f"Respond with JSON: {{\"conclusion\":\"...\",\"confidence_score\":0.0-1.0,"
+                f"\"key_findings\":[\"...\"],\"gaps\":[\"...\"]}}"
+            )
 
         result = await claude_code_query(prompt, system_context=context, timeout=180)
 
         if result.get("error"):
-            logger.warning(f"Claude Code escalation failed: {result['error']}")
+            logger.warning(f"Claude Code enhancement failed: {result['error']}")
             return summary, False
 
         content = result.get("content", "")
@@ -1348,7 +1475,7 @@ class Orchestrator:
             )
             session.add_evidence(claude_evidence)
 
-            # Update summary with Claude's superior analysis
+            # Update summary with Claude's analysis
             summary.conclusion = parsed.get("conclusion", summary.conclusion)
             new_confidence = _clamp_confidence(
                 float(parsed.get("confidence_score", 0.85)), "PRIMARY"
@@ -1356,7 +1483,7 @@ class Orchestrator:
             summary.confidence_score = new_confidence
             summary.evidence_count = len(session.evidence)
             logger.info(
-                f"Claude Code escalation raised confidence to {new_confidence}"
+                f"Claude Code enhancement → confidence={new_confidence}"
             )
         else:
             # Couldn't parse JSON — still use raw text as PRIMARY evidence
@@ -1372,7 +1499,7 @@ class Orchestrator:
             summary.conclusion = content[:1000]
             summary.confidence_score = 0.80
             summary.evidence_count = len(session.evidence)
-            logger.info("Claude Code escalation used raw text (JSON parse failed)")
+            logger.info("Claude Code enhancement used raw text (JSON parse failed)")
 
         return summary, True
 
