@@ -245,16 +245,18 @@ class LineMonitor:
             logger.warning(f"BetMGM scraper failed for {sport}: {e}")
 
         # 4. Odds-API.io — 100 req/hr free (72K/month)
-        if not scraped:
-            try:
-                usage = odds_api_io_usage()
-                if usage.get("requests_remaining", 0) > 0 and usage.get("api_key_set"):
-                    io_data = await odds_api_io_get_odds(sport)
-                    if not io_data.get("error") and io_data.get("game_count", 0) > 0:
-                        scraped["odds_api_io"] = io_data
-                        logger.info(f"Odds-API.io {sport}: {io_data['game_count']} games")
-            except Exception as e:
-                logger.warning(f"Odds-API.io failed for {sport}: {e}")
+        # ALWAYS call this — it provides the most books (multi-book data is
+        # essential for devig and cross-book edge detection). Individual scrapers
+        # only give 1 book each; Odds-API.io gives ALL of them.
+        try:
+            usage = odds_api_io_usage()
+            if usage.get("requests_remaining_this_hour", usage.get("requests_remaining", 0)) > 0 and usage.get("api_key_set"):
+                io_data = await odds_api_io_get_odds(sport)
+                if not io_data.get("error") and io_data.get("game_count", 0) > 0:
+                    scraped["odds_api_io"] = io_data
+                    logger.info(f"Odds-API.io {sport}: {io_data['game_count']} games")
+        except Exception as e:
+            logger.warning(f"Odds-API.io failed for {sport}: {e}")
 
         # 5. OddsPapi — 250/month free (last resort)
         if not scraped:
@@ -553,6 +555,26 @@ class LineMonitor:
         await self._db.commit()
 
         logger.info(f"Snapshot {sport} ({source}): {game_count} games, credits={credits_remaining}")
+
+        # Also cache in historical_odds_cache format for backtesting.
+        # Every live snapshot with multiple books becomes backtest-grade data.
+        # This is how the system accumulates real multi-book odds over time.
+        book_count = 0
+        for g in new_snapshot.get("games", []):
+            book_count = max(book_count, len(g.get("bookmakers", [])))
+        if book_count >= 2 and game_count > 0:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            try:
+                await self._db.execute(
+                    "INSERT OR REPLACE INTO historical_odds_cache "
+                    "(sport, snapshot_date, event_id, market_type, response_json, credits_cost, fetched_at) "
+                    "VALUES (?, ?, NULL, 'h2h,spreads,totals', ?, 0, ?)",
+                    (sport, today, json.dumps(new_snapshot), now),
+                )
+                await self._db.commit()
+                logger.info(f"Cached multi-book snapshot for backtest: {sport} {today} ({book_count} books)")
+            except Exception as e:
+                logger.warning(f"Failed to cache snapshot for backtest: {e}")
 
         # Run edge scanner on every snapshot
         edge_report = full_edge_scan(new_snapshot)

@@ -29,9 +29,10 @@ from tools.edge_confidence import score_edge
 logger = logging.getLogger("callisto.autonomous")
 
 # Only analyze edges above these thresholds — don't waste GPU on noise
-MIN_IMPLIED_RANGE = 0.04       # 4% cross-book disagreement minimum
-MIN_SOFT_EDGE_VS_SHARP = 0.03  # 3% vs sharp consensus minimum
-MIN_CONFIDENCE_TO_ALERT = 0.45 # Don't alert below SPECULATIVE+
+# Lowered from 4%/3% — with 3-5 scraped books, legitimate edges start at 2%
+MIN_IMPLIED_RANGE = 0.02       # 2% cross-book disagreement minimum
+MIN_SOFT_EDGE_VS_SHARP = 0.02  # 2% vs sharp consensus minimum
+MIN_CONFIDENCE_TO_ALERT = 0.40 # Alert at moderate confidence
 
 # Max concurrent AGP sessions to avoid GPU overload
 MAX_CONCURRENT_SESSIONS = 1
