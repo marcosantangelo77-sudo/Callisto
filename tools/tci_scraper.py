@@ -81,6 +81,7 @@ RELIGIOUS_PROGRAMS = {
 # Coaching tenure fallback — ESPN API doesn't return coach data for all teams.
 # Source: public coaching records as of 2025-26 season (years at current school).
 COACHING_TENURE_FALLBACK = {
+    # --- Original 15 (ESPN API gaps) ---
     "Notre Dame Fighting Irish": ("Niele Ivey", 6),
     "Kentucky Wildcats": ("Kenny Brooks", 2),
     "Vanderbilt Commodores": ("Shea Ralph", 4),
@@ -95,7 +96,36 @@ COACHING_TENURE_FALLBACK = {
     "North Carolina Tar Heels": ("Courtney Banghart", 6),
     "Oklahoma Sooners": ("Jennie Baranczyk", 5),
     "West Virginia Mountaineers": ("Dawn Plitzuweit", 3),
-    "Minnesota Golden Gophers": ("Dawn Plitzuweit", 1),  # If transferred
+    "Minnesota Golden Gophers": ("Dawn Plitzuweit", 1),
+    # --- 26 additional teams with 0-tenure gap (Task #31) ---
+    # Major programs
+    "Arizona State Sun Devils": ("Molly Miller", 1),
+    "Clemson Tigers": ("Shawn Poppie", 2),
+    "Illinois Fighting Illini": ("Shauna Green", 4),
+    "Oklahoma State Cowgirls": ("Jacie Hoyt", 4),
+    "Tennessee Lady Volunteers": ("Kim Caldwell", 2),
+    "UC San Diego Tritons": ("Heidi VanDerveer", 14),
+    "USC Trojans": ("Lindsay Gottlieb", 5),
+    "UTSA Roadrunners": ("Karen Aston", 5),
+    "Vermont Catamounts": ("Alisa Kresge", 7),
+    "Virginia Cavaliers": ("Amaka Agugua-Hamilton", 4),
+    "Virginia Tech Hokies": ("Megan Duffy", 2),
+    "Rhode Island Rams": ("Tammi Reiss", 7),
+    "Holy Cross Crusaders": ("Candice Green", 2),
+    # Mid-major programs
+    "California Baptist Lancers": ("Jarrod Olson", 14),
+    "Fairfield Stags": ("Carly Thibault-DuDonis", 4),
+    "Fairleigh Dickinson Knights": ("Stephanie Gaitley", 3),
+    "Green Bay Phoenix": ("Kayla Karius", 2),
+    "High Point Panthers": ("Chelsea Banbury", 7),
+    "Idaho Vandals": ("Arthur Moreira", 2),
+    "Jacksonville Dolphins": ("Special Jennings", 3),
+    "James Madison Dukes": ("Sean O'Regan", 10),
+    "Miami (OH) RedHawks": ("Glenn Box", 3),
+    "Murray State Racers": ("Rechelle Turner", 9),
+    "Samford Bulldogs": ("Matt Wise", 1),
+    "Southern Jaguars": ("Carlos Funchess", 8),
+    "Stephen F. Austin Ladyjacks": ("Leonard Bishop", 3),
 }
 
 # ESPN team ID lookup will be populated dynamically
@@ -369,6 +399,75 @@ def compute_tci(roster: dict, team_info: dict) -> dict:
     }
 
 
+_espn_teams_cache: dict[str, list] = {}
+
+
+async def _get_all_espn_teams(
+    sport: str = "basketball",
+    league: str = "womens-college-basketball",
+) -> list[dict]:
+    """Fetch and cache all ESPN teams for a league."""
+    cache_key = f"{sport}/{league}"
+    if cache_key in _espn_teams_cache:
+        return _espn_teams_cache[cache_key]
+    url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams?limit=400"
+    data = await _espn_get(url)
+    teams = data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+    _espn_teams_cache[cache_key] = teams
+    return teams
+
+
+async def _search_espn_team(
+    name: str,
+    sport: str = "basketball",
+    league: str = "womens-college-basketball",
+) -> Optional[tuple[str, str]]:
+    """Search ESPN for a team ID by display name. Returns (id, displayName) or None."""
+    try:
+        teams = await _get_all_espn_teams(sport, league)
+        for entry in teams:
+            team = entry.get("team", {})
+            if team.get("displayName", "") == name:
+                return (str(team["id"]), team["displayName"])
+        # Fallback: partial match
+        name_lower = name.lower()
+        for entry in teams:
+            team = entry.get("team", {})
+            if name_lower in team.get("displayName", "").lower():
+                return (str(team["id"]), team["displayName"])
+    except Exception as e:
+        logger.warning(f"ESPN team search failed for '{name}': {e}")
+    return None
+
+
+# 2026 NCAAW tournament teams (68) — ESPN display names
+TOURNAMENT_TEAMS_2026 = list({
+    "Alabama Crimson Tide", "Arizona State Sun Devils", "Baylor Bears",
+    "California Baptist Lancers", "Charleston Cougars", "Clemson Tigers",
+    "Colorado Buffaloes", "Colorado State Rams", "Duke Blue Devils",
+    "Fairfield Stags", "Fairleigh Dickinson Knights", "Georgia Lady Bulldogs",
+    "Gonzaga Bulldogs", "Green Bay Phoenix", "High Point Panthers",
+    "Holy Cross Crusaders", "Howard Bison", "Idaho Vandals",
+    "Illinois Fighting Illini", "Iowa Hawkeyes", "Iowa State Cyclones",
+    "Jacksonville Dolphins", "James Madison Dukes", "Kentucky Wildcats",
+    "Louisville Cardinals", "LSU Tigers", "Maryland Terrapins",
+    "Miami (OH) RedHawks", "Michigan Wolverines", "Michigan State Spartans",
+    "Minnesota Golden Gophers", "Missouri State Lady Bears", "Murray State Racers",
+    "NC State Wolfpack", "Nebraska Cornhuskers", "North Carolina Tar Heels",
+    "Notre Dame Fighting Irish", "Ohio State Buckeyes", "Oklahoma Sooners",
+    "Oklahoma State Cowgirls", "Ole Miss Rebels", "Oregon Ducks",
+    "Princeton Tigers", "Rhode Island Rams", "Richmond Spiders",
+    "Samford Bulldogs", "South Carolina Gamecocks", "South Dakota State Jackrabbits",
+    "Southern Jaguars", "Stephen F. Austin Ladyjacks", "Syracuse Orange",
+    "TCU Horned Frogs", "Tennessee Lady Volunteers", "Texas Longhorns",
+    "Texas Tech Lady Raiders", "UC San Diego Tritons", "UConn Huskies",
+    "UCLA Bruins", "USC Trojans", "UTSA Roadrunners", "Vanderbilt Commodores",
+    "Vermont Catamounts", "Villanova Wildcats", "Virginia Cavaliers",
+    "Virginia Tech Hokies", "Washington Huskies", "West Virginia Mountaineers",
+    "Western Illinois Leathernecks",
+})
+
+
 async def build_tci_for_tournament(
     season: int = 2026,
     sport: str = "basketball",
@@ -377,25 +476,37 @@ async def build_tci_for_tournament(
     """
     Build TCI scores for all teams in the current tournament bracket.
 
+    Uses TOURNAMENT_TEAMS_2026 list + ESPN rankings to find all team IDs.
     Fetches roster and coaching data, computes TCI, stores in database.
     """
-    # Get tournament teams from ESPN rankings/bracket
+    team_ids = set()
+
+    # Source 1: ESPN rankings (gets ranked teams with IDs directly)
     url = f"{ESPN_BASE}/{sport}/{league}/rankings"
     try:
         data = await _espn_get(url)
+        for ranking in data.get("rankings", []):
+            for rank in ranking.get("ranks", []):
+                team = rank.get("team", {})
+                tid = team.get("id")
+                if tid:
+                    team_ids.add((str(tid), team.get("displayName", "")))
     except Exception as e:
-        logger.error(f"Failed to fetch rankings: {e}")
-        return []
+        logger.warning(f"Rankings fetch failed: {e}")
 
-    team_ids = set()
-    for ranking in data.get("rankings", []):
-        for rank in ranking.get("ranks", []):
-            team = rank.get("team", {})
-            tid = team.get("id")
-            if tid:
-                team_ids.add((tid, team.get("displayName", "")))
+    # Source 2: look up missing tournament teams by name
+    known_names = {name for _, name in team_ids}
+    missing = [t for t in TOURNAMENT_TEAMS_2026 if t not in known_names]
+    if missing:
+        logger.info(f"TCI: {len(missing)} tournament teams not in rankings, searching ESPN...")
+        for name in missing:
+            result = await _search_espn_team(name, sport, league)
+            if result:
+                team_ids.add(result)
+            else:
+                logger.warning(f"TCI: Could not find ESPN ID for '{name}'")
 
-    logger.info(f"TCI: Found {len(team_ids)} ranked teams, building cohesion profiles...")
+    logger.info(f"TCI: Found {len(team_ids)} tournament teams, building cohesion profiles...")
 
     results = []
     for team_id, team_name in sorted(team_ids, key=lambda x: x[1]):
@@ -425,10 +536,8 @@ async def build_tci_for_tournament(
 async def _store_tci_results(results: list[dict], season: int) -> None:
     """Store TCI results in the database."""
     async with aiosqlite.connect(DB_PATH) as db:
-        # Drop and recreate to match new schema with decomposed metrics
-        await db.execute("DROP TABLE IF EXISTS tci_scores")
         await db.execute("""
-            CREATE TABLE tci_scores (
+            CREATE TABLE IF NOT EXISTS tci_scores (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 team_name TEXT NOT NULL,
                 team_id TEXT,
