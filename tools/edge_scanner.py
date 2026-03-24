@@ -1,0 +1,327 @@
+"""
+Edge scanner — finds exploitable inefficiencies across bookmakers.
+
+This is the quantitative core. Three edge types:
+
+1. CROSS-BOOK DIVERGENCE: Same bet priced differently across books.
+   If BetMGM has -105 and MyBookie has -125 on the same spread,
+   BetMGM is giving you 4%+ better implied probability. Sharp money
+   moves first on soft books — divergence tells you WHERE sharps are.
+
+2. SHARP MONEY DETECTION: When one book moves while others don't,
+   that book likely took a large sharp bet. The others will follow.
+   Getting in before the cascade = buying at a discount.
+
+3. MISPRICED LINES: When a book's juice structure creates +EV.
+   Example: if both sides of a spread are -105 instead of -110,
+   the total vig is lower and the line may be exploitable.
+   Also: stale lines that haven't adjusted to news/injuries.
+"""
+
+import logging
+from typing import Optional
+
+from tools.odds_api import (
+    calculate_implied_probability,
+    calculate_ev,
+    find_best_line,
+)
+
+logger = logging.getLogger("callisto.edge_scanner")
+
+
+def scan_cross_book_edges(games: list[dict], market: str = "spreads") -> list[dict]:
+    """
+    Scan all games for cross-bookmaker pricing divergence.
+
+    Returns edges sorted by magnitude. A large spread across books on the
+    same line means at least one book is mispriced — the question is which one.
+
+    Sharp books (Pinnacle, Circa, Bookmaker.eu) set the true line.
+    Soft books (FanDuel, DraftKings, BetMGM) lag behind and offer value.
+    """
+    # Books ranked by sharpness — match on TITLE (what find_best_line returns)
+    # Also match on key format for direct API comparisons
+    SHARP_TITLES = {"pinnacle", "lowvig.ag", "bookmaker.eu", "betonline.ag", "betcris", "circa"}
+    SOFT_TITLES = {"fanduel", "draftkings", "betmgm", "pointsbet", "caesars", "betrivers", "mybookie.ag", "bovada", "betus", "fanatics", "fanatics sportsbook"}
+
+    edges = []
+
+    for game in games:
+        home = game.get("home_team", "")
+        away = game.get("away_team", "")
+
+        for team in [home, away]:
+            if not team:
+                continue
+
+            best = find_best_line(game, market=market, team=team)
+            if best.get("error") or len(best.get("all_lines", [])) < 2:
+                continue
+
+            all_lines = best["all_lines"]
+            best_line = best["best"]
+            worst_line = best["worst"]
+            price_spread = best["spread_across_books"]
+
+            # Calculate implied probability range across books
+            implied_probs = [calculate_implied_probability(l["price"]) for l in all_lines]
+            implied_range = max(implied_probs) - min(implied_probs)
+            avg_implied = sum(implied_probs) / len(implied_probs)
+
+            # Classify which books are sharp vs soft for this line
+            sharp_lines = [l for l in all_lines if l["bookmaker"].lower() in SHARP_TITLES]
+            soft_lines = [l for l in all_lines if l["bookmaker"].lower() in SOFT_TITLES]
+
+            # Sharp consensus = average of sharp book implied probabilities
+            sharp_consensus = None
+            if sharp_lines:
+                sharp_implied = [calculate_implied_probability(l["price"]) for l in sharp_lines]
+                sharp_consensus = sum(sharp_implied) / len(sharp_implied)
+
+            # Edge: soft book offers better price than sharp consensus
+            soft_edges = []
+            if sharp_consensus is not None:
+                for sl in soft_lines:
+                    soft_implied = calculate_implied_probability(sl["price"])
+                    # If soft book implies LOWER probability than sharps think,
+                    # the soft book is underpricing this outcome = value
+                    edge = sharp_consensus - soft_implied
+                    if edge > 0.02:  # 2% minimum edge
+                        ev = calculate_ev(
+                            probability=sharp_consensus,
+                            american_odds=sl["price"],
+                        )
+                        soft_edges.append({
+                            "bookmaker": sl["bookmaker"],
+                            "price": sl["price"],
+                            "point": sl.get("point"),
+                            "edge_vs_sharp": round(edge, 4),
+                            "ev": ev,
+                        })
+
+            if price_spread >= 10 or implied_range >= 0.03:
+                edges.append({
+                    "game": f"{away} @ {home}",
+                    "game_id": game.get("id", ""),
+                    "team": team,
+                    "market": market,
+                    "best_line": {
+                        "bookmaker": best_line["bookmaker"],
+                        "price": best_line["price"],
+                        "point": best_line.get("point"),
+                    },
+                    "worst_line": {
+                        "bookmaker": worst_line["bookmaker"],
+                        "price": worst_line["price"],
+                        "point": worst_line.get("point"),
+                    },
+                    "price_spread": price_spread,
+                    "implied_range": round(implied_range, 4),
+                    "avg_implied": round(avg_implied, 4),
+                    "sharp_consensus": round(sharp_consensus, 4) if sharp_consensus else None,
+                    "num_bookmakers": len(all_lines),
+                    "soft_book_edges": soft_edges,
+                    "book_count": len(all_lines),
+                })
+
+    # Sort by implied range descending — biggest disagreements first
+    edges.sort(key=lambda x: x["implied_range"], reverse=True)
+    return edges
+
+
+def detect_sharp_money(old_snapshot: dict, new_snapshot: dict) -> list[dict]:
+    """
+    Detect sharp money by finding games where ONE book moved but others didn't.
+
+    When Pinnacle or a sharp book moves a line and the retail books haven't
+    followed yet, there's a window. Sharp money caused the move — the retail
+    books WILL follow, it's just a matter of when.
+
+    This is the "steam move" concept:
+    1. Sharp bettor places large wager on a soft book
+    2. That book adjusts its line
+    3. Other books haven't received the same action yet
+    4. Window exists to bet the OLD line at other books before they adjust
+    """
+    old_prices = {}  # (game_id, book, market, team) -> price
+    new_prices = {}
+
+    for snapshot, store in [(old_snapshot, old_prices), (new_snapshot, new_prices)]:
+        for game in snapshot.get("games", []):
+            gid = game.get("id", "")
+            for bm in game.get("bookmakers", []):
+                for mkt in bm.get("markets", []):
+                    for outcome in mkt.get("outcomes", []):
+                        key = (gid, bm["key"], mkt["key"], outcome.get("name", ""))
+                        store[key] = {
+                            "price": outcome.get("price", 0),
+                            "point": outcome.get("point"),
+                            "bookmaker": bm["title"],
+                        }
+
+    # Group by (game_id, market, team) to compare across books
+    from collections import defaultdict
+    game_lines = defaultdict(list)
+
+    for key in new_prices:
+        gid, book_key, market, team = key
+        group_key = (gid, market, team)
+        old = old_prices.get(key)
+        new = new_prices[key]
+        if old:
+            price_diff = new["price"] - old["price"]
+            game_lines[group_key].append({
+                "bookmaker": new["bookmaker"],
+                "book_key": book_key,
+                "old_price": old["price"],
+                "new_price": new["price"],
+                "price_diff": price_diff,
+                "old_point": old.get("point"),
+                "new_point": new.get("point"),
+                "point_diff": (new.get("point") or 0) - (old.get("point") or 0),
+            })
+
+    sharp_signals = []
+    for (gid, market, team), books in game_lines.items():
+        if len(books) < 3:
+            continue
+
+        # Count how many books moved significantly
+        movers = [b for b in books if abs(b["price_diff"]) >= 8 or abs(b["point_diff"]) >= 0.5]
+        stale = [b for b in books if abs(b["price_diff"]) < 3 and abs(b["point_diff"]) < 0.5]
+
+        # Sharp signal: 1-2 books moved, majority didn't
+        if 0 < len(movers) <= 2 and len(stale) >= 2:
+            sharp_signals.append({
+                "game_id": gid,
+                "market": market,
+                "team": team,
+                "moved_books": [{
+                    "bookmaker": m["bookmaker"],
+                    "old_price": m["old_price"],
+                    "new_price": m["new_price"],
+                    "movement": m["price_diff"],
+                } for m in movers],
+                "stale_books": [{
+                    "bookmaker": s["bookmaker"],
+                    "price": s["new_price"],
+                    "point": s.get("new_point"),
+                } for s in stale],
+                "signal": "SHARP_MOVE",
+                "interpretation": (
+                    f"{len(movers)} book(s) moved on {team} {market} while "
+                    f"{len(stale)} book(s) haven't adjusted. "
+                    f"Stale books may offer value before they follow."
+                ),
+            })
+
+    return sharp_signals
+
+
+def scan_vig_edges(games: list[dict], market: str = "spreads") -> list[dict]:
+    """
+    Find books offering unusually low vig (juice) on specific games.
+
+    Standard vig: both sides at -110 = 4.55% total vig.
+    Low vig: -105/-105 = 2.44% total vig.
+    Reduced vig = the book is either promoting or mispricing.
+
+    Books with lower vig give you better prices structurally —
+    over thousands of bets, reduced vig is the simplest edge.
+    """
+    vig_edges = []
+
+    for game in games:
+        home = game.get("home_team", "")
+        away = game.get("away_team", "")
+
+        for bm in game.get("bookmakers", []):
+            for mkt in bm.get("markets", []):
+                if mkt["key"] != market:
+                    continue
+
+                outcomes = mkt.get("outcomes", [])
+                if len(outcomes) < 2:
+                    continue
+
+                # Calculate total implied probability (vig = total - 1.0)
+                total_implied = sum(
+                    calculate_implied_probability(o.get("price", -110))
+                    for o in outcomes
+                )
+                vig = total_implied - 1.0
+
+                # Standard vig on spreads is ~4.5% (-110/-110)
+                # Anything under 3% is notable, under 2% is exceptional
+                if vig < 0.035:
+                    vig_edges.append({
+                        "game": f"{away} @ {home}",
+                        "game_id": game.get("id", ""),
+                        "bookmaker": bm["title"],
+                        "market": market,
+                        "vig_pct": round(vig * 100, 2),
+                        "total_implied": round(total_implied, 4),
+                        "outcomes": [
+                            {
+                                "name": o.get("name", ""),
+                                "price": o.get("price", 0),
+                                "point": o.get("point"),
+                                "implied": round(calculate_implied_probability(o.get("price", -110)), 4),
+                            }
+                            for o in outcomes
+                        ],
+                        "edge_type": "LOW_VIG",
+                        "note": (
+                            f"Vig at {round(vig * 100, 1)}% vs standard ~4.5%. "
+                            f"{'Exceptional value' if vig < 0.02 else 'Notable reduction'}."
+                        ),
+                    })
+
+    vig_edges.sort(key=lambda x: x["vig_pct"])
+    return vig_edges
+
+
+def full_edge_scan(snapshot: dict) -> dict:
+    """
+    Run all edge scanners on a snapshot and return a unified report.
+
+    This is the main entry point — call after each odds snapshot.
+    """
+    games = snapshot.get("games", [])
+    if not games:
+        return {"error": "No games in snapshot", "edges": []}
+
+    report = {
+        "game_count": len(games),
+        "sport": snapshot.get("sport", "unknown"),
+    }
+
+    # Cross-book divergence
+    for market in ["spreads", "h2h", "totals"]:
+        key = f"cross_book_{market}"
+        edges = scan_cross_book_edges(games, market=market)
+        report[key] = edges
+        if edges:
+            logger.info(
+                f"Cross-book {market}: {len(edges)} divergences found, "
+                f"max implied range: {edges[0]['implied_range']:.1%}"
+            )
+
+    # Vig analysis
+    for market in ["spreads", "h2h", "totals"]:
+        key = f"low_vig_{market}"
+        vig = scan_vig_edges(games, market=market)
+        report[key] = vig
+        if vig:
+            logger.info(f"Low vig {market}: {len(vig)} edges, lowest: {vig[0]['vig_pct']}%")
+
+    # Summary
+    total_edges = sum(
+        len(report.get(k, []))
+        for k in report
+        if k.startswith("cross_book_") or k.startswith("low_vig_")
+    )
+    report["total_edges"] = total_edges
+
+    return report
