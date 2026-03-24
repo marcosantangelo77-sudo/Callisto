@@ -423,6 +423,27 @@ CREATE TABLE IF NOT EXISTS player_stats (
 
 CREATE INDEX IF NOT EXISTS idx_player_stats_lookup
     ON player_stats(sport, player_name, stat_type, game_date);
+
+-- ──────────────────────────────────────────
+-- GAME RESULTS: actual scores for backtest resolution
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS game_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sport TEXT NOT NULL,
+    game_date TEXT NOT NULL,
+    home_team TEXT NOT NULL,
+    away_team TEXT NOT NULL,
+    home_score INTEGER,
+    away_score INTEGER,
+    total_score INTEGER,
+    spread_result REAL,
+    winner TEXT,
+    source TEXT DEFAULT 'espn',
+    UNIQUE(sport, game_date, home_team, away_team)
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_results_lookup
+    ON game_results(sport, game_date, home_team, away_team);
 """
 
 

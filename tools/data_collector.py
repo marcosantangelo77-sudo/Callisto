@@ -181,6 +181,28 @@ class DataCollector:
             except Exception as e:
                 logger.warning(f"Failed to store game {event_id}: {e}")
 
+            # Also store in game_results for backtest resolution
+            try:
+                total_score = home_score + away_score
+                spread_result = float(away_score - home_score)
+                winner = (
+                    home_team if home_score > away_score
+                    else away_team if away_score > home_score
+                    else "push"
+                )
+                await self._db.execute(
+                    "INSERT OR IGNORE INTO game_results "
+                    "(sport, game_date, home_team, away_team, home_score, "
+                    "away_score, total_score, spread_result, winner, source) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'espn')",
+                    (
+                        sport, game_date_fmt, home_team, away_team,
+                        home_score, away_score, total_score, spread_result, winner,
+                    ),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to store game_result {event_id}: {e}")
+
         await self._db.commit()
         logger.info(f"Collected {games_stored} games for {sport} on {date}")
 
