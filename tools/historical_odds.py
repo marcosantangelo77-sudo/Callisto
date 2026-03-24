@@ -83,7 +83,11 @@ class HistoricalOddsFetcher:
     ) -> dict:
         """
         Fetch historical odds for a sport on a specific date.
-        Checks SQLite cache first. If cache miss, calls The Odds API.
+
+        Source cascade (cheapest first):
+          1. SQLite cache (free)
+          2. OddsPapi (1 req per call, 250/month free, includes Pinnacle)
+          3. The Odds API (10 credits per call, 500/month free)
 
         Args:
             sport: Sport key (e.g., 'basketball_nba')
@@ -100,12 +104,71 @@ class HistoricalOddsFetcher:
             logger.debug(f"Cache hit: {sport} {date}")
             return cached
 
+        # Source 1: OddsPapi (1 credit, includes sharp books)
+        result = await self._fetch_via_oddspapi(sport, date, markets)
+        if result and result.get("games"):
+            credits_cost = 1  # OddsPapi costs 1 request regardless of markets
+            await self._cache_response(sport, date, None, markets, result, credits_cost)
+            return result
+
+        # Source 2: The Odds API (10 credits per call — expensive)
+        result = await self._fetch_via_odds_api(sport, date, regions, markets, odds_format)
+        if result and result.get("games"):
+            credits_cost = len(markets.split(",")) * len(regions.split(","))
+            await self._cache_response(sport, date, None, markets, result, credits_cost)
+            return result
+
+        # Both sources failed
+        source_errors = []
+        if result and result.get("error"):
+            source_errors.append(f"Odds API: {result['error']}")
+        logger.warning(f"Historical odds {sport} {date}: all sources failed — {source_errors}")
+        return result or {"error": "All historical odds sources failed", "games": []}
+
+    async def _fetch_via_oddspapi(
+        self, sport: str, date: str, markets: str,
+    ) -> dict:
+        """Try OddsPapi for historical odds (1 credit per call)."""
+        try:
+            from tools.oddspapi import get_historical_odds, get_usage_status
+
+            usage = get_usage_status()
+            if not usage.get("api_key_set"):
+                return {"error": "OddsPapi API key not set", "games": []}
+            if usage.get("requests_remaining", 0) <= 0:
+                return {"error": "OddsPapi monthly limit reached", "games": []}
+
+            result = await get_historical_odds(sport=sport, date=date)
+            if result.get("error"):
+                logger.debug(f"OddsPapi historical {sport} {date}: {result['error']}")
+                return result
+
+            games = result.get("games", [])
+            if games:
+                logger.info(
+                    f"Historical odds via OddsPapi: {sport} {date} → {len(games)} games "
+                    f"(remaining: {usage.get('requests_remaining', '?')} req)"
+                )
+            return {
+                "sport": sport,
+                "date": date,
+                "timestamp": f"{date}T00:00:00Z",
+                "games": games,
+                "game_count": len(games),
+                "source": "oddspapi",
+            }
+        except Exception as e:
+            logger.debug(f"OddsPapi historical fallback failed: {e}")
+            return {"error": str(e), "games": []}
+
+    async def _fetch_via_odds_api(
+        self, sport: str, date: str, regions: str, markets: str, odds_format: str,
+    ) -> dict:
+        """Try The Odds API for historical odds (10 credits per call)."""
         if not ODDS_API_KEY:
             return {"error": "ODDS_API_KEY not set", "games": []}
 
-        # Format date as ISO8601 with time for the API
         date_iso = f"{date}T00:00:00Z"
-
         client = _get_client()
         try:
             resp = await client.get(
@@ -123,7 +186,7 @@ class HistoricalOddsFetcher:
             _update_credits(dict(resp.headers))
             data = resp.json()
 
-            result = {
+            return {
                 "sport": sport,
                 "date": date,
                 "timestamp": data.get("timestamp", date_iso),
@@ -131,19 +194,13 @@ class HistoricalOddsFetcher:
                 "next_timestamp": data.get("next_timestamp"),
                 "games": data.get("data", []),
                 "game_count": len(data.get("data", [])),
+                "source": "odds_api",
             }
-
-            # Cache the response
-            credits_cost = len(markets.split(",")) * len(regions.split(","))
-            await self._cache_response(sport, date, None, markets, result, credits_cost)
-
-            return result
-
         except httpx.HTTPStatusError as e:
-            logger.error(f"Historical API HTTP error: {e.response.status_code}")
+            logger.error(f"Historical Odds API HTTP error: {e.response.status_code}")
             return {"error": f"HTTP {e.response.status_code}", "games": []}
         except Exception as e:
-            logger.error(f"Historical API error: {e}")
+            logger.error(f"Historical Odds API error: {e}")
             return {"error": str(e), "games": []}
 
     async def fetch_historical_event_odds(

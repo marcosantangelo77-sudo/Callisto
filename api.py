@@ -11,8 +11,9 @@ import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
+import aiosqlite
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from agp import Domain
@@ -40,6 +41,8 @@ load_dotenv()
 
 setup_logging()
 logger = logging.getLogger("callisto.api")
+
+DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
 CALLISTO_PORT = int(os.getenv("CALLISTO_PORT", "8420"))
 
@@ -1299,6 +1302,44 @@ async def admin_restart():
 
     asyncio.create_task(_delayed_exit())
     return {"status": "restarting", "message": "Watchdog will restart with new code in ~15 seconds"}
+
+
+@app.post("/admin/sql")
+async def admin_sql(request: Request):
+    """Read-only SQL query against callisto.db for debugging.
+
+    Only SELECT statements allowed. Useful for ad-hoc diagnostics
+    without needing a separate sqlite3 client.
+    """
+    body = await request.json()
+    sql = body.get("sql", "").strip()
+
+    if not sql:
+        return {"error": "No SQL provided"}
+
+    # Safety: only allow SELECT statements
+    normalized = sql.upper().lstrip()
+    if not normalized.startswith("SELECT") and not normalized.startswith("PRAGMA"):
+        return {"error": "Only SELECT and PRAGMA statements allowed"}
+
+    # Block dangerous patterns
+    for forbidden in ("DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH"):
+        if forbidden in normalized:
+            return {"error": f"Forbidden keyword: {forbidden}"}
+
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(sql)
+            rows = await cursor.fetchall()
+            cols = [d[0] for d in cursor.description] if cursor.description else []
+            return {
+                "columns": cols,
+                "rows": [list(r) for r in rows[:500]],  # Cap at 500 rows
+                "row_count": len(rows),
+                "truncated": len(rows) > 500,
+            }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ---------------------------------------------------------------------------
