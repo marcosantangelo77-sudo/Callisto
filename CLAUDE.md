@@ -20,6 +20,17 @@ When a conversation contains insights, decisions, or research that the autonomou
 curl -X POST http://localhost:8420/context/sync -H "Content-Type: application/json" -d '{"session_summary": "...", "actionable_queries": ["..."]}'
 ```
 
+## After Code Changes — Trigger Restart
+When you modify Callisto source files (tools/, api.py, orchestrator.py, etc.), the running process needs to reload. Do this EVERY TIME after committing code changes:
+```bash
+# Method 1: Signal file (works always — sentinel picks it up in ≤30 seconds)
+echo "code reload after commit $(git rev-parse --short HEAD)" > memory/restart_requested
+
+# Method 2: HTTP endpoint (works after first restart when endpoint is live)
+curl -s -X POST http://localhost:8420/admin/restart
+```
+The sentinel watchdog (separate process) watches for `memory/restart_requested`, kills the API, and the watchdog.bat restarts it with new code within 15 seconds. Do NOT skip this step — uncommitted code that isn't reloaded is invisible to the live system.
+
 ## API Quick Reference (localhost:8420)
 - `GET /health` — agent status, odds credits, monitors
 - `GET /system/full-status` — everything: hypotheses, research loop, embeddings, data
@@ -27,6 +38,7 @@ curl -X POST http://localhost:8420/context/sync -H "Content-Type: application/js
 - `GET /task/{id}` — specific task result
 - `POST /task` — submit research query to AGP pipeline
 - `POST /context/sync` — push session context to Callisto
+- `POST /admin/restart` — graceful restart (watchdog brings it back with new code)
 - `GET /odds/edges` — current cross-book edges
 - `GET /odds/opportunities` — +EV opportunities
 - `GET /odds/movements` — recent line movements
@@ -35,6 +47,7 @@ curl -X POST http://localhost:8420/context/sync -H "Content-Type: application/js
 ## Key Rules
 - Never bypass AGP for research — submit to /task
 - Every session starts by syncing with Callisto state
+- After code changes: commit, then trigger restart (signal file or /admin/restart)
 - Commit all code changes autonomously (feedback_autonomous_commits)
 - Don't ask permission — check state and act (feedback_no_permission_asking)
 - Betting must be quantitative with live odds APIs (feedback_betting_strategy)

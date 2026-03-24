@@ -1166,6 +1166,31 @@ async def sync_context(ctx: ContextSync):
     }
 
 
+@app.post("/admin/restart")
+async def admin_restart():
+    """Graceful restart — exits process, watchdog brings it back with new code.
+
+    This is how Claude Code (or any session) triggers a code reload
+    without Marco needing to be physically present. The watchdog.bat
+    restarts within 15 seconds.
+    """
+    logger.info("RESTART REQUESTED via /admin/restart — shutting down gracefully")
+    send_msg = "Callisto restarting (code reload requested)"
+    try:
+        await telegram.send_message(send_msg)
+    except Exception:
+        pass
+
+    # Give time for this response to be sent, then exit
+    async def _delayed_exit():
+        await asyncio.sleep(1)
+        logger.info("Exiting for restart...")
+        os._exit(0)
+
+    asyncio.create_task(_delayed_exit())
+    return {"status": "restarting", "message": "Watchdog will restart with new code in ~15 seconds"}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("api:app", host="0.0.0.0", port=CALLISTO_PORT, reload=False)

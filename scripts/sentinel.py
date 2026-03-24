@@ -47,6 +47,7 @@ CALLISTO_DIR = Path(__file__).parent.parent.resolve()
 API_URL = "http://localhost:8420"
 HEALTH_ENDPOINT = f"{API_URL}/health"
 HEALTH_FILE = CALLISTO_DIR / "memory" / "health.json"
+RESTART_SIGNAL = CALLISTO_DIR / "memory" / "restart_requested"
 LOG_DIR = CALLISTO_DIR / "logs"
 SENTINEL_LOG = CALLISTO_DIR / "logs" / "sentinel.log"
 
@@ -219,6 +220,56 @@ def extract_files_from_traceback(traceback: str) -> list[str]:
         except ValueError:
             pass
     return sorted(files)
+
+
+# ── Process control ──
+
+async def _kill_api_process() -> None:
+    """Kill the Callisto API process so watchdog restarts it with new code.
+
+    Tries graceful HTTP shutdown first, then falls back to killing port 8420.
+    """
+    import httpx
+
+    # 1. Try graceful: POST /admin/restart (may not exist in old code)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(f"{API_URL}/admin/restart")
+            if resp.status_code == 200:
+                logger.info("Graceful restart triggered via /admin/restart")
+                return
+    except Exception:
+        pass
+
+    # 2. Fall back to killing the process on port 8420
+    logger.info("Graceful restart unavailable — killing port 8420 process")
+    try:
+        if sys.platform == "win32":
+            # Find PID on port 8420 and kill it
+            result = subprocess.run(
+                ["netstat", "-ano"],
+                capture_output=True, text=True, timeout=10,
+            )
+            for line in result.stdout.splitlines():
+                if ":8420" in line and "LISTENING" in line:
+                    parts = line.strip().split()
+                    pid = parts[-1]
+                    if pid.isdigit():
+                        subprocess.run(
+                            ["taskkill", "/F", "/PID", pid],
+                            capture_output=True, timeout=10,
+                        )
+                        logger.info(f"Killed API process PID {pid}")
+                        return
+        else:
+            subprocess.run(
+                ["fuser", "-k", "8420/tcp"],
+                capture_output=True, timeout=10,
+            )
+            logger.info("Killed process on port 8420 via fuser")
+            return
+    except Exception as e:
+        logger.error(f"Failed to kill API process: {e}")
 
 
 # ── Health check ──
@@ -640,6 +691,19 @@ async def sentinel_loop() -> None:
 
     while True:
         try:
+            # Check for restart signal file (written by Claude Code after code changes)
+            if RESTART_SIGNAL.exists():
+                try:
+                    reason = RESTART_SIGNAL.read_text(encoding="utf-8").strip() or "code reload"
+                    RESTART_SIGNAL.unlink()
+                    logger.info(f"RESTART SIGNAL detected: {reason}")
+                    send_telegram(f"Restart signal: {reason} — killing API for watchdog restart")
+                    await _kill_api_process()
+                    await asyncio.sleep(5)  # Let watchdog handle restart
+                    continue
+                except Exception as e:
+                    logger.error(f"Failed to process restart signal: {e}")
+
             health = await check_health()
             state.total_checks += 1
 
