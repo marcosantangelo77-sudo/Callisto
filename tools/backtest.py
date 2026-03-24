@@ -163,6 +163,7 @@ class BacktestEngine:
                     devig_method=devig_method,
                     min_books=min_books,
                     config=config,
+                    h_sport=sport,
                 )
                 total_events += events
                 total_signals += signals
@@ -178,6 +179,13 @@ class BacktestEngine:
 
         logger.info(
             f"Backtest {run_id} complete: {total_events} events, {total_signals} signals"
+        )
+
+        # Resolve outcomes using local game_results table
+        resolution = await self.resolve_from_game_results(run_id=run_id, sport=sport)
+        logger.info(
+            f"Backtest {run_id}: resolved {resolution['resolved']} events "
+            f"({resolution['unresolved']} unresolved)"
         )
 
         # Run significance evaluation
@@ -237,6 +245,7 @@ class BacktestEngine:
         devig_method: str,
         min_books: int,
         config: dict,
+        h_sport: str = "",
     ) -> tuple[int, int]:
         """
         Process a single game: devig, compare, record predictions.
@@ -283,7 +292,7 @@ class BacktestEngine:
         return await self._process_game_lines(
             run_id, hypothesis_id, game, game_date, snapshot_time,
             effective_market, effective_target, edge_threshold, devig_method,
-            effective_min_books, config,
+            effective_min_books, config, h_sport=h_sport,
         )
 
     async def _process_game_lines(
@@ -299,6 +308,7 @@ class BacktestEngine:
         devig_method: str,
         min_books: int,
         config: dict,
+        h_sport: str = "",
     ) -> tuple[int, int]:
         """Process spreads/totals/h2h lines for a game."""
         home = game.get("home_team", "")
@@ -396,7 +406,9 @@ class BacktestEngine:
                     signals += 1
 
                 team = side_name
-                event_id = game.get("id", "")
+                # Build a matchable event_id from game identity
+                event_id = game.get("id") or f"{game_date}|{home}|{away}"
+                event_sport = game.get("sport_key") or h_sport
 
                 await self._db.execute(
                     "INSERT INTO backtest_events "
@@ -406,11 +418,12 @@ class BacktestEngine:
                     "signal_generated, game_date, snapshot_time) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        run_id, event_id, hypothesis_id, game.get("sport_key", ""),
+                        run_id, event_id, hypothesis_id, event_sport,
                         None, mkt_key, point, team, target_book,
                         target_price, round(target_implied, 6),
                         round(consensus, 6),
-                        json.dumps({"books_used": len(fair_a_values), "method": devig_method}),
+                        json.dumps({"books_used": len(fair_a_values), "method": devig_method,
+                                    "home_team": home, "away_team": away}),
                         round(edge, 6), round(ev, 6), round(kelly, 6),
                         is_signal, game_date, snapshot_time,
                     ),
@@ -670,6 +683,102 @@ class BacktestEngine:
                 return "push"
 
         return None
+
+    async def resolve_from_game_results(
+        self,
+        run_id: Optional[str] = None,
+        sport: Optional[str] = None,
+    ) -> dict:
+        """
+        Resolve backtest events using the local game_results table.
+        No API calls needed — matches on game_date + teams.
+
+        If run_id is given, resolves only that run's events.
+        If sport is given without run_id, resolves all unresolved events for that sport.
+        If neither, resolves everything possible.
+        """
+        # Build query for unresolved events
+        if run_id:
+            cursor = await self._db.execute(
+                "SELECT id, event_id, sport, market, side, line, game_date, model_factors "
+                "FROM backtest_events WHERE run_id = ? AND actual_result IS NULL",
+                (run_id,),
+            )
+        elif sport:
+            cursor = await self._db.execute(
+                "SELECT id, event_id, sport, market, side, line, game_date, model_factors "
+                "FROM backtest_events WHERE sport = ? AND actual_result IS NULL",
+                (sport,),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT id, event_id, sport, market, side, line, game_date, model_factors "
+                "FROM backtest_events WHERE actual_result IS NULL",
+            )
+
+        unresolved = await cursor.fetchall()
+        if not unresolved:
+            return {"resolved": 0, "unresolved": 0}
+
+        # Build a lookup of game results: (sport, date, home, away) -> scores
+        result_cursor = await self._db.execute(
+            "SELECT sport, game_date, home_team, away_team, home_score, away_score "
+            "FROM game_results",
+        )
+        result_rows = await result_cursor.fetchall()
+        game_lookup = {}
+        for r_sport, r_date, r_home, r_away, r_hscore, r_ascore in result_rows:
+            game_lookup[(r_sport, r_date, r_home, r_away)] = (r_hscore, r_ascore)
+            # Also index by just (date, home, away) for events with empty sport
+            game_lookup[("", r_date, r_home, r_away)] = (r_hscore, r_ascore)
+
+        resolved_count = 0
+        for ev_id, event_id, ev_sport, market, side, line, game_date, model_factors in unresolved:
+            # Extract home/away from event_id or model_factors
+            home_team = ""
+            away_team = ""
+
+            if event_id and "|" in event_id:
+                parts = event_id.split("|")
+                if len(parts) >= 3:
+                    home_team = parts[1]
+                    away_team = parts[2]
+            elif model_factors:
+                try:
+                    factors = json.loads(model_factors)
+                    home_team = factors.get("home_team", "")
+                    away_team = factors.get("away_team", "")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            if not home_team or not away_team:
+                continue
+
+            # Look up game result
+            scores = (
+                game_lookup.get((ev_sport, game_date, home_team, away_team))
+                or game_lookup.get(("", game_date, home_team, away_team))
+            )
+            if not scores:
+                continue
+
+            home_score, away_score = scores
+            if home_score is None or away_score is None:
+                continue
+
+            result = self._resolve_line(
+                market, side, line, home_score, away_score, home_team, away_team
+            )
+            if result:
+                await self._db.execute(
+                    "UPDATE backtest_events SET actual_result = ? WHERE id = ?",
+                    (result, ev_id),
+                )
+                resolved_count += 1
+
+        await self._db.commit()
+        logger.info(f"Resolved {resolved_count}/{len(unresolved)} backtest events from game_results")
+        return {"resolved": resolved_count, "unresolved": len(unresolved) - resolved_count}
 
     async def generate_paper_trade_signal(
         self,

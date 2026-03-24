@@ -633,10 +633,10 @@ class ResearchLoop:
                 break
 
             try:
-                # Use 3 months of data for initial backtest
+                # Use full available historical data range for backtest
                 from datetime import datetime, timedelta, timezone
                 end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                start_date = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
+                start_date = "2023-01-01"  # Full cached range
 
                 result = await self.backtest_engine.run_backtest(
                     hypothesis_id=h["hypothesis_id"],
@@ -658,6 +658,17 @@ class ResearchLoop:
 
     async def _phase_evaluate(self) -> None:
         """Evaluate backtesting hypotheses for promotion or rejection."""
+        # First, resolve any unresolved backtest events from game_results
+        try:
+            resolution = await self.backtest_engine.resolve_from_game_results()
+            if resolution.get("resolved", 0) > 0:
+                logger.info(
+                    f"Research: resolved {resolution['resolved']} backtest events "
+                    f"from game_results"
+                )
+        except Exception as e:
+            logger.warning(f"Backtest resolution failed: {e}")
+
         backtesting = await self.hypothesis_manager.list_hypotheses(status="backtesting")
 
         for h in backtesting:
