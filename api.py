@@ -1126,6 +1126,46 @@ async def full_system_status():
     return status
 
 
+# ---------------------------------------------------------------------------
+# Task listing & context sync
+# ---------------------------------------------------------------------------
+
+@app.get("/tasks")
+async def list_tasks(status: Optional[str] = None, limit: int = 10):
+    """List recent tasks from the queue."""
+    rows = await queue._db.execute_fetchall(
+        """SELECT task_id, query, status, priority, session_id,
+                  created_at, started_at, completed_at
+           FROM task_queue
+           ORDER BY created_at DESC LIMIT ?""",
+        (limit,)
+    )
+    columns = ["task_id", "query", "status", "priority", "session_id",
+               "created_at", "started_at", "completed_at"]
+    tasks = [dict(zip(columns, row)) for row in rows]
+    if status:
+        tasks = [t for t in tasks if t["status"] == status.upper()]
+    return {"count": len(tasks), "tasks": tasks}
+
+
+class ContextSync(BaseModel):
+    session_summary: str
+    actionable_queries: list[str] = []
+
+@app.post("/context/sync")
+async def sync_context(ctx: ContextSync):
+    """Receive context from a Claude Code session. Queues actionable items."""
+    submitted = []
+    for q in ctx.actionable_queries:
+        task_id = await queue.submit_task(q, priority=1)
+        submitted.append(task_id)
+    return {
+        "received": True,
+        "tasks_submitted": len(submitted),
+        "task_ids": submitted,
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("api:app", host="0.0.0.0", port=CALLISTO_PORT, reload=False)
