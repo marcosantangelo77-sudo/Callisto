@@ -1,0 +1,52 @@
+{
+  "identity": {
+    "system": "Callisto",
+    "owner": "Marco Santangelo",
+    "books": [
+      "DraftKings",
+      "Fanatics"
+    ],
+    "reference": [
+      "Pinnacle (via the-odds-api)"
+    ],
+    "method": "Devig sharp books for true probability, compare to retail for mispricing",
+    "primary_edge": "Profit boosts + player props",
+    "date": "2026-03-24"
+  },
+  "bankroll": {
+    "balance": 1000.0,
+    "as_of": "2026-03-22T22:23:39.089738+00:00"
+  },
+  "active_bets": [
+    {
+      "id": 3,
+      "team": "Texas Tech Red Raiders",
+      "market": "spreads",
+      "book": "DraftKings",
+      "odds": 105,
+      "stake": 30.0
+    },
+    {
+      "id": 2,
+      "team": "UConn Huskies",
+      "market": "h2h",
+      "book": "DraftKings",
+      "odds": -185,
+      "stake": 30.0
+    },
+    {
+      "id": 1,
+      "team": "Tennessee Volunteers",
+      "market": "h2h",
+      "book": "DraftKings",
+      "odds": -135,
+      "stake": 30.0
+    }
+  ],
+  "sentinel_flags": [],
+  "performance": {
+    "record": "0W-0L",
+    "pending": 3,
+    "pnl": 0
+  }
+}
