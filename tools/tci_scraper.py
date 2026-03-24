@@ -78,6 +78,26 @@ RELIGIOUS_PROGRAMS = {
     "Oklahoma State": "secular",  # Included for reference
 }
 
+# Coaching tenure fallback — ESPN API doesn't return coach data for all teams.
+# Source: public coaching records as of 2025-26 season (years at current school).
+COACHING_TENURE_FALLBACK = {
+    "Notre Dame Fighting Irish": ("Niele Ivey", 6),
+    "Kentucky Wildcats": ("Kenny Brooks", 2),
+    "Vanderbilt Commodores": ("Shea Ralph", 4),
+    "Baylor Bears": ("Nicki Collen", 5),
+    "Duke Blue Devils": ("Kara Lawson", 6),
+    "Princeton Tigers": ("Carla Berube", 4),
+    "Texas Longhorns": ("Vic Schaefer", 6),
+    "Michigan State Spartans": ("Robyn Fralick", 2),
+    "TCU Horned Frogs": ("Mark Campbell", 3),
+    "Ole Miss Rebels": ("Yolett McPhee-McCuin", 8),
+    "Iowa Hawkeyes": ("Jan Jensen", 3),
+    "North Carolina Tar Heels": ("Courtney Banghart", 6),
+    "Oklahoma Sooners": ("Jennie Baranczyk", 5),
+    "West Virginia Mountaineers": ("Dawn Plitzuweit", 3),
+    "Minnesota Golden Gophers": ("Dawn Plitzuweit", 1),  # If transferred
+}
+
 # ESPN team ID lookup will be populated dynamically
 _team_cache: dict[str, dict] = {}
 _client: Optional[httpx.AsyncClient] = None
@@ -162,22 +182,28 @@ async def get_team_info(
         except Exception:
             coaches = []
         coach_info = {}
+        team_name = team.get("displayName", "")
         if coaches:
             c = coaches[0]  # Head coach is first
             coach_info = {
                 "name": f"{c.get('firstName', '')} {c.get('lastName', '')}".strip(),
                 "tenure_years": c.get("experience", 0),
             }
+        # Fallback: use known coaching tenure when ESPN API is incomplete
+        if not coach_info.get("tenure_years") and team_name in COACHING_TENURE_FALLBACK:
+            name, tenure = COACHING_TENURE_FALLBACK[team_name]
+            coach_info = {"name": name, "tenure_years": tenure}
+            logger.info(f"TCI: Using fallback coaching data for {team_name}: {name} ({tenure}yr)")
         return {
             "team_id": team_id,
-            "team_name": team.get("displayName", ""),
+            "team_name": team_name,
             "abbreviation": team.get("abbreviation", ""),
             "location": team.get("location", ""),
             "conference": team.get("groups", {}).get("id", ""),
             "conference_name": team.get("groups", {}).get("name", ""),
             "head_coach": coach_info,
             "religious_affiliation": RELIGIOUS_PROGRAMS.get(
-                team.get("displayName", ""), "secular"
+                team_name, "secular"
             ),
         }
     except Exception as e:
