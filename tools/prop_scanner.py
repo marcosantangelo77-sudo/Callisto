@@ -113,6 +113,8 @@ async def scan_props_ev(
         book_details = []
 
         for bk_key, bk_data in books.items():
+            if bk_key == target_book:
+                continue  # exclude target book from consensus
             if "Over" not in bk_data or "Under" not in bk_data:
                 continue
             try:

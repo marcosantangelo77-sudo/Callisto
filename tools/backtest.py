@@ -366,9 +366,12 @@ class BacktestEngine:
                 continue
 
             # Devig each book and compute consensus fair values
+            # CRITICAL: exclude target book from consensus to avoid self-reference bias
             fair_a_values = []
             fair_b_values = []
             for bk in common_books:
+                if bk == target_book:
+                    continue  # target book is what we compare AGAINST, not part of consensus
                 price_a = side_a_books[bk]["price"]
                 price_b = side_b_books[bk]["price"]
                 try:
@@ -422,8 +425,8 @@ class BacktestEngine:
                         None, mkt_key, point, team, target_book,
                         target_price, round(target_implied, 6),
                         round(consensus, 6),
-                        json.dumps({"books_used": len(fair_a_values), "method": devig_method,
-                                    "home_team": home, "away_team": away}),
+                        json.dumps({"books_used": len(fair_a_values), "target_excluded": True,
+                                    "method": devig_method, "home_team": home, "away_team": away}),
                         round(edge, 6), round(ev, 6), round(kelly, 6),
                         is_signal, game_date, snapshot_time,
                     ),
@@ -499,6 +502,8 @@ class BacktestEngine:
             fair_overs = []
             fair_unders = []
             for bk_key, bk_data in books.items():
+                if bk_key == target_book:
+                    continue  # exclude target book from consensus
                 if "Over" not in bk_data or "Under" not in bk_data:
                     continue
                 try:

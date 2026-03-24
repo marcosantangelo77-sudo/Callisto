@@ -63,7 +63,7 @@ HYPOTHESIS_TEMPLATES = [
             "rest_days": [2, 3, 4],
             "prop_type": ["points", "rebounds", "assists", "threes"],
             "stat_category": ["scoring", "rebounding", "passing", "three-point shooting"],
-            "min_edge": [2, 3],
+            "min_edge": [1, 2, 3],
         },
     },
     {
@@ -86,7 +86,7 @@ HYPOTHESIS_TEMPLATES = [
         "variables": {
             "prop_type": ["points", "rebounds", "assists", "points_rebounds_assists"],
             "stat_category": ["scoring", "rebounding", "passing", "combined stats"],
-            "min_edge": [2, 3],
+            "min_edge": [1, 2, 3],
         },
     },
     {
@@ -111,7 +111,7 @@ HYPOTHESIS_TEMPLATES = [
             "prop_type": ["points", "assists", "points_rebounds_assists"],
             "stat_category": ["scoring", "passing", "combined stats"],
             "pace_diff": [4, 6, 8],
-            "min_edge": [2, 3],
+            "min_edge": [1, 2, 3],
         },
     },
     {
@@ -136,7 +136,7 @@ HYPOTHESIS_TEMPLATES = [
             "prop_type": ["points", "rebounds", "assists", "threes"],
             "stat_category": ["scoring", "rebounding", "passing", "three-point shooting"],
             "role": ["scorer", "rebounder", "playmaker"],
-            "min_edge": [3, 5],
+            "min_edge": [1.5, 3],
         },
     },
     {
@@ -157,7 +157,7 @@ HYPOTHESIS_TEMPLATES = [
         },
         "variables": {
             "spread_range": ["1-4", "4-7", "7-10"],
-            "min_edge": [2, 3],
+            "min_edge": [0.5, 1, 1.5],
         },
     },
     {
@@ -183,7 +183,7 @@ HYPOTHESIS_TEMPLATES = [
             "weather_condition": ["high wind", "heavy rain", "extreme cold"],
             "weather_metric": ["wind_mph", "precipitation_mm", "temp_f"],
             "threshold": [15, 5, 32],
-            "min_edge": [2, 3],
+            "min_edge": [0.5, 1, 1.5],
         },
     },
     {
@@ -211,7 +211,7 @@ HYPOTHESIS_TEMPLATES = [
             "finish_rank": [5, 10, 20],
             "min_top_finishes": [2, 3],
             "lookback_years": [5, 10],
-            "min_edge": [3, 5],
+            "min_edge": [1, 2, 3],
         },
     },
     {
@@ -236,7 +236,7 @@ HYPOTHESIS_TEMPLATES = [
             "tournament": ["Masters", "Open_Championship"],
             "finish_type": ["tournament_winner", "top_5_finish", "top_10_finish", "top_20_finish"],
             "min_age": [40, 43, 45],
-            "min_edge": [3, 5],
+            "min_edge": [1, 2, 3],
         },
     },
     {
@@ -260,7 +260,7 @@ HYPOTHESIS_TEMPLATES = [
         "variables": {
             "finish_type": ["tournament_winner", "top_5_finish", "top_10_finish"],
             "weeks_since_win": [2, 4, 6, 8],
-            "min_edge": [2, 3, 5],
+            "min_edge": [1, 2, 3],
         },
     },
     {
@@ -286,7 +286,7 @@ HYPOTHESIS_TEMPLATES = [
             "finish_type": ["tournament_winner", "top_5_finish", "top_10_finish"],
             "sg_rank": [5, 10, 15],
             "lookback_events": [5, 10, 16],
-            "min_edge": [2, 3],
+            "min_edge": [1, 2, 3],
         },
     },
     {
@@ -310,7 +310,7 @@ HYPOTHESIS_TEMPLATES = [
         "variables": {
             "min_times": [2, 3],
             "lookback_years": [5, 10],
-            "min_edge": [3, 5, 8],
+            "min_edge": [2, 3, 5],
         },
     },
     {
@@ -333,7 +333,7 @@ HYPOTHESIS_TEMPLATES = [
         },
         "variables": {
             "weather_condition": ["high wind (15+ mph)", "rain", "cold (<55F)"],
-            "min_edge": [3, 5],
+            "min_edge": [1, 2, 3],
         },
     },
     {
@@ -357,7 +357,7 @@ HYPOTHESIS_TEMPLATES = [
             "market_type": ["spreads", "totals", "h2h",
                            "player_points", "player_rebounds", "player_assists"],
             "min_books": [3, 4, 5],
-            "min_edge": [2, 3, 5],
+            "min_edge": [0.5, 1, 2],
         },
     },
 ]

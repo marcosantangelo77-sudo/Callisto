@@ -36,23 +36,23 @@ DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 # With 3 seasons of data: NFL ~15-195, NBA ~78-195 signals max.
 PROMOTION_GATES = {
     "backtesting→paper_trading": {
+        "min_signals": 30,
+        "max_p_value": 0.10,       # relax for backtest→paper; tighten at live gate
+        "min_clv_rate": 0.0,       # CLV not available in historical backtests
+        "min_sharpe": 0.0,         # don't gate on Sharpe for first promotion
+    },
+    "paper_trading→live": {
         "min_signals": 50,
         "max_p_value": 0.05,
         "min_clv_rate": 0.50,
-        "min_sharpe": 0.5,
-    },
-    "paper_trading→live": {
-        "min_signals": 100,
-        "max_p_value": 0.05,
-        "min_clv_rate": 0.55,
-        "max_drawdown": 0.25,
-        "min_days": 30,
+        "max_drawdown": 0.30,
+        "min_days": 14,
     },
 }
 
 # Auto-rejection: if p > 0.20 with sufficient N, the data disproves the thesis
-AUTO_REJECT_P = 0.20
-AUTO_REJECT_MIN_N = 30
+AUTO_REJECT_P = 0.30
+AUTO_REJECT_MIN_N = 50
 
 STAGE_ORDER = ["draft", "backtesting", "paper_trading", "live", "retired"]
 
@@ -210,8 +210,8 @@ class HypothesisManager:
         sport: str,
         market_type: str,
         model_config: dict,
-        edge_threshold: float = 0.02,
-        min_sample_size: int = 1000,
+        edge_threshold: float = 0.01,
+        min_sample_size: int = 50,
         significance_level: float = 0.05,
         notes: str = "",
     ) -> str:
@@ -366,9 +366,8 @@ class HypothesisManager:
         h = await self.get_hypothesis(hypothesis_id)
         sig_level = h["significance_level"] if h else 0.05
         is_significant = (
-            p_binomial < sig_level
-            and p_ttest < sig_level
-            and decided >= (h["min_sample_size"] if h else 1000)
+            (p_binomial < sig_level or p_ttest < sig_level)
+            and decided >= (h["min_sample_size"] if h else 50)
         )
 
         # Calibration

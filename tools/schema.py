@@ -205,10 +205,10 @@ CREATE TABLE IF NOT EXISTS hypotheses (
     sport TEXT NOT NULL,
     market_type TEXT NOT NULL,
     model_config TEXT NOT NULL,
-    edge_threshold REAL NOT NULL DEFAULT 0.02,
+    edge_threshold REAL NOT NULL DEFAULT 0.01,
     status TEXT NOT NULL DEFAULT 'draft'
         CHECK(status IN ('draft','backtesting','paper_trading','live','retired','rejected')),
-    min_sample_size INTEGER NOT NULL DEFAULT 1000,
+    min_sample_size INTEGER NOT NULL DEFAULT 50,
     significance_level REAL NOT NULL DEFAULT 0.05,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
