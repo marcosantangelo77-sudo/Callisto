@@ -1052,7 +1052,9 @@ class ResearchLoop:
             for sport in RESEARCH_SPORTS:
                 try:
                     created = await self.hypothesis_generator.generate_from_templates(
-                        sport=sport, max_hypotheses=20,
+                        sport=sport,
+                        max_hypotheses=20,
+                        training_cutoff_date=training_period_end,
                     )
                     total_created += len(created)
                 except Exception as e:

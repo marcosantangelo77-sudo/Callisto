@@ -143,6 +143,7 @@ class PipelineIntegrityChecker:
             ("zero_metric_detection", self._check_zero_metrics),
             ("stale_metric_detection", self._check_stale_metrics),
             ("rejection_rate", self._check_rejection_rate),
+            ("temporal_isolation", self._check_temporal_isolation),
         ]
 
         for check_name, check_fn in checks:
@@ -340,7 +341,15 @@ class PipelineIntegrityChecker:
     async def _check_backtest_edge_rate(self) -> None:
         """
         If backtests run but find 0% positive edges across many events,
-        the edge detection methodology is broken — not "no edges exist."
+        the meaning depends on temporal isolation:
+
+        - WITH temporal isolation: 0% edge rate is a legitimate finding
+          (hypothesis has no forward edge) — INFO severity
+        - WITHOUT temporal isolation: 0% edge rate likely means the
+          methodology is comparing consensus against itself — CRITICAL
+
+        This distinction prevents false alarms on properly isolated
+        hypotheses while still catching circular testing bugs.
         """
         try:
             async with aiosqlite.connect(DB_PATH) as db:
@@ -366,23 +375,75 @@ class PipelineIntegrityChecker:
                 signal_rate = signals / total_events if total_events > 0 else 0
 
                 if positive_edge_rate == 0 and total_events >= BACKTEST_MIN_EVENTS_FOR_EDGE_CHECK:
-                    self._issues.append(IntegrityIssue(
-                        check_name="backtest_edge_rate",
-                        severity=SEVERITY_CRITICAL,
-                        message=(
-                            f"0% positive edge rate across {total_events} backtest events. "
-                            f"This is statistically impossible with correct methodology — "
-                            f"the edge detection is comparing consensus against itself or "
-                            f"has a similar systemic bug."
-                        ),
-                        details={
-                            "total_events": total_events,
-                            "positive_edges": positive_edges,
-                            "signals": signals,
-                            "positive_edge_rate": positive_edge_rate,
-                            "signal_rate": signal_rate,
-                        },
-                    ))
+                    # Determine if hypotheses have temporal isolation
+                    # If they do, 0% is a legitimate result, not a bug
+                    cursor2 = await db.execute(
+                        "SELECT h.model_config FROM hypotheses h "
+                        "INNER JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id "
+                        "WHERE h.status NOT IN ('rejected', 'retired') "
+                        "LIMIT 20"
+                    )
+                    config_rows = await cursor2.fetchall()
+
+                    isolated_count = 0
+                    non_isolated_count = 0
+                    for (mc_raw,) in config_rows:
+                        if mc_raw:
+                            try:
+                                mc = json.loads(mc_raw) if isinstance(mc_raw, str) else mc_raw
+                                if mc.get("temporal_isolation") is True:
+                                    isolated_count += 1
+                                else:
+                                    non_isolated_count += 1
+                            except (json.JSONDecodeError, TypeError):
+                                non_isolated_count += 1
+                        else:
+                            non_isolated_count += 1
+
+                    if isolated_count > 0 and non_isolated_count == 0:
+                        # All backtested hypotheses have proper temporal isolation.
+                        # 0% edge rate is a legitimate finding: no forward edge exists.
+                        self._issues.append(IntegrityIssue(
+                            check_name="backtest_edge_rate",
+                            severity=SEVERITY_INFO,
+                            message=(
+                                f"0% positive edge rate across {total_events} backtest events, "
+                                f"but all hypotheses have proper temporal isolation. This is a "
+                                f"legitimate finding — no forward edge detected, not a bug."
+                            ),
+                            details={
+                                "total_events": total_events,
+                                "positive_edges": positive_edges,
+                                "signals": signals,
+                                "positive_edge_rate": positive_edge_rate,
+                                "signal_rate": signal_rate,
+                                "temporal_isolation": True,
+                                "isolated_hypotheses_sampled": isolated_count,
+                            },
+                        ))
+                    else:
+                        # Some or all hypotheses lack temporal isolation.
+                        # 0% edge rate is suspicious — likely circular testing.
+                        self._issues.append(IntegrityIssue(
+                            check_name="backtest_edge_rate",
+                            severity=SEVERITY_CRITICAL,
+                            message=(
+                                f"0% positive edge rate across {total_events} backtest events. "
+                                f"{non_isolated_count} hypotheses lack temporal isolation — "
+                                f"the edge detection may be comparing consensus against itself "
+                                f"or has a similar systemic bug."
+                            ),
+                            details={
+                                "total_events": total_events,
+                                "positive_edges": positive_edges,
+                                "signals": signals,
+                                "positive_edge_rate": positive_edge_rate,
+                                "signal_rate": signal_rate,
+                                "temporal_isolation": False,
+                                "non_isolated_count": non_isolated_count,
+                                "isolated_count": isolated_count,
+                            },
+                        ))
                 elif positive_edge_rate < 0.02 and total_events >= BACKTEST_MIN_EVENTS_FOR_EDGE_CHECK:
                     self._issues.append(IntegrityIssue(
                         check_name="backtest_edge_rate",
@@ -538,6 +599,97 @@ class PipelineIntegrityChecker:
 
         except Exception as e:
             logger.warning(f"Signal pipeline check failed: {e}", exc_info=True)
+
+    # ──────────────────────────────────────────────────────────
+    # TEMPORAL ISOLATION CHECK
+    # ──────────────────────────────────────────────────────────
+
+    async def _check_temporal_isolation(self) -> None:
+        """
+        Check that no hypothesis has a backtest where the test period
+        overlaps the training period. This is the core anti-circular-testing
+        check that prevents the system from regressing to training=testing.
+
+        - CRITICAL if overlap found and hypothesis is NOT rejected
+        - INFO if hypothesis has proper isolation and 0% edge rate (legitimate)
+        """
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                cursor = await db.execute(
+                    "SELECT hypothesis_id, name, status, model_config "
+                    "FROM hypotheses "
+                    "WHERE status NOT IN ('rejected', 'retired')"
+                )
+                rows = await cursor.fetchall()
+
+                overlap_count = 0
+                no_metadata_count = 0
+
+                for row in rows:
+                    h_id, name, status, mc_raw = row[0], row[1], row[2], row[3]
+
+                    if not mc_raw:
+                        continue
+
+                    try:
+                        mc = json.loads(mc_raw) if isinstance(mc_raw, str) else mc_raw
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+
+                    training_end = mc.get("training_period_end")
+                    backtest_start = mc.get("backtest_period_start")
+
+                    # Check if hypothesis has been backtested (has backtest range)
+                    if backtest_start and training_end:
+                        try:
+                            te = datetime.strptime(str(training_end), "%Y-%m-%d")
+                            bs = datetime.strptime(str(backtest_start), "%Y-%m-%d")
+                            if bs <= te:
+                                overlap_count += 1
+                                self._issues.append(IntegrityIssue(
+                                    check_name="temporal_isolation",
+                                    severity=SEVERITY_CRITICAL,
+                                    message=(
+                                        f"CIRCULAR TESTING: hypothesis '{name}' ({h_id}) "
+                                        f"has backtest starting {backtest_start} but "
+                                        f"training ends {training_end}. Backtest results "
+                                        f"are contaminated — they include training data."
+                                    ),
+                                    details={
+                                        "hypothesis_id": h_id,
+                                        "name": name,
+                                        "status": status,
+                                        "training_period_end": training_end,
+                                        "backtest_period_start": backtest_start,
+                                    },
+                                ))
+                        except ValueError:
+                            pass
+                    elif status in ("backtesting", "paper_trading", "live"):
+                        # Active hypothesis with no temporal metadata at all
+                        if not training_end:
+                            no_metadata_count += 1
+
+                if no_metadata_count > 0:
+                    self._issues.append(IntegrityIssue(
+                        check_name="temporal_isolation",
+                        severity=SEVERITY_WARNING,
+                        message=(
+                            f"{no_metadata_count} active hypotheses lack temporal "
+                            f"isolation metadata (no training_period_end). These are "
+                            f"legacy hypotheses that may have circular backtests."
+                        ),
+                        details={"count": no_metadata_count},
+                    ))
+
+                if overlap_count == 0 and no_metadata_count == 0:
+                    logger.info(
+                        "TEMPORAL ISOLATION: all active hypotheses have proper "
+                        "temporal separation between training and testing data"
+                    )
+
+        except Exception as e:
+            logger.warning(f"Temporal isolation check failed: {e}", exc_info=True)
 
     # ──────────────────────────────────────────────────────────
     # OUTPUT SANITY CHECKS
