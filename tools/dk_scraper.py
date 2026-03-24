@@ -1,10 +1,9 @@
 """
 DraftKings live odds scraper — free, unlimited pregame odds.
 
-DraftKings exposes undocumented public JSON endpoints for their sportsbook.
-This scraper pulls pregame odds and normalizes them to match the format
-returned by tools/odds_api.py so the rest of the system can consume them
-interchangeably.
+Uses the DraftKings Nash sportsbook content API which returns full
+event/market/selection data without Akamai bot blocking. Falls back
+to the legacy v5 eventgroups endpoint if curl_cffi is unavailable.
 
 Zero API cost. Rate-limited to 1 request per 2 seconds to be polite.
 """
@@ -17,22 +16,94 @@ from typing import Optional
 
 import httpx
 
+# curl_cffi is the preferred HTTP client — it impersonates a real browser TLS
+# fingerprint and bypasses Akamai/Cloudflare bot detection on the nash endpoint.
+# If not installed, we fall back to httpx (which will 403 on old endpoints).
+try:
+    from curl_cffi.requests import Session as CffiSession
+    _HAS_CURL_CFFI = True
+except ImportError:
+    _HAS_CURL_CFFI = False
+
 logger = logging.getLogger("callisto.dk_scraper")
 
-# DraftKings eventgroup endpoints (undocumented but public)
-# NOTE: Golf on DK is organized by INDIVIDUAL TOURNAMENT, not by "PGA Tour".
-# There is no single PGA Tour eventgroup — each tournament has its own ID.
-# The golf_pga entry below uses the current week's tournament; update as needed
-# or use DK_GOLF_EVENTGROUPS to look up tournaments dynamically.
+# ---------------------------------------------------------------------------
+# Nash endpoint (primary — no Akamai blocking)
+# ---------------------------------------------------------------------------
+_NASH_BASE = "https://sportsbook-nash.draftkings.com/api/sportscontent/dkusnj/v1/leagues"
+
+# League IDs on the Nash endpoint (same numeric IDs as old eventgroup IDs)
+LEAGUE_IDS = {
+    "basketball_nba": 42648,
+    "americanfootball_nfl": 88808,
+    "basketball_ncaab": 92483,
+    "icehockey_nhl": 42133,
+    "baseball_mlb": 84240,
+    # Golf is per-tournament — handled separately via DK_GOLF_EVENTGROUPS
+    "golf_pga": 92694,
+}
+
+# Legacy v5 endpoints (fallback — currently blocked by Akamai 403)
 DK_ENDPOINTS = {
     "basketball_nba": "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/42648?format=json",
     "americanfootball_nfl": "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/88808?format=json",
     "icehockey_nhl": "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/42133?format=json",
     "basketball_ncaab": "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/92483?format=json",
-    # Golf: uses per-tournament eventgroup IDs (see DK_GOLF_EVENTGROUPS below)
-    # Default to The Masters as a placeholder — real usage should iterate DK_GOLF_EVENTGROUPS
+    "baseball_mlb": "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/84240?format=json",
     "golf_pga": "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/92694?format=json",
 }
+
+# ---------------------------------------------------------------------------
+# DK abbreviated team name -> full name mapping
+# The Nash endpoint returns short names like "CHA Hornets", "SAC Kings".
+# We map the 3-letter prefix to the full city/state name.
+# ---------------------------------------------------------------------------
+_DK_ABBREV_TO_CITY = {
+    # NBA
+    "ATL": "Atlanta", "BOS": "Boston", "BKN": "Brooklyn", "CHA": "Charlotte",
+    "CHI": "Chicago", "CLE": "Cleveland", "DAL": "Dallas", "DEN": "Denver",
+    "DET": "Detroit", "GS": "Golden State", "GSW": "Golden State",
+    "HOU": "Houston", "IND": "Indiana", "LAC": "Los Angeles",
+    "LAL": "Los Angeles", "MEM": "Memphis", "MIA": "Miami", "MIL": "Milwaukee",
+    "MIN": "Minnesota", "NO": "New Orleans", "NOP": "New Orleans",
+    "NY": "New York", "NYK": "New York", "OKC": "Oklahoma City",
+    "ORL": "Orlando", "PHI": "Philadelphia", "PHO": "Phoenix", "PHX": "Phoenix",
+    "POR": "Portland",
+    "SA": "San Antonio", "SAS": "San Antonio", "SAC": "Sacramento",
+    "TOR": "Toronto", "UTA": "Utah", "WAS": "Washington",
+    # NFL
+    "ARI": "Arizona", "BAL": "Baltimore", "BUF": "Buffalo", "CAR": "Carolina",
+    "CIN": "Cincinnati", "GB": "Green Bay", "JAX": "Jacksonville",
+    "KC": "Kansas City", "LV": "Las Vegas", "LAR": "Los Angeles",
+    "NE": "New England", "NYG": "New York", "NYJ": "New York",
+    "PIT": "Pittsburgh", "SEA": "Seattle", "SF": "San Francisco",
+    "TB": "Tampa Bay", "TEN": "Tennessee",
+    # NHL
+    "ANA": "Anaheim", "CGY": "Calgary", "CBJ": "Columbus",
+    "COL": "Colorado", "DAL": "Dallas", "EDM": "Edmonton",
+    "FLA": "Florida", "LA": "Los Angeles", "MTL": "Montreal",
+    "NSH": "Nashville", "NJ": "New Jersey", "NYI": "New York",
+    "NYR": "New York", "OTT": "Ottawa", "STL": "St. Louis",
+    "SJ": "San Jose", "SEA": "Seattle", "VAN": "Vancouver",
+    "VGK": "Vegas", "WPG": "Winnipeg", "WSH": "Washington",
+    "CAR": "Carolina", "MIN": "Minnesota",
+    # MLB
+    "TEX": "Texas", "HOU": "Houston", "KC": "Kansas City",
+    "CWS": "Chicago", "SD": "San Diego",
+}
+
+def _expand_dk_short_name(short_name: str) -> str:
+    """
+    Convert DK abbreviated name like 'CHA Hornets' to 'Charlotte Hornets'.
+    If no mapping is found, returns the input unchanged.
+    """
+    parts = short_name.split(" ", 1)
+    if len(parts) == 2:
+        abbrev, mascot = parts
+        city = _DK_ABBREV_TO_CITY.get(abbrev)
+        if city:
+            return f"{city} {mascot}"
+    return short_name
 
 # DraftKings Golf Display Group ID (sport-level)
 # DK DFS sport ID: 13, DK Sportsbook displayGroupId: 12
@@ -165,8 +236,9 @@ DK_PROP_CATEGORIES = {
 _last_request_time: float = 0.0
 _RATE_LIMIT_SECONDS = 2.0
 
-# Shared client
+# Shared clients
 _client: Optional[httpx.AsyncClient] = None
+_cffi_session: Optional["CffiSession"] = None  # type: ignore[name-defined]
 
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -177,21 +249,36 @@ _HEADERS = {
 
 
 def _get_client() -> httpx.AsyncClient:
+    """Legacy httpx client (fallback when curl_cffi unavailable)."""
     global _client
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(timeout=15.0, headers=_HEADERS, follow_redirects=True)
     return _client
 
 
+def _get_cffi_session() -> "CffiSession":  # type: ignore[name-defined]
+    """Get or create a curl_cffi session with Chrome TLS impersonation."""
+    global _cffi_session
+    if _cffi_session is None:
+        _cffi_session = CffiSession(impersonate="chrome131")
+    return _cffi_session
+
+
 async def close_client() -> None:
-    global _client
+    global _client, _cffi_session
     if _client and not _client.is_closed:
         await _client.aclose()
         _client = None
+    if _cffi_session is not None:
+        try:
+            _cffi_session.close()
+        except Exception:
+            pass
+        _cffi_session = None
 
 
 async def _rate_limited_get(url: str) -> httpx.Response:
-    """GET with rate limiting — 1 request per 2 seconds."""
+    """GET with rate limiting via legacy httpx — 1 request per 2 seconds."""
     global _last_request_time
     now = time.monotonic()
     elapsed = now - _last_request_time
@@ -205,6 +292,30 @@ async def _rate_limited_get(url: str) -> httpx.Response:
     return resp
 
 
+def _cffi_get_sync(url: str) -> dict:
+    """Synchronous GET via curl_cffi with Chrome impersonation. Returns parsed JSON."""
+    session = _get_cffi_session()
+    resp = session.get(url, timeout=15)
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def _nash_get(url: str) -> dict:
+    """
+    Async wrapper around the synchronous curl_cffi GET.
+    Uses asyncio.to_thread() so the event loop isn't blocked.
+    Rate-limited to 1 request per 2 seconds.
+    """
+    global _last_request_time
+    now = time.monotonic()
+    elapsed = now - _last_request_time
+    if elapsed < _RATE_LIMIT_SECONDS:
+        await asyncio.sleep(_RATE_LIMIT_SECONDS - elapsed)
+    _last_request_time = time.monotonic()
+
+    return await asyncio.to_thread(_cffi_get_sync, url)
+
+
 def _dk_american_odds(price: float) -> int:
     """Convert DraftKings decimal price to American odds."""
     if price >= 2.0:
@@ -214,6 +325,189 @@ def _dk_american_odds(price: float) -> int:
     else:
         return -10000  # Edge case
 
+
+def _parse_nash_american_odds(odds_str: str) -> int:
+    """
+    Parse American odds string from the Nash endpoint.
+
+    The Nash API returns displayOdds.american as strings that may use
+    the Unicode MINUS SIGN (U+2212, '−') instead of a regular ASCII
+    hyphen-minus (U+002D, '-'). Examples: '−112', '+150', '−5.5'.
+    """
+    if not odds_str:
+        return 0
+    # Replace Unicode minus (U+2212) and EN DASH (U+2013) with ASCII minus
+    cleaned = odds_str.replace("\u2212", "-").replace("\u2013", "-").replace("+", "")
+    try:
+        return int(round(float(cleaned)))
+    except (ValueError, TypeError):
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# Nash endpoint normalization
+# ---------------------------------------------------------------------------
+
+_NASH_MARKET_TYPE_MAP = {
+    "moneyline": "h2h",
+    "spread": "spreads",
+    "total": "totals",
+}
+
+
+def _normalize_nash_response(data: dict, sport: str) -> dict:
+    """
+    Convert the Nash endpoint flat response into the standard Callisto
+    odds format (same shape as odds_api.get_odds / the old v5 scraper).
+
+    Nash response has three top-level arrays: events, markets, selections.
+    They are linked by eventId (events<->markets) and marketId (markets<->selections).
+    """
+    events_raw = data.get("events") or []
+    markets_raw = data.get("markets") or []
+    selections_raw = data.get("selections") or []
+
+    # --- Build event map: eventId -> metadata ---
+    event_map = {}  # eventId -> {home_team, away_team, commence_time}
+    for ev in events_raw:
+        eid = str(ev.get("id", ""))
+        if not eid:
+            continue
+        participants = ev.get("participants") or []
+        home = away = ""
+        for p in participants:
+            role = (p.get("venueRole") or "").lower()
+            raw_name = p.get("name", "")
+            full_name = _expand_dk_short_name(raw_name)
+            if role == "home":
+                home = full_name
+            elif role == "away":
+                away = full_name
+        # Fallback: parse event name "Away @ Home"
+        if not home or not away:
+            name = ev.get("name", "")
+            parts = name.replace(" vs ", " @ ").split(" @ ")
+            if len(parts) >= 2:
+                away = away or _expand_dk_short_name(parts[0].strip())
+                home = home or _expand_dk_short_name(parts[1].strip())
+            elif not away:
+                away = _expand_dk_short_name(name)
+
+        event_map[eid] = {
+            "home_team": home,
+            "away_team": away,
+            "commence_time": ev.get("startEventDate", ""),
+        }
+
+    # --- Build market map: marketId -> {eventId, market_key} ---
+    market_info = {}  # marketId -> {eventId, market_key}
+    for mkt in markets_raw:
+        mid = str(mkt.get("id", ""))
+        eid = str(mkt.get("eventId", ""))
+        mtype = (mkt.get("marketType") or {})
+        type_name = (mtype.get("name") or mkt.get("name") or "").lower().strip()
+        market_key = _NASH_MARKET_TYPE_MAP.get(type_name)
+        if mid and eid and market_key:
+            market_info[mid] = {"eventId": eid, "market_key": market_key}
+
+    # --- Group selections by event and market type ---
+    # {eventId: {"h2h": [...], "spreads": [...], "totals": [...]}}
+    offers_by_event: dict[str, dict[str, list]] = {}
+    for sel in selections_raw:
+        mid = str(sel.get("marketId", ""))
+        minfo = market_info.get(mid)
+        if not minfo:
+            continue
+        eid = minfo["eventId"]
+        mkey = minfo["market_key"]
+
+        if eid not in offers_by_event:
+            offers_by_event[eid] = {"h2h": [], "spreads": [], "totals": []}
+
+        # Parse odds
+        display_odds = sel.get("displayOdds") or {}
+        american_str = display_odds.get("american", "")
+        price = _parse_nash_american_odds(american_str)
+
+        # If no American odds, fall back to trueOdds (decimal)
+        if price == 0:
+            true_odds = sel.get("trueOdds")
+            if true_odds and float(true_odds) > 1.0:
+                price = _dk_american_odds(float(true_odds))
+
+        if price == 0:
+            continue
+
+        # Selection label — expand DK abbreviations
+        label = _expand_dk_short_name(sel.get("label", ""))
+
+        # For totals, normalize to Over/Under
+        if mkey == "totals":
+            outcome_type = (sel.get("outcomeType") or "").lower()
+            if outcome_type == "over" or "over" in label.lower():
+                label = "Over"
+            elif outcome_type == "under" or "under" in label.lower():
+                label = "Under"
+
+        entry: dict = {"name": label, "price": price}
+
+        # Point / line (spreads and totals)
+        points = sel.get("points")
+        if points is not None:
+            try:
+                entry["point"] = float(points)
+            except (ValueError, TypeError):
+                pass
+
+        offers_by_event[eid][mkey].append(entry)
+
+    # --- Assemble final games list ---
+    games = []
+    for eid, offers in offers_by_event.items():
+        meta = event_map.get(eid)
+        if not meta:
+            continue
+
+        markets = []
+        for key in ("h2h", "spreads", "totals"):
+            if offers.get(key):
+                markets.append({
+                    "key": key,
+                    "last_update": datetime.now(timezone.utc).isoformat(),
+                    "outcomes": offers[key],
+                })
+
+        if not markets:
+            continue
+
+        games.append({
+            "id": f"dk_{eid}",
+            "sport_key": sport,
+            "sport_title": _sport_title(sport),
+            "home_team": meta["home_team"],
+            "away_team": meta["away_team"],
+            "commence_time": meta["commence_time"],
+            "bookmakers": [{
+                "key": "draftkings",
+                "title": "DraftKings",
+                "last_update": datetime.now(timezone.utc).isoformat(),
+                "markets": markets,
+            }],
+        })
+
+    return {
+        "sport": sport,
+        "game_count": len(games),
+        "games": games,
+        "source": "dk_scraper",
+        "credits": {"remaining": None, "used": None, "api_key_set": True},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Legacy v5 endpoint helpers (kept for fallback and golf/props which still
+# use the old eventgroup format)
+# ---------------------------------------------------------------------------
 
 def _extract_events(data: dict) -> list[dict]:
     """Extract event list from DK eventgroup response."""
@@ -396,17 +690,38 @@ async def scrape_dk_odds(sport: str) -> dict:
     Returns data in the same format as tools/odds_api.get_odds() so the
     rest of the system can consume it interchangeably.
 
+    Primary path: Nash sportsbook content API via curl_cffi (no Akamai blocking).
+    Fallback: Legacy v5 eventgroups endpoint via httpx (may 403).
+
     Args:
         sport: Sport key matching odds_api conventions
-               ('basketball_nba', 'americanfootball_nfl', 'icehockey_nhl', 'basketball_ncaab')
+               ('basketball_nba', 'americanfootball_nfl', 'icehockey_nhl',
+                'basketball_ncaab', 'baseball_mlb')
 
     Returns:
-        Dict with 'sport', 'game_count', 'games' list, and 'source': 'draftkings_scraper'
+        Dict with 'sport', 'game_count', 'games' list, and 'source': 'dk_scraper'
     """
-    url = DK_ENDPOINTS.get(sport)
-    if not url:
+    league_id = LEAGUE_IDS.get(sport)
+    if not league_id and sport not in DK_ENDPOINTS:
         logger.warning(f"No DK endpoint for sport: {sport}")
         return {"error": f"Unsupported sport: {sport}", "games": []}
+
+    # --- Primary path: Nash endpoint via curl_cffi ---
+    if _HAS_CURL_CFFI and league_id:
+        nash_url = f"{_NASH_BASE}/{league_id}"
+        try:
+            data = await _nash_get(nash_url)
+            result = _normalize_nash_response(data, sport)
+            logger.info(f"DK Nash scrape {sport}: {result['game_count']} games found")
+            return result
+        except Exception as e:
+            logger.warning(f"DK Nash scrape failed for {sport}, falling back to legacy: {e}")
+            # Fall through to legacy path
+
+    # --- Fallback: legacy v5 eventgroups via httpx (likely 403) ---
+    url = DK_ENDPOINTS.get(sport)
+    if not url:
+        return {"error": f"No legacy endpoint for {sport} and Nash failed", "games": []}
 
     try:
         resp = await _rate_limited_get(url)
@@ -419,10 +734,8 @@ async def scrape_dk_odds(sport: str) -> dict:
         for event_id, offers in offers_by_event.items():
             meta = event_map.get(event_id, {})
             if not meta:
-                # Skip offers without event metadata
                 continue
 
-            # Build markets list (only include non-empty markets)
             markets = []
             for key in ("h2h", "spreads", "totals"):
                 if offers.get(key):
@@ -442,22 +755,20 @@ async def scrape_dk_odds(sport: str) -> dict:
                 "home_team": meta["home_team"],
                 "away_team": meta["away_team"],
                 "commence_time": meta["commence_time"],
-                "bookmakers": [
-                    {
-                        "key": "draftkings",
-                        "title": "DraftKings",
-                        "last_update": datetime.now(timezone.utc).isoformat(),
-                        "markets": markets,
-                    }
-                ],
+                "bookmakers": [{
+                    "key": "draftkings",
+                    "title": "DraftKings",
+                    "last_update": datetime.now(timezone.utc).isoformat(),
+                    "markets": markets,
+                }],
             })
 
-        logger.info(f"DK scrape {sport}: {len(games)} games found")
+        logger.info(f"DK legacy scrape {sport}: {len(games)} games found")
         return {
             "sport": sport,
             "game_count": len(games),
             "games": games,
-            "source": "draftkings_scraper",
+            "source": "dk_scraper",
             "credits": {"remaining": None, "used": None, "api_key_set": True},
         }
 
@@ -586,6 +897,7 @@ def _sport_title(sport_key: str) -> str:
         "americanfootball_nfl": "NFL",
         "icehockey_nhl": "NHL",
         "basketball_ncaab": "NCAAB",
+        "baseball_mlb": "MLB",
         "golf_pga": "PGA Tour",
     }
     return titles.get(sport_key, sport_key)
