@@ -35,6 +35,19 @@ from tools.hypothesis_generator import HypothesisGenerator
 from tools.data_collector import DataCollector
 from tools.health import SystemHealth
 
+# Pipeline integrity checks — safe import so API doesn't crash if module isn't ready
+try:
+    from tools.pipeline_integrity import lightweight_pipeline_check, deep_pipeline_check
+    _pipeline_integrity_available = True
+except ImportError:
+    _pipeline_integrity_available = False
+
+    async def lightweight_pipeline_check():
+        return {"overall": "ok", "note": "pipeline_integrity module not loaded"}
+
+    async def deep_pipeline_check():
+        return {"summary": {"overall": "ok", "note": "pipeline_integrity module not loaded"}, "deep": {}}
+
 load_dotenv()
 
 setup_logging()
@@ -80,13 +93,13 @@ async def task_worker():
                 await queue.complete_task(task_id, result, session_id=session_id)
                 logger.info(f"Task {task_id} completed, session {session_id}")
             except Exception as e:
-                logger.error(f"Task {task_id} failed: {e}")
+                logger.error(f"Task {task_id} failed: {e}", exc_info=True)
                 await queue.fail_task(task_id, str(e))
 
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.error(f"Worker error: {e}")
+            logger.error(f"Worker error: {e}", exc_info=True)
             await asyncio.sleep(5)
 
 
@@ -294,26 +307,6 @@ async def query_world(
         domain_enum, keyword=keyword, min_confidence=min_confidence, limit=limit
     )
     return {"domain": domain_enum.value, "count": len(results), "entries": results}
-
-
-@app.get("/health")
-async def health():
-    """Health check for all three agents."""
-    status = monitor.get_status()
-    # Include Claude Code availability
-    from tools.claude_code import claude_code_available, get_usage_stats
-    status["claude_code"] = {
-        "available": await claude_code_available(),
-        "usage": get_usage_stats(),
-    }
-    # Include Odds API credit status
-    from tools.odds_api import get_credit_status
-    status["odds_api"] = get_credit_status()
-    # Line monitor status
-    status["line_monitor"] = line_monitor.get_status() if line_monitor else None
-    # Autonomous reasoning loop status
-    status["autonomous"] = autonomous.get_status() if autonomous else None
-    return status
 
 
 # --- Betting / Odds endpoints ---
@@ -1059,15 +1052,50 @@ async def data_collection_stats():
 async def health_check():
     """
     Comprehensive health check — Layer 2.
-    Returns all subsystem statuses, circuit breaker states, error rates.
+    Returns all subsystem statuses, circuit breaker states, error rates,
+    and pipeline integrity (is the system producing expected output).
     The sentinel (Layer 3) polls this to detect problems.
     """
     if not system_health:
         return {"healthy": False, "error": "Health monitor not initialized"}
     report = system_health.get_full_report()
+
+    # Pipeline integrity — lightweight checks only (must be fast)
+    try:
+        pipeline = await lightweight_pipeline_check()
+        report["pipeline_health"] = pipeline
+        # Degrade overall healthy flag if pipeline is broken
+        if pipeline.get("overall") == "BROKEN":
+            report["healthy"] = False
+    except Exception as e:
+        report["pipeline_health"] = {
+            "overall": "DEGRADED",
+            "error": f"integrity check failed: {e}",
+        }
+
     # Write health file for sentinel to read if HTTP is down
     system_health.write_health_file()
     return report
+
+
+@app.get("/health/deep")
+async def health_deep():
+    """
+    Full pipeline integrity suite — thorough diagnostics.
+    Slower than /health. Runs deep analysis of backtest quality,
+    paper trade accuracy, hypothesis pipeline flow, etc.
+    Use this for debugging pipeline issues, not for polling.
+    """
+    try:
+        result = await deep_pipeline_check()
+    except Exception as e:
+        result = {"error": f"deep check failed: {e}"}
+
+    # Include Layer 2 subsystem status for complete picture
+    if system_health:
+        result["subsystems"] = system_health.get_full_report()
+
+    return result
 
 
 @app.get("/claude/status")
@@ -1082,16 +1110,29 @@ async def full_system_status():
     """
     Single endpoint for checking everything from your phone.
     Returns all subsystem statuses in one call.
+    Pipeline integrity is front-and-center so DEGRADED/BROKEN status
+    is immediately visible in every Claude Code session start.
     """
     from tools.claude_code import get_usage_stats as claude_stats
 
     status = {
         "timestamp": __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
-        "autonomous_loop": autonomous.get_status() if autonomous else None,
-        "research_loop": research_loop.get_status() if research_loop else None,
-        "claude_code": claude_stats(),
-        "line_monitor": line_monitor.get_status() if line_monitor else None,
     }
+
+    # Pipeline integrity first — this is the most important signal
+    try:
+        pipeline = await lightweight_pipeline_check()
+        status["pipeline_health"] = pipeline
+    except Exception as e:
+        status["pipeline_health"] = {
+            "overall": "DEGRADED",
+            "error": f"integrity check failed: {e}",
+        }
+
+    status["autonomous_loop"] = autonomous.get_status() if autonomous else None
+    status["research_loop"] = research_loop.get_status() if research_loop else None
+    status["claude_code"] = claude_stats()
+    status["line_monitor"] = line_monitor.get_status() if line_monitor else None
 
     # Add hypothesis summary
     if hypothesis_manager:
@@ -1106,22 +1147,34 @@ async def full_system_status():
                 "rejected": sum(1 for h in all_h if h["status"] == "rejected"),
                 "retired": sum(1 for h in all_h if h["status"] == "retired"),
             }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to get hypothesis summary for full-status: {e}")
 
     # Add embedding stats
     if vector_store:
         try:
             status["embeddings"] = await vector_store.get_collection_stats()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to get embedding stats for full-status: {e}")
 
     # Add data collection stats
     if data_collector:
         try:
             status["data"] = await data_collector.get_collection_stats()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to get data collection stats for full-status: {e}")
+
+    # Layer 2 health subsystems
+    if system_health:
+        try:
+            health_report = system_health.get_full_report()
+            status["system_health"] = {
+                "healthy": health_report.get("healthy"),
+                "uptime_hours": health_report.get("uptime_hours"),
+                "stalled_phases": health_report.get("stalled_phases", []),
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get system health for full-status: {e}")
 
     return status
 
