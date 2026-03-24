@@ -52,6 +52,7 @@ class AgentConfig:
     default_options: dict = field(default_factory=dict)
     system_prompt: str = ""
     think: Optional[bool] = None  # None = model default, False = suppress thinking
+    supports_native_tools: bool = False  # True = pass tools= to Ollama API
 
 
 # VRAM budget: RTX 5060 Ti 16GB
@@ -59,9 +60,14 @@ class AgentConfig:
 # num_ctx/num_batch/num_predict set in Modelfiles — only override temperature here.
 # Flash attention enabled at Ollama server level (OLLAMA_FLASH_ATTENTION=1).
 # Thinking suppressed on all agents — raw tp/s, no wasted tokens.
+#
+# Model lineup (March 2026):
+#   Architect: Nemotron Cascade 2 30B-A3B (MoE, 3B active) — outperforms Qwen3.5 on all benchmarks
+#   Manager:   GPT-OSS 20B (MXFP4) — fast, reliable adversarial review
+#   Sentinel:  Qwen3.5 4B — ultra-fast classification, 3GB vs 9GB DeepSeek-R1
 AGENT_CONFIGS: dict[str, AgentConfig] = {
     "architect": AgentConfig(
-        model="architect:latest",
+        model="nemotron-cascade-2:latest",
         capabilities=["reasoning", "synthesis", "code_generation", "tool_use"],
         default_options={"temperature": 0.1},
         think=False,
@@ -69,7 +75,6 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
             "You are The Architect — the primary reasoning agent in the Callisto system. "
             "You handle complex analysis, code generation, and architecture decisions. "
             "You operate under the Aluft Gianne Protocol. "
-            "NEVER use <think> tags. Respond directly with the requested output. "
             "Always respond with structured JSON when requested. Be concise."
         ),
     ),
@@ -78,18 +83,18 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
         capabilities=["review", "routing", "domain_enforcement", "tool_use"],
         default_options={"temperature": 0.4},
         think=False,
+        supports_native_tools=True,  # GPT-OSS template has tool handling
         system_prompt="",  # set via Modelfile SYSTEM
     ),
     "sentinel": AgentConfig(
-        model="sentinel:latest",
+        model="qwen3.5:4b",
         capabilities=["classification", "monitoring", "domain_tagging"],
-        default_options={"temperature": 0.1},
+        default_options={"temperature": 0.0},
         think=False,
         system_prompt=(
-            "You are The Sentinel — the monitoring and classification agent in the Callisto system. "
+            "You are The Sentinel — the classification agent in the Callisto system. "
             "Classify queries into exactly one domain: FINANCIAL, TECHNICAL, SIGNAL, SYNTHESIS, or GENERAL. "
-            "Respond ONLY with JSON. No explanation. No reasoning. "
-            "Example: {\"domain\": \"TECHNICAL\", \"reasoning\": \"query is about technology\"}"
+            "Respond ONLY with JSON."
         ),
     ),
 }
@@ -106,7 +111,64 @@ def register_function(name: str, func: callable) -> None:
 def _register_default_tools() -> None:
     """Register built-in tools on import."""
     from tools.brave_search import brave_search_sync
-    register_function("brave_search", brave_search_sync)
+    register_function("brave_search", brave_search_sync)  # legacy compat
+    register_function("web_search", brave_search_sync)
+
+    from tools.claude_code import claude_code_sync
+    register_function("claude_code", claude_code_sync)
+
+    from tools.odds_api import (
+        get_sports as _get_sports,
+        get_odds as _get_odds,
+        get_scores as _get_scores,
+        get_event_odds as _get_event_odds,
+        find_best_line as _find_best_line,
+        calculate_ev as _calculate_ev,
+        get_credit_status as _get_credit_status,
+    )
+    # Sync wrappers for the async odds functions
+    import asyncio as _aio
+
+    def _sync_get_sports():
+        return _aio.get_event_loop().run_until_complete(_get_sports())
+
+    def _sync_get_odds(**kwargs):
+        return _aio.get_event_loop().run_until_complete(_get_odds(**kwargs))
+
+    def _sync_get_scores(**kwargs):
+        return _aio.get_event_loop().run_until_complete(_get_scores(**kwargs))
+
+    def _sync_get_event_odds(**kwargs):
+        return _aio.get_event_loop().run_until_complete(_get_event_odds(**kwargs))
+
+    register_function("get_sports", _sync_get_sports)
+    register_function("get_odds", _sync_get_odds)
+    register_function("get_scores", _sync_get_scores)
+    register_function("get_event_odds", _sync_get_event_odds)
+    register_function("find_best_line", _find_best_line)
+    register_function("calculate_ev", _calculate_ev)
+    register_function("get_credit_status", _get_credit_status)
+
+    # Line gap analysis
+    from tools.line_gaps import scan_line_gaps, scan_prop_gaps
+    register_function("scan_line_gaps", scan_line_gaps)
+    register_function("scan_prop_gaps", scan_prop_gaps)
+
+    # Boost evaluator
+    from tools.boost_evaluator import (
+        devig_multiplicative as _devig_mult,
+        evaluate_fixed_boost as _eval_fixed,
+        evaluate_percentage_boost as _eval_pct,
+        evaluate_free_bet as _eval_free,
+        calculate_hedge as _calc_hedge,
+        find_optimal_boost_target as _find_optimal,
+    )
+    register_function("devig_multiplicative", _devig_mult)
+    register_function("evaluate_fixed_boost", _eval_fixed)
+    register_function("evaluate_percentage_boost", _eval_pct)
+    register_function("evaluate_free_bet", _eval_free)
+    register_function("calculate_hedge", _calc_hedge)
+    register_function("find_optimal_boost_target", _find_optimal)
 
 
 _register_default_tools()
@@ -181,7 +243,7 @@ class OllamaInference:
             "messages": messages,
             "options": opts,
         }
-        if tools:
+        if tools and self.config.supports_native_tools:
             kwargs["tools"] = tools
         # think parameter: explicit arg > config default
         t = think if think is not None else self.config.think
@@ -197,19 +259,27 @@ class OllamaInference:
         tools: Optional[list[dict]] = None,
         options: Optional[dict] = None,
         think: Optional[bool] = None,
+        format: Optional[dict] = None,
     ) -> dict:
-        """Async chat with the model."""
+        """Async chat with the model.
+
+        Args:
+            format: JSON schema dict for Ollama structured output.
+                    When provided, output is constrained to match the schema exactly.
+        """
         opts = {**self.config.default_options, **(options or {})}
         kwargs: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
             "options": opts,
         }
-        if tools:
+        if tools and self.config.supports_native_tools:
             kwargs["tools"] = tools
         t = think if think is not None else self.config.think
         if t is not None:
             kwargs["think"] = t
+        if format is not None:
+            kwargs["format"] = format
 
         response = await self.async_client.chat(**kwargs)
         return self._process_response(response)
