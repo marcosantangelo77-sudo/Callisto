@@ -25,6 +25,7 @@ DK_ENDPOINTS = {
     "americanfootball_nfl": "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/88808?format=json",
     "icehockey_nhl": "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/42133?format=json",
     "basketball_ncaab": "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/92483?format=json",
+    "golf_pga": "https://sportsbook.draftkings.com/sites/US-SB/api/v5/eventgroups/92081?format=json",
 }
 
 # DK event-level endpoint for player props
@@ -44,6 +45,16 @@ DK_PROP_CATEGORIES = {
         "player_rush_yds": 1001,
         "player_rec_yds": 1002,
         "player_touchdowns": 1003,
+    },
+    "golf_pga": {
+        "tournament_winner": 487,
+        "top_5_finish": 488,
+        "top_10_finish": 489,
+        "top_20_finish": 490,
+        "make_cut": 491,
+        "first_round_leader": 492,
+        "matchups": 493,
+        "round_score": 494,
     },
 }
 

@@ -341,6 +341,7 @@ RESEARCH_SPORTS = [
     "basketball_ncaab",
     "icehockey_nhl",
     "baseball_mlb",
+    "golf_pga",
 ]
 
 

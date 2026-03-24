@@ -49,6 +49,7 @@ SPORT_IDS = {
     "soccer_mls": 1,
     "baseball_mlb": 16,
     "tennis_atp": 13,
+    "golf_pga": 22,
 }
 
 # Tournament mapping for filtering within a sport
@@ -59,6 +60,11 @@ TOURNAMENT_IDS = {
     "basketball_ncaab": 134,
     "soccer_epl": 7,
     "baseball_mlb": 109,
+    "golf_pga": None,  # Varies per tournament — discovered via /v4/sports
+    "golf_masters_tournament_winner": None,
+    "golf_pga_championship_winner": None,
+    "golf_us_open_winner": None,
+    "golf_the_open_championship_winner": None,
 }
 
 # Market mapping: odds_api style -> OddsPapi market names
@@ -69,6 +75,8 @@ MARKET_MAP = {
     "handicap": "handicap",
     "totals": "over_under",
     "over_under": "over_under",
+    "outrights": "outrights",
+    "winner": "outrights",
 }
 
 

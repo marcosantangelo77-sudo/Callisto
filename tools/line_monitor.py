@@ -51,7 +51,7 @@ SNAPSHOT_INTERVAL = int(os.getenv("ODDS_SNAPSHOT_INTERVAL", "900"))
 # Sports to monitor — configurable via env, comma-separated
 MONITORED_SPORTS = os.getenv(
     "ODDS_MONITORED_SPORTS",
-    "basketball_ncaab,basketball_nba,americanfootball_nfl",
+    "basketball_ncaab,basketball_nba,americanfootball_nfl,golf_pga",
 ).split(",")
 
 # Movement thresholds — what counts as "significant"

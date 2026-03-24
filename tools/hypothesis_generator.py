@@ -187,6 +187,156 @@ HYPOTHESIS_TEMPLATES = [
         },
     },
     {
+        "id": "golf_course_horse",
+        "name": "Course horse {finish_type} mispricing at {tournament}",
+        "thesis": (
+            "Players with {min_top_finishes}+ top-{finish_rank} finishes at {tournament} "
+            "in the last {lookback_years} years have {finish_type} lines set too long. "
+            "Course-specific institutional knowledge compounds at venues played annually "
+            "(especially Augusta). Fair probability of {finish_type} exceeds book implied "
+            "by {min_edge}%+."
+        ),
+        "sport_filter": ["golf_pga"],
+        "market_type": "{finish_type}",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "multiplicative",
+            "target_book": "draftkings",
+            "consensus_min_books": 3,
+            "context_factors": ["course_history", "recent_form"],
+        },
+        "variables": {
+            "tournament": ["Masters", "US_Open", "Open_Championship", "PGA_Championship"],
+            "finish_type": ["tournament_winner", "top_5_finish", "top_10_finish"],
+            "finish_rank": [5, 10, 20],
+            "min_top_finishes": [2, 3],
+            "lookback_years": [5, 10],
+            "min_edge": [3, 5],
+        },
+    },
+    {
+        "id": "golf_age_discount",
+        "name": "Age discount on {finish_type} for veterans at {tournament}",
+        "thesis": (
+            "Players aged {min_age}+ with strong course history are over-discounted "
+            "by books due to age bias. At {tournament}, course knowledge degrades slower "
+            "than raw athleticism — especially at Augusta where putting from memory and "
+            "shot-shaping matter more than distance. {finish_type} odds are too long."
+        ),
+        "sport_filter": ["golf_pga"],
+        "market_type": "{finish_type}",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "multiplicative",
+            "target_book": "draftkings",
+            "consensus_min_books": 3,
+            "context_factors": ["player_age", "course_history", "sg_approach"],
+        },
+        "variables": {
+            "tournament": ["Masters", "Open_Championship"],
+            "finish_type": ["tournament_winner", "top_5_finish", "top_10_finish", "top_20_finish"],
+            "min_age": [40, 43, 45],
+            "min_edge": [3, 5],
+        },
+    },
+    {
+        "id": "golf_recent_form_lag",
+        "name": "Recent winner {finish_type} odds lag at majors",
+        "thesis": (
+            "Players who won a PGA Tour event within {weeks_since_win} weeks before a major "
+            "have {finish_type} odds that don't fully reflect the form spike. Books adjust "
+            "slowly for recency — the confidence and momentum carry forward. "
+            "Fair probability exceeds book implied by {min_edge}%+."
+        ),
+        "sport_filter": ["golf_pga"],
+        "market_type": "{finish_type}",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "multiplicative",
+            "target_book": "draftkings",
+            "consensus_min_books": 3,
+            "context_factors": ["recent_win", "sg_total"],
+        },
+        "variables": {
+            "finish_type": ["tournament_winner", "top_5_finish", "top_10_finish"],
+            "weeks_since_win": [2, 4, 6, 8],
+            "min_edge": [2, 3, 5],
+        },
+    },
+    {
+        "id": "golf_sg_approach_mispricing",
+        "name": "SG:Approach elite players underpriced at approach-dominant courses",
+        "thesis": (
+            "Players ranked top-{sg_rank} in Strokes Gained: Approach over the last "
+            "{lookback_events} events are underpriced at courses where approach play "
+            "is the dominant success factor (Augusta, Pebble Beach, Muirfield Village). "
+            "SG:Approach correlates most strongly with major wins — books weight "
+            "overall rank too heavily vs. skill-specific fit."
+        ),
+        "sport_filter": ["golf_pga"],
+        "market_type": "{finish_type}",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "multiplicative",
+            "target_book": "draftkings",
+            "consensus_min_books": 3,
+            "context_factors": ["sg_approach_rank", "course_sg_correlation"],
+        },
+        "variables": {
+            "finish_type": ["tournament_winner", "top_5_finish", "top_10_finish"],
+            "sg_rank": [5, 10, 15],
+            "lookback_events": [5, 10, 16],
+            "min_edge": [2, 3],
+        },
+    },
+    {
+        "id": "golf_first_round_leader",
+        "name": "First-round leader tendency mispricing",
+        "thesis": (
+            "Players who have led after Round 1 at a specific venue {min_times}+ times "
+            "in the last {lookback_years} years have first-round leader / top-5 R1 odds "
+            "set too long. Early-round course comfort is a repeatable skill, not randomness. "
+            "Fair probability exceeds book implied by {min_edge}%+."
+        ),
+        "sport_filter": ["golf_pga"],
+        "market_type": "first_round_leader",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "multiplicative",
+            "target_book": "draftkings",
+            "consensus_min_books": 2,
+            "context_factors": ["r1_history", "course_familiarity"],
+        },
+        "variables": {
+            "min_times": [2, 3],
+            "lookback_years": [5, 10],
+            "min_edge": [3, 5, 8],
+        },
+    },
+    {
+        "id": "golf_weather_round_scoring",
+        "name": "Weather impact on tournament round scoring",
+        "thesis": (
+            "When {weather_condition} conditions are forecast for a tournament round, "
+            "books underadjust round scoring props and matchup odds. Players with "
+            "experience in adverse conditions gain a relative edge. "
+            "Affected markets are mispriced by {min_edge}%+."
+        ),
+        "sport_filter": ["golf_pga"],
+        "market_type": "round_score",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "multiplicative",
+            "target_book": "draftkings",
+            "consensus_min_books": 3,
+            "context_factors": ["weather_forecast", "player_weather_history"],
+        },
+        "variables": {
+            "weather_condition": ["high wind (15+ mph)", "rain", "cold (<55F)"],
+            "min_edge": [3, 5],
+        },
+    },
+    {
         "id": "consensus_divergence",
         "name": "Cross-book consensus divergence on {market_type}",
         "thesis": (
@@ -195,7 +345,7 @@ HYPOTHESIS_TEMPLATES = [
             "is correct more often than the target book. This is the core model."
         ),
         "sport_filter": ["basketball_nba", "basketball_ncaab", "americanfootball_nfl",
-                         "icehockey_nhl", "baseball_mlb"],
+                         "icehockey_nhl", "baseball_mlb", "golf_pga"],
         "market_type": "{market_type}",
         "model_config": {
             "type": "consensus_devig",

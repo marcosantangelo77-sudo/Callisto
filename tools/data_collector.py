@@ -42,6 +42,7 @@ ESPN_SPORTS = {
     "americanfootball_nfl": ("football", "nfl"),
     "icehockey_nhl": ("hockey", "nhl"),
     "baseball_mlb": ("baseball", "mlb"),
+    "golf_pga": ("golf", "pga"),
 }
 
 _client: Optional[httpx.AsyncClient] = None
