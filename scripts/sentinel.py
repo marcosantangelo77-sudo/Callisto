@@ -611,13 +611,14 @@ async def handle_crash_loop() -> None:
     if attempts >= MAX_FIX_ATTEMPTS:
         msg = (
             f"Crash loop — max fix attempts ({MAX_FIX_ATTEMPTS}) exhausted "
-            f"for error {eh}. Manual intervention required.\n\n"
+            f"for error {eh}. Will keep restarting API (watchdog handles restart).\n\n"
             f"Error:\n{traceback[:500]}"
         )
         logger.error(msg)
         send_telegram(msg)
-        # Wait longer before retrying to avoid spam
-        await asyncio.sleep(1800)  # 30 min
+        # Wait 2 min before re-checking (watchdog.py handles the actual restart)
+        # Do NOT sleep 30 min — that leaves the system dead
+        await asyncio.sleep(120)
         return
 
     state.fix_attempts[eh] = attempts + 1
@@ -743,19 +744,26 @@ async def sentinel_loop() -> None:
                 )
 
                 # AUTO-RESTART: If process is dead, restart it directly.
-                # Don't wait for watchdog.bat — the sentinel IS the watchdog.
+                # Log output to files (not DEVNULL) so crashes are diagnosable.
                 if recent_crashes < CRASH_THRESHOLD:
                     logger.info("Restarting Callisto API directly...")
                     try:
+                        from datetime import datetime as _dt
+                        _ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+                        _stdout_log = LOG_DIR / f"api_stdout_{_ts}.log"
+                        _stderr_log = LOG_DIR / f"api_stderr_{_ts}.log"
+                        _stdout_f = open(_stdout_log, "w", encoding="utf-8")
+                        _stderr_f = open(_stderr_log, "w", encoding="utf-8")
                         subprocess.Popen(
                             [sys.executable, str(CALLISTO_DIR / "api.py")],
                             cwd=str(CALLISTO_DIR),
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
+                            stdout=_stdout_f,
+                            stderr=_stderr_f,
                             creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
                         )
                         send_telegram(f"Auto-restarted Callisto API (crash #{recent_crashes})")
-                        logger.info("Restart command issued — waiting 30s for startup")
+                        logger.info(f"Restart command issued — stderr -> {_stderr_log}")
+                        logger.info("Waiting 30s for startup")
                         await asyncio.sleep(30)  # Give it time to start
                     except Exception as e:
                         logger.error(f"Failed to restart API: {e}")

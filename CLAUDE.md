@@ -23,13 +23,21 @@ curl -X POST http://localhost:8420/context/sync -H "Content-Type: application/js
 ## After Code Changes — Trigger Restart
 When you modify Callisto source files (tools/, api.py, orchestrator.py, etc.), the running process needs to reload. Do this EVERY TIME after committing code changes:
 ```bash
-# Method 1: Signal file (works always — sentinel picks it up in ≤30 seconds)
+# Method 1: Signal file (works always — watchdog picks it up in ≤15 seconds)
 echo "code reload after commit $(git rev-parse --short HEAD)" > memory/restart_requested
 
-# Method 2: HTTP endpoint (works after first restart when endpoint is live)
+# Method 2: HTTP endpoint (works when API is still responding)
 curl -s -X POST http://localhost:8420/admin/restart
 ```
-The sentinel watchdog (separate process) watches for `memory/restart_requested`, kills the API, and the watchdog.bat restarts it with new code within 15 seconds. Do NOT skip this step — uncommitted code that isn't reloaded is invisible to the live system.
+The watchdog (scripts/watchdog.py) runs as a separate process, checks the signal file every 15s, kills the API, and restarts it with new code. Do NOT skip this step — uncommitted code that isn't reloaded is invisible to the live system.
+
+## Watchdog Architecture
+The API auto-restart system has three layers:
+1. **watchdog.py** — Python process that health-checks every 15s, restarts API with full error logging, never gives up (exponential backoff, not surrender)
+2. **watchdog.bat** — Batch loop that restarts watchdog.py if IT crashes
+3. **Windows Task Scheduler** — Starts watchdog.bat at login, restarts on failure (install via `scripts/install_watchdog.bat` as admin)
+
+Logs: `logs/watchdog.log`, `logs/api_stderr_*.log`
 
 ## API Quick Reference (localhost:8420)
 - `GET /health` — agent status, odds credits, monitors

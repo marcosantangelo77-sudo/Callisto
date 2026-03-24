@@ -1067,11 +1067,19 @@ async def health_check():
     Comprehensive health check — Layer 2.
     Returns all subsystem statuses, circuit breaker states, error rates,
     and pipeline integrity (is the system producing expected output).
-    The sentinel (Layer 3) polls this to detect problems.
+    The sentinel (Layer 3) and watchdog poll this to detect problems.
 
     A system with broken pipelines should NOT report "ok" — the pipeline
     integrity checker downgrades the healthy flag if critical issues exist.
     """
+    # Track watchdog/sentinel pings for self-monitoring
+    import time as _time
+    if not hasattr(app.state, "_last_health_ping"):
+        app.state._last_health_ping = _time.time()
+        app.state._health_ping_count = 0
+    app.state._last_health_ping = _time.time()
+    app.state._health_ping_count += 1
+
     if not system_health:
         return {"healthy": False, "error": "Health monitor not initialized"}
     report = system_health.get_full_report()
@@ -1091,6 +1099,19 @@ async def health_check():
             "status": "error",
             "error": f"integrity check failed: {e}",
         }
+
+    # Watchdog self-monitoring: if no one has pinged us in 5 min, that's a warning
+    import time as _time
+    _health_gap = _time.time() - getattr(app.state, "_last_health_ping", _time.time())
+    if _health_gap > 300 and getattr(app.state, "_health_ping_count", 0) > 5:
+        logger.warning(
+            f"No watchdog health ping for {_health_gap:.0f}s — "
+            "watchdog may be dead"
+        )
+    report["watchdog_monitoring"] = {
+        "last_ping_ago_seconds": round(_health_gap, 1),
+        "total_pings": getattr(app.state, "_health_ping_count", 0),
+    }
 
     # Write health file for sentinel to read if HTTP is down
     system_health.write_health_file()
