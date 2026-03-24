@@ -559,8 +559,54 @@ class ResearchLoop:
         await self.focus_manager.load_from_db()
         focus_sports = self.focus_manager.get_focus_sports()
         logger.info(f"Research focus areas loaded: {focus_sports}")
+        # One-time backfill of temporal metadata on legacy hypotheses
+        await self._backfill_temporal_metadata()
         self._task = asyncio.create_task(self._loop())
         logger.info("Research loop started — autonomous hypothesis machine online")
+
+    async def _backfill_temporal_metadata(self) -> None:
+        """Backfill training_period_end on legacy hypotheses that lack temporal metadata.
+
+        Sets reasonable defaults so the backtest engine can enforce temporal isolation
+        on the 231 hypotheses created before the temporal split system existed.
+        """
+        db = self.hypothesis_manager._db
+        if db is None:
+            logger.warning("Cannot backfill temporal metadata — hypothesis DB not initialized")
+            return
+
+        cursor = await db.execute(
+            "SELECT hypothesis_id, model_config FROM hypotheses "
+            "WHERE model_config NOT LIKE '%training_period_end%'"
+        )
+        rows = await cursor.fetchall()
+
+        if not rows:
+            logger.info("Temporal metadata backfill: no legacy hypotheses need updating")
+            return
+
+        count = 0
+        for hypothesis_id, model_config_raw in rows:
+            try:
+                config = json.loads(model_config_raw) if model_config_raw else {}
+            except (json.JSONDecodeError, TypeError):
+                config = {}
+
+            config["training_period_end"] = "2026-02-22"
+            config["training_period_start"] = "2023-01-01"
+            config["temporal_split_gap_days"] = 7
+
+            await db.execute(
+                "UPDATE hypotheses SET model_config = ? WHERE hypothesis_id = ?",
+                (json.dumps(config), hypothesis_id),
+            )
+            count += 1
+
+        await db.commit()
+        logger.info(
+            f"Temporal metadata backfill complete: updated {count} legacy hypotheses "
+            f"(training_period_end=2026-02-22, training_period_start=2023-01-01, gap=7d)"
+        )
 
     async def stop(self) -> None:
         """Stop the research loop."""
@@ -985,6 +1031,7 @@ class ResearchLoop:
                 for dt in dates:
                     date_fmt = dt.strftime("%Y-%m-%d")
                     await self.data_collector.resolve_prop_outcomes(sport, date_fmt)
+                    await self.data_collector.resolve_game_level_outcomes(sport, date_fmt)
 
                 self._data_collections += 1
             except Exception as e:
