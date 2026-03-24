@@ -1053,12 +1053,32 @@ class ResearchLoop:
         to_test = drafts[:BACKTEST_BATCH_SIZE]
         logger.info(f"Research: backtesting {len(to_test)} hypotheses")
 
+        from datetime import datetime, timedelta, timezone
+
         for h in to_test:
             if not self._running:
                 break
 
-            # Skip hypotheses for sports with no usable multi-book data
             sport = h.get("sport", "")
+            market = h.get("market_type", "")
+
+            # Player prop hypotheses can't be backtested (no historical prop data).
+            # Skip backtesting and promote directly to paper_trading for live evaluation.
+            if market.startswith("player_"):
+                try:
+                    await self.hypothesis_manager.update_status(
+                        h["hypothesis_id"], "paper_trading", "auto:no_historical_prop_data"
+                    )
+                    self._backtests_run += 1
+                    logger.info(
+                        f"Research: promoted {h['hypothesis_id']} ({market}) "
+                        f"directly to paper_trading — no historical prop data for backtesting"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to promote prop hypothesis {h['hypothesis_id']}: {e}")
+                continue
+
+            # Skip hypotheses for sports with no usable multi-book data
             if sports_with_odds and sport not in sports_with_odds:
                 logger.info(
                     f"Research: skipping backtest for {h['hypothesis_id']} — "
@@ -1067,8 +1087,6 @@ class ResearchLoop:
                 continue
 
             try:
-                # Use full available historical data range for backtest
-                from datetime import datetime, timedelta, timezone
                 end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 start_date = "2023-01-01"  # Full cached range
 
@@ -1345,8 +1363,44 @@ class ResearchLoop:
 
             try:
                 sport = h["sport"]
+                market = h.get("market_type", "")
+
+                # For player props: use Odds API prop scanner (DK scraper has no props)
+                if market.startswith("player_"):
+                    from tools.prop_scanner import scan_props
+                    from tools.odds_api import get_odds
+                    # Get upcoming games for this sport
+                    if sport not in odds_cache:
+                        live_odds = await get_odds(
+                            sport=sport, regions="us", markets="h2h",
+                        )
+                        if not live_odds.get("error"):
+                            odds_cache[sport] = live_odds
+                    games = odds_cache.get(sport, {}).get("games", [])
+                    for game in games[:3]:  # Limit to 3 games to conserve credits
+                        event_id = game.get("id")
+                        if not event_id:
+                            continue
+                        try:
+                            result = await scan_props(
+                                sport=sport,
+                                event_id=event_id,
+                                target_book="draftkings",
+                                edge_threshold=h["edge_threshold"],
+                                prop_markets=market,
+                            )
+                            edges = result.get("edges", [])
+                            if edges:
+                                logger.info(
+                                    f"Research: {len(edges)} prop edges for "
+                                    f"{h['hypothesis_id']} in game {event_id}"
+                                )
+                        except Exception as e:
+                            logger.debug(f"Prop scan failed for {event_id}: {e}")
+                    continue
+
+                # For game-level markets: use DK scraper (free), Odds API as fallback
                 if sport not in odds_cache:
-                    # Try DK scraper first (free), then Odds API
                     from tools.dk_scraper import scrape_dk_odds
                     live_odds = await scrape_dk_odds(sport)
 
