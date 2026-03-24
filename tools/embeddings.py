@@ -245,6 +245,97 @@ class VectorStore:
             "total": sum(cnt for _, cnt in rows),
         }
 
+    async def get_embeddings_by_period(
+        self, collection: str, period: str
+    ) -> list[dict]:
+        """
+        Get all items in a collection filtered by data_period metadata.
+
+        Args:
+            collection: embedding collection name (e.g., 'game_contexts')
+            period: 'historical', 'recent', or 'all'
+
+        Returns list of dicts with id, text, metadata (no embedding vectors).
+        """
+        if period == "all":
+            return await self.get_all(collection)
+
+        cursor = await self._db.execute(
+            "SELECT id, content_text, metadata_json "
+            "FROM embeddings "
+            "WHERE collection = ? "
+            "AND json_extract(metadata_json, '$.data_period') = ?",
+            (collection, period),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "id": row_id,
+                "text": text,
+                "metadata": json.loads(meta_json) if meta_json else None,
+            }
+            for row_id, text, meta_json in rows
+        ]
+
+    async def get_embedding_coverage(self) -> dict:
+        """
+        Return embedding coverage stats: date ranges, counts per collection,
+        and breakdown by data_period. Used by integrity checker to verify
+        that historical embedding is complete.
+        """
+        result = {}
+
+        # Per-collection stats
+        cursor = await self._db.execute(
+            "SELECT collection, COUNT(*) as count, "
+            "MIN(json_extract(metadata_json, '$.game_date')) as min_date, "
+            "MAX(json_extract(metadata_json, '$.game_date')) as max_date "
+            "FROM embeddings GROUP BY collection ORDER BY count DESC"
+        )
+        rows = await cursor.fetchall()
+        collections = {}
+        for col, cnt, min_d, max_d in rows:
+            collections[col] = {
+                "count": cnt,
+                "date_range": {"min": min_d, "max": max_d},
+            }
+        result["collections"] = collections
+        result["total"] = sum(c["count"] for c in collections.values())
+
+        # Per-period breakdown for game_contexts
+        cursor = await self._db.execute(
+            "SELECT "
+            "json_extract(metadata_json, '$.data_period') as period, "
+            "COUNT(*) as count, "
+            "MIN(json_extract(metadata_json, '$.game_date')) as min_date, "
+            "MAX(json_extract(metadata_json, '$.game_date')) as max_date "
+            "FROM embeddings WHERE collection = 'game_contexts' "
+            "GROUP BY period"
+        )
+        rows = await cursor.fetchall()
+        result["game_contexts_by_period"] = {
+            (period or "untagged"): {
+                "count": cnt,
+                "date_range": {"min": min_d, "max": max_d},
+            }
+            for period, cnt, min_d, max_d in rows
+        }
+
+        # Per-sport breakdown for game_contexts
+        cursor = await self._db.execute(
+            "SELECT "
+            "json_extract(metadata_json, '$.sport') as sport, "
+            "COUNT(*) as count "
+            "FROM embeddings WHERE collection = 'game_contexts' "
+            "GROUP BY sport ORDER BY count DESC"
+        )
+        rows = await cursor.fetchall()
+        result["game_contexts_by_sport"] = {
+            sport: cnt for sport, cnt in rows
+        }
+
+        return result
+
     async def delete_collection(self, collection: str) -> int:
         """Delete all embeddings in a collection. Returns count deleted."""
         cursor = await self._db.execute(
@@ -258,19 +349,33 @@ class VectorStore:
         self,
         collection: str,
         threshold: float = 0.85,
+        data_period: Optional[str] = None,
     ) -> list[list[dict]]:
         """
-        Simple single-linkage clustering by cosine similarity.
+        Single-linkage clustering by cosine similarity.
         Groups items where similarity >= threshold.
+
+        Args:
+            collection: embedding collection to cluster
+            threshold: minimum cosine similarity to join a cluster
+            data_period: optional filter — 'historical', 'recent', or None for all
 
         Returns list of clusters, each cluster is a list of items.
         Good enough for finding recurring game context patterns.
         """
-        cursor = await self._db.execute(
-            "SELECT id, content_text, embedding_json, metadata_json "
-            "FROM embeddings WHERE collection = ?",
-            (collection,),
-        )
+        if data_period:
+            cursor = await self._db.execute(
+                "SELECT id, content_text, embedding_json, metadata_json "
+                "FROM embeddings WHERE collection = ? "
+                "AND json_extract(metadata_json, '$.data_period') = ?",
+                (collection, data_period),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT id, content_text, embedding_json, metadata_json "
+                "FROM embeddings WHERE collection = ?",
+                (collection,),
+            )
         rows = await cursor.fetchall()
 
         items = []
@@ -376,11 +481,15 @@ async def embed_game_context(
     text = " | ".join(parts)
     embedding = await embed_text(text)
 
+    # Classify as historical or recent based on date
+    data_period = "recent" if game_date >= "2026-02-23" else "historical"
+
     metadata = {
         "sport": sport,
         "game_date": game_date,
         "home_team": home_team,
         "away_team": away_team,
+        "data_period": data_period,
         **{k: v for k, v in context.items() if k not in ("key_props", "injuries")},
     }
 

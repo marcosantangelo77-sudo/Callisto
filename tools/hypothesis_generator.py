@@ -471,6 +471,7 @@ class HypothesisGenerator:
         similarity_threshold: float = 0.85,
         min_cluster_size: int = 10,
         min_hit_rate_delta: float = 0.05,
+        data_period: str | None = None,
     ) -> list[dict]:
         """
         Analyze embedding clusters to discover data-driven hypotheses.
@@ -480,10 +481,18 @@ class HypothesisGenerator:
           2. If hit rate diverges from expected, generate a hypothesis
           3. Extract common features from the cluster as context factors
 
+        Args:
+            collection: which embedding collection to cluster
+            similarity_threshold: min cosine similarity for clustering
+            min_cluster_size: ignore clusters smaller than this
+            min_hit_rate_delta: min deviation from expected to generate hypothesis
+            data_period: 'historical' = cluster only on historical data (for backtesting),
+                         'recent' = only recent data, None = all data (for live trading)
+
         Returns list of created hypothesis summaries.
         """
         clusters = await self.vector_store.cluster_by_similarity(
-            collection, threshold=similarity_threshold
+            collection, threshold=similarity_threshold, data_period=data_period
         )
 
         created = []
@@ -522,6 +531,9 @@ class HypothesisGenerator:
                 f"Pattern features: {common.get('pattern_desc', 'see metadata')}."
             )
 
+            # Tag which embedding data the hypothesis was derived from
+            period_label = data_period or "all"
+
             try:
                 hid = await self.hypothesis_manager.create_hypothesis(
                     name=name,
@@ -535,9 +547,13 @@ class HypothesisGenerator:
                         "consensus_min_books": 3,
                         "cluster_features": common,
                         "source_cluster_size": len(cluster),
+                        "source_data_period": period_label,
                     },
                     edge_threshold=abs(delta),
-                    notes=f"Auto-discovered from {collection} cluster (N={len(cluster)})",
+                    notes=(
+                        f"Auto-discovered from {collection} cluster "
+                        f"(N={len(cluster)}, data_period={period_label})"
+                    ),
                 )
                 created.append({
                     "hypothesis_id": hid,
@@ -546,6 +562,7 @@ class HypothesisGenerator:
                     "hit_rate": round(hit_rate, 4),
                     "expected_rate": round(expected_rate, 4),
                     "delta": round(delta, 4),
+                    "data_period": period_label,
                 })
             except Exception as e:
                 logger.warning(f"Failed to create cluster hypothesis: {e}")
