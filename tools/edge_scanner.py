@@ -42,7 +42,7 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads") -> list[di
     """
     # Books ranked by sharpness — match on TITLE (what find_best_line returns)
     # Also match on key format for direct API comparisons
-    SHARP_TITLES = {"pinnacle", "lowvig.ag", "bookmaker.eu", "betonline.ag", "betcris", "circa"}
+    SHARP_TITLES = {"pinnacle", "lowvig.ag", "bookmaker.eu", "betonline.ag", "betcris", "circa", "betfair exchange", "betfair", "sbobet"}
     SOFT_TITLES = {"fanduel", "draftkings", "betmgm", "pointsbet", "caesars", "betrivers", "mybookie.ag", "bovada", "betus", "fanatics", "fanatics sportsbook"}
 
     edges = []
@@ -63,6 +63,21 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads") -> list[di
             best_line = best["best"]
             worst_line = best["worst"]
             price_spread = best["spread_across_books"]
+
+            # H2H sanity check: if lines contain both large positive and large
+            # negative prices, both sides of the market leaked into one team's
+            # line set (e.g. favorite -750 mixed with opponent's underdog +610).
+            # This produces phantom edges of 50%+ that are physically impossible.
+            if market == "h2h":
+                prices = [l["price"] for l in all_lines]
+                has_big_pos = any(p > 150 for p in prices)
+                has_big_neg = any(p < -150 for p in prices)
+                if has_big_pos and has_big_neg:
+                    logger.warning(
+                        f"H2H line contamination for {team}: prices span "
+                        f"{min(prices)} to {max(prices)} — skipping"
+                    )
+                    continue
 
             # Calculate implied probability range across books
             implied_probs = [calculate_implied_probability(l["price"]) for l in all_lines]
@@ -87,6 +102,14 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads") -> list[di
                     # If soft book implies LOWER probability than sharps think,
                     # the soft book is underpricing this outcome = value
                     edge = sharp_consensus - soft_implied
+                    # Cap: real edges in efficient markets top out ~15%.
+                    # Anything higher is almost certainly a data/calc bug.
+                    if edge > 0.30:
+                        logger.warning(
+                            f"Implausible edge {edge:.1%} for {team} at "
+                            f"{sl['bookmaker']} — likely data contamination"
+                        )
+                        continue
                     if edge > 0.02:  # 2% minimum edge
                         ev = calculate_ev(
                             probability=sharp_consensus,
