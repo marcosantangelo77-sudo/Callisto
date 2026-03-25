@@ -99,6 +99,7 @@ class PipelineIntegrityChecker:
         """Create the integrity_checks log table if it doesn't exist."""
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 await db.execute("""
                     CREATE TABLE IF NOT EXISTS integrity_checks (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -216,6 +217,7 @@ class PipelineIntegrityChecker:
         """
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 # Count paper_trading hypotheses
                 cursor = await db.execute(
                     "SELECT COUNT(*) FROM hypotheses WHERE status = 'paper_trading'"
@@ -299,6 +301,7 @@ class PipelineIntegrityChecker:
         """
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 cutoff = (datetime.now(timezone.utc) - timedelta(hours=HYPOTHESIS_STALL_HOURS)).isoformat()
 
                 # Find hypotheses that haven't been updated in HYPOTHESIS_STALL_HOURS
@@ -353,6 +356,7 @@ class PipelineIntegrityChecker:
         """
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 # Get aggregate backtest stats
                 cursor = await db.execute(
                     "SELECT COUNT(*) as total, "
@@ -493,6 +497,7 @@ class PipelineIntegrityChecker:
         """
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 # Check odds_snapshots_v2 (the normalized table)
                 try:
                     cursor = await db.execute(
@@ -559,6 +564,7 @@ class PipelineIntegrityChecker:
         """
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 # Count backtesting hypotheses
                 cursor = await db.execute(
                     "SELECT COUNT(*) FROM hypotheses WHERE status = 'backtesting'"
@@ -615,6 +621,7 @@ class PipelineIntegrityChecker:
         """
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 cursor = await db.execute(
                     "SELECT hypothesis_id, name, status, model_config "
                     "FROM hypotheses "
@@ -702,6 +709,7 @@ class PipelineIntegrityChecker:
         """
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 zero_checks = []
 
                 # Paper trades should exist if we have paper_trading hypotheses
@@ -821,6 +829,7 @@ class PipelineIntegrityChecker:
         """
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 now = datetime.now(timezone.utc)
                 cutoff = (now - timedelta(hours=METRIC_STALE_HOURS)).isoformat()
                 stale_items = []
@@ -891,6 +900,7 @@ class PipelineIntegrityChecker:
         """
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 cursor = await db.execute(
                     "SELECT status, COUNT(*) FROM hypotheses "
                     "WHERE status IN ('rejected', 'paper_trading', 'live', 'retired') "
@@ -988,6 +998,7 @@ class PipelineIntegrityChecker:
 
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 for issue in self._issues:
                     await db.execute(
                         "INSERT INTO integrity_checks "
@@ -1046,6 +1057,7 @@ class PipelineIntegrityChecker:
         """Get recent integrity check history from the database."""
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 cursor = await db.execute(
                     "SELECT run_id, check_name, severity, message, details_json, "
                     "auto_fix, created_at "

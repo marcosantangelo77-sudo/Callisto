@@ -76,6 +76,7 @@ async def build_hot_cache(db_path: str = DB_PATH) -> dict:
 
     try:
         async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout = 10000")
             # Current bankroll
             hot["bankroll"] = await _get_latest_bankroll(db)
 
@@ -228,6 +229,7 @@ async def query_clv_summary(
     """
     try:
         async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout = 10000")
             cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
             where = ["placed_at > ?", "clv_implied IS NOT NULL"]
             params = [cutoff]
@@ -293,6 +295,7 @@ async def query_recent_signals(db_path: str = DB_PATH, n: int = 10) -> list:
     """
     try:
         async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout = 10000")
             rows = await db.execute_fetchall(
                 "SELECT id, team, market, bookmaker, placement_odds, "
                 "result, payout, stake, clv_implied, edge_at_placement "
@@ -328,6 +331,7 @@ async def query_model_calibration(
     """
     try:
         async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout = 10000")
             cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
             where = ["placed_at > ?", "result IN ('won', 'lost')", "placement_implied_prob IS NOT NULL"]
             params = [cutoff]
@@ -406,6 +410,7 @@ async def query_boost_history(
     """
     try:
         async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout = 10000")
             # Check if boosts table exists
             check = await db.execute_fetchall(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='boosts'"
@@ -476,6 +481,7 @@ async def rotate_caches(db_path: str = DB_PATH, warm_days: int = 30):
     """
     try:
         async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA busy_timeout = 10000")
             cutoff = (datetime.now(timezone.utc) - timedelta(days=warm_days)).isoformat()
 
             # Ensure archived column exists on key tables
@@ -513,6 +519,7 @@ async def rotate_caches(db_path: str = DB_PATH, warm_days: int = 30):
 async def ensure_sentinel_table(db_path: str = DB_PATH):
     """Create sentinel_flags table if it doesn't exist."""
     async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout = 10000")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS sentinel_flags (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -556,6 +563,7 @@ async def record_sentinel_flag(
 ):
     """Record a sentinel flag for review."""
     async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout = 10000")
         await ensure_sentinel_table(db_path)
         now = datetime.now(timezone.utc).isoformat()
         await db.execute(

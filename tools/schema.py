@@ -13,6 +13,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+async def open_db(db_path: str = None) -> aiosqlite.Connection:
+    """Open a DB connection with WAL mode and busy_timeout.
+
+    Use this instead of raw aiosqlite.connect() everywhere to avoid
+    "database is locked" errors from concurrent async writers.
+    """
+    if db_path is None:
+        db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+    db = await aiosqlite.connect(db_path)
+    await db.execute("PRAGMA busy_timeout = 10000")
+    return db
+
 logger = logging.getLogger("callisto.schema")
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")

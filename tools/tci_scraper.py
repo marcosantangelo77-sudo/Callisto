@@ -536,6 +536,7 @@ async def build_tci_for_tournament(
 async def _store_tci_results(results: list[dict], season: int) -> None:
     """Store TCI results in the database."""
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA busy_timeout = 10000")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS tci_scores (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -612,6 +613,7 @@ async def get_tci_matchup(
       - Only predictive when |differential| >= 10 (57.1%), very strong >= 15 (66.7%)
     """
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA busy_timeout = 10000")
         results = {}
         for team in [home_team, away_team]:
             cursor = await db.execute(

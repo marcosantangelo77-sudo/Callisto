@@ -232,6 +232,7 @@ class SelfRepairEngine:
     async def _det_stale_odds(self) -> Optional[dict]:
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 for table, col in [("odds_snapshots_v2", "snapshot_time"), ("odds_snapshots", "timestamp")]:
                     try:
                         row = (await (await db.execute(f"SELECT MAX({col}) FROM {table}")).fetchone())
@@ -251,6 +252,7 @@ class SelfRepairEngine:
     async def _det_empty_bt(self) -> Optional[dict]:
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 rows = await (await db.execute(
                     "SELECT run_id, total_events FROM backtest_runs ORDER BY completed_at DESC LIMIT ?",
                     (EMPTY_BACKTEST_LOOKBACK,))).fetchall()
@@ -274,6 +276,7 @@ class SelfRepairEngine:
     async def _det_rejection(self) -> Optional[dict]:
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 counts = dict(await (await db.execute(
                     "SELECT status, COUNT(*) FROM hypotheses "
                     "WHERE status IN ('rejected','paper_trading','live','retired') GROUP BY status"
@@ -290,6 +293,7 @@ class SelfRepairEngine:
     async def _det_drought(self) -> Optional[dict]:
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 row = await (await db.execute(
                     "SELECT COUNT(*), SUM(CASE WHEN signal_generated=1 THEN 1 ELSE 0 END) "
                     "FROM backtest_events")).fetchone()
@@ -303,6 +307,7 @@ class SelfRepairEngine:
         """Detect hypotheses rejected with 0 events for sports that have data."""
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 # Sports with historical odds data
                 sports_with_data = set()
                 rows = await (await db.execute(
@@ -334,6 +339,7 @@ class SelfRepairEngine:
         bloated = []
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 tables = [r[0] for r in await (await db.execute(
                     "SELECT name FROM sqlite_master WHERE type='table'")).fetchall()]
                 for t in tables:
@@ -356,6 +362,7 @@ class SelfRepairEngine:
         """
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 row = await (await db.execute(
                     "SELECT COUNT(*), "
                     "SUM(CASE WHEN actual_result IS NULL THEN 1 ELSE 0 END) "
@@ -461,6 +468,7 @@ class SelfRepairEngine:
         adjusted = 0
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 row = await (await db.execute("SELECT MIN(game_date), MAX(game_date) FROM game_contexts")).fetchone()
                 if not row or not row[0]:
                     return {"fixed": False, "action": "no_game_data", "detail": "No game_contexts to calibrate"}
@@ -506,6 +514,7 @@ class SelfRepairEngine:
         adjusted = 0
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 if itype == "high_rejection":
                     zsr = await (await db.execute(
                         "SELECT COUNT(*) FROM hypotheses h "
@@ -554,6 +563,7 @@ class SelfRepairEngine:
         requeued = 0
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 for c in candidates:
                     await db.execute(
                         "UPDATE hypotheses SET status = 'draft' WHERE hypothesis_id = ? AND status = 'rejected'",
@@ -600,6 +610,7 @@ class SelfRepairEngine:
         pruned = []
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 for entry in issue.get("bloated_tables", []):
                     table = entry["table"]
                     if table not in _PRUNE_SAFE:
@@ -718,6 +729,7 @@ class SelfRepairEngine:
         flagged = 0
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 # Find hypotheses with identical (unique_games, total_events) counts
                 cursor = await db.execute("""
                     SELECT h.hypothesis_id, h.name,
@@ -774,6 +786,7 @@ class SelfRepairEngine:
         fixed_count = 0
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 cursor = await db.execute(
                     "SELECT hypothesis_id, name, thesis, model_config FROM hypotheses "
                     "WHERE status IN ('draft', 'backtesting')"
@@ -846,6 +859,7 @@ class SelfRepairEngine:
         updated = 0
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 cursor = await db.execute(
                     "SELECT hypothesis_id, model_config FROM hypotheses "
                     "WHERE status IN ('draft', 'backtesting')"
@@ -882,6 +896,7 @@ class SelfRepairEngine:
         updated = 0
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 cursor = await db.execute(
                     "SELECT hypothesis_id, model_config FROM hypotheses "
                     "WHERE status = 'backtesting'"
@@ -919,6 +934,7 @@ class SelfRepairEngine:
         adjusted = 0
         try:
             async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
                 cursor = await db.execute(
                     "SELECT hypothesis_id, edge_threshold, model_config FROM hypotheses "
                     "WHERE status IN ('draft', 'backtesting') AND edge_threshold > 0.02"
