@@ -1265,6 +1265,19 @@ class BacktestEngine:
                 ev = ev_binary(fair_val, american_to_decimal(target_price))
                 kelly = kelly_binary(fair_val, american_to_decimal(target_price))
                 edge = fair_val - target_implied  # Probability edge (not EV)
+
+                # ── Hard cap: no real market edge exceeds 15% ──
+                # Anything larger is a data artifact (swapped sides, stale line,
+                # mismatched markets).  The outlier filter catches most cases but
+                # this is the last line of defence.
+                MAX_EDGE_MAGNITUDE = 0.15
+                if abs(edge) > MAX_EDGE_MAGNITUDE:
+                    logger.debug(
+                        f"Edge {edge:.4f} exceeds magnitude cap for "
+                        f"{side_name} @ {target_book} — clamping"
+                    )
+                    edge = MAX_EDGE_MAGNITUDE if edge > 0 else -MAX_EDGE_MAGNITUDE
+
                 is_signal = edge >= edge_threshold
 
                 events += 1
@@ -1403,9 +1416,20 @@ class BacktestEngine:
             consensus_over = sum(v[0] for v in fair_overs) / non_target_count
             consensus_under = sum(v[0] for v in fair_unders) / non_target_count
 
+            # ── Outlier filter (same logic as _process_game_lines) ──
+            OUTLIER_THRESHOLD = 0.15
+            clean_overs = [(v, bk) for v, bk in fair_overs
+                           if abs(v - consensus_over) <= OUTLIER_THRESHOLD]
+            clean_unders = [(v, bk) for v, bk in fair_unders
+                            if abs(v - consensus_under) <= OUTLIER_THRESHOLD]
+            if not clean_overs:
+                clean_overs = fair_overs
+            if not clean_unders:
+                clean_unders = fair_unders
+
             # Cross-book best line: sharpest devigged fair prob for each side
-            best_over_val, best_over_book = max(fair_overs, key=lambda x: x[0])
-            best_under_val, best_under_book = max(fair_unders, key=lambda x: x[0])
+            best_over_val, best_over_book = max(clean_overs, key=lambda x: x[0])
+            best_under_val, best_under_book = max(clean_unders, key=lambda x: x[0])
 
             use_crossbook = non_target_count >= 3
             contributing_books = [bk for _, bk in fair_overs]
@@ -1421,6 +1445,12 @@ class BacktestEngine:
                 ev = ev_binary(fair_val, american_to_decimal(target_price))
                 kelly = kelly_binary(fair_val, american_to_decimal(target_price))
                 edge = fair_val - target_implied  # Probability edge (not EV)
+
+                # Hard cap: same as _process_game_lines
+                MAX_EDGE_MAGNITUDE = 0.15
+                if abs(edge) > MAX_EDGE_MAGNITUDE:
+                    edge = MAX_EDGE_MAGNITUDE if edge > 0 else -MAX_EDGE_MAGNITUDE
+
                 is_signal = edge >= edge_threshold
 
                 events += 1
