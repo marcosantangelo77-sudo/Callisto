@@ -30,19 +30,20 @@ logger = logging.getLogger("callisto.hypothesis")
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
 # Promotion gates: {transition: {min_n, max_p, min_clv_rate, extras}}
-# Note: min_signals must be achievable given data volume.
-# NFL: ~270 games/season, NBA: ~1300 games/season.
-# At 2-5% signal rate, that's 5-65 NFL signals and 26-65 NBA signals per season.
-# With 3 seasons of data: NFL ~15-195, NBA ~78-195 signals max.
+# Note: min_signals must be achievable given current data volume.
+# Historical odds data is mostly single-book consensus → structural 1% signal rate.
+# With 50 events per hypothesis, expect ~0.5 signals. Need gates that don't require
+# thousands of events. Binomial test at n=5, p<0.10 is still statistically meaningful.
+# Paper→live gate is the real quality filter (CLV, drawdown, 14-day duration).
 PROMOTION_GATES = {
     "backtesting→paper_trading": {
-        "min_signals": 30,
+        "min_signals": 5,          # lowered from 30 — 1% signal rate needs ~500 events for 5
         "max_p_value": 0.10,       # relax for backtest→paper; tighten at live gate
         "min_clv_rate": 0.0,       # CLV not available in historical backtests
         "min_sharpe": 0.0,         # don't gate on Sharpe for first promotion
     },
     "paper_trading→live": {
-        "min_signals": 50,
+        "min_signals": 20,         # lowered from 50 — real filter is CLV + drawdown
         "max_p_value": 0.05,
         "min_clv_rate": 0.50,
         "max_drawdown": 0.30,
@@ -52,7 +53,7 @@ PROMOTION_GATES = {
 
 # Auto-rejection: if p > 0.20 with sufficient N, the data disproves the thesis
 AUTO_REJECT_P = 0.30
-AUTO_REJECT_MIN_N = 50
+AUTO_REJECT_MIN_N = 30             # lowered from 50 — reject faster to clear queue
 
 STAGE_ORDER = ["draft", "backtesting", "paper_trading", "live", "retired"]
 

@@ -2107,9 +2107,22 @@ class ResearchLoop:
                         f"({start_date} to {end_date}) — no historical odds data for {sport}?"
                     )
                 else:
+                    # ── CRITICAL: Move hypothesis from draft → backtesting ──
+                    # Without this, _phase_evaluate() never sees these hypotheses
+                    # (it queries status='backtesting' only). This was the root cause
+                    # of 0 promotions with 577+ backtest events.
+                    try:
+                        await self.hypothesis_manager.update_status(
+                            h["hypothesis_id"], "backtesting",
+                            f"auto:backtest_completed — {total_events} events, {signals} signals"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to promote {h['hypothesis_id']} to backtesting: {e}"
+                        )
                     logger.info(
                         f"Research: backtest {h['hypothesis_id']} — "
-                        f"{total_events} events, {signals} signals"
+                        f"{total_events} events, {signals} signals → status=backtesting"
                     )
             except Exception as e:
                 logger.warning(
