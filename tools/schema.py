@@ -216,6 +216,7 @@ CREATE TABLE IF NOT EXISTS hypotheses (
     promoted_by TEXT,
     notes TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hypotheses_name ON hypotheses(name);
 
 -- ──────────────────────────────────────────
 -- BACKTEST RUNS: metadata per execution
