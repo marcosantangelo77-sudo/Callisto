@@ -565,6 +565,26 @@ class BacktestEngine:
         r"\bcohesion\b": "team_identity",
         r"\bidentity\b": "team_identity",
         r"\bcultural\b": "team_identity",
+        # Rest / schedule factors
+        r"\brest\b": "days_rest",
+        r"\bb2b\b": "days_rest",
+        r"\bback.to.back\b": "days_rest",
+        r"\bdays.rest\b": "days_rest",
+        r"\brest.mismatch\b": "days_rest",
+        r"\bshort.rest\b": "days_rest",
+        r"\bextra.rest\b": "extra_rest_days",
+        r"\bbye\b": "bye_week_flag",
+        # Closer / reliever patterns
+        r"\bcloser\b": "bullpen_status",
+        r"\breliever\b": "bullpen_status",
+        r"\bsetup.man\b": "bullpen_status",
+        # Venue / park factors
+        r"\bpark.dim": "venue_type",
+        r"\bpark.factor": "venue_type",
+        r"\bfence.distance\b": "venue_type",
+        # Pace / tempo factors
+        r"\bpace\b": "home_pace_rank",
+        r"\btempo\b": "home_pace_rank",
     }
 
     @staticmethod
