@@ -416,6 +416,21 @@ class BacktestEngine:
                 singlebook_skipped += 1
 
             for game in games:
+                # Filter out games whose commence_time falls on a different day
+                # The Odds API date-based endpoint can return next-day games
+                ct = game.get("commence_time", "")
+                if ct:
+                    try:
+                        from datetime import datetime as _dt_parse
+                        ct_dt = _dt_parse.fromisoformat(ct.replace("Z", "+00:00"))
+                        # Use US Eastern (UTC-5) to determine the calendar date
+                        ct_eastern = ct_dt - timedelta(hours=5)
+                        ct_date = ct_eastern.strftime("%Y-%m-%d")
+                        if ct_date != date_str:
+                            continue  # Skip — game belongs to a different date
+                    except (ValueError, TypeError):
+                        pass  # If parsing fails, keep the game
+
                 events, signals = await self._process_game(
                     run_id=run_id,
                     hypothesis_id=hypothesis_id,
