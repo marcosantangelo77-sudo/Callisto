@@ -565,7 +565,94 @@ class HypothesisManager:
         }
 
     async def auto_promote(self, hypothesis_id: str) -> dict:
-        """If criteria met, advance to next stage. Returns result."""
+        """If criteria met, advance to next stage. Returns result.
+
+        Hard gates (cannot be bypassed by statistical tests):
+          - backtesting → paper_trading: backtest_events MUST exist for this hypothesis
+            AND meet minimum sample size (>20) with p-value < 0.05
+          - paper_trading → live: paper_trades MUST exist AND show positive ROI
+
+        Auto-rejection:
+          - If a hypothesis has been in 'backtesting' through 5+ evaluate cycles
+            with 0 backtest_events, it is auto-rejected as untestable.
+        """
+        h = await self.get_hypothesis(hypothesis_id)
+        if not h:
+            return {"action": "error", "reason": "Hypothesis not found"}
+
+        status = h["status"]
+
+        # ── Hard data-existence gates ──
+        if status == "backtesting":
+            events = await self._get_backtest_signals(hypothesis_id)
+            if not events:
+                # Check for stale hypothesis: auto-reject if stuck with no data
+                # Use evaluate_cycle_count from model_config to track cycles
+                model_config = h.get("model_config", {})
+                if isinstance(model_config, str):
+                    import json as _json
+                    try:
+                        model_config = _json.loads(model_config)
+                    except (json.JSONDecodeError, TypeError):
+                        model_config = {}
+                eval_cycles = model_config.get("evaluate_cycles", 0) + 1
+                model_config["evaluate_cycles"] = eval_cycles
+                await self._db.execute(
+                    "UPDATE hypotheses SET model_config = ? WHERE hypothesis_id = ?",
+                    (json.dumps(model_config), hypothesis_id),
+                )
+                await self._db.commit()
+
+                if eval_cycles >= 5:
+                    await self.update_status(
+                        hypothesis_id, "rejected",
+                        "auto:no_backtest_data_after_5_cycles",
+                    )
+                    return {
+                        "action": "rejected",
+                        "reason": f"No backtest events after {eval_cycles} evaluation cycles — untestable.",
+                    }
+
+                return {
+                    "action": "held",
+                    "reason": f"No backtest events yet (cycle {eval_cycles}/5 before auto-reject).",
+                }
+
+            # Events exist — now check minimum quality bar
+            n = len(events)
+            if n < 20:
+                return {
+                    "action": "held",
+                    "reason": f"Only {n} backtest events — need at least 20 before promotion.",
+                }
+
+        elif status == "paper_trading":
+            trades = await self._get_paper_trades(hypothesis_id)
+            if not trades:
+                return {
+                    "action": "held",
+                    "reason": "No paper trades exist — cannot promote to live.",
+                }
+            # Check positive ROI
+            returns = []
+            for t in trades:
+                if t.get("actual_result") == "won":
+                    from tools.math_utils import american_to_decimal
+                    dec = american_to_decimal(t["book_odds_american"])
+                    returns.append(dec - 1)
+                elif t.get("actual_result") == "lost":
+                    returns.append(-1.0)
+                elif t.get("actual_result") == "push":
+                    returns.append(0.0)
+            if returns:
+                roi = sum(returns) / len(returns)
+                if roi <= 0:
+                    return {
+                        "action": "held",
+                        "reason": f"Paper trade ROI is {roi:.2%} — need positive ROI for live promotion.",
+                    }
+
+        # ── Standard readiness check (statistical significance, gates, etc.) ──
         readiness = await self.check_promotion_readiness(hypothesis_id)
 
         if readiness.get("should_reject"):

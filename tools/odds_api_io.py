@@ -2,11 +2,24 @@
 Odds-API.io integration — free odds API with 100 requests/hour (72K/month).
 
 https://odds-api.io provides real-time and pre-match odds across major US sports.
-Free tier: 100 requests per hour, no monthly cap — 144x more than our paid OddsPapi
-subscription and the single highest-volume free odds source in the stack.
+Free tier: 100 requests per hour, no monthly cap, but limited to 2 bookmakers
+(currently BetMGM + bet365 NJ for this API key).
+
+API Structure (v3):
+  - GET /v3/sports           -> list of sports ({"name","slug"})
+  - GET /v3/bookmakers       -> list of all bookmakers
+  - GET /v3/events?sport=X&league=Y  -> list of events
+  - GET /v3/odds?eventId=X&bookmakers=Y  -> odds for a single event
+
+IMPORTANT: Unlike "The Odds API" (odds-api.com / v4), this API uses:
+  - Sport slugs like "basketball", "american-football", "ice-hockey"
+  - League slugs like "usa-nba", "usa-nfl", "usa-nhl", "usa-mlb"
+  - Decimal odds only (no American format option)
+  - One eventId per odds request (no batch)
+  - Bookmakers by name (e.g., "BetMGM", "bet365 NJ")
 
 This module normalizes output to match the odds_api.py format so the rest of
-the system can consume it interchangeably with The Odds API, OddsPapi, and DK scraper.
+the system can consume it interchangeably.
 
 Base URL: https://api.odds-api.io/v3
 Auth: API key via query param (env var ODDS_API_IO_KEY)
@@ -16,7 +29,6 @@ import asyncio
 import json
 import logging
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -44,22 +56,23 @@ _lifetime_requests: int = 0
 # Shared client
 _client: Optional[httpx.AsyncClient] = None
 
-# Sport key mapping: canonical odds_api keys -> odds-api.io sport slugs
-# Modeled after The Odds API v4 sport keys (odds-api.io uses the same convention)
-SPORT_KEYS = {
-    "basketball_nba": "basketball_nba",
-    "americanfootball_nfl": "americanfootball_nfl",
-    "icehockey_nhl": "icehockey_nhl",
-    "basketball_ncaab": "basketball_ncaab",
-    "baseball_mlb": "baseball_mlb",
-    "golf_pga": "golf_pga_championship_winner",
-    # Aliases — accept shorthand
-    "nba": "basketball_nba",
-    "nfl": "americanfootball_nfl",
-    "nhl": "icehockey_nhl",
-    "ncaab": "basketball_ncaab",
-    "mlb": "baseball_mlb",
-    "pga": "golf_pga_championship_winner",
+# ---------------------------------------------------------------------------
+# Sport/league mapping: Callisto canonical keys -> odds-api.io slugs
+# ---------------------------------------------------------------------------
+
+SPORT_MAP = {
+    "basketball_nba":       {"sport": "basketball",        "league": "usa-nba"},
+    "americanfootball_nfl": {"sport": "american-football",  "league": "usa-nfl"},
+    "icehockey_nhl":        {"sport": "ice-hockey",         "league": "usa-nhl"},
+    "basketball_ncaab":     {"sport": "basketball",         "league": "usa-ncaa-division-i-national-championship"},
+    "baseball_mlb":         {"sport": "baseball",           "league": "usa-mlb"},
+    "golf_pga":             {"sport": "golf",               "league": None},  # varies per tournament
+    # Aliases
+    "nba":   {"sport": "basketball",       "league": "usa-nba"},
+    "nfl":   {"sport": "american-football", "league": "usa-nfl"},
+    "nhl":   {"sport": "ice-hockey",        "league": "usa-nhl"},
+    "ncaab": {"sport": "basketball",        "league": "usa-ncaa-division-i-national-championship"},
+    "mlb":   {"sport": "baseball",          "league": "usa-mlb"},
 }
 
 # Display titles
@@ -69,11 +82,25 @@ SPORT_TITLES = {
     "icehockey_nhl": "NHL",
     "basketball_ncaab": "NCAAB",
     "baseball_mlb": "MLB",
-    "golf_pga_championship_winner": "PGA Golf",
+    "golf_pga": "PGA Golf",
 }
 
-# Supported markets
-SUPPORTED_MARKETS = {"h2h", "spreads", "totals", "outrights"}
+# Free-tier bookmakers selected for this API key.
+# Use PUT /bookmakers/selected/clear to reset, then select new ones.
+_SELECTED_BOOKMAKERS = "BetMGM,bet365 NJ"
+
+# Bookmaker name -> normalized slug for output
+_BOOKMAKER_SLUG_MAP = {
+    "BetMGM": "betmgm",
+    "bet365 NJ": "bet365",
+    "DraftKings": "draftkings",
+    "FanDuel": "fanduel",
+    "Caesars": "caesars",
+    "BetRivers": "betrivers",
+    "Pinnacle": "pinnacle",
+    "FanDuel NJ": "fanduel",
+    "BetMGM NJ": "betmgm",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +221,6 @@ async def _api_get(endpoint: str, params: Optional[dict] = None) -> dict | list:
     url = f"{ODDS_API_IO_BASE}{endpoint}"
     try:
         resp = await client.get(url, params=params)
-        _update_headers(dict(resp.headers))
         resp.raise_for_status()
         _increment_usage()
         return resp.json()
@@ -210,6 +236,8 @@ async def _api_get(endpoint: str, params: Optional[dict] = None) -> dict | list:
             return {"error": "Invalid ODDS_API_IO_KEY — check your API key"}
         if status == 429:
             return {"error": "Odds-API.io rate limit hit (100/hr). Wait and retry."}
+        if status == 403:
+            return {"error": f"Access denied (bookmaker limit?): {body}"}
         return {"error": f"HTTP {status}: {body or 'Unknown error'}"}
     except httpx.TimeoutException:
         logger.error(f"Odds-API.io timeout on {endpoint}")
@@ -219,30 +247,17 @@ async def _api_get(endpoint: str, params: Optional[dict] = None) -> dict | list:
         return {"error": str(e)}
 
 
-def _update_headers(headers: dict) -> None:
-    """Extract any rate-limit info from response headers (if provided)."""
-    # Some v3 APIs echo remaining quota in headers — capture if present
-    for key in ("x-requests-remaining", "x-ratelimit-remaining"):
-        val = headers.get(key)
-        if val is not None:
-            logger.info(f"Odds-API.io header {key}: {val}")
-
-
 # ---------------------------------------------------------------------------
-# Sport key resolution
+# Odds helpers: decimal -> American conversion
 # ---------------------------------------------------------------------------
 
-def _resolve_sport(sport: str) -> Optional[str]:
-    """Resolve a user-supplied sport key to the odds-api.io sport slug."""
-    # Exact match first
-    if sport in SPORT_KEYS:
-        return SPORT_KEYS[sport]
-    # Case-insensitive fallback
-    lower = sport.lower().strip()
-    if lower in SPORT_KEYS:
-        return SPORT_KEYS[lower]
-    # Already a valid slug (pass through)
-    return sport
+def _decimal_to_american(dec: float) -> int:
+    """Convert decimal odds to American format."""
+    if dec >= 2.0:
+        return round((dec - 1) * 100)
+    elif dec > 1.0:
+        return round(-100 / (dec - 1))
+    return -10000
 
 
 # ---------------------------------------------------------------------------
@@ -273,27 +288,38 @@ async def get_events(sport: str) -> dict:
     Returns:
         Dict with 'events' list in normalized format, plus usage info.
     """
-    sport_slug = _resolve_sport(sport)
+    mapping = SPORT_MAP.get(sport, SPORT_MAP.get(sport.lower().strip()))
+    if not mapping:
+        return {"events": [], "error": f"Unknown sport: {sport}"}
 
-    data = await _api_get(f"/sports/{sport_slug}/events")
+    params = {"sport": mapping["sport"]}
+    if mapping.get("league"):
+        params["league"] = mapping["league"]
+
+    data = await _api_get("/events", params)
     if isinstance(data, dict) and "error" in data:
         return {"events": [], **data}
 
     events_raw = data if isinstance(data, list) else data.get("data", [])
 
+    # Filter to pending/live only (exclude settled and cancelled)
     events = []
     for ev in events_raw:
+        status = ev.get("status", "")
+        if status in ("settled", "cancelled", "postponed"):
+            continue
         events.append({
-            "id": ev.get("id", ""),
-            "sport_key": ev.get("sport_key", sport_slug),
-            "sport_title": ev.get("sport_title", SPORT_TITLES.get(sport_slug, sport)),
-            "home_team": ev.get("home_team", ""),
-            "away_team": ev.get("away_team", ""),
-            "commence_time": ev.get("commence_time", ""),
+            "id": str(ev.get("id", "")),
+            "sport_key": sport,
+            "sport_title": SPORT_TITLES.get(sport, sport),
+            "home_team": ev.get("home", ""),
+            "away_team": ev.get("away", ""),
+            "commence_time": ev.get("date", ""),
+            "status": status,
         })
 
     return {
-        "sport": sport_slug,
+        "sport": sport,
         "event_count": len(events),
         "events": events,
         "source": "odds_api_io",
@@ -310,47 +336,112 @@ async def get_odds(
     """
     Get live and upcoming odds for a sport.
 
-    Output format matches tools/odds_api.get_odds() exactly so the rest of
-    the system can consume it interchangeably.
+    Fetches pending events, then fetches odds for each one.
+    The free tier is limited to 2 bookmakers (currently BetMGM + bet365 NJ).
 
-    Args:
-        sport: Sport key ('basketball_nba', 'americanfootball_nfl', etc.)
-        regions: Bookmaker regions, comma-separated ('us', 'us,uk', 'eu')
-        markets: Market types, comma-separated ('h2h', 'spreads', 'totals', 'outrights')
-        odds_format: 'american' or 'decimal'
+    Costs: 1 request for events + 1 per game with odds.
+    Typical daily NBA slate (6-10 games) = 7-11 requests = well within 100/hr.
 
-    Returns:
-        Dict with 'sport', 'game_count', 'games' list, and 'credits' info.
+    Output format matches tools/odds_api.get_odds() exactly.
     """
-    sport_slug = _resolve_sport(sport)
+    mapping = SPORT_MAP.get(sport, SPORT_MAP.get(sport.lower().strip()))
+    if not mapping:
+        return {"games": [], "error": f"Unknown sport: {sport}"}
 
-    params = {
-        "regions": regions,
-        "markets": markets,
-        "oddsFormat": odds_format,
-        "dateFormat": "iso",
-    }
+    # Step 1: Get pending events (1 request)
+    events_result = await get_events(sport)
+    if events_result.get("error"):
+        return {"games": [], **events_result}
 
-    data = await _api_get(f"/sports/{sport_slug}/odds", params)
-    if isinstance(data, dict) and "error" in data:
-        return {"games": [], **data}
+    pending_events = events_result.get("events", [])
+    if not pending_events:
+        logger.info(f"Odds-API.io {sport}: no pending events")
+        return {
+            "sport": sport,
+            "game_count": 0,
+            "games": [],
+            "source": "odds_api_io",
+            "credits": _credits_dict(),
+        }
 
-    games_raw = data if isinstance(data, list) else data.get("data", [])
-    games = _normalize_games(games_raw, sport_slug)
+    # Filter to today's and tomorrow's games only (not 2+ weeks out).
+    # This is critical: NBA has 150+ pending events spanning weeks. We only
+    # want the immediate slate to conserve the 100 req/hr budget.
+    from datetime import timedelta
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc + timedelta(hours=36)
+    today_events = []
+    for ev in pending_events:
+        try:
+            ev_date = datetime.fromisoformat(ev.get("commence_time", "").replace("Z", "+00:00"))
+            if ev_date <= cutoff:
+                today_events.append(ev)
+        except (ValueError, TypeError):
+            # If we can't parse the date, include it (safe default)
+            today_events.append(ev)
 
-    logger.info(f"Odds-API.io {sport_slug}: {len(games)} games, {markets}")
+    pending_events = today_events
+    if not pending_events:
+        logger.info(f"Odds-API.io {sport}: no games within 36h window")
+        return {
+            "sport": sport,
+            "game_count": 0,
+            "games": [],
+            "source": "odds_api_io",
+            "credits": _credits_dict(),
+        }
+
+    # Budget check: we need 1 request per event
+    budget_err = _check_budget(cost=len(pending_events))
+    if budget_err:
+        # Try to fetch as many as we can afford
+        remaining = max(0, _HOURLY_LIMIT - _hourly_requests)
+        if remaining == 0:
+            return {"games": [], "error": budget_err}
+        pending_events = pending_events[:remaining]
+        logger.warning(
+            f"Odds-API.io budget tight — fetching only {len(pending_events)} "
+            f"of {events_result['event_count']} events"
+        )
+
+    # Step 2: Fetch odds for each event concurrently (N requests)
+    tasks = [
+        _fetch_event_odds(ev["id"], ev, sport)
+        for ev in pending_events
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    games = []
+    for result in results:
+        if isinstance(result, Exception):
+            logger.warning(f"Odds-API.io event fetch error: {result}")
+            continue
+        if result and "error" not in result:
+            games.append(result)
+
+    logger.info(f"Odds-API.io {sport}: {len(games)} games with odds")
     return {
-        "sport": sport_slug,
+        "sport": sport,
         "game_count": len(games),
         "games": games,
         "source": "odds_api_io",
-        "credits": {
-            "remaining_this_hour": max(0, _HOURLY_LIMIT - _hourly_requests),
-            "used_this_hour": _hourly_requests,
-            "hourly_limit": _HOURLY_LIMIT,
-            "api_key_set": bool(ODDS_API_IO_KEY),
-        },
+        "credits": _credits_dict(),
     }
+
+
+async def _fetch_event_odds(event_id: str, event_info: dict, sport: str) -> Optional[dict]:
+    """Fetch and normalize odds for a single event."""
+    params = {
+        "eventId": event_id,
+        "bookmakers": _SELECTED_BOOKMAKERS,
+    }
+
+    data = await _api_get("/odds", params)
+    if isinstance(data, dict) and "error" in data:
+        logger.debug(f"Odds-API.io no odds for event {event_id}: {data.get('error')}")
+        return None
+
+    return _normalize_event_odds(data, event_info, sport)
 
 
 async def get_event_odds(
@@ -361,46 +452,31 @@ async def get_event_odds(
     odds_format: str = "american",
 ) -> dict:
     """
-    Get odds for a single event. Useful for tracking line movement on a specific game.
+    Get odds for a single event by ID.
 
     Args:
         sport: Sport key
-        event_id: Event ID (from get_events or get_odds)
-        regions: Bookmaker regions
-        markets: Market types
-        odds_format: 'american' or 'decimal'
-
-    Returns:
-        Single game dict in the standard format, or error dict.
+        event_id: Event ID from get_events()
     """
-    sport_slug = _resolve_sport(sport)
-
     params = {
-        "regions": regions,
-        "markets": markets,
-        "oddsFormat": odds_format,
-        "dateFormat": "iso",
+        "eventId": event_id,
+        "bookmakers": _SELECTED_BOOKMAKERS,
     }
 
-    data = await _api_get(f"/sports/{sport_slug}/events/{event_id}/odds", params)
+    data = await _api_get("/odds", params)
     if isinstance(data, dict) and "error" in data:
         return data
 
-    # Single event response — normalize it
-    if isinstance(data, dict):
-        game = _normalize_single_game(data, sport_slug)
-        return game
+    event_info = {
+        "id": event_id,
+        "sport_key": sport,
+        "home_team": "",
+        "away_team": "",
+        "commence_time": "",
+    }
 
-    # If API returns a list, find our event
-    if isinstance(data, list):
-        for item in data:
-            if item.get("id") == event_id:
-                return _normalize_single_game(item, sport_slug)
-        # Return first if only one result
-        if len(data) == 1:
-            return _normalize_single_game(data[0], sport_slug)
-
-    return {"error": f"Event {event_id} not found in response"}
+    result = _normalize_event_odds(data, event_info, sport)
+    return result if result else {"error": f"No odds for event {event_id}"}
 
 
 async def get_scores(
@@ -410,41 +486,40 @@ async def get_scores(
     """
     Get live scores and recently completed games.
 
-    Args:
-        sport: Sport key
-        days_from: Number of days back to include completed games (1-3)
-
-    Returns:
-        Dict with 'games' list containing score data.
+    Uses the events endpoint and filters for settled games with scores.
     """
-    sport_slug = _resolve_sport(sport)
+    mapping = SPORT_MAP.get(sport, SPORT_MAP.get(sport.lower().strip()))
+    if not mapping:
+        return {"games": [], "error": f"Unknown sport: {sport}"}
 
-    params = {
-        "daysFrom": days_from,
-        "dateFormat": "iso",
-    }
+    params = {"sport": mapping["sport"]}
+    if mapping.get("league"):
+        params["league"] = mapping["league"]
 
-    data = await _api_get(f"/sports/{sport_slug}/scores", params)
+    data = await _api_get("/events", params)
     if isinstance(data, dict) and "error" in data:
         return {"games": [], **data}
 
-    games_raw = data if isinstance(data, list) else data.get("data", [])
+    events_raw = data if isinstance(data, list) else []
 
     games = []
-    for g in games_raw:
+    for g in events_raw:
+        scores = g.get("scores")
+        if scores is None:
+            continue
         games.append({
-            "id": g.get("id", ""),
-            "sport_key": g.get("sport_key", sport_slug),
-            "home_team": g.get("home_team", ""),
-            "away_team": g.get("away_team", ""),
-            "commence_time": g.get("commence_time", ""),
-            "completed": g.get("completed", False),
-            "scores": g.get("scores"),
-            "last_update": g.get("last_update", ""),
+            "id": str(g.get("id", "")),
+            "sport_key": sport,
+            "home_team": g.get("home", ""),
+            "away_team": g.get("away", ""),
+            "commence_time": g.get("date", ""),
+            "completed": g.get("status") == "settled",
+            "scores": scores,
+            "last_update": "",
         })
 
     return {
-        "sport": sport_slug,
+        "sport": sport,
         "game_count": len(games),
         "games": games,
         "source": "odds_api_io",
@@ -456,23 +531,8 @@ async def get_outrights(
     regions: str = "us",
     odds_format: str = "american",
 ) -> dict:
-    """
-    Get outright/futures odds (e.g., PGA tournament winner, conference winner).
-
-    Args:
-        sport: Sport key — most useful for golf_pga
-        regions: Bookmaker regions
-        odds_format: 'american' or 'decimal'
-
-    Returns:
-        Dict with games/events and outright odds.
-    """
-    return await get_odds(
-        sport=sport,
-        regions=regions,
-        markets="outrights",
-        odds_format=odds_format,
-    )
+    """Get outright/futures odds."""
+    return await get_odds(sport=sport, regions=regions, markets="outrights", odds_format=odds_format)
 
 
 # ---------------------------------------------------------------------------
@@ -487,34 +547,30 @@ async def snapshot_all_sports(
     """
     Pull odds for all supported major sports in one call batch.
 
-    Uses 5-6 of the 100 hourly requests. Returns a dict keyed by sport.
+    Budget: ~1 events call + N odds calls per sport. For a typical day
+    (NBA 10, NHL 8, MLB 15 = 33 games + 3 event calls = ~36 requests).
+    Well within 100/hr limit.
     """
     sports = [
         "basketball_nba",
-        "americanfootball_nfl",
         "icehockey_nhl",
-        "basketball_ncaab",
         "baseball_mlb",
     ]
 
-    budget_err = _check_budget(cost=len(sports))
+    budget_err = _check_budget(cost=len(sports) * 5)
     if budget_err:
         return {"error": budget_err}
 
-    tasks = [
-        get_odds(sport=s, regions=regions, markets=markets, odds_format=odds_format)
-        for s in sports
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
+    # Run sequentially to avoid hammering the API
     snapshot = {}
     total_games = 0
-    for sport, result in zip(sports, results):
-        if isinstance(result, Exception):
-            snapshot[sport] = {"error": str(result), "games": []}
-        else:
-            snapshot[sport] = result
+    for s in sports:
+        try:
+            result = await get_odds(sport=s, regions=regions, markets=markets, odds_format=odds_format)
+            snapshot[s] = result
             total_games += result.get("game_count", 0)
+        except Exception as e:
+            snapshot[s] = {"error": str(e), "games": []}
 
     return {
         "total_games": total_games,
@@ -525,125 +581,203 @@ async def snapshot_all_sports(
 
 
 # ---------------------------------------------------------------------------
-# Normalization helpers
+# Normalization: odds-api.io format -> Callisto standard format
 # ---------------------------------------------------------------------------
 
-def _normalize_games(games_raw: list, sport_slug: str) -> list[dict]:
+def _normalize_event_odds(raw: dict, event_info: dict, sport: str) -> Optional[dict]:
     """
-    Normalize a list of games from the API response to the standard format.
+    Normalize a single event's odds response from odds-api.io to the
+    standard Callisto format.
 
-    Target format (matching tools/odds_api.py output):
+    odds-api.io response structure:
     {
-        "id": "...",
-        "sport_key": "basketball_nba",
-        "sport_title": "NBA",
-        "home_team": "...",
-        "away_team": "...",
-        "commence_time": "...",
-        "bookmakers": [
-            {
-                "key": "draftkings",
-                "title": "DraftKings",
-                "last_update": "...",
-                "markets": [
-                    {
-                        "key": "h2h",
-                        "last_update": "...",
-                        "outcomes": [
-                            {"name": "Team A", "price": -110},
-                            {"name": "Team B", "price": +105}
-                        ]
-                    }
-                ]
-            }
-        ]
+        "id": 62924773,
+        "home": "Phoenix Suns",
+        "away": "Denver Nuggets",
+        "date": "2026-03-25T03:00:00Z",
+        "status": "pending",
+        "bookmakers": {
+            "BetMGM": [
+                {"name": "ML", "updatedAt": "...", "odds": [{"home": "2.95", "away": "1.43"}]},
+                {"name": "Spread", "updatedAt": "...", "odds": [{"hdp": 6.5, "home": "1.91", "away": "1.91"}]},
+                {"name": "Totals", "updatedAt": "...", "odds": [{"hdp": 226.5, "over": "1.87", "under": "1.95"}]}
+            ]
+        }
     }
     """
-    games = []
-    for g in games_raw:
-        game = _normalize_single_game(g, sport_slug)
-        if game and "error" not in game:
-            games.append(game)
-    return games
+    if not raw or not isinstance(raw, dict):
+        return None
 
+    home_team = raw.get("home", event_info.get("home_team", ""))
+    away_team = raw.get("away", event_info.get("away_team", ""))
+    commence_time = raw.get("date", event_info.get("commence_time", ""))
 
-def _normalize_single_game(raw: dict, sport_slug: str) -> dict:
-    """Normalize a single game/event from the API response."""
     game = {
-        "id": raw.get("id", ""),
-        "sport_key": raw.get("sport_key", sport_slug),
-        "sport_title": raw.get("sport_title", SPORT_TITLES.get(sport_slug, sport_slug)),
-        "home_team": raw.get("home_team", ""),
-        "away_team": raw.get("away_team", ""),
-        "commence_time": raw.get("commence_time", ""),
+        "id": str(raw.get("id", event_info.get("id", ""))),
+        "sport_key": sport,
+        "sport_title": SPORT_TITLES.get(sport, sport),
+        "home_team": home_team,
+        "away_team": away_team,
+        "commence_time": commence_time,
         "bookmakers": [],
     }
 
-    for bm in raw.get("bookmakers", []):
-        normalized_bm = {
-            "key": bm.get("key", ""),
-            "title": bm.get("title", _bookmaker_title(bm.get("key", ""))),
-            "last_update": bm.get("last_update", ""),
-            "markets": [],
-        }
+    raw_bookmakers = raw.get("bookmakers", {})
+    if not isinstance(raw_bookmakers, dict):
+        return None
 
-        for mkt in bm.get("markets", []):
-            market_key = mkt.get("key", "")
-            outcomes = []
-            for o in mkt.get("outcomes", []):
-                entry = {
-                    "name": o.get("name", ""),
-                    "price": o.get("price", 0),
-                }
-                if "point" in o and o["point"] is not None:
-                    entry["point"] = o["point"]
-                if "description" in o and o["description"]:
-                    entry["description"] = o["description"]
-                outcomes.append(entry)
+    for bm_name, bm_markets in raw_bookmakers.items():
+        bm_slug = _BOOKMAKER_SLUG_MAP.get(bm_name, bm_name.lower().replace(" ", "_"))
+        normalized_markets = []
+        last_update = ""
 
-            if outcomes:
-                normalized_bm["markets"].append({
-                    "key": market_key,
-                    "last_update": mkt.get("last_update", ""),
-                    "outcomes": outcomes,
-                })
+        if not isinstance(bm_markets, list):
+            continue
 
-        if normalized_bm["markets"]:
-            game["bookmakers"].append(normalized_bm)
+        for mkt in bm_markets:
+            mkt_name = mkt.get("name", "").lower().strip()
+            updated_at = mkt.get("updatedAt", "")
+            if updated_at:
+                last_update = updated_at
+
+            odds_list = mkt.get("odds", [])
+            if not odds_list:
+                continue
+
+            # Classify market type
+            if mkt_name in ("ml", "moneyline", "1x2", "winner"):
+                # Moneyline — pick the primary line (first entry)
+                odds_entry = odds_list[0]
+                home_dec = _safe_float(odds_entry.get("home"))
+                away_dec = _safe_float(odds_entry.get("away"))
+                if home_dec and away_dec:
+                    normalized_markets.append({
+                        "key": "h2h",
+                        "last_update": updated_at,
+                        "outcomes": [
+                            {"name": home_team, "price": _decimal_to_american(home_dec)},
+                            {"name": away_team, "price": _decimal_to_american(away_dec)},
+                        ],
+                    })
+
+            elif mkt_name in ("spread", "spreads", "handicap", "point spread"):
+                # Spreads — find the primary spread (closest to the main line)
+                # Pick the entry with the tightest odds or the middle index
+                best = _pick_primary_spread(odds_list, home_team, away_team)
+                if best:
+                    normalized_markets.append({
+                        "key": "spreads",
+                        "last_update": updated_at,
+                        "outcomes": best,
+                    })
+
+            elif mkt_name in ("totals", "total", "over/under", "total points"):
+                # Totals — find the primary total
+                best = _pick_primary_total(odds_list)
+                if best:
+                    normalized_markets.append({
+                        "key": "totals",
+                        "last_update": updated_at,
+                        "outcomes": best,
+                    })
+
+        if normalized_markets:
+            game["bookmakers"].append({
+                "key": bm_slug,
+                "title": bm_name,
+                "last_update": last_update,
+                "markets": normalized_markets,
+            })
+
+    if not game["bookmakers"]:
+        return None
 
     return game
 
 
-def _bookmaker_title(slug: str) -> str:
-    """Convert bookmaker slug to display title."""
-    titles = {
-        "pinnacle": "Pinnacle",
-        "bet365": "Bet365",
-        "draftkings": "DraftKings",
-        "fanduel": "FanDuel",
-        "betmgm": "BetMGM",
-        "caesars": "Caesars",
-        "bovada": "Bovada",
-        "betrivers": "BetRivers",
-        "unibet": "Unibet",
-        "williamhill": "William Hill",
-        "sbobet": "SBOBet",
-        "betfair": "Betfair",
-        "mybookie": "MyBookie",
-        "barstool": "Barstool",
-        "betonlineag": "BetOnline.ag",
-        "lowvig": "LowVig.ag",
-        "betus": "BetUS",
-        "superbook": "SuperBook",
-        "wynnbet": "WynnBET",
-        "pointsbetus": "PointsBet US",
-        "betparx": "betPARX",
-        "hardrock": "Hard Rock Bet",
-        "espnbet": "ESPN BET",
-        "fliff": "Fliff",
-        "fanatics": "Fanatics",
+def _pick_primary_spread(odds_list: list, home: str, away: str) -> Optional[list]:
+    """
+    From a list of spread entries, pick the primary (main) spread.
+    The primary spread is typically the one closest to -110/-110 (even odds).
+    """
+    best_entry = None
+    best_score = float("inf")
+
+    for entry in odds_list:
+        hdp = entry.get("hdp")
+        home_dec = _safe_float(entry.get("home"))
+        away_dec = _safe_float(entry.get("away"))
+        if hdp is None or not home_dec or not away_dec:
+            continue
+        # Score: how close to even (1.91 is -110 in decimal)
+        score = abs(home_dec - 1.91) + abs(away_dec - 1.91)
+        if score < best_score:
+            best_score = score
+            best_entry = entry
+
+    if not best_entry:
+        return None
+
+    hdp = float(best_entry["hdp"])
+    home_dec = _safe_float(best_entry["home"])
+    away_dec = _safe_float(best_entry["away"])
+
+    return [
+        {"name": home, "price": _decimal_to_american(home_dec), "point": hdp},
+        {"name": away, "price": _decimal_to_american(away_dec), "point": -hdp},
+    ]
+
+
+def _pick_primary_total(odds_list: list) -> Optional[list]:
+    """
+    From a list of total entries, pick the primary (main) total.
+    Same logic: closest to -110/-110.
+    """
+    best_entry = None
+    best_score = float("inf")
+
+    for entry in odds_list:
+        hdp = entry.get("hdp")
+        over_dec = _safe_float(entry.get("over"))
+        under_dec = _safe_float(entry.get("under"))
+        if hdp is None or not over_dec or not under_dec:
+            continue
+        score = abs(over_dec - 1.91) + abs(under_dec - 1.91)
+        if score < best_score:
+            best_score = score
+            best_entry = entry
+
+    if not best_entry:
+        return None
+
+    hdp = float(best_entry["hdp"])
+    over_dec = _safe_float(best_entry["over"])
+    under_dec = _safe_float(best_entry["under"])
+
+    return [
+        {"name": "Over", "price": _decimal_to_american(over_dec), "point": hdp},
+        {"name": "Under", "price": _decimal_to_american(under_dec), "point": hdp},
+    ]
+
+
+def _safe_float(val) -> Optional[float]:
+    """Safely convert a value to float."""
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _credits_dict() -> dict:
+    """Return the credits/usage dict in standard format."""
+    return {
+        "remaining_this_hour": max(0, _HOURLY_LIMIT - _hourly_requests),
+        "used_this_hour": _hourly_requests,
+        "hourly_limit": _HOURLY_LIMIT,
+        "api_key_set": bool(ODDS_API_IO_KEY),
     }
-    return titles.get(slug, slug.replace("_", " ").title())
 
 
 # ---------------------------------------------------------------------------
@@ -656,14 +790,6 @@ def find_best_line(game: dict, market: str = "spreads", team: str = "") -> dict:
 
     Same interface as odds_api.find_best_line() — works with any game dict
     in the standard format regardless of source.
-
-    Args:
-        game: A game dict from get_odds()
-        market: 'h2h', 'spreads', or 'totals'
-        team: Team name to find best line for (for spreads/h2h)
-
-    Returns:
-        Dict with best line, worst line, spread across books, and all lines.
     """
     bookmaker_lines = []
     for bm in game.get("bookmakers", []):

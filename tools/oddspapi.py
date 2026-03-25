@@ -255,11 +255,12 @@ async def get_odds(
         return {"error": f"Unknown sport: {sport}", "games": []}
 
     params = {
-        "tournamentId": tournament_id,
+        "tournamentIds": tournament_id,
         "oddsFormat": odds_format,
+        "bookmaker": "pinnacle",  # Required param, default to sharpest book
     }
     if bookmakers:
-        params["bookmakers"] = bookmakers
+        params["bookmaker"] = bookmakers
 
     data = await _api_get("/odds-by-tournaments", params)
     if "error" in data:
@@ -307,12 +308,11 @@ async def get_historical_odds(
         return {"error": f"Unknown sport: {sport}", "games": []}
 
     params = {
-        "tournamentId": tournament_id,
+        "tournamentIds": tournament_id,
         "fromDate": f"{date}T00:00:00Z",
         "toDate": f"{date}T23:59:59Z",
+        "bookmaker": bookmakers or "pinnacle",
     }
-    if bookmakers:
-        params["bookmakers"] = bookmakers
 
     data = await _api_get("/historical-odds", params)
     if "error" in data:

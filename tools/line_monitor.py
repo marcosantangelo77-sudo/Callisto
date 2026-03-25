@@ -78,6 +78,10 @@ class LineMonitor:
         self._snapshots: dict[str, dict] = {}  # sport -> last snapshot
         self._alerts: list[dict] = []  # Recent movement alerts
         self._latest_edge_reports: dict[str, dict] = {}  # sport -> latest edge scan
+        # Self-healing: track consecutive all-source failures per sport.
+        # Alert via Telegram only after 3+ consecutive failures.
+        self._consecutive_failures: dict[str, int] = {}  # sport -> count
+        self._FAILURE_ALERT_THRESHOLD = 3
 
     async def initialize(self) -> None:
         """Create tables for odds snapshots and alerts."""
@@ -323,8 +327,27 @@ class LineMonitor:
 
         # Merge all successful sources
         if not scraped:
-            logger.warning(f"All fallback sources failed for {sport} — skipping snapshot")
+            # Track consecutive failures for self-healing alerts
+            self._consecutive_failures[sport] = self._consecutive_failures.get(sport, 0) + 1
+            count = self._consecutive_failures[sport]
+            logger.warning(
+                f"All fallback sources failed for {sport} — skipping snapshot "
+                f"(consecutive failures: {count})"
+            )
+            if count >= self._FAILURE_ALERT_THRESHOLD:
+                try:
+                    await telegram.alert_system(
+                        f"ALL odds sources failing for {sport} "
+                        f"({count} consecutive cycles). Check DK, FD, Action Network, "
+                        f"Odds-API.io connectivity.",
+                        is_error=True,
+                    )
+                except Exception:
+                    pass  # Don't let Telegram errors break the monitor
             return
+
+        # Reset consecutive failure counter on success
+        self._consecutive_failures[sport] = 0
 
         sources = list(scraped.values())
         new_snapshot = sources[0]

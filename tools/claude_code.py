@@ -127,7 +127,16 @@ def is_available() -> bool:
     attempting escalation. If unavailable, skip Claude-dependent
     work and continue with local-only phases.
     """
-    global _available, _cooldown_until
+    global _available, _cooldown_until, _call_count, _last_reset
+
+    # Reset tracking window if expired — this MUST happen before the
+    # call count check, otherwise the counter stays stuck at max and
+    # no new calls are ever attempted (which also prevents _track_call
+    # from running and resetting the window).
+    now = time.monotonic()
+    if now - _last_reset > _TRACKING_WINDOW:
+        _call_count = 0
+        _last_reset = now
 
     if _available:
         # Soft cap: don't exceed hourly call limit
@@ -178,16 +187,19 @@ async def claude_code_query(
     system_context: str = "",
     timeout: Optional[int] = None,
     skip_availability_check: bool = False,
+    hermes_caller: str = "default",
 ) -> dict:
     """
     Send a query to Claude Code CLI and return the response.
 
     Uses `claude --print` for non-interactive single-shot output.
     Handles rate limits with exponential backoff.
+    Hermes bridge auto-injects persistent memory context.
 
     Args:
         prompt: The query/analysis request for Claude.
         system_context: Optional context to prepend.
+        hermes_caller: Caller type for Hermes priority ('hypothesis_gen', 'deep_work', 'edge_analysis', 'telegram').
         timeout: Override default timeout in seconds.
         skip_availability_check: If True, attempt even during cooldown.
 
@@ -214,8 +226,22 @@ async def claude_code_query(
 
     timeout = timeout or CLAUDE_TIMEOUT
 
-    # Build the full prompt with context
+    # Hermes bridge — inject persistent memory into every Claude call
+    # Context is prioritized based on what's calling (hypothesis gen vs deep work vs edge analysis)
+    hermes_context = ""
+    try:
+        from tools.hermes_memory import get_hermes_memory
+        hermes = get_hermes_memory()
+        hermes_context = await hermes.get_memory_context(caller=hermes_caller)
+        if hermes_context:
+            logger.info(f"Hermes bridge [{hermes_caller}]: injecting {len(hermes_context)} chars")
+    except Exception as e:
+        logger.debug(f"Hermes bridge unavailable: {e}")
+
+    # Build the full prompt with Hermes memory + caller context + prompt
     full_prompt = ""
+    if hermes_context:
+        full_prompt += f"{hermes_context}\n\n"
     if system_context:
         full_prompt += f"{system_context}\n\n"
     full_prompt += prompt

@@ -396,3 +396,79 @@ class HistoricalOddsFetcher:
             (sport, date, event_id, market_type, json.dumps(data), credits_cost),
         )
         await self._db.commit()
+
+    async def bridge_snapshots_to_cache(self) -> dict:
+        """Bridge odds_snapshots into historical_odds_cache.
+
+        The odds_snapshots table has live multi-book odds data collected by
+        the monitor. Convert these into historical_odds_cache format so the
+        backtest engine can use them.
+
+        Only processes snapshots not already represented in the cache.
+        Returns summary of what was bridged.
+        """
+        if not self._db:
+            return {"error": "DB not initialized", "bridged": 0}
+
+        # Find snapshot dates/sports NOT already in historical_odds_cache
+        cursor = await self._db.execute(
+            """
+            SELECT os.sport, os.timestamp, os.snapshot_json, os.game_count
+            FROM odds_snapshots os
+            WHERE os.game_count > 0
+            AND NOT EXISTS (
+                SELECT 1 FROM historical_odds_cache hoc
+                WHERE hoc.sport = os.sport
+                AND hoc.snapshot_date = SUBSTR(os.timestamp, 1, 10)
+                AND hoc.market_type = 'h2h,spreads,totals'
+                AND hoc.event_id IS NULL
+            )
+            ORDER BY os.timestamp
+            """
+        )
+        rows = await cursor.fetchall()
+
+        if not rows:
+            logger.debug("bridge_snapshots_to_cache: no new snapshots to bridge")
+            return {"bridged": 0, "skipped": 0}
+
+        # Group by (sport, date) — take the snapshot with the most games per group
+        best_per_day: dict[tuple[str, str], tuple[int, str]] = {}
+        for sport, timestamp, snapshot_json, game_count in rows:
+            date_str = timestamp[:10]  # "2026-03-22"
+            key = (sport, date_str)
+            if key not in best_per_day or game_count > best_per_day[key][0]:
+                best_per_day[key] = (game_count, snapshot_json)
+
+        bridged = 0
+        for (sport, date_str), (game_count, snapshot_json) in best_per_day.items():
+            try:
+                snapshot = json.loads(snapshot_json)
+                games = snapshot.get("games", [])
+                if not games:
+                    continue
+
+                # Reformat to match historical_odds_cache response_json format
+                cache_entry = {
+                    "sport": sport,
+                    "date": date_str,
+                    "timestamp": f"{date_str}T00:00:00Z",
+                    "games": games,
+                    "game_count": len(games),
+                    "source": "bridged_from_odds_snapshots",
+                }
+
+                await self._db.execute(
+                    "INSERT OR IGNORE INTO historical_odds_cache "
+                    "(sport, snapshot_date, event_id, market_type, response_json, credits_cost) "
+                    "VALUES (?, ?, NULL, ?, ?, 0)",
+                    (sport, date_str, "h2h,spreads,totals", json.dumps(cache_entry)),
+                )
+                bridged += 1
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning(f"bridge_snapshots_to_cache: failed to parse snapshot for {sport} {date_str}: {e}")
+                continue
+
+        await self._db.commit()
+        logger.info(f"bridge_snapshots_to_cache: bridged {bridged} snapshot-days into historical_odds_cache")
+        return {"bridged": bridged, "total_candidates": len(rows)}

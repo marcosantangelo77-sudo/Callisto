@@ -1,24 +1,31 @@
 """
-Hermes persistent memory — gives local agents memory across sessions.
+Hermes — Callisto's nervous system. Persistent memory + bidirectional bridge.
 
-Without this, every AGP session starts from scratch. The Architect doesn't know
-what edges it found yesterday, which bets won, or what patterns it's seen.
+Hermes is NOT just a context builder. It is the continuous memory layer that:
+1. READS state → builds context for every Claude call (identity, bets, edges, research, code)
+2. WRITES back ← Claude stores discoveries, learnings, and insights after each call
+3. PRIORITIZES sections based on caller intent (hypothesis gen vs edge analysis vs deep work)
+4. NOTIFIES across sessions via a message queue (cross-session awareness)
 
-This module builds a compressed memory context that gets injected into the
-Architect's system prompt on every inference call. The agents carry their
-history at all times, no Claude Code needed.
+Every Claude CLI subprocess gets Hermes context automatically via the bridge
+in claude_code.py. No call is stateless. No session is blind.
 
-Memory is organized into:
-1. EDGE HISTORY    — recent edges found, which were real vs noise
-2. BET OUTCOMES    — win/loss/CLV track record, bankroll state
-3. LEARNED PATTERNS — which markets/books/teams produce consistent edges
-4. ACTIVE STATE    — current open bets, today's games, active alerts
-5. SYSTEM IDENTITY — who Callisto is, what it's trying to do
+Memory sections:
+1. IDENTITY       — who Callisto is, rules, capabilities
+2. BETS           — bankroll, open bets, P/L, CLV track record
+3. EDGES          — recent +EV opportunities, analysis sessions
+4. PATTERNS       — learned market/book patterns from operation
+5. ACTIVE STATE   — open bets, current monitoring
+6. RESEARCH       — hypothesis counts, top tested, recently disproven
+7. CODE CHANGES   — git commits, uncommitted modifications (cross-session awareness)
+8. LEARNINGS      — discoveries Claude has made (bidirectional memory)
+9. MESSAGES       — cross-session notification queue
 """
 
 import json
 import logging
 import os
+import subprocess
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -28,94 +35,272 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logger = logging.getLogger("callisto.hermes_memory")
+logger = logging.getLogger("callisto.hermes")
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+MESSAGES_FILE = os.path.join(os.path.dirname(DB_PATH), "hermes_messages.json")
 
-# Memory budget — must fit in Architect's 8192 context alongside the query + tools
-MAX_MEMORY_TOKENS_APPROX = 2000  # ~2000 tokens ≈ ~1500 words
+# Context caller types — determines which sections get priority
+CALLER_HYPOTHESIS_GEN = "hypothesis_gen"
+CALLER_DEEP_WORK = "deep_work"
+CALLER_EDGE_ANALYSIS = "edge_analysis"
+CALLER_TELEGRAM = "telegram"
+CALLER_DEFAULT = "default"
 
 
 class HermesMemory:
-    """Builds and maintains the persistent memory context for local agents."""
+    """Callisto's nervous system — persistent, bidirectional, context-aware memory."""
 
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
-        self._cache: Optional[str] = None
-        self._cache_time: float = 0
-        self._cache_ttl: float = 120  # Refresh every 2 minutes
+        self._cache: dict[str, str] = {}  # caller_type -> cached context
+        self._cache_time: dict[str, float] = {}
+        self._cache_ttl: float = 90  # Refresh every 90 seconds
+        self._db_initialized = False
 
-    async def get_memory_context(self, force_refresh: bool = False) -> str:
+    async def _ensure_tables(self, db: aiosqlite.Connection) -> None:
+        """Create Hermes tables if they don't exist."""
+        if self._db_initialized:
+            return
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS hermes_learnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key TEXT NOT NULL UNIQUE,
+                value TEXT NOT NULL,
+                learned_at TEXT NOT NULL,
+                confidence REAL DEFAULT 0.5,
+                occurrences INTEGER DEFAULT 1,
+                source TEXT DEFAULT 'claude'
+            );
+            CREATE TABLE IF NOT EXISTS hermes_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                message TEXT NOT NULL,
+                read INTEGER DEFAULT 0
+            );
+        """)
+        await db.commit()
+        self._db_initialized = True
+
+    # ──────────────────────────────────────────────────
+    # READ: Build context for Claude calls
+    # ──────────────────────────────────────────────────
+
+    async def get_memory_context(
+        self,
+        caller: str = CALLER_DEFAULT,
+        force_refresh: bool = False,
+    ) -> str:
         """
-        Build the full memory context string for injection into agent prompts.
+        Build prioritized memory context for injection into Claude prompts.
 
-        Returns a compact text block that fits in ~2000 tokens.
-        Cached for 2 minutes to avoid hitting DB on every inference call.
+        Args:
+            caller: What's calling — determines section priority/ordering.
+            force_refresh: Bypass cache.
+
+        Returns:
+            Compact text block with all relevant memory sections.
         """
         now = time.time()
-        if self._cache and not force_refresh and (now - self._cache_time) < self._cache_ttl:
-            return self._cache
+        cache_key = caller
+        if (not force_refresh
+                and cache_key in self._cache
+                and (now - self._cache_time.get(cache_key, 0)) < self._cache_ttl):
+            return self._cache[cache_key]
 
         try:
             async with aiosqlite.connect(self.db_path) as db:
+                await self._ensure_tables(db)
+
+                # Build all sections
+                all_sections = {
+                    "identity": self._build_identity(),
+                    "bets": await self._build_bet_history(db),
+                    "edges": await self._build_edge_history(db),
+                    "patterns": await self._build_learned_patterns(db),
+                    "active": await self._build_active_state(db),
+                    "research": await self._build_research_state(db),
+                    "learnings": await self._build_learnings(db),
+                    "messages": await self._build_messages(db),
+                    "code": self._build_code_changes(),
+                }
+
+                # Priority ordering based on caller
+                order = self._get_section_order(caller)
+
                 sections = []
+                for key in order:
+                    section = all_sections.get(key, "")
+                    if section:
+                        sections.append(section)
 
-                # 1. System identity
-                sections.append(self._build_identity())
-
-                # 2. Bet outcomes & bankroll
-                bet_section = await self._build_bet_history(db)
-                if bet_section:
-                    sections.append(bet_section)
-
-                # 3. Recent edge history
-                edge_section = await self._build_edge_history(db)
-                if edge_section:
-                    sections.append(edge_section)
-
-                # 4. Learned patterns
-                pattern_section = await self._build_learned_patterns(db)
-                if pattern_section:
-                    sections.append(pattern_section)
-
-                # 5. Active state
-                active_section = await self._build_active_state(db)
-                if active_section:
-                    sections.append(active_section)
-
-                self._cache = "\n\n".join(sections)
-                self._cache_time = now
-                return self._cache
+                result = "\n\n".join(sections)
+                self._cache[cache_key] = result
+                self._cache_time[cache_key] = now
+                return result
 
         except Exception as e:
-            logger.error(f"Memory context build failed: {e}")
-            return self._build_identity()  # Fallback to identity only
+            logger.error(f"Hermes context build failed: {e}")
+            return self._build_identity()
+
+    def _get_section_order(self, caller: str) -> list[str]:
+        """Return section keys in priority order based on caller type."""
+        if caller == CALLER_HYPOTHESIS_GEN:
+            # Research state and learnings first — what's been tried, what works
+            return ["identity", "research", "learnings", "patterns", "edges", "code", "messages", "bets", "active"]
+        elif caller == CALLER_DEEP_WORK:
+            # Everything matters — deep work is the most comprehensive phase
+            return ["identity", "research", "learnings", "patterns", "edges", "bets", "active", "code", "messages"]
+        elif caller == CALLER_EDGE_ANALYSIS:
+            # Edges and patterns first — what markets/books produce value
+            return ["identity", "edges", "patterns", "active", "bets", "research", "learnings", "code", "messages"]
+        elif caller == CALLER_TELEGRAM:
+            # Active state and bets first — Marco is checking in
+            return ["identity", "active", "bets", "edges", "research", "messages", "learnings", "patterns", "code"]
+        else:
+            return ["identity", "bets", "edges", "patterns", "active", "research", "learnings", "messages", "code"]
+
+    # ──────────────────────────────────────────────────
+    # WRITE: Claude stores discoveries back to Hermes
+    # ──────────────────────────────────────────────────
+
+    async def record_learning(self, key: str, value: str, confidence: float = 0.5, source: str = "claude") -> None:
+        """
+        Store a discovery/pattern for future calls.
+
+        Called by Claude deep work and backtest interpretation phases.
+        Examples:
+          - "dk_h2h_lag_pinnacle" → "DraftKings h2h lines lag Pinnacle by ~12 min on NBA"
+          - "cold_venue_under_edge" → "Unders at northern parks in April show +1.5% avg edge"
+          - "backtest_13_same_game" → "13 MLB hypotheses all flagged same game — need better filtering"
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await self._ensure_tables(db)
+                await db.execute(
+                    "INSERT INTO hermes_learnings (key, value, learned_at, confidence, source) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET "
+                    "value=excluded.value, occurrences=occurrences+1, "
+                    "confidence=MAX(confidence, excluded.confidence), "
+                    "learned_at=excluded.learned_at, source=excluded.source",
+                    (key, value, datetime.now(timezone.utc).isoformat(), confidence, source),
+                )
+                await db.commit()
+                # Invalidate cache so next read picks up the new learning
+                self._cache.clear()
+                self._cache_time.clear()
+                logger.info(f"Hermes learning recorded: {key} (confidence={confidence:.2f})")
+        except Exception as e:
+            logger.error(f"Failed to record learning: {e}")
+
+    async def record_learnings_batch(self, learnings: list[dict]) -> int:
+        """
+        Store multiple learnings at once. Each dict needs 'key' and 'value',
+        optionally 'confidence' and 'source'.
+
+        Returns count of successfully stored learnings.
+        """
+        stored = 0
+        for l in learnings:
+            try:
+                await self.record_learning(
+                    key=l["key"],
+                    value=l["value"],
+                    confidence=l.get("confidence", 0.5),
+                    source=l.get("source", "claude"),
+                )
+                stored += 1
+            except Exception as e:
+                logger.warning(f"Failed to record learning '{l.get('key')}': {e}")
+        return stored
+
+    # ──────────────────────────────────────────────────
+    # NOTIFY: Cross-session message queue
+    # ──────────────────────────────────────────────────
+
+    async def send_message(self, sender: str, message: str) -> None:
+        """
+        Post a message for other sessions to read.
+
+        Examples:
+          - ("termius_session", "Rewrote backtest engine — all hypothesis thresholds lowered to 1.5%")
+          - ("research_loop", "Found 3 hypotheses with positive edge >2% on MLB unders")
+          - ("deep_work", "Pipeline integrity issue: 13 hypotheses tested same game")
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await self._ensure_tables(db)
+                await db.execute(
+                    "INSERT INTO hermes_messages (timestamp, sender, message) VALUES (?, ?, ?)",
+                    (datetime.now(timezone.utc).isoformat(), sender, message),
+                )
+                await db.commit()
+                self._cache.clear()
+                self._cache_time.clear()
+                logger.info(f"Hermes message from {sender}: {message[:80]}")
+        except Exception as e:
+            logger.error(f"Failed to send Hermes message: {e}")
+
+    async def get_unread_messages(self) -> list[dict]:
+        """Get all unread messages and mark them as read."""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await self._ensure_tables(db)
+                rows = await db.execute_fetchall(
+                    "SELECT id, timestamp, sender, message FROM hermes_messages "
+                    "WHERE read = 0 ORDER BY timestamp"
+                )
+                if rows:
+                    ids = [r[0] for r in rows]
+                    placeholders = ",".join("?" * len(ids))
+                    await db.execute(
+                        f"UPDATE hermes_messages SET read = 1 WHERE id IN ({placeholders})",
+                        ids,
+                    )
+                    await db.commit()
+                return [
+                    {"id": r[0], "timestamp": r[1], "sender": r[2], "message": r[3]}
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.error(f"Failed to get Hermes messages: {e}")
+            return []
+
+    # ──────────────────────────────────────────────────
+    # Section builders
+    # ──────────────────────────────────────────────────
 
     def _build_identity(self) -> str:
         """Core identity — who Callisto is and what it does."""
         return (
             "<memory type=\"identity\">\n"
-            "You are Callisto — an autonomous sports betting edge detection system.\n"
-            "Owner: Marco Santangelo. Books: DraftKings (primary), Fanatics (secondary).\n"
-            "Your job: find +EV bets using quantitative edge detection, not gut picks.\n"
-            "Core method: devig sharp books (Pinnacle/Circa) to find true probability,\n"
+            "You are Callisto \u2014 an autonomous general-purpose research agent.\n"
+            "Owner: Marco Santangelo. Primary domain: quantitative edge detection.\n"
+            "Books: DraftKings (primary), Fanatics (secondary).\n"
+            "Core method: devig sharp books (Pinnacle) to find true probability,\n"
             "compare to soft books (DK/FanDuel/BetMGM) for mispricing.\n"
-            "Edge = sharp consensus - soft book implied probability.\n"
-            "All confidence scores are CAPPED by evidence quality (AGP protocol).\n"
-            "You must NEVER recommend a bet without quantitative evidence.\n"
-            "Track record matters — every bet gets CLV-measured against closing lines.\n"
+            "You are Claude Opus 4.6 \u2014 the PRIMARY reasoning engine.\n"
+            "Local models (Sentinel) handle lightweight tasks only.\n"
+            "RULES:\n"
+            "- Never recommend bets without quantitative evidence\n"
+            "- Always scrutinize your own results (are backtests real or generic?)\n"
+            "- Track record matters \u2014 every bet gets CLV-measured\n"
+            "- Think outside the box \u2014 absurd hypotheses can have the biggest edges\n"
+            "- Callisto is NOT just sports \u2014 stocks, crypto, any quantifiable edge\n"
+            "- When you discover something, WRITE IT BACK via record_learning()\n"
+            "- Check messages section for cross-session notifications\n"
             "</memory>"
         )
 
     async def _build_bet_history(self, db: aiosqlite.Connection) -> str:
         """Bet outcomes and bankroll state."""
-        # Current bankroll
         bal_row = await db.execute_fetchall(
             "SELECT balance FROM bankroll ORDER BY timestamp DESC LIMIT 1"
         )
         bankroll = bal_row[0][0] if bal_row else "unknown"
 
-        # Bet summary
         total_row = await db.execute_fetchall("SELECT COUNT(*) FROM bets")
         total_bets = total_row[0][0] if total_row else 0
 
@@ -126,26 +311,23 @@ class HermesMemory:
         lost = lost_row[0][0] if lost_row else 0
         pending = pending_row[0][0] if pending_row else 0
 
-        # P/L
         pl_row = await db.execute_fetchall(
             "SELECT COALESCE(SUM(CASE WHEN result='won' THEN payout - stake "
             "WHEN result='lost' THEN -stake ELSE 0 END), 0) FROM bets"
         )
         pl = pl_row[0][0] if pl_row else 0
 
-        # CLV stats
         clv_row = await db.execute_fetchall(
             "SELECT AVG(clv_implied) FROM bets WHERE clv_implied IS NOT NULL"
         )
         avg_clv = clv_row[0][0] if clv_row and clv_row[0][0] is not None else None
 
-        # Recent bets (last 5)
         recent = await db.execute_fetchall(
             "SELECT game_description, team, market, placement_odds, result, "
             "stake, payout, clv_implied FROM bets ORDER BY placed_at DESC LIMIT 5"
         )
 
-        lines = [f"<memory type=\"bets\">"]
+        lines = ["<memory type=\"bets\">"]
         lines.append(f"Bankroll: ${bankroll}")
         lines.append(f"Record: {won}W-{lost}L ({pending} pending) | Total: {total_bets}")
         if won + lost > 0:
@@ -162,9 +344,9 @@ class HermesMemory:
                 status = result.upper() if result != 'pending' else 'OPEN'
                 line = f"  {status}: {team} {market} {odds_str}"
                 if result == 'won' and payout:
-                    line += f" → +${payout - stake:.0f}"
+                    line += f" \u2192 +${payout - stake:.0f}"
                 elif result == 'lost':
-                    line += f" → -${stake:.0f}"
+                    line += f" \u2192 -${stake:.0f}"
                 if clv is not None:
                     line += f" (CLV: {clv:+.2%})"
                 lines.append(line)
@@ -173,19 +355,17 @@ class HermesMemory:
         return "\n".join(lines)
 
     async def _build_edge_history(self, db: aiosqlite.Connection) -> str:
-        """Recent edge detection results from sessions."""
-        # Recent autonomous sessions
-        sessions = await db.execute_fetchall(
-            "SELECT query, conclusion, confidence_score, confidence_tier, sealed_at "
-            "FROM sessions WHERE query LIKE '%AUTONOMOUS%' OR query LIKE '%edge%' "
-            "ORDER BY sealed_at DESC LIMIT 5"
-        )
-
-        # Recent EV opportunities
+        """Recent edge detection results."""
         ev_opps = await db.execute_fetchall(
             "SELECT sport, team, market, bookmaker, american_odds, edge, "
             "expected_value, kelly_fraction, detected_at "
             "FROM ev_opportunities ORDER BY detected_at DESC LIMIT 5"
+        )
+
+        sessions = await db.execute_fetchall(
+            "SELECT query, conclusion, confidence_score, confidence_tier, sealed_at "
+            "FROM sessions WHERE query LIKE '%AUTONOMOUS%' OR query LIKE '%edge%' "
+            "ORDER BY sealed_at DESC LIMIT 3"
         )
 
         if not sessions and not ev_opps:
@@ -194,7 +374,7 @@ class HermesMemory:
         lines = ["<memory type=\"edges\">"]
 
         if ev_opps:
-            lines.append("Recent +EV opportunities detected:")
+            lines.append("Recent +EV opportunities:")
             for o in ev_opps:
                 sport, team, market, book, odds, edge, ev, kelly, detected = o
                 odds_str = f"+{odds}" if odds > 0 else str(odds)
@@ -204,32 +384,28 @@ class HermesMemory:
                 )
 
         if sessions:
-            lines.append("Recent analysis sessions:")
+            lines.append("Recent analysis:")
             for s in sessions:
                 query, conclusion, conf, tier, sealed = s
-                # Truncate query for compactness
                 q_short = query[:60].replace("\n", " ")
                 c_short = (conclusion or "")[:80].replace("\n", " ")
-                lines.append(f"  [{tier} {conf:.2f}] {q_short}... → {c_short}")
+                lines.append(f"  [{tier} {conf:.2f}] {q_short}... \u2192 {c_short}")
 
         lines.append("</memory>")
         return "\n".join(lines)
 
     async def _build_learned_patterns(self, db: aiosqlite.Connection) -> str:
-        """Patterns derived from historical data."""
-        # Which markets produce the most EV opportunities
+        """Patterns from EV data + explicit learnings from operation."""
         market_stats = await db.execute_fetchall(
             "SELECT market, COUNT(*) as cnt, AVG(edge) as avg_edge "
             "FROM ev_opportunities GROUP BY market ORDER BY cnt DESC LIMIT 5"
         )
 
-        # Which books appear most in opportunities
         book_stats = await db.execute_fetchall(
             "SELECT bookmaker, COUNT(*) as cnt, AVG(edge) as avg_edge "
             "FROM ev_opportunities GROUP BY bookmaker ORDER BY cnt DESC LIMIT 5"
         )
 
-        # Bet performance by market
         market_perf = await db.execute_fetchall(
             "SELECT market, "
             "SUM(CASE WHEN result='won' THEN 1 ELSE 0 END) as wins, "
@@ -265,8 +441,7 @@ class HermesMemory:
         return "\n".join(lines)
 
     async def _build_active_state(self, db: aiosqlite.Connection) -> str:
-        """Current open bets and active monitoring state."""
-        # Open bets
+        """Current open bets."""
         open_bets = await db.execute_fetchall(
             "SELECT id, game_description, team, market, bookmaker, "
             "placement_odds, stake, notes FROM bets WHERE result='pending' "
@@ -283,43 +458,145 @@ class HermesMemory:
             odds_str = f"+{odds}" if odds > 0 else str(odds)
             lines.append(f"  Bet #{bid}: {team} {market} {odds_str} (${stake} @ {book})")
             if notes:
-                # First 60 chars of notes
                 lines.append(f"    {notes[:60]}")
 
         lines.append("</memory>")
         return "\n".join(lines)
 
-    async def record_learning(self, db: aiosqlite.Connection, key: str, value: str) -> None:
-        """
-        Store an explicit learning/pattern for future reference.
+    async def _build_research_state(self, db: aiosqlite.Connection) -> str:
+        """Hypothesis testing state — what's been tried, what's promising."""
+        try:
+            status_rows = await db.execute_fetchall(
+                "SELECT status, COUNT(*) FROM hypotheses GROUP BY status"
+            )
+            status_counts = {r[0]: r[1] for r in status_rows}
 
-        These are things the system discovers through operation:
-        - "DraftKings h2h lines lag Pinnacle by ~15 min on NBA"
-        - "Player props under 0.5 points from round numbers have higher edge frequency"
-        """
-        await db.execute(
-            "CREATE TABLE IF NOT EXISTS hermes_learnings ("
-            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            "  key TEXT NOT NULL UNIQUE,"
-            "  value TEXT NOT NULL,"
-            "  learned_at TEXT NOT NULL,"
-            "  confidence REAL DEFAULT 0.5,"
-            "  occurrences INTEGER DEFAULT 1"
-            ")"
-        )
-        await db.execute(
-            "INSERT INTO hermes_learnings (key, value, learned_at) "
-            "VALUES (?, ?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET "
-            "value=excluded.value, occurrences=occurrences+1, "
-            "learned_at=excluded.learned_at",
-            (key, value, datetime.now(timezone.utc).isoformat()),
-        )
-        await db.commit()
-        logger.info(f"Learning recorded: {key}")
+            top_hypos = await db.execute_fetchall(
+                """SELECT h.name, h.sport, h.market_type, h.thesis,
+                          COUNT(be.id) as events,
+                          SUM(CASE WHEN be.signal_generated=1 THEN 1 ELSE 0 END) as signals,
+                          AVG(be.edge) as avg_edge
+                   FROM hypotheses h
+                   LEFT JOIN backtest_events be ON h.hypothesis_id = be.hypothesis_id
+                   GROUP BY h.hypothesis_id
+                   HAVING events > 0
+                   ORDER BY signals DESC, avg_edge DESC
+                   LIMIT 5"""
+            )
+
+            rejected = await db.execute_fetchall(
+                "SELECT name, thesis FROM hypotheses WHERE status='rejected' "
+                "ORDER BY updated_at DESC LIMIT 3"
+            )
+
+            lines = ["<memory type=\"research\">"]
+            total = sum(status_counts.values())
+            lines.append(f"Hypotheses: {total} total")
+            for s in ['draft', 'backtesting', 'paper_trading', 'live', 'rejected']:
+                if status_counts.get(s, 0) > 0:
+                    lines.append(f"  {s}: {status_counts[s]}")
+
+            if top_hypos:
+                lines.append("Most tested:")
+                for h in top_hypos:
+                    name, sport, mkt, thesis, events, signals, avg_edge = h
+                    edge_str = f"{avg_edge*100:+.2f}%" if avg_edge else "N/A"
+                    lines.append(f"  {name} ({sport}/{mkt}): {events} events, {signals} signals, edge {edge_str}")
+
+            if rejected:
+                lines.append("Recently disproven:")
+                for r in rejected:
+                    lines.append(f"  {r[0]}: {r[1][:80]}")
+
+            lines.append("</memory>")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.debug(f"Research state build failed: {e}")
+            return ""
+
+    async def _build_learnings(self, db: aiosqlite.Connection) -> str:
+        """Discoveries Claude has made and stored back to Hermes."""
+        try:
+            rows = await db.execute_fetchall(
+                "SELECT key, value, confidence, occurrences, learned_at "
+                "FROM hermes_learnings ORDER BY confidence DESC, occurrences DESC LIMIT 10"
+            )
+            if not rows:
+                return ""
+
+            lines = ["<memory type=\"learnings\">"]
+            lines.append("Discovered patterns (from your own analysis):")
+            for r in rows:
+                key, value, conf, occ, when = r
+                lines.append(f"  [{conf:.0%} conf, {occ}x seen] {key}: {value[:120]}")
+            lines.append("</memory>")
+            return "\n".join(lines)
+        except Exception:
+            return ""
+
+    async def _build_messages(self, db: aiosqlite.Connection) -> str:
+        """Cross-session notifications — unread messages from other Claude sessions."""
+        try:
+            rows = await db.execute_fetchall(
+                "SELECT timestamp, sender, message FROM hermes_messages "
+                "WHERE read = 0 ORDER BY timestamp DESC LIMIT 5"
+            )
+            if not rows:
+                return ""
+
+            lines = ["<memory type=\"messages\">"]
+            lines.append(f"UNREAD MESSAGES ({len(rows)}):")
+            for r in rows:
+                ts, sender, msg = r
+                time_short = ts[11:16] if len(ts) > 16 else ts
+                lines.append(f"  [{time_short}] {sender}: {msg[:150]}")
+            lines.append("ACTION: Acknowledge these messages in your response.")
+            lines.append("</memory>")
+            return "\n".join(lines)
+        except Exception:
+            return ""
+
+    def _build_code_changes(self) -> str:
+        """Recent code changes from git — cross-session awareness."""
+        try:
+            repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+            result = subprocess.run(
+                ["git", "log", "--oneline", "-10", "--format=%h %s (%cr)"],
+                cwd=repo_dir, capture_output=True, text=True, timeout=5,
+            )
+            commits = result.stdout.strip() if result.returncode == 0 else ""
+
+            result2 = subprocess.run(
+                ["git", "diff", "--stat", "HEAD"],
+                cwd=repo_dir, capture_output=True, text=True, timeout=5,
+            )
+            uncommitted = result2.stdout.strip() if result2.returncode == 0 else ""
+
+            if not commits and not uncommitted:
+                return ""
+
+            lines = ["<memory type=\"code_changes\">"]
+
+            if commits:
+                lines.append("Recent commits:")
+                for c in commits.split("\n")[:10]:
+                    lines.append(f"  {c}")
+
+            if uncommitted:
+                lines.append("Uncommitted changes:")
+                for u in uncommitted.split("\n")[-6:]:
+                    lines.append(f"  {u.strip()}")
+
+            lines.append("</memory>")
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.debug(f"Code changes build failed: {e}")
+            return ""
 
 
-# Singleton instance
+# Singleton
 _instance: Optional[HermesMemory] = None
 
 
@@ -331,11 +608,7 @@ def get_hermes_memory() -> HermesMemory:
     return _instance
 
 
-# ──────────────────────────────────────────────────
-# NEW: Tiered cache manager (hot/warm/cold)
-# Use get_cache_manager() for new code.
-# get_hermes_memory() still works for backward compat.
-# ──────────────────────────────────────────────────
+# Backward compat
 def get_cache_manager():
     """Get the tiered CacheManager (hot/warm/cold). Preferred over HermesMemory."""
     from tools.cache_manager import get_cache_manager as _get_cm

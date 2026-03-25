@@ -22,7 +22,18 @@ logger = logging.getLogger("callisto.fanduel_scraper")
 # FanDuel API base — their public sportsbook API
 FD_API_BASE = "https://sbapi.nj.sportsbook.fanduel.com/api"
 
-# Event group / competition IDs (discovered via FanDuel API exploration)
+# Custom page IDs — the CUSTOM endpoint is the only one currently working.
+# The old SPORT/{sport}/{competition} format returns HTTP 400 as of March 2026.
+FD_CUSTOM_PAGE_IDS = {
+    "basketball_nba": "nba",
+    "americanfootball_nfl": "nfl",
+    "icehockey_nhl": "nhl",
+    "baseball_mlb": "mlb",
+    "basketball_ncaab": "ncaab",
+    "golf_pga": "golf",
+}
+
+# Legacy competition config — kept for reference but no longer used
 FD_COMPETITIONS = {
     "basketball_nba": {"sport": "basketball", "competition": "7522"},
     "americanfootball_nfl": {"sport": "american-football", "competition": "54"},
@@ -86,16 +97,17 @@ async def scrape_fd_odds(sport: str) -> dict:
         "credits_used": 0,
     }
     """
-    config = FD_COMPETITIONS.get(sport)
-    if not config:
+    custom_page = FD_CUSTOM_PAGE_IDS.get(sport)
+    if not custom_page:
         return {"error": f"Sport '{sport}' not configured for FanDuel scraper", "games": []}
 
     try:
-        # FanDuel competition events endpoint
+        # Use the CUSTOM page endpoint (working as of March 2026).
+        # The old SPORT/{sport}/{competition} format returns HTTP 400.
         url = f"{FD_API_BASE}/content-managed-page"
         params = {
-            "page": f"SPORT/{config['sport']}/{config['competition']}",
-            "pbHorizontal": "false",
+            "page": "CUSTOM",
+            "customPageId": custom_page,
             "_ak": "FhMFpcPWXMeyZxOx",
             "timezone": "America/New_York",
         }
@@ -108,10 +120,33 @@ async def scrape_fd_odds(sport: str) -> dict:
         # Parse FanDuel's response structure
         attachments = data.get("attachments", {})
         events = attachments.get("events", {})
-        markets = attachments.get("markets", {})
+        all_markets = attachments.get("markets", {})
+
+        # Group markets by eventId — the CUSTOM endpoint does NOT put a
+        # "markets" array inside each event object.  Instead, each market
+        # has an "eventId" field that maps back to the event.
+        from collections import defaultdict
+        markets_by_event: dict[str, dict[str, dict]] = defaultdict(dict)
+        for mid, mkt in all_markets.items():
+            eid = str(mkt.get("eventId", ""))
+            if eid:
+                markets_by_event[eid][mid] = mkt
 
         for event_id, event in events.items():
-            game = _parse_fd_event(event, markets)
+            # Build a per-event markets dict.
+            # Prefer the event's own "markets" list (old format) if present,
+            # otherwise use our grouped-by-eventId lookup.
+            event_market_ids = event.get("markets", [])
+            if event_market_ids:
+                event_markets = {
+                    str(mid): all_markets[str(mid)]
+                    for mid in event_market_ids
+                    if str(mid) in all_markets
+                }
+            else:
+                event_markets = markets_by_event.get(str(event.get("eventId", event_id)), {})
+
+            game = _parse_fd_event(event, event_markets)
             if game:
                 games.append(game)
 
@@ -133,8 +168,14 @@ async def scrape_fd_odds(sport: str) -> dict:
         return {"error": str(e), "games": []}
 
 
-def _parse_fd_event(event: dict, markets: dict) -> Optional[dict]:
-    """Parse a FanDuel event into normalized format."""
+def _parse_fd_event(event: dict, event_markets: dict) -> Optional[dict]:
+    """Parse a FanDuel event into normalized format.
+
+    Args:
+        event: Event dict from the attachments/events section.
+        event_markets: Dict of {marketId: marketDict} for this event only.
+                       Pre-filtered by the caller.
+    """
     try:
         name = event.get("name", "")
         if " @ " in name:
@@ -146,13 +187,10 @@ def _parse_fd_event(event: dict, markets: dict) -> Optional[dict]:
             away_team = parts[0].strip()
             home_team = parts[1].strip()
         else:
-            away_team = name
-            home_team = ""
+            # Not a game event (e.g. "NBA Futures", "NBA Player Awards")
+            return None
 
         commence_time = event.get("openDate", "")
-
-        # Get market IDs for this event
-        event_market_ids = event.get("markets", [])
 
         game = {
             "id": f"fd_{event.get('eventId', '')}",
@@ -169,11 +207,7 @@ def _parse_fd_event(event: dict, markets: dict) -> Optional[dict]:
         }
 
         # Parse each market for this event
-        for market_id in event_market_ids:
-            mid = str(market_id)
-            if mid not in markets:
-                continue
-            market = markets[mid]
+        for mid, market in event_markets.items():
             parsed = _parse_fd_market(market)
             if parsed:
                 game["bookmakers"][0]["markets"].append(parsed)
@@ -195,13 +229,18 @@ def _parse_fd_market(market: dict) -> Optional[dict]:
         market_type = market.get("marketType", "")
         runners = market.get("runners", [])
 
-        # Map FanDuel market types to standard names
+        # Map FanDuel market types to standard names.
+        # The CUSTOM endpoint uses longer names like "MONEY_LINE" and
+        # "MATCH_HANDICAP_(2-WAY)" alongside the old short names.
         type_map = {
             "MATCH_ODDS": "h2h",
             "MONEYLINE": "h2h",
+            "MONEY_LINE": "h2h",
             "HANDICAP": "spreads",
             "TOTAL_POINTS": "totals",
+            "TOTAL_POINTS_(OVER/UNDER)": "totals",
             "MATCH_HANDICAP": "spreads",
+            "MATCH_HANDICAP_(2-WAY)": "spreads",
             "ALTERNATE_TOTAL_POINTS": "totals",
             "WINNER": "outrights",
             "OUTRIGHT": "outrights",
@@ -216,9 +255,23 @@ def _parse_fd_market(market: dict) -> Optional[dict]:
 
         outcomes = []
         for runner in runners:
-            price = runner.get("winRunnerOdds", {}).get("americanOdds")
+            win_odds = runner.get("winRunnerOdds", {})
+            # New format: americanDisplayOdds.americanOdds (CUSTOM endpoint)
+            price = None
+            american_display = win_odds.get("americanDisplayOdds", {})
+            if american_display:
+                price = american_display.get("americanOdds") or american_display.get("americanOddsInt")
+            # Old format: direct americanOdds key
             if price is None:
-                decimal_odds = runner.get("winRunnerOdds", {}).get("decimalOdds")
+                price = win_odds.get("americanOdds")
+            # Fallback: decimal odds conversion
+            if price is None:
+                true_odds = win_odds.get("trueOdds", {})
+                decimal_odds_obj = true_odds.get("decimalOdds", {})
+                decimal_odds = decimal_odds_obj.get("decimalOdds") if isinstance(decimal_odds_obj, dict) else None
+                # Also try the old flat key
+                if decimal_odds is None:
+                    decimal_odds = win_odds.get("decimalOdds")
                 if decimal_odds and decimal_odds > 1:
                     # Convert decimal to american
                     if decimal_odds >= 2.0:
@@ -254,13 +307,13 @@ async def scrape_fd_golf_outrights() -> dict:
     Scrape FanDuel golf tournament outright and placement odds.
 
     Returns tournament winner, top-5, top-10, top-20, and make-cut markets.
-    Specific to golf — uses FanDuel's golf-specific endpoints.
+    Specific to golf — uses FanDuel's CUSTOM page endpoint.
     """
     try:
         url = f"{FD_API_BASE}/content-managed-page"
         params = {
-            "page": "SPORT/golf/13163",
-            "pbHorizontal": "false",
+            "page": "CUSTOM",
+            "customPageId": "golf",
             "_ak": "FhMFpcPWXMeyZxOx",
             "timezone": "America/New_York",
         }
@@ -271,24 +324,33 @@ async def scrape_fd_golf_outrights() -> dict:
 
         attachments = data.get("attachments", {})
         events = attachments.get("events", {})
-        markets = attachments.get("markets", {})
+        all_markets = attachments.get("markets", {})
+
+        # Group markets by eventId (same approach as scrape_fd_odds)
+        from collections import defaultdict
+        markets_by_event: dict[str, dict[str, dict]] = defaultdict(dict)
+        for mid, mkt in all_markets.items():
+            eid = str(mkt.get("eventId", ""))
+            if eid:
+                markets_by_event[eid][mid] = mkt
 
         results = []
         for event_id, event in events.items():
-            event_markets = []
-            for mid in event.get("markets", []):
-                mid_str = str(mid)
-                if mid_str in markets:
-                    parsed = _parse_fd_market(markets[mid_str])
-                    if parsed:
-                        event_markets.append(parsed)
+            eid_str = str(event.get("eventId", event_id))
+            event_mkts = markets_by_event.get(eid_str, {})
 
-            if event_markets:
+            parsed_markets = []
+            for mid, mkt in event_mkts.items():
+                parsed = _parse_fd_market(mkt)
+                if parsed:
+                    parsed_markets.append(parsed)
+
+            if parsed_markets:
                 results.append({
                     "event": event.get("name", ""),
-                    "event_id": str(event.get("eventId", "")),
+                    "event_id": eid_str,
                     "open_date": event.get("openDate", ""),
-                    "markets": event_markets,
+                    "markets": parsed_markets,
                 })
 
         return {
