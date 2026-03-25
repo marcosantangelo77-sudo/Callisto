@@ -163,14 +163,37 @@ import httpx
 API_KEY = os.getenv("ODDS_API_IO_KEY", "")
 API_BASE = "https://api.odds-api.io/v3"
 REQUEST_DELAY = 0.12  # ~500 req/min, well under 30K/hr
+RATE_LIMIT_BUFFER = 500  # Stop when this many calls remain
+
+# Track rate limit state from response headers
+_rate_limit = {"remaining": 30000, "limit": 30000, "reset": ""}
 
 
 async def api_get(path: str, params: dict) -> dict | list | None:
-    """Make an API request with rate limiting."""
+    """Make an API request with rate limiting and automatic backoff."""
+    # Check if we're near the rate limit
+    if _rate_limit["remaining"] <= RATE_LIMIT_BUFFER:
+        logger.warning(
+            f"Rate limit nearly exhausted: {_rate_limit['remaining']}/{_rate_limit['limit']} remaining. "
+            f"Resets at {_rate_limit['reset']}. Stopping to preserve budget."
+        )
+        return None
+
     params["apiKey"] = API_KEY
     async with httpx.AsyncClient(timeout=20.0) as client:
         try:
             resp = await client.get(f"{API_BASE}{path}", params=params)
+            # Update rate limit tracking from headers
+            if "x-ratelimit-remaining" in resp.headers:
+                _rate_limit["remaining"] = int(resp.headers["x-ratelimit-remaining"])
+                _rate_limit["limit"] = int(resp.headers.get("x-ratelimit-limit", 30000))
+                _rate_limit["reset"] = resp.headers.get("x-ratelimit-reset", "")
+                if _rate_limit["remaining"] % 1000 == 0:
+                    logger.info(f"Rate limit: {_rate_limit['remaining']}/{_rate_limit['limit']} remaining")
+            if resp.status_code == 429:
+                logger.warning(f"Rate limited (429). Resets at {_rate_limit['reset']}. Stopping.")
+                _rate_limit["remaining"] = 0
+                return None
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPStatusError as e:
