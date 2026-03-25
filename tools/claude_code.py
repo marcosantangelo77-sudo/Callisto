@@ -156,6 +156,25 @@ def is_available() -> bool:
     return False
 
 
+def reset_rate_limit() -> dict:
+    """Force-reset all rate limit state. Returns previous and new state."""
+    global _available, _call_count, _last_reset, _cooldown_until
+    global _consecutive_failures, _current_backoff, _last_error
+
+    prev = get_usage_stats()
+
+    _available = True
+    _call_count = 0
+    _last_reset = time.monotonic()
+    _cooldown_until = 0.0
+    _consecutive_failures = 0
+    _current_backoff = INITIAL_BACKOFF
+    _last_error = ""
+
+    logger.info("Claude Code rate limit force-reset via admin endpoint")
+    return {"previous": prev, "current": get_usage_stats()}
+
+
 def get_cooldown_remaining() -> float:
     """Seconds until Claude Code is available again. 0 if available now."""
     if _available:

@@ -1181,6 +1181,13 @@ async def claude_status():
     return get_usage_stats()
 
 
+@app.post("/admin/claude/reset")
+async def reset_claude_rate_limit():
+    """Force-reset Claude Code rate limit state after hourly limit resets."""
+    from tools.claude_code import reset_rate_limit
+    return reset_rate_limit()
+
+
 @app.get("/system/full-status")
 async def full_system_status():
     """
