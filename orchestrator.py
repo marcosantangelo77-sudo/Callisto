@@ -735,9 +735,11 @@ class Orchestrator:
             logger.info(f"Session {session.session_id}: step 3 — {len(sources)} sources [{t_sources:.1f}s]")
 
             # Run any additional searches from Architect's source list (parallel)
+            # Use only first line of query to avoid URL overflow on multi-line prompts
+            short_query = query.split("\n")[0][:200].rstrip("?").strip()
             extra_queries = []
             for src in sources[:2]:
-                q = f"{src} {query.rstrip('?').strip()}"
+                q = f"{src} {short_query}"
                 if q not in pre_queries:
                     extra_queries.append(q)
             if extra_queries:
@@ -1052,10 +1054,10 @@ class Orchestrator:
     async def _execute_tool(self, name: str, arguments: dict):
         """Execute a tool call."""
         if name == "web_search":
-            return await web_search(
-                query=arguments.get("query", ""),
-                count=arguments.get("count", 5),
-            )
+            # Truncate query to prevent Brave 422 on massive tool-generated queries
+            raw_q = arguments.get("query", "")
+            safe_q = raw_q.split("\n")[0][:300].strip()
+            return await web_search(query=safe_q, count=arguments.get("count", 5))
         if name == "claude_code":
             return await claude_code_query(
                 prompt=arguments.get("prompt", ""),
