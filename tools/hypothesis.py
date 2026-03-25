@@ -650,9 +650,11 @@ class HypothesisManager:
 
                         # Retroactively update signal_generated on existing events
                         # so evaluate_significance can see them without re-backtesting
+                        # NOTE: must use `edge` column (probability edge), NOT `ev_pct` (expected value)
+                        # — consistent with backtest.py:1161 where is_signal = edge >= edge_threshold
                         cursor = await self._db.execute(
                             "UPDATE backtest_events "
-                            "SET signal_generated = CASE WHEN ev_pct >= ? THEN 1 ELSE 0 END "
+                            "SET signal_generated = CASE WHEN edge >= ? THEN 1 ELSE 0 END "
                             "WHERE hypothesis_id = ?",
                             (new_threshold, hypothesis_id),
                         )
