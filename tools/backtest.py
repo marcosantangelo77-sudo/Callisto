@@ -1157,8 +1157,8 @@ class BacktestEngine:
                 target_implied = american_to_implied(target_price)
                 ev = ev_binary(fair_val, american_to_decimal(target_price))
                 kelly = kelly_binary(fair_val, american_to_decimal(target_price))
-                edge = ev  # Use EV as edge metric (accounts for vig in odds)
-                is_signal = ev >= edge_threshold
+                edge = fair_val - target_implied  # Probability edge (not EV)
+                is_signal = edge >= edge_threshold
 
                 events += 1
                 if is_signal:
@@ -1313,8 +1313,8 @@ class BacktestEngine:
                 target_implied = american_to_implied(target_price)
                 ev = ev_binary(fair_val, american_to_decimal(target_price))
                 kelly = kelly_binary(fair_val, american_to_decimal(target_price))
-                edge = ev  # Use EV as edge metric (accounts for vig in odds)
-                is_signal = ev >= edge_threshold
+                edge = fair_val - target_implied  # Probability edge (not EV)
+                is_signal = edge >= edge_threshold
 
                 events += 1
                 if is_signal:
