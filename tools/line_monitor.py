@@ -299,13 +299,9 @@ class LineMonitor:
         except Exception as e:
             logger.warning(f"FanDuel scraper failed for {sport}: {e}")
 
-        # 5. BetMGM — free and unlimited
-        try:
-            mgm_data = await scrape_betmgm_odds(sport)
-            if not mgm_data.get("error") and mgm_data.get("game_count", 0) > 0:
-                scraped["mgm"] = mgm_data
-        except Exception as e:
-            logger.warning(f"BetMGM scraper failed for {sport}: {e}")
+        # 5. BetMGM — DISABLED: redundant with odds-api.io Pro (includes BetMGM).
+        # Scraped endpoint returns 400/403 consistently, generating log noise.
+        # Re-enable only if odds-api.io loses BetMGM coverage.
 
         # 6. OddsPapi — 250/month free (last resort)
         if not scraped:
@@ -384,7 +380,8 @@ class LineMonitor:
             # Enrich with fresh scraper data from all free sources (always)
             new_snapshot = await self._enrich_with_dk(sport, new_snapshot)
             new_snapshot = await self._enrich_with_fd(sport, new_snapshot)
-            new_snapshot = await self._enrich_with_mgm(sport, new_snapshot)
+            # BetMGM enrichment disabled — redundant with odds-api.io Pro
+            # new_snapshot = await self._enrich_with_mgm(sport, new_snapshot)
 
             await self._process_snapshot(sport, new_snapshot)
 

@@ -690,8 +690,12 @@ class Orchestrator:
         self.manager = get_manager()
         self.sentinel = get_sentinel()
 
-    async def run_session(self, query: str) -> dict:
-        """Execute a full 7-step AGP session. Returns the sealed session dict."""
+    async def run_session(self, query: str, skip_search: bool = False) -> dict:
+        """Execute a full 7-step AGP session. Returns the sealed session dict.
+
+        skip_search: If True, skip web searches entirely (for internal tasks
+        like edge analysis that already have all data they need).
+        """
         session = AGPSession(query)
         logger.info(f"Session {session.session_id}: starting — {query}")
         t0 = time.monotonic()
@@ -708,11 +712,15 @@ class Orchestrator:
 
             # Step 2: Sentinel classifies WHILE Brave pre-searches run in parallel
             session.advance_to(SessionStep.ASSIGN_DOMAIN)
-            # Extract a short search query — use first line only, max 200 chars
-            search_query = query.split("\n")[0][:200].strip()
-            pre_queries = [search_query, f"{search_query.rstrip('?').strip()} 2025 2026 latest"]
             domain_task = asyncio.create_task(self._step_assign_domain(session))
-            search_task = asyncio.create_task(self._run_searches_parallel(pre_queries))
+
+            if skip_search:
+                pre_results = []
+            else:
+                # Extract a short search query — use first line only, max 200 chars
+                search_query = query.split("\n")[0][:200].strip()
+                pre_queries = [search_query, f"{search_query.rstrip('?').strip()} 2025 2026 latest"]
+                search_task = asyncio.create_task(self._run_searches_parallel(pre_queries))
 
             domain = await domain_task
             session.domain = domain
@@ -720,12 +728,13 @@ class Orchestrator:
             logger.info(f"Session {session.session_id}: step 2 — domain={domain.value} [{t_domain:.1f}s]")
 
             # Collect pre-search results + one domain-specific search
-            pre_results = await search_task
-            domain_q = self._domain_search_query(query, domain)
-            if domain_q:
-                extra = await self._run_searches_parallel([domain_q])
-                pre_results.extend(extra)
-            pre_results = _dedup_search_results(pre_results)
+            if not skip_search:
+                pre_results = await search_task
+                domain_q = self._domain_search_query(query, domain)
+                if domain_q:
+                    extra = await self._run_searches_parallel([domain_q])
+                    pre_results.extend(extra)
+                pre_results = _dedup_search_results(pre_results)
 
             # Step 3: Source Enumeration (Architect)
             session.advance_to(SessionStep.SOURCE_ENUMERATION)
@@ -735,17 +744,18 @@ class Orchestrator:
             logger.info(f"Session {session.session_id}: step 3 — {len(sources)} sources [{t_sources:.1f}s]")
 
             # Run any additional searches from Architect's source list (parallel)
-            # Use only first line of query to avoid URL overflow on multi-line prompts
-            short_query = query.split("\n")[0][:200].rstrip("?").strip()
-            extra_queries = []
-            for src in sources[:2]:
-                q = f"{src} {short_query}"
-                if q not in pre_queries:
-                    extra_queries.append(q)
-            if extra_queries:
-                extra_results = await self._run_searches_parallel(extra_queries)
-                pre_results.extend(extra_results)
-                pre_results = _dedup_search_results(pre_results)
+            if not skip_search:
+                # Use only first line of query to avoid URL overflow on multi-line prompts
+                short_query = query.split("\n")[0][:200].rstrip("?").strip()
+                extra_queries = []
+                for src in sources[:2]:
+                    q = f"{src} {short_query}"
+                    if q not in pre_queries:
+                        extra_queries.append(q)
+                if extra_queries:
+                    extra_results = await self._run_searches_parallel(extra_queries)
+                    pre_results.extend(extra_results)
+                    pre_results = _dedup_search_results(pre_results)
 
             # Step 4: Primary Collection (Architect + search results)
             session.advance_to(SessionStep.PRIMARY_COLLECTION)

@@ -248,7 +248,7 @@ class AutonomousLoop:
 
         try:
             result = await asyncio.wait_for(
-                self.orchestrator.run_session(query),
+                self.orchestrator.run_session(query, skip_search=True),
                 timeout=180,  # 3 minute max per session
             )
             self._session_count += 1
@@ -1561,6 +1561,17 @@ class ResearchLoop:
         if now - self._last_hypothesis_gen < HYPOTHESIS_GEN_INTERVAL:
             return
 
+        # Don't generate more hypotheses when the backlog is already huge.
+        # The pipeline can test ~20/cycle — generating thousands more is waste.
+        MAX_DRAFT_BACKLOG = 100
+        drafts = await self.hypothesis_manager.list_hypotheses(status="draft")
+        if len(drafts) > MAX_DRAFT_BACKLOG:
+            logger.info(
+                f"Research: skipping hypothesis generation — {len(drafts)} drafts "
+                f"already queued (cap={MAX_DRAFT_BACKLOG}). Test existing ones first."
+            )
+            return
+
         logger.info("Research: generating hypotheses (Claude-primary)")
         self._last_hypothesis_gen = now
 
@@ -2202,15 +2213,39 @@ class ResearchLoop:
 
                 if ctx_coverage < 0.5:
                     ctx_factors = model_config.get("context_factors", [])
-                    logger.warning(
-                        f"Research: demoting {h['hypothesis_id']} to draft — "
-                        f"context_coverage={ctx_coverage:.0%} ({len(ctx_factors)} "
-                        f"factors, most unfilterable). Backtest results are noise."
+                    # Count how many times this hypothesis has been demoted.
+                    # After 2 demotions, reject instead of creating a circular loop.
+                    demotion_count = model_config.get("demotion_count", 0) + 1
+                    model_config["demotion_count"] = demotion_count
+                    await self.hypothesis_manager._db.execute(
+                        "UPDATE hypotheses SET model_config = ? WHERE hypothesis_id = ?",
+                        (json.dumps(model_config), h["hypothesis_id"]),
                     )
-                    await self.hypothesis_manager.update_status(
-                        h["hypothesis_id"], "draft",
-                        f"auto:low_context_coverage ({ctx_coverage:.0%}) — needs game context enrichment"
-                    )
+                    await self.hypothesis_manager._db.commit()
+
+                    if demotion_count >= 2:
+                        logger.info(
+                            f"Research: rejecting {h['hypothesis_id']} — demoted "
+                            f"{demotion_count}x for ctx_coverage={ctx_coverage:.0%}. "
+                            f"Hypothesis is untestable with available data."
+                        )
+                        await self.hypothesis_manager.update_status(
+                            h["hypothesis_id"], "rejected",
+                            f"auto:untestable_context — demoted {demotion_count}x, "
+                            f"ctx_coverage={ctx_coverage:.0%}"
+                        )
+                        self._rejections += 1
+                    else:
+                        logger.warning(
+                            f"Research: demoting {h['hypothesis_id']} to draft — "
+                            f"context_coverage={ctx_coverage:.0%} ({len(ctx_factors)} "
+                            f"factors, most unfilterable). Attempt {demotion_count}/2."
+                        )
+                        await self.hypothesis_manager.update_status(
+                            h["hypothesis_id"], "draft",
+                            f"auto:low_context_coverage ({ctx_coverage:.0%}) — "
+                            f"needs game context enrichment (demotion {demotion_count}/2)"
+                        )
                     continue
 
                 result = await self.hypothesis_manager.auto_promote(h["hypothesis_id"])

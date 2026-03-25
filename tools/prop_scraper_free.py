@@ -1047,19 +1047,18 @@ async def scrape_all_props(sport: str) -> dict:
 
     Returns unified prop data with multi-book coverage per player/market/line.
     """
-    # Run all three scrapers concurrently
+    # Run scrapers concurrently (BetMGM disabled — redundant with odds-api.io Pro)
     dk_task = asyncio.create_task(scrape_dk_props(sport))
     fd_task = asyncio.create_task(scrape_fd_props(sport))
-    mgm_task = asyncio.create_task(scrape_mgm_props(sport))
 
-    dk_result, fd_result, mgm_result = await asyncio.gather(
-        dk_task, fd_task, mgm_task, return_exceptions=True
+    dk_result, fd_result = await asyncio.gather(
+        dk_task, fd_task, return_exceptions=True
     )
 
     all_props = []
     sources_ok = []
 
-    for name, result in [("dk", dk_result), ("fd", fd_result), ("mgm", mgm_result)]:
+    for name, result in [("dk", dk_result), ("fd", fd_result)]:
         if isinstance(result, Exception):
             logger.warning(f"{name} prop scrape raised: {result}")
             continue
