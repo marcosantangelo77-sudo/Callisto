@@ -640,6 +640,12 @@ class ResearchLoop:
                 if not self._running:
                     break
 
+                # Phase 0b: Refresh signals (retroactive threshold updates)
+                await self._phase_refresh_signals()
+
+                if not self._running:
+                    break
+
                 # Phase 1: Collect data (if due)
                 await self._phase_collect_data()
 
@@ -972,6 +978,37 @@ class ResearchLoop:
         if not issues:
             logger.info("DIAG: all pipeline health checks passed")
 
+    async def _phase_refresh_signals(self) -> None:
+        """Retroactively update signal_generated when thresholds change.
+
+        Claude deep work can lower edge_threshold on hypotheses AFTER backtests
+        have already run and stored signal_generated=0. This phase catches those
+        events and upgrades them to signal=1 so the pipeline sees them.
+        """
+        import aiosqlite
+
+        db_path = self.backtest_engine.db_path
+        try:
+            async with aiosqlite.connect(db_path) as db:
+                # Find events where edge now exceeds threshold but signal=0
+                updated = await db.execute(
+                    """UPDATE backtest_events SET signal_generated = 1
+                       WHERE id IN (
+                           SELECT be.id FROM backtest_events be
+                           JOIN hypotheses h ON be.hypothesis_id = h.hypothesis_id
+                           WHERE be.edge >= h.edge_threshold AND be.edge > 0
+                           AND be.signal_generated = 0
+                       )"""
+                )
+                if updated.rowcount > 0:
+                    await db.commit()
+                    logger.info(
+                        f"Signal refresh: upgraded {updated.rowcount} events "
+                        f"to signal=1 (threshold lowered after backtest)"
+                    )
+        except Exception as e:
+            logger.warning(f"Signal refresh failed: {e}")
+
     async def _phase_collect_data(self) -> None:
         """Collect post-game data from ESPN (free).
 
@@ -1182,7 +1219,7 @@ class ResearchLoop:
                     f"- Prefer focus area sports, then sports with the most data\n"
                 )
 
-                result = await claude_code_query(prompt)
+                result = await claude_code_query(prompt, hermes_caller="hypothesis_gen")
                 self._last_claude_call = time.time()
                 self._claude_escalations += 1
 
@@ -1274,6 +1311,15 @@ class ResearchLoop:
         Legacy hypotheses without temporal metadata get a conservative default:
         backtest only the last 30 days (assumed to be unseen).
         """
+        # Bridge live odds_snapshots into historical_odds_cache so backtests
+        # can use recently-collected multi-book data
+        try:
+            bridge_result = await self.backtest_engine.historical_fetcher.bridge_snapshots_to_cache()
+            if bridge_result.get("bridged", 0) > 0:
+                logger.info(f"Research: bridged {bridge_result['bridged']} snapshot-days into historical cache")
+        except Exception as e:
+            logger.warning(f"Research: snapshot bridge failed: {e}")
+
         # Get draft hypotheses that haven't been backtested
         drafts = await self.hypothesis_manager.list_hypotheses(status="draft")
 
@@ -1323,19 +1369,41 @@ class ResearchLoop:
             market = h.get("market_type", "")
 
             # Player prop hypotheses can't be backtested (no historical prop data).
-            # Skip backtesting and promote directly to paper_trading for live evaluation.
+            # Move to backtesting status — they will accumulate paper trade data
+            # over time and be promoted only when actual evidence exists.
             if market.startswith("player_"):
                 try:
                     await self.hypothesis_manager.update_status(
-                        h["hypothesis_id"], "paper_trading", "auto:no_historical_prop_data"
+                        h["hypothesis_id"], "backtesting", "auto:awaiting_prop_data"
                     )
                     self._backtests_run += 1
                     logger.info(
-                        f"Research: promoted {h['hypothesis_id']} ({market}) "
-                        f"directly to paper_trading — no historical prop data for backtesting"
+                        f"Research: moved {h['hypothesis_id']} ({market}) "
+                        f"to backtesting — awaiting prop data collection"
                     )
                 except Exception as e:
                     logger.warning(f"Failed to promote prop hypothesis {h['hypothesis_id']}: {e}")
+                continue
+
+            # Skip hypotheses where most context conditions are unfilterable.
+            # These produce identical event sets across different hypotheses
+            # because game-level conditions (pitcher stats, weather, etc.) can't
+            # be applied — the backtest just tests ALL games in the sport/market.
+            model_cfg = h.get("model_config", {})
+            if isinstance(model_cfg, str):
+                try:
+                    model_cfg = json.loads(model_cfg)
+                except (json.JSONDecodeError, TypeError):
+                    model_cfg = {}
+            from tools.backtest import BacktestEngine
+            ctx_coverage = BacktestEngine.compute_context_coverage(model_cfg)
+            if ctx_coverage < 0.5:
+                ctx_factors = model_cfg.get("context_factors", [])
+                logger.info(
+                    f"Research: skipping backtest for {h['hypothesis_id']} — "
+                    f"context_coverage={ctx_coverage:.0%} ({len(ctx_factors)} context "
+                    f"factors, most unfilterable). Needs game context enrichment."
+                )
                 continue
 
             # Skip hypotheses for sports with no usable multi-book data
@@ -1389,6 +1457,29 @@ class ResearchLoop:
                 today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 if end_date >= today:
                     end_date = str(datetime.now(timezone.utc).date() - timedelta(days=1))
+
+                # ── Constrain to date range where historical data EXISTS ──
+                # Without this, backtests target dates with no cached odds
+                # and produce 0 events every time.
+                cached_range = await self.backtest_engine.historical_fetcher.get_cached_date_range(sport)
+                if cached_range and cached_range[0] and cached_range[1]:
+                    cache_start, cache_end = cached_range
+                    # Clamp start_date and end_date to the cached range
+                    if start_date < cache_start:
+                        start_date = cache_start
+                    if end_date > cache_end:
+                        end_date = cache_end
+                    logger.info(
+                        f"Research: backtest {h['hypothesis_id']} date range "
+                        f"clamped to cached data [{start_date} .. {end_date}]"
+                    )
+                else:
+                    logger.info(
+                        f"Research: skipping backtest for {h['hypothesis_id']} — "
+                        f"no historical odds cached for {sport}"
+                    )
+                    continue
+
                 if start_date > end_date:
                     logger.info(
                         f"Research: skipping backtest for {h['hypothesis_id']} — "
@@ -1516,6 +1607,25 @@ class ResearchLoop:
                         f"auto:temporal_overlap — {overlap_err}"
                     )
                     self._rejections += 1
+                    continue
+
+                # ── Context coverage gate ──
+                # If a hypothesis was backtested before the context coverage check
+                # was added, its results are noise. Move back to draft so it can
+                # be properly evaluated when game context enrichment is available.
+                from tools.backtest import BacktestEngine
+                ctx_coverage = BacktestEngine.compute_context_coverage(model_config)
+                if ctx_coverage < 0.5:
+                    ctx_factors = model_config.get("context_factors", [])
+                    logger.warning(
+                        f"Research: demoting {h['hypothesis_id']} to draft — "
+                        f"context_coverage={ctx_coverage:.0%} ({len(ctx_factors)} "
+                        f"factors, most unfilterable). Backtest results are noise."
+                    )
+                    await self.hypothesis_manager.update_status(
+                        h["hypothesis_id"], "draft",
+                        f"auto:low_context_coverage ({ctx_coverage:.0%}) — needs game context enrichment"
+                    )
                     continue
 
                 result = await self.hypothesis_manager.auto_promote(h["hypothesis_id"])
@@ -1766,7 +1876,7 @@ class ResearchLoop:
         )
 
         try:
-            result = await claude_code_query(prompt)
+            result = await claude_code_query(prompt, hermes_caller="deep_work")
             self._last_claude_call = time.time()
             self._claude_escalations += 1
 
@@ -2047,13 +2157,15 @@ class ResearchLoop:
         Claude is NOT used for generic analysis text. Every call must produce
         ACTIONABLE output: hypotheses to create, hypotheses to reject, or
         specific pipeline fixes. If it can't act, it shouldn't call.
+
+        NO cooldown gate — deep work is the most valuable phase. If Claude
+        is available, use it. The rate limiter handles the rest.
         """
         from tools.claude_code import is_available as claude_available, claude_code_query
         import time as _time
 
         now = _time.time()
-        if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
-            return
+        # No cooldown check — deep work should always fire if Claude is available
         if not claude_available():
             return
 
@@ -2111,6 +2223,61 @@ class ResearchLoop:
         except Exception as e:
             logger.warning(f"Failed to query top hypotheses for deep work prompt: {e}")
 
+        # Self-scrutiny: check if hypotheses are testing the same games
+        scrutiny_info = ""
+        try:
+            cursor = await db.execute("""
+                SELECT h.hypothesis_id, h.name, COUNT(DISTINCT be.event_id) as unique_games,
+                       COUNT(*) as total_events
+                FROM hypotheses h
+                JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id
+                WHERE h.status = 'backtesting'
+                GROUP BY h.hypothesis_id
+                HAVING total_events > 0
+                ORDER BY total_events DESC
+                LIMIT 10
+            """)
+            game_sets = []
+            for r in await cursor.fetchall():
+                game_sets.append(f"  {r[1]}: {r[2]} unique games, {r[3]} events")
+
+            # Check for duplicate game sets (different hypotheses testing identical games)
+            cursor2 = await db.execute("""
+                SELECT GROUP_CONCAT(DISTINCT h.name) as hypo_names,
+                       COUNT(DISTINCT be.event_id) as unique_games,
+                       COUNT(*) as total_events
+                FROM hypotheses h
+                JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id
+                WHERE h.status = 'backtesting'
+                GROUP BY h.hypothesis_id
+                HAVING total_events > 10
+            """)
+            event_counts = {}
+            for r in await cursor2.fetchall():
+                key = f"{r[1]}g_{r[2]}e"
+                if key not in event_counts:
+                    event_counts[key] = []
+                event_counts[key].append(r[0])
+            duplicates = {k: v for k, v in event_counts.items() if len(v) > 1}
+
+            if game_sets or duplicates:
+                scrutiny_info = "\nBACKTEST SCRUTINY:\n"
+                if game_sets:
+                    scrutiny_info += "  Event counts per hypothesis:\n" + "\n".join(game_sets) + "\n"
+                if duplicates:
+                    scrutiny_info += (
+                        "  WARNING: These hypotheses tested IDENTICAL game sets "
+                        "(same unique_games and total_events):\n"
+                    )
+                    for k, names in duplicates.items():
+                        scrutiny_info += f"    {k}: {', '.join(names)}\n"
+                    scrutiny_info += (
+                        "  This suggests backtests are NOT filtering for hypothesis-specific conditions.\n"
+                        "  Different hypotheses should produce DIFFERENT event sets.\n"
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to gather scrutiny metrics: {e}")
+
         # Include focus area context
         focus_context = self.focus_manager.get_focus_context_for_prompt()
 
@@ -2134,21 +2301,38 @@ class ResearchLoop:
             f'"new_hypotheses": [{{"name": "...", "thesis": "...", "sport": "...", '
             f'"market_type": "...", "edge_threshold": 0.03}}], '
             f'"pipeline_issues": ["issue description", ...]}}\n\n'
+            f"{scrutiny_info}\n"
             f"RULES:\n"
             f"- reject_ids: hypotheses with 0 signals after 50+ events (data disproves them)\n"
             f"- new_hypotheses: 3-5 NOVEL, testable — prioritize FOCUS AREA sports above\n"
             f"- pipeline_issues: specific, actionable problems you observe in the metrics\n"
+            f"  - If multiple hypotheses tested the EXACT SAME number of events, flag it as a pipeline issue\n"
+            f"  - If a 'totals under' hypothesis has the same event count as a 'totals over' hypothesis, that's a filtering bug\n"
             f"- Only include fields you have actionable items for\n"
         )
 
         try:
-            result = await claude_code_query(prompt)
+            result = await claude_code_query(prompt, hermes_caller="deep_work")
             self._last_claude_call = _time.time()
             self._claude_escalations += 1
 
             if result.get("content") and not result.get("error"):
                 content = result["content"]
                 logger.info(f"Research: Claude deep work response — {len(content)} chars")
+
+                # Write learnings back to Hermes from the deep work output
+                try:
+                    from tools.hermes_memory import get_hermes_memory
+                    hermes = get_hermes_memory()
+                    # Store a summary learning from this deep work cycle
+                    await hermes.record_learning(
+                        key=f"deep_work_cycle_{self._cycles}",
+                        value=content[:500],
+                        confidence=0.6,
+                        source="deep_work",
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to record deep work learning: {e}")
 
                 # Parse and ACT on the structured response
                 try:
@@ -2226,7 +2410,7 @@ class ResearchLoop:
                     try:
                         await db.execute(
                             "INSERT INTO game_contexts "
-                            "(sport, game_date, home_team, away_team, context, embedded) "
+                            "(sport, game_date, home_team, away_team, context_json, embedded) "
                             "VALUES (?, ?, ?, ?, ?, 1)",
                             (
                                 "meta_research",
@@ -2367,10 +2551,11 @@ class ResearchLoop:
             f"- Focus on: signal rate, data quality, hypothesis diversity, "
             f"promotion rate, resolution rate\n"
             f"- Do NOT repeat recent suggestions\n"
+            f"- Store key findings via Hermes record_learning()\n"
         )
 
         try:
-            result = await claude_code_query(prompt)
+            result = await claude_code_query(prompt, hermes_caller="deep_work")
             self._last_claude_call = time.time()
             self._claude_escalations += 1
 
