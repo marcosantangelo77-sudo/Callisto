@@ -601,6 +601,9 @@ class ResearchLoop:
         await self._backfill_temporal_metadata()
         # One-time: lower edge_thresholds that are too high (real edges cap at ~2.5%)
         await self._migrate_edge_thresholds()
+        # Retroactively update signal_generated on existing backtest events
+        # to match lowered thresholds — unblocks stalled promotions
+        await self._retroactive_signal_update()
         # One-time: requeue hypotheses falsely rejected by high-threshold bug
         await self._requeue_threshold_rejections()
         self._task = asyncio.create_task(self._loop())
@@ -651,36 +654,111 @@ class ResearchLoop:
         )
 
     async def _migrate_edge_thresholds(self) -> None:
-        """One-time migration: lower edge_thresholds that exceed real market edge range.
+        """Lower edge_thresholds that exceed real market edge range.
 
-        Real market edges top out at ~2.5%. Hypotheses with thresholds at 3%+
-        will NEVER fire signals, causing false rejections. Lower to 1.5% so
-        the backtest engine can actually detect edges.
+        Real market edges in our data top out at ~2.5% with most at 0.5-1.5%.
+        Two-pass migration:
+          Pass 1: thresholds >= 2.5% → 1.5% (legacy fix)
+          Pass 2: thresholds >= 1.5% → 1.0% (93% zero-signal fix)
+        Thresholds at 1.5%+ still suppress most signals given 2-3 book
+        consensus devig produces compressed edge distributions.
         """
         db = self.hypothesis_manager._db
         if db is None:
             return
 
+        # Pass 1: legacy — >= 2.5% to 1.5%
         cursor = await db.execute(
             "SELECT COUNT(*) FROM hypotheses "
             "WHERE edge_threshold >= 0.025 AND status IN ('draft', 'backtesting')"
         )
         row = await cursor.fetchone()
-        count = row[0] if row else 0
+        count_high = row[0] if row else 0
 
-        if count == 0:
+        if count_high > 0:
+            await db.execute(
+                "UPDATE hypotheses SET edge_threshold = 0.015 "
+                "WHERE edge_threshold >= 0.025 AND status IN ('draft', 'backtesting')"
+            )
+            logger.info(
+                f"Edge threshold migration pass 1: lowered {count_high} hypotheses "
+                f"from ≥2.5% to 1.5%"
+            )
+
+        # Pass 2: lower 1.5-2.5% to 1.0% — most real edges are 0.5-1.5%
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM hypotheses "
+            "WHERE edge_threshold >= 0.015 AND edge_threshold < 0.025 "
+            "AND status IN ('draft', 'backtesting')"
+        )
+        row = await cursor.fetchone()
+        count_mid = row[0] if row else 0
+
+        if count_mid > 0:
+            await db.execute(
+                "UPDATE hypotheses SET edge_threshold = 0.01 "
+                "WHERE edge_threshold >= 0.015 AND edge_threshold < 0.025 "
+                "AND status IN ('draft', 'backtesting')"
+            )
+            logger.info(
+                f"Edge threshold migration pass 2: lowered {count_mid} hypotheses "
+                f"from 1.5-2.5% to 1.0%"
+            )
+
+        total = count_high + count_mid
+        if total > 0:
+            await db.commit()
+            logger.info(
+                f"Edge threshold migration complete: {total} hypotheses updated "
+                f"(pass1={count_high}, pass2={count_mid})"
+            )
+        else:
             logger.info("Edge threshold migration: no hypotheses need lowering")
+
+    async def _retroactive_signal_update(self) -> None:
+        """Retroactively update signal_generated on backtest events after threshold migration.
+
+        When edge_threshold is lowered, existing backtest events may now qualify
+        as signals (edge >= new threshold). Without this, hypotheses sit in 'held'
+        state despite having edges that exceed the updated threshold.
+        """
+        db = self.hypothesis_manager._db
+        if db is None:
             return
 
-        await db.execute(
-            "UPDATE hypotheses SET edge_threshold = 0.015 "
-            "WHERE edge_threshold >= 0.025 AND status IN ('draft', 'backtesting')"
+        # For each backtesting hypothesis, update signal_generated based on
+        # current edge_threshold (which may have been lowered by migration)
+        cursor = await db.execute(
+            "SELECT hypothesis_id, edge_threshold FROM hypotheses "
+            "WHERE status = 'backtesting'"
         )
-        await db.commit()
-        logger.info(
-            f"Edge threshold migration: lowered {count} hypotheses from ≥2.5% to 1.5% "
-            f"(real market edges cap at ~2.5%, signals need room below that)"
-        )
+        rows = await cursor.fetchall()
+
+        total_updated = 0
+        total_new_signals = 0
+        for hypothesis_id, threshold in rows:
+            if threshold is None:
+                continue
+            # Update signal_generated for events where edge >= threshold
+            update_cursor = await db.execute(
+                "UPDATE backtest_events "
+                "SET signal_generated = CASE WHEN edge >= ? THEN 1 ELSE 0 END "
+                "WHERE hypothesis_id = ? AND signal_generated = 0 AND edge IS NOT NULL "
+                "AND edge >= ?",
+                (threshold, hypothesis_id, threshold),
+            )
+            if update_cursor.rowcount > 0:
+                total_updated += update_cursor.rowcount
+                total_new_signals += update_cursor.rowcount
+
+        if total_updated > 0:
+            await db.commit()
+            logger.info(
+                f"Retroactive signal update: upgraded {total_updated} backtest events "
+                f"to signals across {len(rows)} hypotheses (edge >= lowered threshold)"
+            )
+        else:
+            logger.info("Retroactive signal update: no events needed updating")
 
     async def _requeue_threshold_rejections(self) -> None:
         """Requeue hypotheses that were rejected due to the high-threshold bug.

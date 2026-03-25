@@ -690,16 +690,41 @@ class HypothesisManager:
                             f"(max observed edge: {edge_diag['max_edge']:.3f}). "
                             f"Retroactively updated {retroactive_count} events → {new_signals} signals"
                         )
-                        return {
-                            "action": "threshold_adjusted",
-                            "reason": (
-                                f"0 signals in {total_events} events because edge_threshold "
-                                f"({edge_diag['current_threshold']:.1%}) exceeds max observed "
-                                f"edge ({edge_diag['max_edge']:.1%}). Lowered to "
-                                f"{new_threshold:.1%} and reset eval cycles. "
-                                f"Retroactively updated {new_signals} events to signals."
-                            ),
-                        }
+                        # If retroactive update created enough signals, immediately
+                        # check promotion readiness instead of returning early.
+                        if new_signals >= PROMOTION_GATES["backtesting→paper_trading"]["min_signals"]:
+                            logger.info(
+                                f"Hypothesis {hypothesis_id}: {new_signals} signals after "
+                                f"threshold adjustment — checking promotion readiness now"
+                            )
+                            readiness = await self.check_promotion_readiness(hypothesis_id)
+                            if readiness.get("should_reject"):
+                                await self.update_status(hypothesis_id, "rejected", "auto")
+                                return {"action": "rejected", "reason": "Data actively disproves thesis after threshold adjustment."}
+                            if readiness.get("ready"):
+                                next_stage = readiness["next_stage"]
+                                await self.update_status(hypothesis_id, next_stage, "auto")
+                                return {"action": "promoted", "new_status": next_stage}
+                            return {
+                                "action": "threshold_adjusted",
+                                "reason": (
+                                    f"Threshold lowered to {new_threshold:.1%}, "
+                                    f"{new_signals} signals now exist, but promotion "
+                                    f"check not yet passing."
+                                ),
+                                "checks": readiness.get("checks", []),
+                            }
+                        else:
+                            return {
+                                "action": "threshold_adjusted",
+                                "reason": (
+                                    f"0 signals in {total_events} events because edge_threshold "
+                                    f"({edge_diag['current_threshold']:.1%}) exceeds max observed "
+                                    f"edge ({edge_diag['max_edge']:.1%}). Lowered to "
+                                    f"{new_threshold:.1%} and reset eval cycles. "
+                                    f"Retroactively updated {new_signals} events to signals."
+                                ),
+                            }
 
                 # Use 10 cycles (not 5) before rejecting — gives more time for
                 # data collection, especially for sports with few games.
