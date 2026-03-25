@@ -1572,14 +1572,14 @@ class ResearchLoop:
         if now - self._last_hypothesis_gen < HYPOTHESIS_GEN_INTERVAL:
             return
 
-        # Don't generate more hypotheses when the backlog is already huge.
-        # The pipeline can test ~20/cycle — generating thousands more is waste.
-        MAX_DRAFT_BACKLOG = 100
-        drafts = await self.hypothesis_manager.list_hypotheses(status="draft")
-        if len(drafts) > MAX_DRAFT_BACKLOG:
+        # Throttle generation when spinning — drafts are free to store and
+        # having a diverse pool is good (more ready when data accumulates).
+        # But if the loop is spinning (0 progress), shift Claude budget from
+        # generation to diagnosis/interpretation instead.
+        if self._spinning_detected:
             logger.info(
-                f"Research: skipping hypothesis generation — {len(drafts)} drafts "
-                f"already queued (cap={MAX_DRAFT_BACKLOG}). Test existing ones first."
+                "Research: throttling hypothesis generation — loop is spinning. "
+                "Shifting Claude budget to diagnosis and interpretation."
             )
             return
 

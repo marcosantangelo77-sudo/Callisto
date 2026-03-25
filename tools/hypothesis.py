@@ -758,14 +758,32 @@ class HypothesisManager:
                             ),
                         }
                     else:
-                        # Never got backtested at all
+                        # No events found — but this might be because the
+                        # data window is too narrow, not because the hypothesis
+                        # is bad. Check how much data we actually have.
+                        days_of_data = await self._days_of_odds_data(hypothesis_id)
+                        if days_of_data is not None and days_of_data < 30:
+                            # Too little data to declare untestable — hold for later
+                            return {
+                                "action": "held",
+                                "reason": (
+                                    f"0 events after {eval_cycles} cycles, but only "
+                                    f"{days_of_data} days of odds data available. "
+                                    f"Holding until data window grows."
+                                ),
+                            }
+
                         await self.update_status(
                             hypothesis_id, "rejected",
                             "auto:no_backtest_data_after_5_cycles",
                         )
                         return {
                             "action": "rejected",
-                            "reason": f"No backtest events after {eval_cycles} evaluation cycles — untestable.",
+                            "reason": (
+                                f"No backtest events after {eval_cycles} evaluation "
+                                f"cycles with {days_of_data or '?'} days of data — "
+                                f"untestable."
+                            ),
                         }
 
                 if total_events > 0:
@@ -917,6 +935,24 @@ class HypothesisManager:
             "avg_edge": row[3],
             "avg_ev": row[4],
         }
+
+    async def _days_of_odds_data(self, hypothesis_id: str) -> Optional[int]:
+        """How many days of historical odds data exist for this hypothesis's sport."""
+        cursor = await self._db.execute(
+            "SELECT sport FROM hypotheses WHERE hypothesis_id = ?",
+            (hypothesis_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        sport = row[0]
+        cursor = await self._db.execute(
+            "SELECT COUNT(DISTINCT snapshot_date) FROM historical_odds_cache "
+            "WHERE sport = ?",
+            (sport,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
 
     async def _avg_books_used(self, hypothesis_id: str) -> Optional[float]:
         """Average books_used across backtest events for this hypothesis.
