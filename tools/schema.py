@@ -553,6 +553,31 @@ CREATE INDEX IF NOT EXISTS idx_masters_bt_hypo
     ON masters_backtest_results(hypothesis_id, method);
 
 -- ──────────────────────────────────────────
+-- PROP SNAPSHOTS: player prop odds over time
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS prop_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sport TEXT NOT NULL,
+    event_id TEXT,
+    home_team TEXT,
+    away_team TEXT,
+    player TEXT NOT NULL,
+    market TEXT NOT NULL,
+    line REAL NOT NULL,
+    side TEXT NOT NULL,
+    book TEXT NOT NULL,
+    price_american INTEGER NOT NULL,
+    snapshot_time DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_prop_snap_player
+    ON prop_snapshots(player, market, line, book, snapshot_time);
+CREATE INDEX IF NOT EXISTS idx_prop_snap_sport_time
+    ON prop_snapshots(sport, snapshot_time);
+CREATE INDEX IF NOT EXISTS idx_prop_snap_event
+    ON prop_snapshots(event_id, market, snapshot_time);
+
+-- ──────────────────────────────────────────
 -- MASTERS PREDICTIONS: pre-tournament rankings
 -- ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS masters_predictions (

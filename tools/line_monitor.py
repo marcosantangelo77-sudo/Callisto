@@ -40,6 +40,7 @@ from tools.fanduel_scraper import scrape_fd_odds
 from tools.betmgm_scraper import scrape_betmgm_odds
 from tools.odds_api_io import get_odds as odds_api_io_get_odds, get_usage_status as odds_api_io_usage
 from tools.oddspapi import get_odds as oddspapi_get_odds, get_usage_status as oddspapi_usage
+from tools.prop_scraper_free import scrape_all_props, store_prop_snapshot, ensure_prop_schema
 
 load_dotenv()
 
@@ -130,7 +131,9 @@ class LineMonitor:
             CREATE INDEX IF NOT EXISTS idx_ev_status ON ev_opportunities(status, detected_at);
         """)
         await self._db.commit()
-        logger.info("Line monitor initialized")
+        # Ensure prop_snapshots table exists
+        await ensure_prop_schema(self.db_path)
+        logger.info("Line monitor initialized (with prop snapshots)")
 
     async def start(self) -> None:
         """Start the background monitoring loop."""
@@ -195,6 +198,9 @@ class LineMonitor:
                     else:
                         await self._snapshot_sport(sport.strip())
 
+                # Prop snapshots — free cascade (DK + FD + BetMGM), no credits
+                await self._snapshot_props()
+
                 await asyncio.sleep(interval)
 
             except asyncio.CancelledError:
@@ -202,6 +208,37 @@ class LineMonitor:
             except Exception as e:
                 logger.error(f"Monitor loop error: {e}")
                 await asyncio.sleep(30)
+
+    async def _snapshot_props(self) -> None:
+        """Scrape player props from all free sources for all monitored sports.
+
+        Runs the DK + FanDuel + BetMGM prop cascade for each sport,
+        stores results in prop_snapshots table. Zero credit cost.
+        """
+        # Only scrape props for sports that have prop markets
+        prop_sports = [s.strip() for s in MONITORED_SPORTS
+                       if s.strip() in ("basketball_nba", "baseball_mlb",
+                                        "icehockey_nhl", "americanfootball_nfl")]
+        if not prop_sports:
+            return
+
+        total_stored = 0
+        for sport in prop_sports:
+            try:
+                result = await scrape_all_props(sport)
+                if result.get("error") or not result.get("props"):
+                    continue
+                stored = await store_prop_snapshot(result["props"], sport, self.db_path)
+                total_stored += stored
+                logger.info(
+                    f"Props {sport}: {stored} lines stored "
+                    f"({result.get('multi_book_count', 0)} multi-book)"
+                )
+            except Exception as e:
+                logger.warning(f"Prop snapshot failed for {sport}: {e}")
+
+        if total_stored > 0:
+            logger.info(f"Prop snapshot cycle complete: {total_stored} total lines stored")
 
     async def _snapshot_sport_fallback(self, sport: str) -> None:
         """Take an odds snapshot using free sources — full cascade.
