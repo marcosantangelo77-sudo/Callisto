@@ -542,9 +542,12 @@ class BacktestEngine:
         r"\bfamiliarity\b": "head_to_head_record",
         r"\brevenge\b": "head_to_head_record",
         r"\bformer.team\b": "head_to_head_record",
-        r"\baces?\b.*first.start": "pitcher_history",
+        r"\baces?\b.*first.*start": "pitcher_history",
+        r"\bace\b.*starter": "pitcher_history",
         r"\bseason.debut\b": "pitcher_history",
-        r"\bfirst.start\b": "pitcher_history",
+        r"\bfirst.*start": "pitcher_history",
+        r"\bfirst.*career.*start": "pitcher_history",
+        r"\bcareer.*debut": "pitcher_history",
         r"\bk/9\b": "pitcher_history",
         r"\bera\b.*under|under.*\bera\b": "pitcher_history",
         r"\bsinkerball\b": "pitcher_pitch_type",
@@ -585,6 +588,18 @@ class BacktestEngine:
         # Pace / tempo factors
         r"\bpace\b": "home_pace_rank",
         r"\btempo\b": "home_pace_rank",
+        # Schedule / matchup type factors
+        r"\binterleague\b": "schedule_type",
+        r"\bopening.day\b": "schedule_type",
+        r"\bopener\b": "schedule_type",
+        # Specific venue names
+        r"\bcoors\b": "venue_type",
+        r"\bfenway\b": "venue_type",
+        r"\bwrigley\b": "venue_type",
+        r"\byankee.stadium\b": "venue_type",
+        # Lineup / starter identity
+        r"\bstarting.pitcher\b": "pitcher_identity",
+        r"\b(?:sp|ace)\b.*\bpitcher\b": "pitcher_identity",
     }
 
     @staticmethod

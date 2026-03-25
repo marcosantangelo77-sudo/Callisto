@@ -1761,12 +1761,24 @@ class ResearchLoop:
                     model_cfg = {}
             from tools.backtest import BacktestEngine
             ctx_coverage = BacktestEngine.compute_context_coverage(model_cfg)
+            # Also infer context needs from thesis/name BEFORE running backtest
+            # (same inference run_backtest does internally). This prevents wasting
+            # a backtest cycle on hypotheses that will just return "untestable".
+            if ctx_coverage >= 0.5 and not model_cfg.get("context_factors"):
+                h_thesis = h.get("thesis", "")
+                h_name_for_ctx = h.get("name", "")
+                inferred_pre = BacktestEngine._infer_context_needs(h_thesis, h_name_for_ctx)
+                if inferred_pre:
+                    ctx_coverage = 0.0
+                    logger.info(
+                        f"Research: pre-backtest inference for {h['hypothesis_id']} "
+                        f"({h_name_for_ctx}) detected unfilterable needs: {inferred_pre}"
+                    )
             if ctx_coverage < 0.5:
                 ctx_factors = model_cfg.get("context_factors", [])
                 logger.info(
                     f"Research: skipping backtest for {h['hypothesis_id']} — "
-                    f"context_coverage={ctx_coverage:.0%} ({len(ctx_factors)} context "
-                    f"factors, most unfilterable). Needs game context enrichment."
+                    f"context_coverage={ctx_coverage:.0%}. Needs game context enrichment."
                 )
                 continue
 
