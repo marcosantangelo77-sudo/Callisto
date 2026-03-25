@@ -1377,6 +1377,40 @@ class ResearchLoop:
             except Exception as e:
                 logger.warning(f"Data collection failed for {sport}: {e}")
 
+        # Collect pre-calculated value bets from Odds-API.io Pro
+        # These are updated every 5 seconds with EV computed from consensus
+        try:
+            from tools.odds_api_io import get_value_bets
+            for book in ["DraftKings", "Fanatics"]:
+                vb = await get_value_bets(book)
+                if vb.get("count", 0) > 0:
+                    logger.info(
+                        f"Research: {vb['count']} value bets from {book} "
+                        f"(top EV: {max(b['ev_pct'] for b in vb['bets']):.1%})"
+                    )
+                    # Store in ev_opportunities table for edge scanner
+                    try:
+                        db = self.data_collector._db
+                        if db:
+                            for bet in vb["bets"]:
+                                if bet["ev_pct"] >= 0.01:  # Only store 1%+ EV
+                                    await db.execute(
+                                        "INSERT OR REPLACE INTO ev_opportunities "
+                                        "(event_id, book, market, side, ev_pct, "
+                                        "source, updated_at) "
+                                        "VALUES (?, ?, ?, ?, ?, 'odds_api_io_pro', ?)",
+                                        (
+                                            bet["event_id"], bet["bookmaker"],
+                                            bet["market"], bet["side"],
+                                            bet["ev_pct"], bet["updated_at"],
+                                        ),
+                                    )
+                            await db.commit()
+                    except Exception as e:
+                        logger.debug(f"Value bet storage: {e}")
+        except Exception as e:
+            logger.warning(f"Value bets collection failed: {e}")
+
     async def _phase_embed_data(self) -> None:
         """Embed new game contexts into the vector store."""
         from tools.embeddings import embed_game_context

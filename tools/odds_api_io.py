@@ -1,25 +1,24 @@
 """
-Odds-API.io integration — free odds API with 100 requests/hour (72K/month).
+Odds-API.io integration — Pro plan with 30,000 requests/hour + WebSocket.
 
-https://odds-api.io provides real-time and pre-match odds across major US sports.
-Free tier: 100 requests per hour, no monthly cap, but limited to 2 bookmakers
-(currently BetMGM + bet365 NJ for this API key).
+https://odds-api.io provides real-time and pre-match odds across 34 sports.
+Pro plan: 30,000 req/hr, 15 bookmakers, all markets, historical data,
+pre-calculated value bets + arbitrage, and WebSocket streaming.
 
-API Structure (v3):
-  - GET /v3/sports           -> list of sports ({"name","slug"})
-  - GET /v3/bookmakers       -> list of all bookmakers
-  - GET /v3/events?sport=X&league=Y  -> list of events
-  - GET /v3/odds?eventId=X&bookmakers=Y  -> odds for a single event
+Key Pro endpoints:
+  - GET /v3/odds/multi?eventIds=X,Y,Z  -> odds for up to 10 events (1 request!)
+  - GET /v3/odds/updated?since=X       -> incremental odds changes
+  - GET /v3/value-bets?bookmaker=X     -> pre-calculated +EV bets (every 5s)
+  - GET /v3/arbitrage-bets             -> pre-calculated arb opportunities
+  - GET /v3/historical/events          -> historical events (31-day windows)
+  - GET /v3/historical/odds            -> historical/closing odds + scores
+  - GET /v3/odds/movements             -> opening-to-closing line history
+  - WSS /v3/ws                         -> real-time odds streaming
 
-IMPORTANT: Unlike "The Odds API" (odds-api.com / v4), this API uses:
-  - Sport slugs like "basketball", "american-football", "ice-hockey"
-  - League slugs like "usa-nba", "usa-nfl", "usa-nhl", "usa-mlb"
-  - Decimal odds only (no American format option)
-  - One eventId per odds request (no batch)
-  - Bookmakers by name (e.g., "BetMGM", "bet365 NJ")
-
-This module normalizes output to match the odds_api.py format so the rest of
-the system can consume it interchangeably.
+Selected bookmakers (15):
+  DraftKings, Fanatics, FanDuel, BetMGM, Caesars, BetRivers, bet365 NJ,
+  Hard Rock, Bovada, Circa, BetOnline.ag, WilliamHill NJ,
+  Betfair Exchange, Betfair Sportsbook, Sbobet
 
 Base URL: https://api.odds-api.io/v3
 Auth: API key via query param (env var ODDS_API_IO_KEY)
@@ -44,8 +43,8 @@ logger = logging.getLogger("callisto.odds_api_io")
 ODDS_API_IO_KEY = os.getenv("ODDS_API_IO_KEY", "")
 ODDS_API_IO_BASE = "https://api.odds-api.io/v3"
 
-# Rate limit: 100 requests per hour
-_HOURLY_LIMIT = 100
+# Rate limit: 30,000 requests per hour (Pro plan)
+_HOURLY_LIMIT = 30000
 _TRACKER_PATH = Path(os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")).parent / "odds_api_io_usage.json"
 
 # Request tracking — sliding window within the current hour
@@ -85,9 +84,12 @@ SPORT_TITLES = {
     "golf_pga": "PGA Golf",
 }
 
-# Free-tier bookmakers selected for this API key.
-# Use PUT /bookmakers/selected/clear to reset, then select new ones.
-_SELECTED_BOOKMAKERS = "BetMGM,bet365 NJ"
+# Pro plan: 15 bookmakers selected via /bookmakers/selected/select
+_SELECTED_BOOKMAKERS = (
+    "DraftKings,Fanatics,FanDuel,BetMGM,Caesars,BetRivers,bet365 NJ,"
+    "Hard Rock,Bovada,Circa,BetOnline.ag,WilliamHill NJ,"
+    "Betfair Exchange,Betfair Sportsbook,Sbobet"
+)
 
 # Bookmaker name -> normalized slug for output
 _BOOKMAKER_SLUG_MAP = {
@@ -95,8 +97,17 @@ _BOOKMAKER_SLUG_MAP = {
     "bet365 NJ": "bet365",
     "DraftKings": "draftkings",
     "FanDuel": "fanduel",
+    "Fanatics": "fanatics",
     "Caesars": "caesars",
     "BetRivers": "betrivers",
+    "Hard Rock": "hardrock",
+    "Bovada": "bovada",
+    "Circa": "circa",
+    "BetOnline.ag": "betonlineag",
+    "WilliamHill NJ": "williamhill",
+    "Betfair Exchange": "betfair_exchange",
+    "Betfair Sportsbook": "betfair",
+    "Sbobet": "sbobet",
     "Pinnacle": "pinnacle",
     "FanDuel NJ": "fanduel",
     "BetMGM NJ": "betmgm",
@@ -777,6 +788,256 @@ def _credits_dict() -> dict:
         "used_this_hour": _hourly_requests,
         "hourly_limit": _HOURLY_LIMIT,
         "api_key_set": bool(ODDS_API_IO_KEY),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pro plan endpoints: value bets, arbitrage, multi-odds, historical
+# ---------------------------------------------------------------------------
+
+
+async def get_value_bets(bookmaker: str = "DraftKings") -> dict:
+    """
+    Get pre-calculated +EV bets from odds-api.io (updated every 5 seconds).
+
+    Returns bets where the bookmaker's odds exceed the consensus fair value
+    derived from all selected bookmakers. Pro plan only.
+    """
+    budget_err = _check_budget(1)
+    if budget_err:
+        return {"error": budget_err, "bets": []}
+
+    data = await _api_get("/value-bets", {"bookmaker": bookmaker})
+    if isinstance(data, dict) and data.get("error"):
+        return data
+
+    bets = data if isinstance(data, list) else []
+    normalized = []
+    for vb in bets:
+        market = vb.get("market", {})
+        bk_odds = vb.get("bookmakerOdds", {})
+        ev_raw = vb.get("expectedValue", 100)
+        ev_pct = (ev_raw - 100) / 100 if ev_raw > 0 else 0
+
+        normalized.append({
+            "event_id": str(vb.get("eventId", "")),
+            "bookmaker": vb.get("bookmaker", bookmaker),
+            "side": vb.get("betSide", ""),
+            "market": market.get("name", ""),
+            "line": market.get("hdp"),
+            "ev_pct": round(ev_pct, 4),
+            "ev_raw": ev_raw,
+            "consensus_odds_home": _safe_float(market.get("home")),
+            "consensus_odds_away": _safe_float(market.get("away")),
+            "book_odds_home": _safe_float(bk_odds.get("home")),
+            "book_odds_away": _safe_float(bk_odds.get("away")),
+            "book_line": bk_odds.get("hdp"),
+            "bet_url": bk_odds.get("href", ""),
+            "updated_at": vb.get("expectedValueUpdatedAt", ""),
+        })
+
+    return {
+        "bookmaker": bookmaker,
+        "count": len(normalized),
+        "bets": normalized,
+        "source": "odds_api_io_pro",
+        "credits": _credits_dict(),
+    }
+
+
+async def get_arbitrage_bets() -> dict:
+    """
+    Get pre-calculated arbitrage opportunities across selected bookmakers.
+
+    Returns guaranteed-profit opportunities with optimal stake calculations.
+    """
+    budget_err = _check_budget(1)
+    if budget_err:
+        return {"error": budget_err, "arbs": []}
+
+    data = await _api_get("/arbitrage-bets", {"bookmakers": _SELECTED_BOOKMAKERS})
+    if isinstance(data, dict) and data.get("error"):
+        return data
+
+    arbs = data if isinstance(data, list) else []
+    normalized = []
+    for arb in arbs:
+        legs = []
+        for leg in arb.get("legs", []):
+            legs.append({
+                "bookmaker": leg.get("bookmaker", ""),
+                "side": leg.get("side", ""),
+                "odds_decimal": _safe_float(leg.get("odds")),
+                "odds_american": _decimal_to_american(_safe_float(leg.get("odds")) or 2.0),
+                "url": leg.get("directLink", ""),
+            })
+        normalized.append({
+            "event_id": str(arb.get("eventId", "")),
+            "market": arb.get("market", {}).get("name", ""),
+            "profit_margin": arb.get("profitMargin", 0),
+            "implied_probability": arb.get("impliedProbability", 0),
+            "legs": legs,
+            "optimal_stakes": arb.get("optimalStakes", []),
+        })
+
+    return {
+        "count": len(normalized),
+        "arbs": normalized,
+        "source": "odds_api_io_pro",
+        "credits": _credits_dict(),
+    }
+
+
+async def get_odds_multi(event_ids: list[str | int], bookmakers: str = "") -> list[dict]:
+    """
+    Get odds for up to 10 events in a single request (Pro plan efficiency).
+
+    This is the key throughput multiplier: 10 events per API call.
+    """
+    if not event_ids:
+        return []
+
+    budget_err = _check_budget(1)
+    if budget_err:
+        return []
+
+    bm = bookmakers or _SELECTED_BOOKMAKERS
+    ids_str = ",".join(str(eid) for eid in event_ids[:10])
+    data = await _api_get("/odds/multi", {"eventIds": ids_str, "bookmakers": bm})
+    if isinstance(data, dict) and data.get("error"):
+        return []
+
+    # data should be a list of event-odds objects
+    results = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+    return results
+
+
+async def get_odds_updated(since_unix: int, sport: str = "", bookmaker: str = "") -> dict:
+    """
+    Get incremental odds changes since a unix timestamp (max 60s ago).
+
+    Only returns odds that changed, not full snapshots. Efficient for
+    high-frequency polling without wasting requests.
+    """
+    budget_err = _check_budget(1)
+    if budget_err:
+        return {"error": budget_err, "updates": []}
+
+    params: dict = {"since": since_unix}
+    if sport:
+        mapping = SPORT_MAP.get(sport, {})
+        params["sport"] = mapping.get("sport", sport)
+    if bookmaker:
+        params["bookmaker"] = bookmaker
+
+    data = await _api_get("/odds/updated", params)
+    if isinstance(data, dict) and data.get("error"):
+        return data
+
+    updates = data if isinstance(data, list) else []
+    return {
+        "count": len(updates),
+        "updates": updates,
+        "since": since_unix,
+        "source": "odds_api_io_pro",
+    }
+
+
+async def get_historical_events(
+    sport: str,
+    from_date: str,
+    to_date: str,
+) -> dict:
+    """
+    Get historical events for a sport within a date range (max 31 days).
+
+    Useful for backtesting: returns completed events with scores.
+    """
+    budget_err = _check_budget(1)
+    if budget_err:
+        return {"error": budget_err, "events": []}
+
+    mapping = SPORT_MAP.get(sport, {})
+    sport_slug = mapping.get("sport", sport)
+    league_slug = mapping.get("league", "")
+
+    params: dict = {"sport": sport_slug, "from": from_date, "to": to_date}
+    if league_slug:
+        params["league"] = league_slug
+
+    data = await _api_get("/historical/events", params)
+    if isinstance(data, dict) and data.get("error"):
+        return data
+
+    events = data if isinstance(data, list) else []
+    return {
+        "sport": sport,
+        "count": len(events),
+        "events": events,
+        "from": from_date,
+        "to": to_date,
+        "source": "odds_api_io_pro",
+    }
+
+
+async def get_historical_odds(event_id: str | int, bookmakers: str = "") -> dict:
+    """
+    Get historical/closing odds + scores for a specific event.
+
+    Returns opening odds, closing odds, and final scores. Critical for
+    backtesting and closing line value (CLV) analysis.
+    """
+    budget_err = _check_budget(1)
+    if budget_err:
+        return {"error": budget_err}
+
+    bm = bookmakers or _SELECTED_BOOKMAKERS
+    data = await _api_get("/historical/odds", {
+        "eventId": str(event_id),
+        "bookmakers": bm,
+    })
+    return data if isinstance(data, dict) else {"data": data}
+
+
+async def get_odds_movements(
+    event_id: str | int,
+    bookmaker: str = "DraftKings",
+    market: str = "ML",
+) -> dict:
+    """
+    Get full line movement history for an event (opening to current/closing).
+
+    Shows every price change for the specified bookmaker+market combination.
+    """
+    budget_err = _check_budget(1)
+    if budget_err:
+        return {"error": budget_err}
+
+    data = await _api_get("/odds/movements", {
+        "eventId": str(event_id),
+        "bookmaker": bookmaker,
+        "market": market,
+    })
+    return data if isinstance(data, dict) else {"data": data}
+
+
+async def get_live_events(sport: str = "") -> dict:
+    """Get currently live (in-play) events."""
+    budget_err = _check_budget(1)
+    if budget_err:
+        return {"error": budget_err, "events": []}
+
+    params: dict = {}
+    if sport:
+        mapping = SPORT_MAP.get(sport, {})
+        params["sport"] = mapping.get("sport", sport)
+
+    data = await _api_get("/events/live", params)
+    events = data if isinstance(data, list) else []
+    return {
+        "count": len(events),
+        "events": events,
+        "source": "odds_api_io_pro",
     }
 
 

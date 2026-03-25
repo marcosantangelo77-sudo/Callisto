@@ -38,7 +38,11 @@ from tools.dk_scraper import scrape_dk_odds
 from tools.action_network_scraper import scrape_action_network
 from tools.fanduel_scraper import scrape_fd_odds
 from tools.betmgm_scraper import scrape_betmgm_odds
-from tools.odds_api_io import get_odds as odds_api_io_get_odds, get_usage_status as odds_api_io_usage
+from tools.odds_api_io import (
+    get_odds as odds_api_io_get_odds,
+    get_usage_status as odds_api_io_usage,
+    get_value_bets as odds_api_io_value_bets,
+)
 from tools.oddspapi import get_odds as oddspapi_get_odds, get_usage_status as oddspapi_usage
 from tools.prop_scraper_free import scrape_all_props, store_prop_snapshot, ensure_prop_schema
 
@@ -245,70 +249,63 @@ class LineMonitor:
             logger.info(f"Prop snapshot cycle complete: {total_stored} total lines stored")
 
     async def _snapshot_sport_fallback(self, sport: str) -> None:
-        """Take an odds snapshot using free sources — full cascade.
+        """Take an odds snapshot using all available sources.
 
         Called when Odds API credits are exhausted or unavailable.
-        Cascade (all free):
-          1. DraftKings scraper (unlimited)
-          2. Action Network scraper (unlimited, up to 9 books per game)
-          3. FanDuel scraper (unlimited)
-          4. BetMGM scraper (unlimited)
-          5. Odds-API.io (100 req/hr free)
-          6. OddsPapi (250/month free)
+        Priority cascade:
+          1. Odds-API.io Pro (PRIMARY — 15 books, 30K req/hr)
+          2. DraftKings scraper (supplementary — DK-specific lines)
+          3. Action Network scraper (supplementary — up to 9 books)
+          4. FanDuel scraper (supplementary)
+          5. BetMGM scraper (supplementary)
+          6. OddsPapi (last resort — 250/month)
         Merges all successful sources for maximum multi-book coverage.
         """
-        logger.info(f"FREE MODE: scraping {sport} via free source cascade (0 paid credits)")
         scraped = {}  # source_name -> data
 
-        # 1. DraftKings — free and unlimited
-        try:
-            dk_data = await scrape_dk_odds(sport)
-            if not dk_data.get("error") and dk_data.get("game_count", 0) > 0:
-                scraped["dk"] = dk_data
-                logger.info(f"DK scraper {sport}: {dk_data['game_count']} games")
-        except Exception as e:
-            logger.warning(f"DK scraper failed for {sport}: {e}")
-
-        # 2. Action Network — free, up to 9 books per game
-        try:
-            an_data = await scrape_action_network(sport)
-            if not an_data.get("error") and an_data.get("game_count", 0) > 0:
-                scraped["action_network"] = an_data
-                logger.info(f"Action Network scraper {sport}: {an_data['game_count']} games")
-        except Exception as e:
-            logger.warning(f"Action Network scraper failed for {sport}: {e}")
-
-        # 3. FanDuel — free and unlimited
-        try:
-            fd_data = await scrape_fd_odds(sport)
-            if not fd_data.get("error") and fd_data.get("game_count", 0) > 0:
-                scraped["fd"] = fd_data
-                logger.info(f"FanDuel scraper {sport}: {fd_data['game_count']} games")
-        except Exception as e:
-            logger.warning(f"FanDuel scraper failed for {sport}: {e}")
-
-        # 4. BetMGM — free and unlimited
-        try:
-            mgm_data = await scrape_betmgm_odds(sport)
-            if not mgm_data.get("error") and mgm_data.get("game_count", 0) > 0:
-                scraped["mgm"] = mgm_data
-                logger.info(f"BetMGM scraper {sport}: {mgm_data['game_count']} games")
-        except Exception as e:
-            logger.warning(f"BetMGM scraper failed for {sport}: {e}")
-
-        # 5. Odds-API.io — 100 req/hr free (72K/month)
-        # ALWAYS call this — it provides the most books (multi-book data is
-        # essential for devig and cross-book edge detection). Individual scrapers
-        # only give 1 book each; Odds-API.io gives ALL of them.
+        # 1. Odds-API.io Pro — PRIMARY source (15 books, 30K req/hr)
+        # This is now the best multi-book source by far.
         try:
             usage = odds_api_io_usage()
             if usage.get("requests_remaining_this_hour", usage.get("requests_remaining", 0)) > 0 and usage.get("api_key_set"):
                 io_data = await odds_api_io_get_odds(sport)
                 if not io_data.get("error") and io_data.get("game_count", 0) > 0:
                     scraped["odds_api_io"] = io_data
-                    logger.info(f"Odds-API.io {sport}: {io_data['game_count']} games")
+                    logger.info(f"Odds-API.io Pro {sport}: {io_data['game_count']} games ({len(io_data['games'][0]['bookmakers']) if io_data['games'] else 0} books/game)")
         except Exception as e:
-            logger.warning(f"Odds-API.io failed for {sport}: {e}")
+            logger.warning(f"Odds-API.io Pro failed for {sport}: {e}")
+
+        # 2. DraftKings — free, supplementary for DK-specific alt lines
+        try:
+            dk_data = await scrape_dk_odds(sport)
+            if not dk_data.get("error") and dk_data.get("game_count", 0) > 0:
+                scraped["dk"] = dk_data
+        except Exception as e:
+            logger.warning(f"DK scraper failed for {sport}: {e}")
+
+        # 3. Action Network — free, up to 9 books per game
+        try:
+            an_data = await scrape_action_network(sport)
+            if not an_data.get("error") and an_data.get("game_count", 0) > 0:
+                scraped["action_network"] = an_data
+        except Exception as e:
+            logger.warning(f"Action Network scraper failed for {sport}: {e}")
+
+        # 4. FanDuel — free and unlimited
+        try:
+            fd_data = await scrape_fd_odds(sport)
+            if not fd_data.get("error") and fd_data.get("game_count", 0) > 0:
+                scraped["fd"] = fd_data
+        except Exception as e:
+            logger.warning(f"FanDuel scraper failed for {sport}: {e}")
+
+        # 5. BetMGM — free and unlimited
+        try:
+            mgm_data = await scrape_betmgm_odds(sport)
+            if not mgm_data.get("error") and mgm_data.get("game_count", 0) > 0:
+                scraped["mgm"] = mgm_data
+        except Exception as e:
+            logger.warning(f"BetMGM scraper failed for {sport}: {e}")
 
         # 6. OddsPapi — 250/month free (last resort)
         if not scraped:

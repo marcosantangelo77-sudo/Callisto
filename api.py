@@ -180,6 +180,14 @@ async def lifespan(app: FastAPI):
     )
     await telegram_listener.start()
 
+    # Odds WebSocket — real-time odds streaming from Odds-API.io Pro
+    try:
+        from tools.odds_ws import start_odds_stream
+        await start_odds_stream()
+        logger.info("Odds WebSocket stream started (15 books, real-time)")
+    except Exception as e:
+        logger.warning(f"Odds WebSocket failed to start: {e}")
+
     worker_task = asyncio.create_task(task_worker())
     logger.info(f"Callisto API started on port {CALLISTO_PORT}")
 
@@ -188,7 +196,7 @@ async def lifespan(app: FastAPI):
     await telegram.alert_system(
         f"API started on port {CALLISTO_PORT}\n"
         f"Monitoring: {', '.join(sports)}\n"
-        f"Agents: Architect, Manager, Sentinel\n"
+        f"Odds-API.io Pro: 15 books, 30K req/hr + WebSocket\n"
         f"Autonomous reasoning: ACTIVE\n"
         f"Research loop: ACTIVE (24/7 hypothesis machine)"
     )
@@ -197,6 +205,11 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     await telegram.alert_system("Callisto shutting down.", is_error=True)
+    try:
+        from tools.odds_ws import stop_odds_stream
+        await stop_odds_stream()
+    except Exception:
+        pass
     await telegram_listener.stop()
     if system_health:
         system_health.write_health_file()
