@@ -1086,3 +1086,221 @@ class TestMultiGameBacktest:
             assert row[0] >= 4, (
                 f"Expected at least 4 resolved events (2 sides x 2 games), got {row[0]}"
             )
+
+
+class TestDateRangeSafety:
+    """Verify end_date is capped at yesterday inside run_backtest()."""
+
+    @pytest.mark.asyncio
+    async def test_future_end_date_capped(self, backtest_engine, hypothesis_manager, db_path):
+        """run_backtest with end_date=today should cap it to yesterday."""
+        from datetime import datetime as dt, timezone as tz, timedelta
+        today = dt.now(tz.utc).strftime("%Y-%m-%d")
+        yesterday = str(dt.now(tz.utc).date() - timedelta(days=1))
+
+        hid = await create_test_hypothesis(hypothesis_manager)
+        # Seed data for yesterday so we have something to process
+        snapshot = build_odds_api_snapshot(game_date=yesterday)
+        await insert_cached_odds(db_path, snapshot, game_date=yesterday)
+        await insert_game_result(db_path, game_date=yesterday)
+
+        result = await backtest_engine.run_backtest(
+            hypothesis_id=hid,
+            start_date=yesterday,
+            end_date=today,  # Should get capped to yesterday
+            credit_budget=0,
+        )
+
+        assert "error" not in result, f"Unexpected error: {result.get('error')}"
+        # Verify the run's date_range_end is yesterday, not today
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(
+                "SELECT date_range_end FROM backtest_runs WHERE run_id = ?",
+                (result["run_id"],),
+            )
+            row = await cursor.fetchone()
+            assert row[0] == yesterday, (
+                f"date_range_end should be capped to {yesterday}, got {row[0]}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_start_after_end_returns_error(self, backtest_engine, hypothesis_manager, db_path):
+        """If start_date > capped end_date, should return error (not crash)."""
+        from datetime import datetime as dt, timezone as tz
+        today = dt.now(tz.utc).strftime("%Y-%m-%d")
+
+        hid = await create_test_hypothesis(hypothesis_manager)
+        result = await backtest_engine.run_backtest(
+            hypothesis_id=hid,
+            start_date=today,  # start=today, end=today -> capped to yesterday -> start>end
+            end_date=today,
+            credit_budget=0,
+        )
+        assert "error" in result
+
+
+class TestRecalculateRunStats:
+    """Test that run stats are recalculated after deferred resolution."""
+
+    @pytest.mark.asyncio
+    async def test_deferred_resolution_updates_run(
+        self, backtest_engine, hypothesis_manager, db_path,
+    ):
+        """
+        Simulate the broken pipeline scenario:
+        1. Run backtest WITHOUT game_results (events created, unresolved)
+        2. Verify run has null stats
+        3. Insert game_results
+        4. Call resolve_from_game_results()
+        5. Verify run stats are now populated
+        """
+        hid = await create_test_hypothesis(hypothesis_manager)
+        snapshot = build_odds_api_snapshot()
+        await insert_cached_odds(db_path, snapshot)
+        # Do NOT insert game_results yet
+
+        result = await backtest_engine.run_backtest(
+            hypothesis_id=hid,
+            start_date=GAME_DATE,
+            end_date=GAME_DATE,
+            credit_budget=0,
+        )
+        run_id = result["run_id"]
+        assert result["total_events"] > 0
+
+        # Verify run has null/zero stats (the broken state)
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(
+                "SELECT actual_win, actual_loss, hit_rate FROM backtest_runs WHERE run_id = ?",
+                (run_id,),
+            )
+            row = await cursor.fetchone()
+            # Should be 0/0/null since no events resolved
+            assert row[0] == 0 or row[0] is None
+            assert row[1] == 0 or row[1] is None
+
+        # Now insert game_results (simulating scores arriving later)
+        await insert_game_result(db_path)
+
+        # Run deferred resolution
+        resolution = await backtest_engine.resolve_from_game_results(run_id=run_id, sport=SPORT)
+        assert resolution["resolved"] > 0, "Expected some events to resolve"
+
+        # Verify run stats are now populated
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(
+                "SELECT actual_win, actual_loss, hit_rate FROM backtest_runs WHERE run_id = ?",
+                (run_id,),
+            )
+            row = await cursor.fetchone()
+            wins, losses, hit_rate = row
+            assert (wins + losses) > 0, f"Expected wins+losses > 0, got {wins}+{losses}"
+            assert hit_rate is not None, "hit_rate should be populated after resolution"
+            assert 0 <= hit_rate <= 1, f"hit_rate should be between 0 and 1, got {hit_rate}"
+
+    @pytest.mark.asyncio
+    async def test_global_resolution_recalculates_all_stale_runs(
+        self, backtest_engine, hypothesis_manager, db_path,
+    ):
+        """
+        Multiple broken runs should all get recalculated when
+        resolve_from_game_results() is called without run_id.
+        """
+        # Create two hypotheses and run backtests without results
+        hid1 = await create_test_hypothesis(hypothesis_manager, name_suffix=" A")
+        hid2 = await create_test_hypothesis(hypothesis_manager, market_type="h2h", name_suffix=" B")
+
+        snapshot = build_odds_api_snapshot()
+        await insert_cached_odds(db_path, snapshot)
+        # No game_results yet
+
+        r1 = await backtest_engine.run_backtest(
+            hypothesis_id=hid1, start_date=GAME_DATE, end_date=GAME_DATE, credit_budget=0,
+        )
+        r2 = await backtest_engine.run_backtest(
+            hypothesis_id=hid2, start_date=GAME_DATE, end_date=GAME_DATE, credit_budget=0,
+        )
+
+        assert r1["total_events"] > 0
+        assert r2["total_events"] > 0
+
+        # Both runs should be in broken state
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM backtest_runs "
+                "WHERE completed_at IS NOT NULL AND total_events > 0 "
+                "AND (actual_win = 0 AND actual_loss = 0 AND hit_rate IS NULL)",
+            )
+            broken = (await cursor.fetchone())[0]
+            assert broken == 2, f"Expected 2 broken runs, got {broken}"
+
+        # Now insert results and resolve globally
+        await insert_game_result(db_path)
+        resolution = await backtest_engine.resolve_from_game_results()
+        assert resolution["resolved"] > 0
+
+        # Both runs should now have stats
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM backtest_runs "
+                "WHERE completed_at IS NOT NULL AND total_events > 0 "
+                "AND (actual_win = 0 AND actual_loss = 0 AND hit_rate IS NULL)",
+            )
+            still_broken = (await cursor.fetchone())[0]
+            assert still_broken == 0, (
+                f"Expected 0 broken runs after resolution, got {still_broken}"
+            )
+
+
+class TestFuzzyResolution:
+    """Test fuzzy team name matching in resolution and _resolve_line."""
+
+    def setup_method(self):
+        self.engine = BacktestEngine.__new__(BacktestEngine)
+
+    def test_resolve_line_fuzzy_h2h(self):
+        """h2h resolution should work with fuzzy team names."""
+        # Side from Odds API uses full name, game_results may use abbreviation
+        result = self.engine._resolve_line(
+            "h2h", "Los Angeles Lakers", None, 110, 105,
+            "LA Lakers", "Boston Celtics",
+        )
+        assert result == "won", f"Fuzzy h2h home should resolve to 'won', got {result}"
+
+    def test_resolve_line_fuzzy_away(self):
+        result = self.engine._resolve_line(
+            "h2h", "Boston Celtics", None, 110, 105,
+            "LA Lakers", "Boston Celtics",
+        )
+        assert result == "lost", f"Fuzzy h2h away should resolve to 'lost', got {result}"
+
+    def test_resolve_line_fuzzy_spreads(self):
+        """Spreads with fuzzy team names should still identify home/away correctly."""
+        result = self.engine._resolve_line(
+            "spreads", "Los Angeles Lakers", -3.5, 110, 105,
+            "LA Lakers", "Boston Celtics",
+        )
+        assert result == "won", f"Fuzzy spreads home should resolve to 'won', got {result}"
+
+    def test_resolve_line_mascot_match(self):
+        """Mascot-only matching (last word) should work."""
+        result = self.engine._resolve_line(
+            "h2h", "Golden State Warriors", None, 110, 105,
+            "GS Warriors", "Miami Heat",
+        )
+        assert result == "won", f"Mascot match should resolve to 'won', got {result}"
+
+    def test_team_matches_exact(self):
+        assert BacktestEngine._team_matches("Boston Celtics", "Boston Celtics")
+
+    def test_team_matches_normalized(self):
+        assert BacktestEngine._team_matches("Los Angeles Lakers", "LA Lakers")
+
+    def test_team_matches_mascot(self):
+        assert BacktestEngine._team_matches("Golden State Warriors", "GS Warriors")
+
+    def test_team_matches_substring(self):
+        assert BacktestEngine._team_matches("Athletics", "Oakland Athletics")
+
+    def test_team_no_match(self):
+        assert not BacktestEngine._team_matches("Boston Celtics", "LA Lakers")

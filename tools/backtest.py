@@ -28,6 +28,7 @@ from tools.math_utils import american_to_decimal, american_to_implied
 from tools.devig import devig_market, power_devig, multiplicative_devig
 from tools.ev import ev_binary, evaluate_edge
 from tools.sizing import kelly_binary
+from datetime import timedelta
 from tools.temporal_analysis import validate_temporal_isolation
 
 load_dotenv()
@@ -161,6 +162,20 @@ class BacktestEngine:
         target_book = config.get("target_book", "draftkings")
         devig_method = config.get("devig_method", "power")
         min_books = config.get("consensus_min_books", 2)
+
+        # ── DATE RANGE SAFETY ──
+        # Never backtest against today or future — games haven't finished,
+        # resolution will always fail. Cap at yesterday.
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if end_date >= today_str:
+            end_date = str(datetime.now(timezone.utc).date() - timedelta(days=1))
+            logger.info(f"Backtest {hypothesis_id}: capped end_date to {end_date} (today's games unfinished)")
+        if start_date > end_date:
+            return {
+                "error": "No valid date range",
+                "detail": f"start_date {start_date} > end_date {end_date} after capping at yesterday",
+                "hypothesis_id": hypothesis_id,
+            }
 
         # ── TEMPORAL ISOLATION ENFORCEMENT ──
         # If the hypothesis was generated from data analysis, ensure the backtest
@@ -891,16 +906,21 @@ class BacktestEngine:
         total = home_score + away_score
         margin = home_score - away_score
 
+        # Use fuzzy matching for side identification — side names from Odds API
+        # may differ from game_results team names
+        is_home = self._team_matches(side, home_team)
+        is_away = self._team_matches(side, away_team)
+
         if market == "h2h":
-            if side.lower() == home_team.lower():
+            if is_home:
                 return "won" if margin > 0 else "lost" if margin < 0 else "push"
-            elif side.lower() == away_team.lower():
+            elif is_away:
                 return "won" if margin < 0 else "lost" if margin > 0 else "push"
             return None
 
         if market == "spreads" and line is not None:
             # side is the team name, line is their spread
-            if side.lower() == home_team.lower():
+            if is_home:
                 adjusted = margin + line
             else:
                 adjusted = -margin + line
@@ -1100,7 +1120,89 @@ class BacktestEngine:
                 f"to game_results (missing game data or team name mismatch)"
             )
         logger.info(f"Resolved {resolved_count}/{len(unresolved)} backtest events from game_results")
+
+        # Recalculate run-level stats for any runs that had events resolved
+        if resolved_count > 0:
+            affected_runs = await self._get_affected_run_ids(run_id)
+            recalc_count = 0
+            for rid in affected_runs:
+                updated = await self.recalculate_run_stats(rid)
+                if updated:
+                    recalc_count += 1
+            if recalc_count > 0:
+                logger.info(f"Recalculated stats for {recalc_count} backtest runs after resolution")
+
         return {"resolved": resolved_count, "unresolved": len(unresolved) - resolved_count}
+
+    async def _get_affected_run_ids(self, run_id: Optional[str] = None) -> list[str]:
+        """Get run IDs that have resolved events but stale run-level stats."""
+        if run_id:
+            return [run_id]
+        # Find all completed runs that have resolved events but null/zero stats
+        cursor = await self._db.execute(
+            "SELECT DISTINCT br.run_id FROM backtest_runs br "
+            "JOIN backtest_events be ON be.run_id = br.run_id "
+            "WHERE br.completed_at IS NOT NULL "
+            "AND br.total_events > 0 "
+            "AND be.actual_result IS NOT NULL "
+            "AND (br.actual_win = 0 AND br.actual_loss = 0 AND br.hit_rate IS NULL)"
+        )
+        return [r[0] for r in await cursor.fetchall()]
+
+    async def recalculate_run_stats(self, run_id: str) -> bool:
+        """Recalculate win/loss/hit_rate for a run from its resolved events."""
+        cursor = await self._db.execute(
+            "SELECT actual_result, COUNT(*) FROM backtest_events "
+            "WHERE run_id = ? AND actual_result IS NOT NULL "
+            "GROUP BY actual_result",
+            (run_id,),
+        )
+        results = {r[0]: r[1] for r in await cursor.fetchall()}
+
+        wins = results.get("won", 0)
+        losses = results.get("lost", 0)
+        pushes = results.get("push", 0)
+        total_decided = wins + losses
+
+        if total_decided == 0:
+            return False  # Nothing resolved yet
+
+        # Count unresolved
+        cursor = await self._db.execute(
+            "SELECT COUNT(*) FROM backtest_events "
+            "WHERE run_id = ? AND actual_result IS NULL",
+            (run_id,),
+        )
+        unresolved = (await cursor.fetchone())[0]
+
+        hit_rate = wins / total_decided if total_decided > 0 else None
+
+        # Calculate avg_edge, avg_ev from resolved events
+        cursor = await self._db.execute(
+            "SELECT AVG(edge), AVG(ev_pct), AVG(clv_implied) FROM backtest_events "
+            "WHERE run_id = ? AND actual_result IS NOT NULL",
+            (run_id,),
+        )
+        row = await cursor.fetchone()
+        avg_edge = row[0]
+        avg_ev = row[1]
+        avg_clv = row[2]
+
+        await self._db.execute(
+            "UPDATE backtest_runs SET "
+            "actual_win = ?, actual_loss = ?, actual_push = ?, unresolved = ?, "
+            "hit_rate = ?, avg_edge = ?, avg_ev = ?, avg_clv = ? "
+            "WHERE run_id = ?",
+            (wins, losses, pushes, unresolved, hit_rate, avg_edge, avg_ev, avg_clv, run_id),
+        )
+        await self._db.commit()
+        logger.info(
+            f"Run {run_id}: recalculated stats — {wins}W/{losses}L/{pushes}P "
+            f"({unresolved} unresolved), hit_rate={hit_rate:.3f}" if hit_rate else
+            f"Run {run_id}: recalculated stats — {wins}W/{losses}L/{pushes}P "
+            f"({unresolved} unresolved)"
+        )
+        return True
 
     async def generate_paper_trade_signal(
         self,
