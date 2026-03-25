@@ -17,6 +17,45 @@ logger = logging.getLogger("callisto.schema")
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
+# ──────────────────────────────────────────────────────────────
+# Regime classification — maps (sport, date) → regime name.
+# Backtests use this to filter data by rule era.
+# ──────────────────────────────────────────────────────────────
+REGIME_BOUNDARIES: dict[str, list[tuple[str, str, str | None]]] = {
+    # (regime_name, start_date, end_date_or_None)
+    "baseball_mlb": [
+        ("mlb_pre_pitch_clock", "2020-01-01", "2023-03-29"),
+        ("mlb_post_pitch_clock", "2023-03-30", None),
+    ],
+    "americanfootball_nfl": [
+        ("nfl_pre_new_kickoff", "2020-01-01", "2024-09-04"),
+        ("nfl_post_new_kickoff", "2024-09-05", None),
+    ],
+    "basketball_nba": [
+        ("nba_pre_cup", "2020-01-01", "2023-10-23"),
+        ("nba_cup_era", "2023-10-24", None),
+    ],
+    "icehockey_nhl": [
+        ("nhl_modern", "2020-01-01", None),
+    ],
+    "basketball_ncaab": [
+        ("ncaab_modern", "2020-01-01", None),
+    ],
+    "basketball_ncaaw": [
+        ("ncaaw_quarter_era", "2015-01-01", None),
+    ],
+}
+
+
+def classify_regime(sport: str, game_date: str) -> str:
+    """Return the regime name for a (sport, date) pair."""
+    boundaries = REGIME_BOUNDARIES.get(sport, [])
+    for regime_name, start, end in reversed(boundaries):
+        if game_date >= start and (end is None or game_date <= end):
+            return regime_name
+    return "unknown"
+
+
 SCHEMA_SQL = """
 -- ──────────────────────────────────────────
 -- BOOK REGISTRY: categorize by tier
@@ -446,6 +485,40 @@ CREATE TABLE IF NOT EXISTS game_results (
 CREATE INDEX IF NOT EXISTS idx_game_results_lookup
     ON game_results(sport, game_date, home_team, away_team);
 
+-- ──────────────────────────────────────────
+-- REGIME TAGGING: rule-change era metadata
+-- ──────────────────────────────────────────
+-- Regimes encode major rule changes that invalidate historical patterns.
+-- Backtests should default to the current regime unless explicitly cross-era.
+--
+-- Key regime boundaries:
+--   MLB:  2023-04-01  pitch clock, shift ban, larger bases
+--   NFL:  2024-09-05  XFL-style kickoff rules
+--   NBA:  2023-10-24  in-season tournament (NBA Cup) introduced
+--   NHL:  (no major recent breaks — stable since 2021)
+--
+CREATE TABLE IF NOT EXISTS regime_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sport TEXT NOT NULL,
+    regime_name TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT,
+    description TEXT NOT NULL,
+    rule_changes TEXT,
+    UNIQUE(sport, regime_name)
+);
+
+INSERT OR IGNORE INTO regime_rules (sport, regime_name, start_date, end_date, description, rule_changes) VALUES
+    ('baseball_mlb', 'mlb_pre_pitch_clock', '2020-01-01', '2023-03-29', 'Pre pitch clock era', 'No pitch clock, shifts allowed, standard bases'),
+    ('baseball_mlb', 'mlb_post_pitch_clock', '2023-03-30', NULL, 'Post pitch clock era', 'Pitch clock, shift ban, larger bases, disengagement limits'),
+    ('americanfootball_nfl', 'nfl_pre_new_kickoff', '2020-01-01', '2024-09-04', 'Traditional kickoff rules', 'Standard NFL kickoff format'),
+    ('americanfootball_nfl', 'nfl_post_new_kickoff', '2024-09-05', NULL, 'XFL-style kickoff rules', 'New kickoff formation, fair catch changes'),
+    ('basketball_nba', 'nba_pre_cup', '2020-01-01', '2023-10-23', 'Pre NBA Cup era', 'Standard schedule, no in-season tournament'),
+    ('basketball_nba', 'nba_cup_era', '2023-10-24', NULL, 'NBA Cup era', 'In-season tournament, schedule adjustments, rest pattern changes'),
+    ('icehockey_nhl', 'nhl_modern', '2020-01-01', NULL, 'Modern NHL rules', 'Stable ruleset since 2021'),
+    ('basketball_ncaab', 'ncaab_modern', '2020-01-01', NULL, 'Modern NCAA basketball', 'Shot clock at 30s since 2015'),
+    ('basketball_ncaaw', 'ncaaw_quarter_era', '2015-01-01', NULL, 'Quarter-based NCAAW', 'Switched from halves to quarters');
+
 CREATE TABLE IF NOT EXISTS research_focus_areas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sport TEXT NOT NULL,
@@ -609,10 +682,47 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         await db.executescript(SCHEMA_SQL)
         await db.commit()
 
+        # Migrations: add regime columns (safe if already exists)
+        for tbl in ("historical_odds_cache", "game_results"):
+            try:
+                await db.execute(f"ALTER TABLE {tbl} ADD COLUMN regime TEXT")
+                await db.commit()
+                logger.info(f"Added regime column to {tbl}")
+            except Exception:
+                pass  # Column already exists
+
         # One-time migration: backfill signals table from backtest_events
         await _backfill_signals_from_backtests(db)
 
+        # One-time migration: tag existing data with regimes
+        await _backfill_regimes(db)
+
     logger.info("Schema ensured")
+
+
+async def _backfill_regimes(db) -> None:
+    """Tag existing historical_odds_cache and game_results rows with regime."""
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM game_results WHERE regime IS NULL"
+    )
+    untagged = (await cursor.fetchone())[0]
+    if untagged == 0:
+        return
+
+    # Load regime rules
+    cursor = await db.execute("SELECT sport, regime_name, start_date, end_date FROM regime_rules")
+    rules = await cursor.fetchall()
+
+    for sport, regime_name, start_date, end_date in rules:
+        end_clause = f"AND game_date <= '{end_date}'" if end_date else ""
+        for tbl, date_col in [("game_results", "game_date"), ("historical_odds_cache", "snapshot_date")]:
+            await db.execute(
+                f"UPDATE {tbl} SET regime = ? "
+                f"WHERE sport = ? AND {date_col} >= ? {end_clause} AND regime IS NULL",
+                (regime_name, sport, start_date),
+            )
+    await db.commit()
+    logger.info(f"Backfilled regimes for {untagged} untagged rows")
 
 
 async def _backfill_signals_from_backtests(db) -> None:
