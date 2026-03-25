@@ -128,8 +128,11 @@ class OddsWebSocket:
                         if not self._running:
                             break
                         try:
+                            # Handle both str and bytes messages
+                            if isinstance(message, bytes):
+                                message = message.decode("utf-8", errors="replace")
                             data = json.loads(message)
-                            msg_type = data.get("type", "unknown")
+                            msg_type = data.get("type", "")
 
                             if msg_type == "welcome":
                                 books = data.get("bookmakers", [])
@@ -138,13 +141,16 @@ class OddsWebSocket:
                                     f"filters={data.get('filters', {})}"
                                 )
 
-                            elif msg_type == "updated":
-                                self._updates_received += 1
-                                self._last_update_time = time.time()
-                                await self.on_update(data)
+                            elif msg_type in ("updated", ""):
+                                # Some update messages lack a "type" field —
+                                # detect by presence of bookie/markets fields
+                                if "bookie" in data or "markets" in data or msg_type == "updated":
+                                    self._updates_received += 1
+                                    self._last_update_time = time.time()
+                                    await self.on_update(data)
 
                             elif msg_type == "created":
-                                logger.info(
+                                logger.debug(
                                     f"WS new event: {data.get('id')} "
                                     f"{data.get('home', '')} vs {data.get('away', '')}"
                                 )
@@ -153,7 +159,7 @@ class OddsWebSocket:
                                 logger.debug(f"WS event removed: {data.get('id')}")
 
                         except json.JSONDecodeError:
-                            logger.warning(f"WS invalid JSON: {message[:200]}")
+                            logger.debug(f"WS parse error (len={len(message)})")
                         except Exception as e:
                             logger.warning(f"WS handler error: {e}")
 
