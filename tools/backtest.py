@@ -161,13 +161,16 @@ class BacktestEngine:
         market_type = h["market_type"]
         edge_threshold = h["edge_threshold"]
         thesis = h.get("thesis", "")
+        h_name = h.get("name", hypothesis_id)  # Readable name for filter parsing
         target_book = config.get("target_book", "draftkings")
         devig_method = config.get("devig_method", "power")
         min_books = config.get("consensus_min_books", 2)
 
         # ── HYPOTHESIS-AWARE FILTERING ──
         # Parse line-based filters from thesis text, model_config, and name (Tier 1)
-        filters = self._parse_hypothesis_filters(thesis, config, hypothesis_id)
+        # NOTE: pass h_name (readable name like "mlb_ace_first_start_over_total")
+        # not hypothesis_id (UUID like "756c5b28-093") so name-based fallbacks work
+        filters = self._parse_hypothesis_filters(thesis, config, h_name)
         if filters:
             logger.info(
                 f"Backtest {hypothesis_id}: applying hypothesis filters: {filters}"
@@ -191,12 +194,51 @@ class BacktestEngine:
         unfilterable = self._log_unfilterable_context_factors(hypothesis_id, config)
         context_coverage = self.compute_context_coverage(config)
 
+        # ── INFER MISSING CONTEXT FACTORS ──
+        # Many hypotheses have empty context_factors despite clearly needing
+        # game-level filtering (dome teams, weather, pitcher stats, etc.).
+        # Detect this from thesis/name keywords and compute effective coverage.
+        inferred_unfilterable = self._infer_context_needs(thesis, h_name)
+        if inferred_unfilterable and not config.get("context_factors"):
+            # Hypothesis needs context filtering but wasn't tagged — override coverage
+            context_coverage = 0.0
+            unfilterable = inferred_unfilterable
+            logger.warning(
+                f"Backtest {hypothesis_id} ({h_name}): inferred unfilterable "
+                f"context needs from thesis/name: {inferred_unfilterable}. "
+                f"context_factors was empty — effective coverage overridden to 0%."
+            )
+
         if context_coverage < 0.5:
             logger.warning(
                 f"Backtest {hypothesis_id}: context_coverage={context_coverage:.0%} — "
                 f"most game-selection conditions are unfilterable. Results will be "
                 f"indistinguishable from testing ALL games in the sport/market."
             )
+            # ── HARD GATE: skip backtests that can't filter meaningfully ──
+            # Without game-level context data, all hypotheses test the same games.
+            # Running anyway produces identical results that waste cycles and
+            # mislead the pipeline into thinking hypotheses were tested.
+            return {
+                "hypothesis_id": hypothesis_id,
+                "hypothesis_name": h_name,
+                "error": "untestable",
+                "detail": (
+                    f"Context coverage is {context_coverage:.0%}. "
+                    f"Unfilterable factors: {unfilterable}. "
+                    f"Without game-level context data, this hypothesis tests "
+                    f"ALL {sport} games indistinguishably from other hypotheses."
+                ),
+                "context_coverage": context_coverage,
+                "unfilterable_context_factors": unfilterable,
+                "hypothesis_filters": filters if filters else {},
+                "suggestion": (
+                    "Either: (1) add venue/weather/player enrichment data to enable "
+                    "filtering, or (2) restructure as a pure line-based hypothesis "
+                    "(home underdog, spread range, etc.), or (3) add context_factors "
+                    "to model_config and populate the corresponding data."
+                ),
+            }
 
         # ── DATE RANGE SAFETY ──
         # Never backtest against today or future — games haven't finished,
@@ -449,6 +491,68 @@ class BacktestEngine:
         "opponent_days_rest", "defensive_rating_slow_team",
         "pre_bye_scoring_trend_last_3",
     }
+
+    # Keywords in thesis/name that imply game-level context filtering is needed.
+    # Maps keyword patterns → the unfilterable factor they represent.
+    _CONTEXT_KEYWORD_MAP = {
+        r"\bdome\b": "venue_type",
+        r"\bretractable.roof\b": "venue_type",
+        r"\bindoor\b": "venue_type",
+        r"\boutdoor\b": "venue_type",
+        r"\bweather\b": "weather",
+        r"\btemperature\b": "temperature",
+        r"\bcold\b": "temperature",
+        r"\bwind\b": "wind",
+        r"\bfastball.velo": "pitcher_velocity",
+        r"\bvelo(city)?\b.*drop": "pitcher_velocity",
+        r"\bmph\b": "pitcher_velocity",
+        r"\bpitch.count": "pitcher_workload",
+        r"\bbullpen\b": "bullpen_status",
+        r"\bopener\b.*inning": "bullpen_status",
+        r"\bcatcher\b": "battery_composition",
+        r"\bbattery\b": "battery_composition",
+        r"\btravel\b": "travel_distance",
+        r"\bwest.coast.*east|east.*west.coast": "timezone_crossing",
+        r"\btimezone\b": "timezone_crossing",
+        r"\bspring.training\b": "spring_training_stats",
+        r"\bspring.era\b": "spring_training_stats",
+        r"\bspring.*k/9\b": "spring_training_stats",
+        r"\bwhiff.rate\b": "spring_training_stats",
+        r"\broster.turnover\b": "roster_composition",
+        r"\bnew.lineup\b": "roster_composition",
+        r"\b\d\+.new\b.*starter": "roster_composition",
+        r"\boffseason\b.*acqui": "roster_composition",
+        r"\bfree.agency\b": "roster_composition",
+        r"\btrade\b": "roster_composition",
+        r"\bnrfi\b": "first_inning_stats",
+        r"\bfirst.inning\b": "first_inning_stats",
+        r"\bdivision.rival": "head_to_head_record",
+        r"\bfamiliarity\b": "head_to_head_record",
+        r"\baces?\b.*first.start": "pitcher_history",
+        r"\bseason.debut\b": "pitcher_history",
+        r"\bfirst.start\b": "pitcher_history",
+        r"\bk/9\b": "pitcher_history",
+        r"\bera\b.*under|under.*\bera\b": "pitcher_history",
+        r"\bhbcu\b": "school_identity",
+        r"\breligious\b": "school_identity",
+        r"\bcohesion\b": "team_identity",
+        r"\bidentity\b": "team_identity",
+        r"\bcultural\b": "team_identity",
+    }
+
+    @staticmethod
+    def _infer_context_needs(thesis: str, name: str) -> list[str]:
+        """Infer unfilterable context factors from thesis/name when context_factors is empty.
+
+        Returns list of inferred context needs, or empty list if the hypothesis
+        appears to be purely line-based (no game-context filtering needed).
+        """
+        text = f"{thesis} {name}".lower()
+        inferred = set()
+        for pattern, factor in BacktestEngine._CONTEXT_KEYWORD_MAP.items():
+            if re.search(pattern, text):
+                inferred.add(factor)
+        return sorted(inferred)
 
     @staticmethod
     def _parse_hypothesis_filters(thesis: str, config: dict, hypothesis_id: str = "") -> dict:

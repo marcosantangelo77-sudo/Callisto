@@ -1494,6 +1494,22 @@ class ResearchLoop:
                     credit_budget=30,  # Enough for ~10 dates × 3 markets
                 )
 
+                # Handle untestable hypotheses — context filtering not available
+                if result.get("error") == "untestable":
+                    logger.warning(
+                        f"Research: hypothesis {h['hypothesis_id']} ({h.get('name', '?')}) "
+                        f"is UNTESTABLE — {result.get('detail', 'no context data')}. "
+                        f"Moving back to draft."
+                    )
+                    # Move back to draft so it doesn't block the pipeline
+                    try:
+                        await self.hypothesis_manager.update_status(
+                            h["hypothesis_id"], "draft", "auto:untestable"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to revert {h['hypothesis_id']} to draft: {e}")
+                    continue
+
                 # Store temporal metadata in backtest result for integrity checking
                 self._backtests_run += 1
                 signals = result.get("signals_generated", 0)
