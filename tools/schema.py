@@ -608,7 +608,76 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(SCHEMA_SQL)
         await db.commit()
+
+        # One-time migration: backfill signals table from backtest_events
+        await _backfill_signals_from_backtests(db)
+
     logger.info("Schema ensured")
+
+
+async def _backfill_signals_from_backtests(db) -> None:
+    """Copy backtest_events with signal_generated=1 into signals table.
+
+    Idempotent — uses INSERT OR IGNORE and checks if backfill already ran.
+    """
+    from tools.backtest import _signal_confidence
+
+    # Check if we already have backtest-type signals (skip if already backfilled)
+    row = await db.execute_fetchall(
+        "SELECT COUNT(*) FROM signals WHERE signal_type = 'backtest'"
+    )
+    if row and row[0][0] > 0:
+        return  # Already backfilled
+
+    # Count what needs backfilling
+    row = await db.execute_fetchall(
+        "SELECT COUNT(*) FROM backtest_events WHERE signal_generated = 1"
+    )
+    total = row[0][0] if row else 0
+    if total == 0:
+        return
+
+    rows = await db.execute_fetchall(
+        "SELECT event_id, sport, side, market, book, book_odds_american, "
+        "model_fair_prob, edge, ev_pct, kelly_fraction, hypothesis_id, run_id "
+        "FROM backtest_events "
+        "WHERE signal_generated = 1"
+    )
+
+    inserted = 0
+    for r in rows:
+        edge_val = r[7] or 0
+        confidence = _signal_confidence(edge_val)
+        await db.execute(
+            "INSERT OR IGNORE INTO signals "
+            "(event_id, sport, signal_type, team, market, book, "
+            "odds_american, fair_probability, fair_prob_source, "
+            "edge_pct, ev_pct, confidence, kelly_fraction, "
+            "recommended_stake, status, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                r[0],        # event_id
+                r[1],        # sport
+                "backtest",  # signal_type
+                r[2],        # side/team
+                r[3],        # market
+                r[4],        # book
+                r[5] or 0,   # odds_american
+                r[6] or 0,   # fair_probability
+                "cross_book_devig",
+                edge_val,
+                r[8] or 0,   # ev_pct
+                confidence,
+                r[9],        # kelly_fraction
+                None,        # recommended_stake
+                "historical",
+                f"hypothesis_id={r[10]}, run_id={r[11]}",
+            ),
+        )
+        inserted += 1
+
+    await db.commit()
+    logger.info(f"Backfill migration: inserted {inserted} backtest signals into signals table")
 
 
 async def get_book_tier(db_path: str = DB_PATH, book_key: str = "") -> str:
