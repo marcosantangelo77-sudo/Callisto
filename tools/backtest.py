@@ -372,9 +372,8 @@ class BacktestEngine:
         )
 
         logger.info(
-            f"Backtest {run_id}: fetched {fetch_result['dates_fetched']} dates, "
-            f"{fetch_result['dates_cached_already']} cached, "
-            f"{fetch_result['credits_spent']} credits spent"
+            f"Backtest {run_id}: fetched {fetch_result.get('dates_fetched', 0)} dates, "
+            f"{fetch_result.get('dates_cached_already', 0)} cached"
         )
 
         # Process each cached date
