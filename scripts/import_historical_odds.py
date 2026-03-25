@@ -208,15 +208,112 @@ def _safe_float(val) -> float:
         return 0.0
 
 
+def _normalize_h2h(odds_list: list, home: str, away: str) -> dict | None:
+    """Normalize ML / h2h market."""
+    for o in odds_list:
+        h_dec = _safe_float(o.get("home", 0))
+        a_dec = _safe_float(o.get("away", 0))
+        if h_dec > 1 and a_dec > 1:
+            return {"key": "h2h", "outcomes": [
+                {"name": home, "price": _decimal_to_american(h_dec)},
+                {"name": away, "price": _decimal_to_american(a_dec)},
+            ]}
+    return None
+
+
+def _normalize_spread(mkt_key: str, odds_list: list, home: str, away: str) -> dict | None:
+    """Normalize any spread market — store ALL lines, not just the primary."""
+    lines = []
+    for o in odds_list:
+        hdp = _safe_float(o.get("hdp", 0))
+        h_dec = _safe_float(o.get("home", 0))
+        a_dec = _safe_float(o.get("away", 0))
+        if h_dec > 1 and a_dec > 1:
+            lines.append({
+                "point": hdp,
+                "home": {"name": home, "price": _decimal_to_american(h_dec)},
+                "away": {"name": away, "price": _decimal_to_american(a_dec)},
+            })
+    if not lines:
+        return None
+    # Sort by closest to even for convenience; primary line is first
+    lines.sort(key=lambda x: abs(x["home"]["price"] - x["away"]["price"]))
+    return {"key": mkt_key, "lines": lines}
+
+
+def _normalize_total(mkt_key: str, odds_list: list) -> dict | None:
+    """Normalize any totals market — store ALL lines."""
+    lines = []
+    for o in odds_list:
+        hdp = _safe_float(o.get("hdp", 0))
+        over_dec = _safe_float(o.get("over", 0))
+        under_dec = _safe_float(o.get("under", 0))
+        if over_dec > 1 and under_dec > 1:
+            lines.append({
+                "point": hdp,
+                "over": _decimal_to_american(over_dec),
+                "under": _decimal_to_american(under_dec),
+            })
+    if not lines:
+        return None
+    lines.sort(key=lambda x: abs(x["over"] - x["under"]))
+    return {"key": mkt_key, "lines": lines}
+
+
+def _normalize_yes_no(mkt_key: str, odds_list: list) -> dict | None:
+    """Normalize yes/no markets (Both Teams To Score, etc.)."""
+    for o in odds_list:
+        y_dec = _safe_float(o.get("yes", 0))
+        n_dec = _safe_float(o.get("no", 0))
+        if y_dec > 1 and n_dec > 1:
+            return {"key": mkt_key, "outcomes": [
+                {"name": "Yes", "price": _decimal_to_american(y_dec)},
+                {"name": "No", "price": _decimal_to_american(n_dec)},
+            ]}
+    return None
+
+
+def _normalize_first_to(mkt_key: str, odds_list: list, home: str, away: str) -> dict | None:
+    """Normalize first-to-score style markets."""
+    for o in odds_list:
+        h_dec = _safe_float(o.get("home", 0))
+        a_dec = _safe_float(o.get("away", 0))
+        if h_dec > 1 and a_dec > 1:
+            return {"key": mkt_key, "outcomes": [
+                {"name": home, "price": _decimal_to_american(h_dec)},
+                {"name": away, "price": _decimal_to_american(a_dec)},
+            ]}
+    return None
+
+
+# Map API market names to normalized keys and handler types
+MARKET_HANDLERS = {
+    "ML":               ("h2h",         "h2h"),
+    "Spread":           ("spreads",     "spread"),
+    "Spread HT":        ("spreads_ht",  "spread"),
+    "Spread 1Q":        ("spreads_1q",  "spread"),
+    "Spread 2Q":        ("spreads_2q",  "spread"),
+    "Spread 3Q":        ("spreads_3q",  "spread"),
+    "Spread 4Q":        ("spreads_4q",  "spread"),
+    "Totals":           ("totals",      "total"),
+    "Totals HT":        ("totals_ht",   "total"),
+    "Totals 1Q":        ("totals_1q",   "total"),
+    "Totals 2Q":        ("totals_2q",   "total"),
+    "Totals 3Q":        ("totals_3q",   "total"),
+    "Totals 4Q":        ("totals_4q",   "total"),
+    "Team Total Home":  ("team_total_home", "total"),
+    "Team Total Away":  ("team_total_away", "total"),
+    "Both Teams To Score": ("btts",     "yesno"),
+    "First Team To Score": ("first_to_score", "firstto"),
+}
+
+
 def normalize_event(raw: dict, sport_key: str) -> dict | None:
     """Normalize a raw odds-api.io event into Callisto format.
 
-    odds-api.io format:
-        bookmakers: { "BookName": [ {name: "ML", odds: [{home: "1.65", away: "2.25"}]}, ... ] }
-        - Odds values are STRINGS (decimal), not floats
-        - ML market odds list may contain a single {home, away} object
-        - Spread/Totals have multiple lines; pick the one closest to even
-        - Also stores player props for future use
+    Captures ALL available markets: ML, spreads, totals (full game + period),
+    team totals, specials, and player props. Stores every alternate line,
+    not just the primary.
     """
     home = raw.get("home", "")
     away = raw.get("away", "")
@@ -235,68 +332,20 @@ def normalize_event(raw: dict, sport_key: str) -> dict | None:
             continue
         slug = BOOKMAKER_SLUG_MAP.get(bm_name, bm_name.lower().replace(" ", ""))
         markets = []
+
         for mkt in bm_markets:
             mkt_name = mkt.get("name", "")
             odds_list = mkt.get("odds", [])
             if not odds_list:
                 continue
 
-            if mkt_name == "ML":
-                outcomes = []
-                for o in odds_list:
-                    h_dec = _safe_float(o.get("home", 0))
-                    a_dec = _safe_float(o.get("away", 0))
-                    if h_dec > 1 and a_dec > 1:
-                        outcomes.append({"name": home, "price": _decimal_to_american(h_dec)})
-                        outcomes.append({"name": away, "price": _decimal_to_american(a_dec)})
-                if outcomes:
-                    markets.append({"key": "h2h", "outcomes": outcomes})
-
-            elif mkt_name == "Spread":
-                best = None
-                best_diff = 999
-                for o in odds_list:
-                    hdp = _safe_float(o.get("hdp", 0))
-                    h_dec = _safe_float(o.get("home", 0))
-                    a_dec = _safe_float(o.get("away", 0))
-                    if h_dec > 1 and a_dec > 1:
-                        diff = abs(h_dec - a_dec)
-                        if diff < best_diff:
-                            best_diff = diff
-                            best = (hdp, h_dec, a_dec)
-                if best:
-                    hdp, h_dec, a_dec = best
-                    markets.append({"key": "spreads", "outcomes": [
-                        {"name": home, "price": _decimal_to_american(h_dec), "point": hdp},
-                        {"name": away, "price": _decimal_to_american(a_dec), "point": -hdp},
-                    ]})
-
-            elif mkt_name == "Totals":
-                best = None
-                best_diff = 999
-                for o in odds_list:
-                    hdp = _safe_float(o.get("hdp", 0))
-                    over_dec = _safe_float(o.get("over", 0))
-                    under_dec = _safe_float(o.get("under", 0))
-                    if over_dec > 1 and under_dec > 1:
-                        diff = abs(over_dec - under_dec)
-                        if diff < best_diff:
-                            best_diff = diff
-                            best = (hdp, over_dec, under_dec)
-                if best:
-                    hdp, over_dec, under_dec = best
-                    markets.append({"key": "totals", "outcomes": [
-                        {"name": "Over", "price": _decimal_to_american(over_dec), "point": hdp},
-                        {"name": "Under", "price": _decimal_to_american(under_dec), "point": hdp},
-                    ]})
-
-            elif mkt_name == "Player Props":
+            if mkt_name == "Player Props":
                 for o in odds_list:
                     label = o.get("label", "")
                     hdp = _safe_float(o.get("hdp", 0))
                     over_dec = _safe_float(o.get("over", 0))
                     under_dec = _safe_float(o.get("under", 0))
-                    if label and hdp > 0 and over_dec > 1 and under_dec > 1:
+                    if label and over_dec > 1 and under_dec > 1:
                         player_props.append({
                             "book": slug,
                             "label": label,
@@ -304,6 +353,29 @@ def normalize_event(raw: dict, sport_key: str) -> dict | None:
                             "over": _decimal_to_american(over_dec),
                             "under": _decimal_to_american(under_dec),
                         })
+                continue
+
+            handler = MARKET_HANDLERS.get(mkt_name)
+            if not handler:
+                # Unknown market — store raw for future use
+                markets.append({"key": mkt_name.lower().replace(" ", "_"), "raw": odds_list})
+                continue
+
+            norm_key, handler_type = handler
+            result = None
+            if handler_type == "h2h":
+                result = _normalize_h2h(odds_list, home, away)
+            elif handler_type == "spread":
+                result = _normalize_spread(norm_key, odds_list, home, away)
+            elif handler_type == "total":
+                result = _normalize_total(norm_key, odds_list)
+            elif handler_type == "yesno":
+                result = _normalize_yes_no(norm_key, odds_list)
+            elif handler_type == "firstto":
+                result = _normalize_first_to(norm_key, odds_list, home, away)
+
+            if result:
+                markets.append(result)
 
         if markets:
             normalized_bookmakers.append({
