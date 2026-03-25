@@ -714,8 +714,8 @@ async def _backfill_regimes(db) -> None:
     rules = await cursor.fetchall()
 
     for sport, regime_name, start_date, end_date in rules:
-        end_clause = f"AND game_date <= '{end_date}'" if end_date else ""
         for tbl, date_col in [("game_results", "game_date"), ("historical_odds_cache", "snapshot_date")]:
+            end_clause = f"AND {date_col} <= '{end_date}'" if end_date else ""
             await db.execute(
                 f"UPDATE {tbl} SET regime = ? "
                 f"WHERE sport = ? AND {date_col} >= ? {end_clause} AND regime IS NULL",
