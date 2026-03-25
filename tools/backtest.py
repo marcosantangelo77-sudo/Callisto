@@ -1694,6 +1694,7 @@ class BacktestEngine:
 
         resolved_count = 0
         match_failures = 0
+        from datetime import datetime as _dt, timedelta as _td
         for ev_id, event_id, ev_sport, market, side, line, game_date, model_factors in unresolved:
             # Extract home/away from event_id or model_factors
             home_team = ""
@@ -1716,18 +1717,33 @@ class BacktestEngine:
                 continue
 
             # Fuzzy match: find the game in results for this date
+            # Try exact date first, then ±1 day to handle timezone offsets
+            # (odds API uses US dates, results sources may use UTC/AU dates)
             scores = None
-            candidates = games_by_date.get((ev_sport, game_date), [])
-            if not candidates:
-                candidates = games_by_date.get(("", game_date), [])
+            try:
+                base = _dt.strptime(game_date, "%Y-%m-%d")
+                date_candidates = [
+                    game_date,
+                    (base + _td(days=1)).strftime("%Y-%m-%d"),
+                    (base - _td(days=1)).strftime("%Y-%m-%d"),
+                ]
+            except ValueError:
+                date_candidates = [game_date]
 
-            for r_home, r_away, r_hscore, r_ascore in candidates:
-                if self._team_matches(home_team, r_home) and self._team_matches(away_team, r_away):
-                    scores = (r_hscore, r_ascore)
-                    break
-                # Also try swapped home/away (data source differences)
-                if self._team_matches(home_team, r_away) and self._team_matches(away_team, r_home):
-                    scores = (r_ascore, r_hscore)
+            for try_date in date_candidates:
+                candidates = games_by_date.get((ev_sport, try_date), [])
+                if not candidates:
+                    candidates = games_by_date.get(("", try_date), [])
+
+                for r_home, r_away, r_hscore, r_ascore in candidates:
+                    if self._team_matches(home_team, r_home) and self._team_matches(away_team, r_away):
+                        scores = (r_hscore, r_ascore)
+                        break
+                    # Also try swapped home/away (data source differences)
+                    if self._team_matches(home_team, r_away) and self._team_matches(away_team, r_home):
+                        scores = (r_ascore, r_hscore)
+                        break
+                if scores:
                     break
 
             if not scores:

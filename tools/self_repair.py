@@ -202,6 +202,7 @@ class SelfRepairEngine:
                            ("empty_backtests", self._det_empty_bt), ("claude_stuck", self._det_claude),
                            ("high_rejection", self._det_rejection), ("signal_drought", self._det_drought),
                            ("premature_rejection", self._det_premature_rejection),
+                           ("resolution_broken", self._det_resolution_broken),
                            ("db_bloat", self._det_bloat)]:
             try:
                 d = await det()
@@ -346,6 +347,42 @@ class SelfRepairEngine:
             pass
         return {"bloated_tables": bloated} if bloated else None
 
+    async def _det_resolution_broken(self) -> Optional[dict]:
+        """Detect when backtest resolution consistently fails to match events.
+
+        If >30% of events are unresolved AND game_results has data for those
+        dates, the resolution pipeline is broken (e.g. date mismatch, team
+        name mismatch) and needs a re-run.
+        """
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                row = await (await db.execute(
+                    "SELECT COUNT(*), "
+                    "SUM(CASE WHEN actual_result IS NULL THEN 1 ELSE 0 END) "
+                    "FROM backtest_events"
+                )).fetchone()
+                if not row or (row[0] or 0) < 50:
+                    return None
+                total, unresolved = row[0], row[1] or 0
+                rate = unresolved / total
+                if rate < 0.30:
+                    return None
+                # Verify game_results has data for the unresolved dates
+                gr_count = (await (await db.execute(
+                    "SELECT COUNT(*) FROM game_results"
+                )).fetchone())[0]
+                if gr_count < 10:
+                    return None  # No results to resolve against
+                return {
+                    "total_events": total,
+                    "unresolved": unresolved,
+                    "unresolved_rate": round(rate, 3),
+                    "game_results_count": gr_count,
+                }
+        except Exception:
+            pass
+        return None
+
 
     async def _repair(self, issue: dict) -> dict:
         itype = issue.get("type", "unknown")
@@ -353,6 +390,7 @@ class SelfRepairEngine:
               "empty_backtests": self._fix_empty_bt, "claude_stuck": self._fix_claude,
               "high_rejection": self._fix_thresholds, "signal_drought": self._fix_thresholds,
               "premature_rejection": self._fix_premature_rejection,
+              "resolution_broken": self._fix_resolution_broken,
               "db_bloat": self._fix_bloat}.get(itype)
         if not fn:
             return {"fixed": False, "action": "no_strategy", "detail": itype}
@@ -530,6 +568,34 @@ class SelfRepairEngine:
                     "detail": f"Moved {requeued} hypotheses from rejected -> draft (had 0 events in sports with data)"}
         return {"fixed": False, "action": "no_requeue", "detail": "No candidates matched"}
 
+    async def _fix_resolution_broken(self, issue: dict) -> dict:
+        """Re-run backtest resolution (now with ±1 day date matching)."""
+        try:
+            from tools.backtest import BacktestEngine
+            from tools.hypothesis import HypothesisManager
+            from tools.historical_odds import HistoricalOddsFetcher
+            hm = HypothesisManager(DB_PATH)
+            hf = HistoricalOddsFetcher(DB_PATH)
+            engine = BacktestEngine(hm, hf, DB_PATH)
+            await engine.initialize()
+            result = await engine.resolve_from_game_results()
+            resolved = result.get("resolved", 0)
+            remaining = result.get("unresolved", 0)
+            await engine.close()
+            if resolved > 0:
+                return {
+                    "fixed": True,
+                    "action": "reran_resolution",
+                    "detail": f"Resolved {resolved} events ({remaining} still unresolved)",
+                }
+            return {
+                "fixed": False,
+                "action": "resolution_no_new_matches",
+                "detail": f"{remaining} events remain unresolved — may need more game_results data",
+            }
+        except Exception as e:
+            return {"fixed": False, "action": "resolution_error", "detail": str(e)}
+
     async def _fix_bloat(self, issue: dict) -> dict:
         pruned = []
         try:
@@ -582,6 +648,9 @@ class SelfRepairEngine:
         (["edge ceiling", "edge cap", "max edge", "threshold too high",
           "thresholds above"],
          "edge_ceiling"),
+        (["resolution", "game_results", "date mismatch", "date offset",
+          "timezone", "could not match", "match failure", "unresolved event"],
+         "resolution_broken"),
     ]
 
     @staticmethod
@@ -614,6 +683,7 @@ class SelfRepairEngine:
                     "low_sample_size": self._fix_finding_low_sample,
                     "promotion_thresholds_strict": self._fix_finding_promotion_thresholds,
                     "edge_ceiling": self._fix_finding_edge_ceiling,
+                    "resolution_broken": self._fix_finding_resolution,
                 }.get(strategy)
 
                 if handler:
@@ -878,6 +948,10 @@ class SelfRepairEngine:
                     "detail": f"Lowered edge_threshold from >2% to 1.5% on {adjusted} hypotheses"}
         return {"fixed": False, "action": "lower_edge_ceiling",
                 "detail": "No hypotheses with edge_threshold > 2% found"}
+
+    async def _fix_finding_resolution(self, finding: dict) -> dict:
+        """Re-run resolution when Claude identifies matching failures."""
+        return await self._fix_resolution_broken(finding)
 
     async def _record_to_hermes(self, itype: str, result: dict) -> None:
         try:
