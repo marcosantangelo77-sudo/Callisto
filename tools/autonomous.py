@@ -1995,6 +1995,34 @@ class ResearchLoop:
                 # be properly evaluated when game context enrichment is available.
                 from tools.backtest import BacktestEngine
                 ctx_coverage = BacktestEngine.compute_context_coverage(model_config)
+
+                # Also infer context needs from thesis/name (same logic as
+                # run_backtest). Without this, hypotheses with empty
+                # context_factors appear "fully filterable" (coverage=1.0)
+                # even when their name implies unfilterable conditions.
+                if ctx_coverage >= 0.5 and not model_config.get("context_factors"):
+                    thesis = h.get("thesis", "")
+                    h_name = h.get("name", "")
+                    inferred = BacktestEngine._infer_context_needs(thesis, h_name)
+                    if inferred:
+                        ctx_coverage = 0.0
+                        logger.info(
+                            f"Research: {h['hypothesis_id']} ({h_name}) — inferred "
+                            f"unfilterable context needs: {inferred}"
+                        )
+
+                # Also check needs_unique_data flag from self-repair
+                if model_config.get("needs_unique_data"):
+                    logger.warning(
+                        f"Research: demoting {h['hypothesis_id']} to draft — "
+                        f"flagged as needs_unique_data (duplicate event set)"
+                    )
+                    await self.hypothesis_manager.update_status(
+                        h["hypothesis_id"], "draft",
+                        "auto:needs_unique_data — stale backtest with duplicate event set"
+                    )
+                    continue
+
                 if ctx_coverage < 0.5:
                     ctx_factors = model_config.get("context_factors", [])
                     logger.warning(
