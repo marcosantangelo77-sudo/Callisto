@@ -15,6 +15,7 @@ based on the hypothesis's model_config. No new simulation code — reuse everyth
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -159,9 +160,35 @@ class BacktestEngine:
         sport = h["sport"]
         market_type = h["market_type"]
         edge_threshold = h["edge_threshold"]
+        thesis = h.get("thesis", "")
         target_book = config.get("target_book", "draftkings")
         devig_method = config.get("devig_method", "power")
         min_books = config.get("consensus_min_books", 2)
+
+        # ── HYPOTHESIS-AWARE FILTERING ──
+        # Parse line-based filters from thesis text, model_config, and name (Tier 1)
+        filters = self._parse_hypothesis_filters(thesis, config, hypothesis_id)
+        if filters:
+            logger.info(
+                f"Backtest {hypothesis_id}: applying hypothesis filters: {filters}"
+            )
+        else:
+            logger.info(
+                f"Backtest {hypothesis_id}: no line-based filters parsed — "
+                f"processing all lines (generic cross-book edge detection)"
+            )
+
+        # Warn specifically when a totals hypothesis couldn't determine a side
+        if market_type == "totals" and "side_filter" not in filters:
+            logger.warning(
+                f"Backtest {hypothesis_id}: totals hypothesis without side filter — "
+                f"BOTH Over and Under will be evaluated (2x events, diluted signal). "
+                f"Fix: add side_filter to model_config or include 'over'/'under' in "
+                f"thesis/name."
+            )
+
+        # Log unfilterable context factors (Tier 2)
+        unfilterable = self._log_unfilterable_context_factors(hypothesis_id, config)
 
         # ── DATE RANGE SAFETY ──
         # Never backtest against today or future — games haven't finished,
@@ -303,6 +330,8 @@ class BacktestEngine:
                     min_books=min_books,
                     config=config,
                     h_sport=sport,
+                    thesis=thesis,
+                    filters=filters,
                 )
                 total_events += events
                 total_signals += signals
@@ -374,7 +403,245 @@ class BacktestEngine:
             "signals_generated": total_signals,
             "fetch_summary": fetch_result,
             "significance": sig_report,
+            "hypothesis_filters": filters if filters else {},
+            "unfilterable_context_factors": unfilterable,
+            "unfiltered_totals_side": (
+                market_type == "totals" and "side_filter" not in (filters or {})
+            ),
+            "filter_quality": (
+                "fully_filtered" if filters and not unfilterable
+                else "partially_filtered" if filters
+                else "unfiltered_noisy" if unfilterable
+                else "generic"
+            ),
         }
+
+    # ── HYPOTHESIS-AWARE FILTERING ──
+    # Tier 1: Line-based filters (spread range, side, home/away)
+    # Tier 2: Contextual filters (weather, travel, etc.) — logged as unavailable
+
+    UNFILTERABLE_CONTEXT_FACTORS = {
+        "weather", "temperature", "wind", "wind_speed", "wind_direction",
+        "travel_distance", "timezone_crossing", "altitude",
+        "pitcher_history", "player_trade_recency", "player_impact_rating",
+        "referee_crew", "referee_foul_tendency", "public_betting_pct",
+        "handle_estimate", "line_movement_velocity", "line_movement_direction",
+        "prev_game_margin", "starter_4q_minutes_prev",
+        "days_rest", "days_since_last_game",
+        "bye_week_flag", "bye_week_return", "primetime_flag", "game_slot",
+        "thursday_game", "national_tv_flag", "revenge_game_flag",
+        "divisional_matchup", "conference_tier", "hours_before_tip",
+        "home_pace_rank", "away_pace_rank", "pace_differential",
+        "last_10_possessions_per_game", "defensive_rating_slow_team",
+        "home_team_pace_rank", "away_team_pace_rank",
+        "season_avg_total", "pre_bye_scoring_trend_last_3",
+        "first_half_total", "defensive_rank_both_teams", "extra_rest_days",
+        "opponent_record", "head_to_head_record", "both_teams_short_rest",
+        "opponent_days_rest", "defensive_rating_slow_team",
+        "pre_bye_scoring_trend_last_3",
+    }
+
+    @staticmethod
+    def _parse_hypothesis_filters(thesis: str, config: dict, hypothesis_id: str = "") -> dict:
+        """Parse hypothesis thesis text, model_config, and name to extract line-based filters.
+
+        Returns a dict of filters that can be applied to game lines:
+            side_filter: "Over", "Under", or None — only evaluate this side
+            spread_range: (min, max) or None — only test spreads in this range
+            spread_min: float or None — only test spreads >= this value
+            home_away_filter: "home", "away", or None — only test this side
+            dog_fav_filter: "underdog", "favorite", or None — only test this role
+        """
+        filters = {}
+        thesis_lower = thesis.lower() if thesis else ""
+        h_id_lower = hypothesis_id.lower() if hypothesis_id else ""
+
+        # 1. Side filter from model_config (most reliable — explicitly set)
+        side_filter = config.get("side_filter")
+        if side_filter:
+            filters["side_filter"] = side_filter  # "Over" or "Under"
+        elif config.get("market_type") == "totals" or "total" in thesis_lower:
+            # Parse from thesis: if thesis is about "under" or "over" specifically
+            # Be careful: "underdog" contains "under" but is not a side filter
+            # Look for "under" as a side-of-total context, not "underdog"
+            thesis_words = re.split(r'[\s,;.!?()]+', thesis_lower)
+            has_under_side = ("under" in thesis_words or "unders" in thesis_words
+                             or "under-" in thesis_lower
+                             or re.search(r'\bunder\b(?!dog)', thesis_lower))
+            has_over_side = ("over" in thesis_words or "overs" in thesis_words
+                            or "over-" in thesis_lower
+                            or re.search(r'\bover\b(?!reaction|priced|weight|all|val)', thesis_lower))
+            # Only set side filter if thesis is clearly about ONE side
+            if has_under_side and not has_over_side:
+                filters["side_filter"] = "Under"
+            elif has_over_side and not has_under_side:
+                filters["side_filter"] = "Over"
+
+        # 1b. Fallback: extract side from hypothesis NAME if thesis parsing missed it.
+        # Names like "mlb_opener_bullpen_game_total_over" or "mlb_new_manager_total_under"
+        # encode the predicted direction. Only use as fallback when thesis didn't yield a side.
+        if "side_filter" not in filters and h_id_lower:
+            is_totals = config.get("market_type") == "totals" or "total" in h_id_lower
+            if is_totals:
+                # Check name suffix/segments for over/under direction
+                name_parts = h_id_lower.replace("-", "_").split("_")
+                name_has_over = "over" in name_parts or "overs" in name_parts
+                name_has_under = "under" in name_parts or "unders" in name_parts
+                if name_has_over and not name_has_under:
+                    filters["side_filter"] = "Over"
+                    logger.info(f"Side filter 'Over' inferred from hypothesis name: {hypothesis_id}")
+                elif name_has_under and not name_has_over:
+                    filters["side_filter"] = "Under"
+                    logger.info(f"Side filter 'Under' inferred from hypothesis name: {hypothesis_id}")
+
+        # 2. Spread range from model_config or thesis
+        spread_range = config.get("spread_range")
+        if spread_range and isinstance(spread_range, (list, tuple)) and len(spread_range) == 2:
+            filters["spread_range"] = (float(spread_range[0]), float(spread_range[1]))
+        else:
+            # Parse "X-Y points" from thesis — only when describing game selection criteria
+            # e.g., "underdogs of 3-7 points" or "favorites by 3-7 points"
+            # NOT "moving the line 0.5-1.5 points past fair value" (line movement context)
+            range_match = re.search(
+                r'(?:of|by|between|within|spread(?:s)?[\s:]+)'
+                r'\s*(\d+(?:\.\d+)?)\s*[-–to]+\s*(\d+(?:\.\d+)?)\s*point',
+                thesis_lower,
+            )
+            if range_match:
+                low = float(range_match.group(1))
+                high = float(range_match.group(2))
+                if low > high:
+                    low, high = high, low
+                # Sanity: spread ranges should be in a reasonable range (1-20)
+                if 1 <= low and high <= 25:
+                    filters["spread_range"] = (low, high)
+
+        # 3. Spread minimum from thesis ("X+ points", "of X+ points")
+        if "spread_range" not in filters:
+            # Only match when in a game-selection context, not line movement
+            min_match = re.search(
+                r'(?:of|by|at least|minimum|spread(?:s)?[\s:]+)'
+                r'\s*(\d+(?:\.\d+)?)\+?\s*point',
+                thesis_lower,
+            )
+            if min_match:
+                val = float(min_match.group(1))
+                # Sanity: only treat as spread minimum if it looks like a spread value (1-20)
+                if 1 <= val <= 20:
+                    filters["spread_min"] = val
+
+        # 4. Home/away filter
+        if re.search(r'\bhome\s+(underdog|dog|team|favorite)', thesis_lower):
+            filters["home_away_filter"] = "home"
+        elif re.search(r'\broad\s+(underdog|dog|team|favorite)', thesis_lower):
+            filters["home_away_filter"] = "away"
+        elif re.search(r'\baway\s+(underdog|dog|team|favorite)', thesis_lower):
+            filters["home_away_filter"] = "away"
+
+        # 5. Underdog/favorite filter
+        if re.search(r'\bunderdog', thesis_lower) and not re.search(r'\bfavorite', thesis_lower):
+            filters["dog_fav_filter"] = "underdog"
+        elif re.search(r'\bfavorite', thesis_lower) and not re.search(r'\bunderdog', thesis_lower):
+            filters["dog_fav_filter"] = "favorite"
+
+        return filters
+
+    def _matches_hypothesis_conditions(
+        self,
+        side_name: str,
+        market_type: str,
+        point: Optional[float],
+        home_team: str,
+        away_team: str,
+        filters: dict,
+    ) -> bool:
+        """Check if a specific line/side matches the hypothesis conditions.
+
+        Args:
+            side_name: The side being evaluated (team name, "Over", "Under")
+            market_type: "spreads", "totals", "h2h"
+            point: The line value (spread number, total number)
+            home_team: Home team name
+            away_team: Away team name
+            filters: Pre-parsed filters from _parse_hypothesis_filters()
+
+        Returns True if this line should be processed, False to skip.
+        """
+        # 1. Side filter (Over/Under for totals) — check even when filters dict
+        # is empty, because totals should default to single-side if possible
+        side_filter = filters.get("side_filter") if filters else None
+        if market_type == "totals":
+            if side_filter:
+                if side_name.lower() != side_filter.lower():
+                    return False
+            # No side filter on a totals hypothesis = both sides processed.
+            # This is acceptable for generic edge detection but will be flagged
+            # in backtest metadata as "unfiltered_totals_side".
+
+        if not filters:
+            return True  # No filters = backward compatible, process everything
+
+        # 2. Spread range filter
+        spread_range = filters.get("spread_range")
+        if spread_range and market_type == "spreads" and point is not None:
+            abs_spread = abs(point)
+            low, high = spread_range
+            if abs_spread < low or abs_spread > high:
+                return False
+
+        # 3. Spread minimum filter
+        spread_min = filters.get("spread_min")
+        if spread_min is not None and market_type == "spreads" and point is not None:
+            if abs(point) < spread_min:
+                return False
+
+        # 4. Home/away filter
+        home_away = filters.get("home_away_filter")
+        if home_away and market_type in ("spreads", "h2h"):
+            is_home_side = self._team_matches(side_name, home_team)
+            is_away_side = self._team_matches(side_name, away_team)
+            if home_away == "home" and not is_home_side:
+                return False
+            if home_away == "away" and not is_away_side:
+                return False
+
+        # 5. Underdog/favorite filter (for spreads: negative line = favorite)
+        dog_fav = filters.get("dog_fav_filter")
+        if dog_fav and market_type == "spreads" and point is not None:
+            # Negative point = favorite, positive point = underdog
+            is_underdog = point > 0
+            is_favorite = point < 0
+            if dog_fav == "underdog" and not is_underdog:
+                return False
+            if dog_fav == "favorite" and not is_favorite:
+                return False
+
+        return True
+
+    @staticmethod
+    def _log_unfilterable_context_factors(hypothesis_id: str, config: dict) -> list[str]:
+        """Check for context factors we cannot filter on and log them.
+
+        Returns list of unfilterable factors for inclusion in backtest metadata.
+        """
+        context_factors = config.get("context_factors", [])
+        if not context_factors:
+            return []
+
+        unfilterable = [
+            f for f in context_factors
+            if f.lower().replace(" ", "_") in BacktestEngine.UNFILTERABLE_CONTEXT_FACTORS
+            or f.lower() in BacktestEngine.UNFILTERABLE_CONTEXT_FACTORS
+        ]
+
+        if unfilterable:
+            logger.warning(
+                f"Hypothesis {hypothesis_id} requires context_factors "
+                f"{unfilterable} which are not yet available — running "
+                f"unfiltered backtest for those conditions (results will be noisy)."
+            )
+
+        return unfilterable
 
     async def _process_game(
         self,
@@ -390,6 +657,8 @@ class BacktestEngine:
         min_books: int,
         config: dict,
         h_sport: str = "",
+        thesis: str = "",
+        filters: Optional[dict] = None,
     ) -> tuple[int, int]:
         """
         Process a single game: devig, compare, record predictions.
@@ -465,7 +734,7 @@ class BacktestEngine:
         return await self._process_game_lines(
             run_id, hypothesis_id, game, game_date, snapshot_time,
             effective_market, effective_target, edge_threshold, devig_method,
-            effective_min_books, config, h_sport=h_sport,
+            effective_min_books, config, h_sport=h_sport, filters=filters,
         )
 
     async def _process_game_lines(
@@ -482,6 +751,7 @@ class BacktestEngine:
         min_books: int,
         config: dict,
         h_sport: str = "",
+        filters: Optional[dict] = None,
     ) -> tuple[int, int]:
         """Process spreads/totals/h2h lines for a game.
 
@@ -524,12 +794,15 @@ class BacktestEngine:
         # For spreads, sides have opposite-sign points (e.g., -7.5 and +7.5)
         # so group by abs(point) to pair them correctly
         sides_by_line = {}
+        signed_points = {}  # (mkt_key, group_point, side_name) -> signed point
         for (mkt_key, name, point), books in lines_by_key.items():
             group_point = abs(point) if point is not None and mkt_key == "spreads" else point
             line_key = (mkt_key, group_point)
             if line_key not in sides_by_line:
                 sides_by_line[line_key] = {}
             sides_by_line[line_key][name] = books
+            # Track the original signed point for underdog/favorite filtering
+            signed_points[(mkt_key, group_point, name)] = point
 
         for (mkt_key, point), sides in sides_by_line.items():
             side_names = list(sides.keys())
@@ -619,6 +892,19 @@ class BacktestEngine:
                 (side_a_name, fair_a, consensus_a, best_a_val, best_a_book, side_a_books, contributing_books_a),
                 (side_b_name, fair_b, consensus_b, best_b_val, best_b_book, side_b_books, contributing_books_b),
             ]:
+                # ── Hypothesis-aware filtering ──
+                # Get the signed point for this side (for underdog/favorite detection)
+                side_signed_point = signed_points.get((mkt_key, point, side_name), point)
+                if not self._matches_hypothesis_conditions(
+                    side_name=side_name,
+                    market_type=mkt_key,
+                    point=side_signed_point,
+                    home_team=home,
+                    away_team=away,
+                    filters=filters or {},
+                ):
+                    continue  # Skip — doesn't match hypothesis conditions
+
                 target_price = target_books[target_book]["price"]
                 target_implied = american_to_implied(target_price)
                 ev = ev_binary(fair_val, american_to_decimal(target_price))
