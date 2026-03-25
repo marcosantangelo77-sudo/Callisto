@@ -217,6 +217,9 @@ class HypothesisManager:
     ) -> str:
         """Create a new hypothesis. Returns hypothesis_id.
 
+        If a hypothesis with the same name already exists, returns the existing
+        hypothesis_id instead of creating a duplicate.
+
         Temporal metadata in model_config (set by temporal_analysis.py):
             - training_period_start: First date used for pattern discovery
             - training_period_end: Last date used for pattern discovery
@@ -224,6 +227,18 @@ class HypothesisManager:
 
         These fields are used by backtest.py to enforce temporal isolation.
         """
+        # ── Deduplication guard: skip if name already exists ──
+        cursor = await self._db.execute(
+            "SELECT hypothesis_id FROM hypotheses WHERE name = ? LIMIT 1",
+            (name,),
+        )
+        existing = await cursor.fetchone()
+        if existing:
+            logger.debug(
+                f"Hypothesis '{name}' already exists as {existing[0]} — skipping duplicate"
+            )
+            return existing[0]
+
         hid = str(uuid.uuid4())[:12]
         now = datetime.now(timezone.utc).isoformat()
 
