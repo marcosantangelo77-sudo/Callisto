@@ -833,7 +833,20 @@ class ResearchLoop:
                             sport=nh.get("sport", "basketball_nba"),
                             market_type=nh.get("market_type", "spreads"),
                             edge_threshold=nh.get("edge_threshold", 0.015),
-                            model_config={"source": "deferred_queue_claude", "cycle": self._cycles},
+                            model_config={
+                                "source": "deferred_queue_claude",
+                                "cycle": self._cycles,
+                                "training_period_start": "2023-01-01",
+                                "training_period_end": str(
+                                    datetime.now(timezone.utc).date()
+                                    - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
+                                ),
+                                "forward_test_start": str(
+                                    datetime.now(timezone.utc).date()
+                                    - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
+                                    + timedelta(days=BACKTEST_GAP_DAYS)
+                                ),
+                            },
                         )
                         created += 1
                     except Exception as e:
@@ -863,7 +876,20 @@ class ResearchLoop:
                             sport=nh.get("sport", "basketball_nba"),
                             market_type=nh.get("market_type", "spreads"),
                             edge_threshold=nh.get("edge_threshold", 0.015),
-                            model_config={"source": "deferred_deep_work", "cycle": self._cycles},
+                            model_config={
+                                "source": "deferred_deep_work",
+                                "cycle": self._cycles,
+                                "training_period_start": "2023-01-01",
+                                "training_period_end": str(
+                                    datetime.now(timezone.utc).date()
+                                    - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
+                                ),
+                                "forward_test_start": str(
+                                    datetime.now(timezone.utc).date()
+                                    - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
+                                    + timedelta(days=BACKTEST_GAP_DAYS)
+                                ),
+                            },
                         )
                         created += 1
                     except Exception:

@@ -815,8 +815,12 @@ class Orchestrator:
             raise
 
     def _domain_search_query(self, query: str, domain: Domain) -> Optional[str]:
-        """Generate a domain-specific search refinement."""
-        core = query.rstrip("?").strip()
+        """Generate a domain-specific search refinement.
+
+        Uses only the first line (max 200 chars) to avoid URL overflow
+        on multi-line queries like edge analysis prompts.
+        """
+        core = query.split("\n")[0][:200].rstrip("?").strip()
         if domain == Domain.FINANCIAL:
             return f"{core} market analysis financial data"
         elif domain == Domain.TECHNICAL:
