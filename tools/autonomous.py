@@ -305,10 +305,15 @@ class AutonomousLoop:
         now = time.time()
         expired = [
             k for k, t in self._analyzed_edges.items()
-            if now - t > EDGE_DEDUP_WINDOW * 2
+            if now - t > EDGE_DEDUP_WINDOW * 1.5
         ]
         for k in expired:
             del self._analyzed_edges[k]
+        # Hard cap: if cache grows beyond 500 entries, keep only newest 250
+        if len(self._analyzed_edges) > 500:
+            sorted_keys = sorted(self._analyzed_edges, key=self._analyzed_edges.get)
+            for k in sorted_keys[:len(sorted_keys) - 250]:
+                del self._analyzed_edges[k]
 
     def get_status(self) -> dict:
         """Return loop status."""
@@ -586,6 +591,10 @@ class ResearchLoop:
         logger.info(f"Research focus areas loaded: {focus_sports}")
         # One-time backfill of temporal metadata on legacy hypotheses
         await self._backfill_temporal_metadata()
+        # One-time: lower edge_thresholds that are too high (real edges cap at ~2.5%)
+        await self._migrate_edge_thresholds()
+        # One-time: requeue hypotheses falsely rejected by high-threshold bug
+        await self._requeue_threshold_rejections()
         self._task = asyncio.create_task(self._loop())
         logger.info("Research loop started — autonomous hypothesis machine online")
 
@@ -631,6 +640,85 @@ class ResearchLoop:
         logger.info(
             f"Temporal metadata backfill complete: updated {count} legacy hypotheses "
             f"(training_period_end=2026-02-22, training_period_start=2023-01-01, gap=7d)"
+        )
+
+    async def _migrate_edge_thresholds(self) -> None:
+        """One-time migration: lower edge_thresholds that exceed real market edge range.
+
+        Real market edges top out at ~2.5%. Hypotheses with thresholds at 3%+
+        will NEVER fire signals, causing false rejections. Lower to 1.5% so
+        the backtest engine can actually detect edges.
+        """
+        db = self.hypothesis_manager._db
+        if db is None:
+            return
+
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM hypotheses "
+            "WHERE edge_threshold >= 0.025 AND status IN ('draft', 'backtesting')"
+        )
+        row = await cursor.fetchone()
+        count = row[0] if row else 0
+
+        if count == 0:
+            logger.info("Edge threshold migration: no hypotheses need lowering")
+            return
+
+        await db.execute(
+            "UPDATE hypotheses SET edge_threshold = 0.015 "
+            "WHERE edge_threshold >= 0.025 AND status IN ('draft', 'backtesting')"
+        )
+        await db.commit()
+        logger.info(
+            f"Edge threshold migration: lowered {count} hypotheses from ≥2.5% to 1.5% "
+            f"(real market edges cap at ~2.5%, signals need room below that)"
+        )
+
+    async def _requeue_threshold_rejections(self) -> None:
+        """Requeue hypotheses that were rejected due to the high-threshold bug.
+
+        These hypotheses were rejected with 'no_edge_after_backtest' because their
+        edge_threshold was ≥3% while real market edges cap at ~2.5%. With thresholds
+        now lowered, they deserve a second chance.
+        """
+        db = self.hypothesis_manager._db
+        if db is None:
+            return
+
+        cursor = await db.execute(
+            "SELECT hypothesis_id, model_config FROM hypotheses "
+            "WHERE status = 'rejected' "
+            "AND promoted_by LIKE '%no_edge_after_backtest%'"
+        )
+        rows = await cursor.fetchall()
+
+        if not rows:
+            logger.info("Threshold rejection requeue: no hypotheses to requeue")
+            return
+
+        count = 0
+        for hypothesis_id, model_config_raw in rows:
+            try:
+                config = json.loads(model_config_raw) if model_config_raw else {}
+            except (json.JSONDecodeError, TypeError):
+                config = {}
+
+            # Reset eval cycles so they get a fresh evaluation
+            config["evaluate_cycles"] = 0
+            config["requeued_from_threshold_bug"] = True
+
+            await db.execute(
+                "UPDATE hypotheses SET status = 'backtesting', "
+                "edge_threshold = 0.015, model_config = ? "
+                "WHERE hypothesis_id = ?",
+                (json.dumps(config), hypothesis_id),
+            )
+            count += 1
+
+        await db.commit()
+        logger.info(
+            f"Threshold rejection requeue: moved {count} hypotheses from rejected → backtesting "
+            f"(were victims of edge_threshold ≥ 3% bug, now set to 1.5%)"
         )
 
     async def stop(self) -> None:
@@ -744,7 +832,7 @@ class ResearchLoop:
                             thesis=nh.get("thesis", ""),
                             sport=nh.get("sport", "basketball_nba"),
                             market_type=nh.get("market_type", "spreads"),
-                            edge_threshold=nh.get("edge_threshold", 0.03),
+                            edge_threshold=nh.get("edge_threshold", 0.015),
                             model_config={"source": "deferred_queue_claude", "cycle": self._cycles},
                         )
                         created += 1
@@ -774,7 +862,7 @@ class ResearchLoop:
                             thesis=nh.get("thesis", ""),
                             sport=nh.get("sport", "basketball_nba"),
                             market_type=nh.get("market_type", "spreads"),
-                            edge_threshold=nh.get("edge_threshold", 0.03),
+                            edge_threshold=nh.get("edge_threshold", 0.015),
                             model_config={"source": "deferred_deep_work", "cycle": self._cycles},
                         )
                         created += 1
@@ -1545,7 +1633,7 @@ class ResearchLoop:
                     f'"thesis": "Clear testable statement", '
                     f'"sport": "basketball_nba", '
                     f'"market_type": "spreads|totals|h2h|player_props", '
-                    f'"edge_threshold": 0.03}}\n'
+                    f'"edge_threshold": 0.015}}\n'
                     f"]}}\n\n"
                     f"RULES:\n"
                     f"- Generate 3-5 hypotheses per call\n"
@@ -1587,7 +1675,7 @@ class ResearchLoop:
                                     thesis=nh.get("thesis", ""),
                                     sport=nh.get("sport", "basketball_nba"),
                                     market_type=nh.get("market_type", "spreads"),
-                                    edge_threshold=nh.get("edge_threshold", 0.03),
+                                    edge_threshold=nh.get("edge_threshold", 0.015),
                                     model_config={
                                         "source": "claude_primary_gen",
                                         "cycle": self._cycles,
@@ -1660,7 +1748,7 @@ class ResearchLoop:
                                 thesis=nh.get("thesis", ""),
                                 sport=nh.get("sport", "basketball_nba"),
                                 market_type=nh.get("market_type", "spreads"),
-                                edge_threshold=nh.get("edge_threshold", 0.03),
+                                edge_threshold=nh.get("edge_threshold", 0.015),
                                 model_config={
                                     "source": "local_fallback_gen",
                                     "cycle": self._cycles,
@@ -2824,7 +2912,7 @@ class ResearchLoop:
             f'{{"reject_ids": ["hypothesis_id1", ...], '
             f'"promising_sports": ["sport1", ...], '
             f'"new_hypotheses": [{{"name": "...", "thesis": "...", "sport": "...", '
-            f'"market_type": "...", "edge_threshold": 0.03}}], '
+            f'"market_type": "...", "edge_threshold": 0.015}}], '
             f'"pipeline_issues": ["issue description", ...]}}\n\n'
             f"{scrutiny_info}\n"
             f"RULES:\n"
@@ -2909,7 +2997,7 @@ class ResearchLoop:
                                 thesis=nh.get("thesis", ""),
                                 sport=nh.get("sport", "basketball_nba"),
                                 market_type=nh.get("market_type", "spreads"),
-                                edge_threshold=nh.get("edge_threshold", 0.03),
+                                edge_threshold=nh.get("edge_threshold", 0.015),
                                 model_config={
                                     "source": "claude_deep_work",
                                     "cycle": self._cycles,

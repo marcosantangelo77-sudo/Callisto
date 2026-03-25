@@ -53,9 +53,10 @@ class HermesMemory:
 
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
-        self._cache: dict[str, str] = {}  # caller_type -> cached context
+        self._cache: dict[str, str] = {}  # caller_type -> cached context (max 20 entries)
         self._cache_time: dict[str, float] = {}
         self._cache_ttl: float = 90  # Refresh every 90 seconds
+        self._cache_max_entries: int = 20  # Hard cap to prevent memory leak
         self._db_initialized = False
 
     async def _ensure_tables(self, db: aiosqlite.Connection) -> None:
@@ -136,6 +137,13 @@ class HermesMemory:
                         sections.append(section)
 
                 result = "\n\n".join(sections)
+                # Enforce max cache size to prevent memory leak
+                if len(self._cache) >= self._cache_max_entries:
+                    # Evict oldest entries
+                    oldest = sorted(self._cache_time, key=self._cache_time.get)
+                    for old_key in oldest[:len(oldest) // 2]:
+                        self._cache.pop(old_key, None)
+                        self._cache_time.pop(old_key, None)
                 self._cache[cache_key] = result
                 self._cache_time[cache_key] = now
                 return result

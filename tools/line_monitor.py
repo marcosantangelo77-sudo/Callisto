@@ -79,9 +79,9 @@ class LineMonitor:
         self._db: Optional[aiosqlite.Connection] = None
         self._task: Optional[asyncio.Task] = None
         self._running = False
-        self._snapshots: dict[str, dict] = {}  # sport -> last snapshot
-        self._alerts: list[dict] = []  # Recent movement alerts
-        self._latest_edge_reports: dict[str, dict] = {}  # sport -> latest edge scan
+        self._snapshots: dict[str, dict] = {}  # sport -> last snapshot (only latest per sport)
+        self._alerts: list[dict] = []  # Recent movement alerts (capped at 100)
+        self._latest_edge_reports: dict[str, dict] = {}  # sport -> latest edge scan (only latest per sport)
         # Self-healing: track consecutive all-source failures per sport.
         # Alert via Telegram only after 3+ consecutive failures.
         self._consecutive_failures: dict[str, int] = {}  # sport -> count
@@ -680,6 +680,9 @@ class LineMonitor:
                 logger.info(f"SHARP MONEY: {sport} — {len(sharp_signals)} signals (logged, no alert)")
                 for sig in sharp_signals:
                     self._alerts.append({"sport": sport, "type": "sharp_money", **sig})
+                # Cap alerts to prevent unbounded growth
+                if len(self._alerts) > 100:
+                    self._alerts = self._alerts[-100:]
 
         self._snapshots[sport] = new_snapshot
 

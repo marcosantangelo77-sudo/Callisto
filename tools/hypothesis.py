@@ -573,8 +573,10 @@ class HypothesisManager:
           - paper_trading → live: paper_trades MUST exist AND show positive ROI
 
         Auto-rejection:
-          - If a hypothesis has been in 'backtesting' through 5+ evaluate cycles
+          - If a hypothesis has been in 'backtesting' through 10+ evaluate cycles
             with 0 backtest_events, it is auto-rejected as untestable.
+          - If 0 signals after 10 cycles but events exist, check if threshold is
+            the issue before rejecting (edge distribution diagnostic).
         """
         h = await self.get_hypothesis(hypothesis_id)
         if not h:
@@ -609,9 +611,55 @@ class HypothesisManager:
                 )
                 await self._db.commit()
 
-                if eval_cycles >= 5:
+                # Before rejecting, check if the edge threshold is too high.
+                # If events exist but 0 signals, the threshold may be suppressing
+                # valid edges. Check edge distribution first.
+                if total_events > 0 and eval_cycles >= 5:
+                    edge_diag = await self._diagnose_edge_threshold(hypothesis_id)
+                    if edge_diag.get("threshold_too_high"):
+                        # Auto-lower threshold and give more cycles
+                        new_threshold = edge_diag["recommended_threshold"]
+                        model_config["edge_threshold"] = new_threshold
+                        model_config["evaluate_cycles"] = 0  # Reset cycle count
+                        await self._db.execute(
+                            "UPDATE hypotheses SET edge_threshold = ?, model_config = ? "
+                            "WHERE hypothesis_id = ?",
+                            (new_threshold, json.dumps(model_config), hypothesis_id),
+                        )
+                        await self._db.commit()
+                        logger.info(
+                            f"Hypothesis {hypothesis_id}: lowered edge_threshold "
+                            f"from {edge_diag['current_threshold']:.3f} to {new_threshold:.3f} "
+                            f"(max observed edge: {edge_diag['max_edge']:.3f})"
+                        )
+                        return {
+                            "action": "threshold_adjusted",
+                            "reason": (
+                                f"0 signals in {total_events} events because edge_threshold "
+                                f"({edge_diag['current_threshold']:.1%}) exceeds max observed "
+                                f"edge ({edge_diag['max_edge']:.1%}). Lowered to "
+                                f"{new_threshold:.1%} and reset eval cycles."
+                            ),
+                        }
+
+                # Use 10 cycles (not 5) before rejecting — gives more time for
+                # data collection, especially for sports with few games.
+                if eval_cycles >= 10:
                     if total_events > 0:
-                        # Hypothesis was tested but found no edge — legitimate rejection
+                        # Check run-level stats before rejecting — the run may
+                        # have real resolved data even if 0 signals at threshold.
+                        run_stats = await self._get_best_run_stats(hypothesis_id)
+                        if run_stats and run_stats.get("hit_rate") is not None:
+                            return {
+                                "action": "held",
+                                "reason": (
+                                    f"0 signals at threshold but run-level data exists: "
+                                    f"{run_stats['wins']}W/{run_stats['losses']}L "
+                                    f"(hit_rate={run_stats['hit_rate']:.1%}). "
+                                    f"Consider threshold adjustment."
+                                ),
+                            }
+
                         await self.update_status(
                             hypothesis_id, "rejected",
                             "auto:no_edge_after_backtest",
@@ -639,12 +687,12 @@ class HypothesisManager:
                         "action": "held",
                         "reason": (
                             f"{total_events} events tested but 0 signals "
-                            f"(cycle {eval_cycles}/5 before auto-reject)."
+                            f"(cycle {eval_cycles}/10 before auto-reject)."
                         ),
                     }
                 return {
                     "action": "held",
-                    "reason": f"No backtest events yet (cycle {eval_cycles}/5 before auto-reject).",
+                    "reason": f"No backtest events yet (cycle {eval_cycles}/10 before auto-reject).",
                 }
 
             # Events exist — now check minimum quality bar
@@ -708,6 +756,65 @@ class HypothesisManager:
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
         return [dict(zip(cols, row)) for row in rows]
+
+    async def _diagnose_edge_threshold(self, hypothesis_id: str) -> dict:
+        """Check if a hypothesis's edge_threshold is suppressing valid signals.
+
+        Looks at the edge distribution of backtest events to determine if the
+        threshold is set above the max observed edge (meaning signals can never fire).
+        """
+        h = await self.get_hypothesis(hypothesis_id)
+        current_threshold = h.get("edge_threshold", 0.03) if h else 0.03
+
+        cursor = await self._db.execute(
+            "SELECT edge FROM backtest_events "
+            "WHERE hypothesis_id = ? AND edge IS NOT NULL "
+            "ORDER BY edge DESC LIMIT 100",
+            (hypothesis_id,),
+        )
+        edges = [r[0] for r in await cursor.fetchall()]
+
+        if not edges:
+            return {"threshold_too_high": False, "current_threshold": current_threshold}
+
+        max_edge = max(edges)
+        avg_edge = sum(edges) / len(edges)
+        above_threshold = sum(1 for e in edges if e >= current_threshold)
+
+        result = {
+            "current_threshold": current_threshold,
+            "max_edge": max_edge,
+            "avg_edge": avg_edge,
+            "total_edges": len(edges),
+            "above_threshold": above_threshold,
+            "threshold_too_high": above_threshold == 0 and max_edge > 0,
+        }
+
+        if result["threshold_too_high"]:
+            # Set new threshold to 60% of max observed edge (leaves room for real signals)
+            result["recommended_threshold"] = round(max(max_edge * 0.6, 0.01), 4)
+
+        return result
+
+    async def _get_best_run_stats(self, hypothesis_id: str) -> Optional[dict]:
+        """Get the best backtest run stats for a hypothesis (by hit_rate)."""
+        cursor = await self._db.execute(
+            "SELECT actual_win, actual_loss, hit_rate, avg_edge, avg_ev "
+            "FROM backtest_runs "
+            "WHERE hypothesis_id = ? AND hit_rate IS NOT NULL "
+            "ORDER BY hit_rate DESC LIMIT 1",
+            (hypothesis_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "wins": row[0],
+            "losses": row[1],
+            "hit_rate": row[2],
+            "avg_edge": row[3],
+            "avg_ev": row[4],
+        }
 
     async def _get_paper_trades(self, hypothesis_id: str) -> list[dict]:
         """Get all paper trades for a hypothesis."""
