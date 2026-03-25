@@ -29,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from tools import telegram
+from tools.backtest import _signal_confidence
 from tools.edge_confidence import score_edge
 
 logger = logging.getLogger("callisto.autonomous")
@@ -2722,12 +2723,7 @@ class ResearchLoop:
                                     )
                                     # Also insert into signals table
                                     edge_val = round(edge_info.get("edge_pct", 0) / 100, 6)
-                                    if edge_val > 0.05:
-                                        sig_confidence = "high"
-                                    elif edge_val > 0.03:
-                                        sig_confidence = "medium"
-                                    else:
-                                        sig_confidence = "low"
+                                    sig_confidence = _signal_confidence(edge_val)
                                     await db.execute(
                                         "INSERT INTO signals "
                                         "(event_id, sport, signal_type, team, market, book, "

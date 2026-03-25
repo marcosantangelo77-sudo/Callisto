@@ -39,6 +39,20 @@ logger = logging.getLogger("callisto.backtest")
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
 
+def _signal_confidence(edge: float) -> str:
+    """Categorize edge into confidence tiers based on realistic market edges.
+
+    Real cross-book edges cap at ~2.5%. Old thresholds (5%/3%) were impossible
+    to hit, making every signal "low". These thresholds reflect actual edge
+    distribution: top-decile edges are ~2%+, median is ~1%.
+    """
+    if edge >= 0.02:
+        return "high"
+    elif edge >= 0.012:
+        return "medium"
+    return "low"
+
+
 class BacktestEngine:
     """Replay historical odds through a model and evaluate predictions."""
 
@@ -439,6 +453,13 @@ class BacktestEngine:
             f"Backtest {run_id} complete: {total_events} events, {total_signals} signals"
         )
 
+        # ── Copy signal events to signals table ──
+        # Bridge the gap: backtest_events with signal_generated=1 need to
+        # appear in the signals table so the system has a unified view of
+        # all detected edges, not just paper-trade ones.
+        if total_signals > 0:
+            await self._populate_signals_from_backtest(run_id, hypothesis_id)
+
         # Resolve outcomes using local game_results table
         resolution = await self.resolve_from_game_results(run_id=run_id, sport=sport)
         logger.info(
@@ -510,6 +531,61 @@ class BacktestEngine:
             ),
             "context_coverage": context_coverage,
         }
+
+    async def _populate_signals_from_backtest(
+        self, run_id: str, hypothesis_id: str
+    ) -> int:
+        """Copy backtest events with signal_generated=1 into the signals table.
+
+        Returns the number of signals inserted.
+        """
+        rows = await self._db.execute_fetchall(
+            "SELECT event_id, sport, side, market, book, book_odds_american, "
+            "model_fair_prob, edge, ev_pct, kelly_fraction "
+            "FROM backtest_events "
+            "WHERE run_id = ? AND hypothesis_id = ? AND signal_generated = 1",
+            (run_id, hypothesis_id),
+        )
+        if not rows:
+            return 0
+
+        inserted = 0
+        for r in rows:
+            edge_val = r[7] or 0  # edge column
+            confidence = _signal_confidence(edge_val)
+            await self._db.execute(
+                "INSERT OR IGNORE INTO signals "
+                "(event_id, sport, signal_type, team, market, book, "
+                "odds_american, fair_probability, fair_prob_source, "
+                "edge_pct, ev_pct, confidence, kelly_fraction, "
+                "recommended_stake, status, notes) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    r[0],        # event_id
+                    r[1],        # sport
+                    "backtest",  # signal_type — distinguishes from paper_trade
+                    r[2],        # side/team
+                    r[3],        # market
+                    r[4],        # book
+                    r[5] or 0,   # odds_american
+                    r[6] or 0,   # fair_probability
+                    "cross_book_devig",
+                    edge_val,
+                    r[8] or 0,   # ev_pct
+                    confidence,
+                    r[9],        # kelly_fraction
+                    None,        # recommended_stake
+                    "historical", # status — these are resolved, not actionable
+                    f"hypothesis_id={hypothesis_id}, run_id={run_id}",
+                ),
+            )
+            inserted += 1
+
+        await self._db.commit()
+        logger.info(
+            f"Backtest {run_id}: populated {inserted} signals from backtest events"
+        )
+        return inserted
 
     # ── HYPOTHESIS-AWARE FILTERING ──
     # Tier 1: Line-based filters (spread range, side, home/away)
@@ -2017,12 +2093,7 @@ class BacktestEngine:
             )
             # Also insert into signals table
             edge_val = event.get("edge", 0) or 0
-            if edge_val > 0.05:
-                confidence = "high"
-            elif edge_val > 0.03:
-                confidence = "medium"
-            else:
-                confidence = "low"
+            confidence = _signal_confidence(edge_val)
             await self._db.execute(
                 "INSERT INTO signals "
                 "(event_id, sport, signal_type, team, market, book, "
