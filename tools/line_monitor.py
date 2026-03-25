@@ -582,9 +582,19 @@ class LineMonitor:
             key = self._matchup_key(extra_game.get("home_team", ""), extra_game.get("away_team", ""))
             if key and key in base_by_matchup:
                 idx = base_by_matchup[key]
-                # Add all bookmakers from extra source
+                # Add bookmakers from extra source, skipping duplicates.
+                # A duplicate = same bookmaker key already present in base.
+                existing_keys = {
+                    bm.get("key", "").lower()
+                    for bm in merged["games"][idx].get("bookmakers", [])
+                }
                 for bm in extra_game.get("bookmakers", []):
+                    bm_key = bm.get("key", "").lower()
+                    if bm_key and bm_key in existing_keys:
+                        continue  # Skip — this book already has an entry
                     merged["games"][idx].setdefault("bookmakers", []).append(bm)
+                    if bm_key:
+                        existing_keys.add(bm_key)
             else:
                 extra_only_games.append(extra_game)
 

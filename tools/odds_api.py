@@ -378,6 +378,32 @@ def find_best_line(game: dict, market: str = "spreads", team: str = "") -> dict:
     if not bookmaker_lines:
         return {"error": "No lines found", "lines": []}
 
+    # H2H contamination guard: if a team's lines contain BOTH large positive
+    # AND large negative prices, two sides of the market leaked into one
+    # team's line set (e.g. correct underdog +500 mixed with opponent's
+    # favorite -700 due to a scraper home/away swap).  Keep only the
+    # majority sign to purge the contaminated entries.
+    if market == "h2h" and len(bookmaker_lines) >= 3:
+        prices = [l["price"] for l in bookmaker_lines]
+        has_big_pos = any(p > 150 for p in prices)
+        has_big_neg = any(p < -150 for p in prices)
+        if has_big_pos and has_big_neg:
+            n_pos = sum(1 for p in prices if p > 0)
+            n_neg = sum(1 for p in prices if p < 0)
+            if n_pos >= n_neg:
+                # Team is an underdog — keep positive lines only
+                bookmaker_lines = [l for l in bookmaker_lines if l["price"] > 0]
+            else:
+                # Team is a favorite — keep negative lines only
+                bookmaker_lines = [l for l in bookmaker_lines if l["price"] < 0]
+            logger.warning(
+                f"H2H contamination filtered for {team}: kept "
+                f"{len(bookmaker_lines)} lines (pos={n_pos}, neg={n_neg})"
+            )
+
+    if not bookmaker_lines:
+        return {"error": "No lines found after contamination filter", "lines": []}
+
     # Sort by best price (highest for positive odds, highest for negative = closest to 0)
     bookmaker_lines.sort(key=lambda x: x["price"], reverse=True)
 
