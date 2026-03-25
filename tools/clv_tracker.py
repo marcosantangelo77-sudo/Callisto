@@ -42,6 +42,7 @@ class CLVTracker:
     async def initialize(self) -> None:
         """Create bet tracking tables."""
         self._db = await aiosqlite.connect(self.db_path)
+        await self._db.execute("PRAGMA busy_timeout = 10000")
         await self._db.executescript("""
             CREATE TABLE IF NOT EXISTS bets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

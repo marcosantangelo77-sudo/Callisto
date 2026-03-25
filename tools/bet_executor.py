@@ -95,6 +95,7 @@ class BetExecutor:
     async def initialize(self) -> None:
         """Initialize database connection and ensure directories exist."""
         self._db = await aiosqlite.connect(DB_PATH)
+        await self._db.execute("PRAGMA busy_timeout = 10000")
         SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
         SESSION_DIR.mkdir(parents=True, exist_ok=True)
 
