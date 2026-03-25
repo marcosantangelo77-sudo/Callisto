@@ -25,7 +25,7 @@ SCRAPER_DISABLE_SECONDS = 3600
 SCRAPERS = {
     "dk":     ("tools.dk_scraper",        "scrape_dk_odds",     "basketball_nba"),
     "fd":     ("tools.fanduel_scraper",    "scrape_fd_odds",     "basketball_nba"),
-    "betmgm": ("tools.betmgm_scraper",    "scrape_betmgm_odds", "basketball_nba"),
+    # "betmgm": disabled — redundant with odds-api.io Pro, consistently 403
 }
 BETMGM_ALT_SUBDOMAINS = ["co", "pa", "va", "az"]
 _disabled_scrapers: dict[str, float] = {}  # name -> re-enable monotonic ts
