@@ -466,11 +466,12 @@ class SystemHealth:
         # Try Telegram alert
         try:
             from tools import telegram
-            await telegram.send_message(
+            await telegram.alert_system(
                 f"HEALTH ALERT: {subsystem} circuit breaker OPEN\n"
                 f"Error: {error}\n"
                 f"Subsystem disabled for {BREAKER_COOLDOWN}s.\n"
-                f"Other subsystems continue running."
+                f"Other subsystems continue running.",
+                is_error=True,
             )
         except Exception as e:
             logger.warning(f"Telegram health alert failed for {subsystem}: {e}")

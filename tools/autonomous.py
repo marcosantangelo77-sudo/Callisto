@@ -347,6 +347,21 @@ SYSTEM_IMPROVEMENT_INTERVAL = 10    # Run system improvement every N cycles
 DEFAULT_TRAINING_WINDOW_DAYS = 30    # Train on everything before (today - N days)
 BACKTEST_GAP_DAYS = 1                # Gap between training end and backtest start (avoids leakage)
 
+# ── Sport priority for backtest queue ──
+# Sports with more historical data get tested first.
+# This ensures NBA/NFL hypotheses (abundant data) are validated before
+# MLB (season just started, sparse data). Lower number = higher priority.
+SPORT_PRIORITY = {
+    "basketball_nba": 1,
+    "americanfootball_nfl": 2,
+    "icehockey_nhl": 3,
+    "baseball_mlb": 4,
+    "basketball_ncaab": 5,
+    "basketball_ncaaw": 6,
+    "basketball_wnba": 7,
+    "golf_pga": 8,
+}
+
 # Domains to research (ordered by data availability)
 RESEARCH_SPORTS = [
     "basketball_nba",
@@ -507,6 +522,10 @@ class ResearchLoop:
     and system improvement. Local models handle fast classification
     (Sentinel) and embeddings only. Template generation is the fallback
     when Claude is rate-limited.
+
+    NEVER IDLE: When Claude is unavailable, work is deferred to a
+    persistent queue AND local model fallbacks keep the loop productive.
+    When Claude returns, the deferred queue drains immediately.
     """
 
     def __init__(
@@ -549,6 +568,12 @@ class ResearchLoop:
 
         # Self-diagnostics — track already-escalated issues to avoid spam
         self._diagnostic_issues: set[str] = set()
+
+        # Deferred work queue + downtime tracker (never-idle loop)
+        from tools.work_queue import get_work_queue, get_downtime_tracker
+        self._work_queue = get_work_queue()
+        self._downtime_tracker = get_downtime_tracker()
+        self._was_claude_available = True  # track transitions
 
     async def start(self) -> None:
         """Start the research loop."""
@@ -617,12 +642,231 @@ class ResearchLoop:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        # Record final downtime stats
+        await self._downtime_tracker.record_to_hermes()
         logger.info(
             f"Research loop stopped — {self._cycles} cycles, "
             f"{self._hypotheses_generated} hypotheses generated, "
             f"{self._backtests_run} backtests run, "
             f"{self._promotions} promoted, {self._rejections} rejected"
         )
+
+    async def _drain_deferred_queue(self) -> None:
+        """If Claude is available and we have queued work, drain it first.
+
+        This is the critical path: when Claude comes back online after a
+        rate-limit window, all deferred hypothesis generation, interpretation,
+        and deep work gets executed immediately before the normal cycle.
+        """
+        from tools.claude_code import is_available as claude_available, claude_code_query
+
+        claude_up = claude_available()
+
+        # Track Claude availability transitions
+        if claude_up and not self._was_claude_available:
+            self._downtime_tracker.mark_available()
+        elif not claude_up and self._was_claude_available:
+            self._downtime_tracker.mark_unavailable()
+        self._was_claude_available = claude_up
+
+        if not claude_up:
+            return
+
+        pending = await self._work_queue.size()
+        if pending == 0:
+            return
+
+        logger.info(f"Claude available -- draining {pending} deferred items")
+        drained = await self._work_queue.drain(max_items=5)
+
+        for item in drained:
+            if not self._running:
+                break
+            try:
+                result = await claude_code_query(
+                    item["prompt"], hermes_caller=item["work_type"]
+                )
+                self._last_claude_call = time.time()
+                self._claude_escalations += 1
+
+                if result.get("content") and not result.get("error"):
+                    # Process based on work type
+                    await self._process_drained_item(item, result["content"])
+                    await self._work_queue.mark_done(item["id"], result["content"][:500])
+                    logger.info(
+                        f"Drained item {item['id']} ({item['work_type']}): success"
+                    )
+                elif result.get("rate_limited"):
+                    # Claude went away again -- put item back
+                    await self._work_queue.mark_failed(item["id"], "rate_limited_during_drain")
+                    logger.info("Claude rate-limited during drain -- stopping drain")
+                    break
+                else:
+                    await self._work_queue.mark_done(
+                        item["id"], f"error: {result.get('error', 'unknown')}"
+                    )
+            except Exception as e:
+                await self._work_queue.mark_failed(item["id"], str(e))
+                logger.warning(f"Drain item {item['id']} failed: {e}")
+
+        # Record downtime pattern every 10 cycles
+        if self._cycles % 10 == 0:
+            await self._downtime_tracker.record_to_hermes()
+
+    async def _process_drained_item(self, item: dict, content: str) -> None:
+        """Process the result of a drained deferred work item."""
+        work_type = item["work_type"]
+        try:
+            # Extract JSON from response
+            json_str = content
+            if "```" in json_str:
+                parts = json_str.split("```")
+                for part in parts:
+                    stripped = part.strip()
+                    if stripped.startswith("json"):
+                        stripped = stripped[4:].strip()
+                    if stripped.startswith("{"):
+                        json_str = stripped
+                        break
+            elif "{" in json_str:
+                start = json_str.index("{")
+                end = json_str.rindex("}") + 1
+                json_str = json_str[start:end]
+
+            parsed = json.loads(json_str)
+
+            if work_type == "hypothesis_gen":
+                created = 0
+                for nh in parsed.get("hypotheses", []):
+                    try:
+                        await self.hypothesis_manager.create_hypothesis(
+                            name=nh.get("name", f"deferred_gen_{self._cycles}"),
+                            thesis=nh.get("thesis", ""),
+                            sport=nh.get("sport", "basketball_nba"),
+                            market_type=nh.get("market_type", "spreads"),
+                            edge_threshold=nh.get("edge_threshold", 0.03),
+                            model_config={"source": "deferred_queue_claude", "cycle": self._cycles},
+                        )
+                        created += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to create deferred hypothesis: {e}")
+                if created:
+                    self._hypotheses_generated += created
+                    logger.info(f"Deferred drain: created {created} hypotheses")
+
+            elif work_type == "deep_work":
+                # Same processing as _phase_claude_deep_work
+                rejected = 0
+                for hid in parsed.get("reject_ids", []):
+                    try:
+                        await self.hypothesis_manager.update_status(
+                            hid, "rejected", "deferred_claude_deep_work"
+                        )
+                        rejected += 1
+                        self._rejections += 1
+                    except Exception:
+                        pass
+                created = 0
+                for nh in parsed.get("new_hypotheses", []):
+                    try:
+                        await self.hypothesis_manager.create_hypothesis(
+                            name=nh.get("name", "deferred_deep"),
+                            thesis=nh.get("thesis", ""),
+                            sport=nh.get("sport", "basketball_nba"),
+                            market_type=nh.get("market_type", "spreads"),
+                            edge_threshold=nh.get("edge_threshold", 0.03),
+                            model_config={"source": "deferred_deep_work", "cycle": self._cycles},
+                        )
+                        created += 1
+                    except Exception:
+                        pass
+                if rejected or created:
+                    self._hypotheses_generated += created
+                    logger.info(
+                        f"Deferred drain deep_work: rejected {rejected}, created {created}"
+                    )
+
+                # Route pipeline_issues to self-repair (same as _phase_claude_deep_work)
+                pipeline_issues = parsed.get("pipeline_issues", [])
+                if pipeline_issues:
+                    findings = []
+                    for issue in pipeline_issues:
+                        issue_lower = issue.lower() if isinstance(issue, str) else ""
+                        if any(kw in issue_lower for kw in ["identical", "same games", "filtering bug", "broken"]):
+                            severity = "CRITICAL"
+                        elif any(kw in issue_lower for kw in ["prioritize", "threshold", "zero promotion", "low sample"]):
+                            severity = "HIGH"
+                        else:
+                            severity = "LOW"
+                        findings.append({"severity": severity, "description": issue})
+                    try:
+                        from tools.self_repair import get_repair_engine
+                        engine = get_repair_engine()
+                        repair_results = await engine.handle_claude_findings(findings)
+                        for r in repair_results:
+                            if r["fixed"]:
+                                logger.info(f"Deferred deep work auto-fix: {r['action']} — {r['detail']}")
+                            else:
+                                logger.warning(f"Deferred deep work unfixed: {r['action']} — {r['detail']}")
+                    except Exception as e:
+                        logger.warning(f"Deferred drain: failed to route findings to self-repair: {e}")
+
+            elif work_type == "interpret_backtests":
+                # Same processing as _phase_interpret_backtests
+                db = self.data_collector._db
+                rejected = 0
+                for hid in parsed.get("reject", []):
+                    try:
+                        await self.hypothesis_manager.update_status(
+                            hid, "rejected", "deferred_interpret"
+                        )
+                        rejected += 1
+                        self._rejections += 1
+                    except Exception:
+                        pass
+                modified = 0
+                for mod in parsed.get("modify", []):
+                    try:
+                        hid = mod.get("id")
+                        new_thresh = mod.get("new_threshold")
+                        if hid and new_thresh is not None and db:
+                            await db.execute(
+                                "UPDATE hypotheses SET edge_threshold = ? WHERE hypothesis_id = ?",
+                                (new_thresh, hid),
+                            )
+                            await db.commit()
+                            modified += 1
+                    except Exception:
+                        pass
+                if rejected or modified:
+                    logger.info(
+                        f"Deferred drain interpret: rejected {rejected}, modified {modified}"
+                    )
+
+            elif work_type == "system_improvement":
+                db = self.data_collector._db
+                stored = 0
+                for imp in parsed.get("improvements", []):
+                    try:
+                        if db:
+                            await db.execute(
+                                "INSERT INTO system_improvements "
+                                "(cycle, category, suggestion, priority) VALUES (?, ?, ?, ?)",
+                                (self._cycles, imp.get("category", "general"),
+                                 imp.get("suggestion", ""), imp.get("priority", "medium")),
+                            )
+                            stored += 1
+                    except Exception:
+                        pass
+                if stored and db:
+                    await db.commit()
+                    logger.info(f"Deferred drain: stored {stored} system improvements")
+
+            elif work_type == "diagnostic_escalation":
+                logger.info(f"Deferred diagnostic processed: {content[:200]}")
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.debug(f"Deferred item {work_type} response not valid JSON: {e}")
 
     async def _loop(self) -> None:
         """Main research cycle."""
@@ -634,7 +878,16 @@ class ResearchLoop:
                 self._cycles += 1
                 logger.info(f"Research cycle #{self._cycles} starting")
 
-                # Phase 0: Self-diagnose pipeline health
+                # ── Queue drain: if Claude just became available, burn through deferred work ──
+                await self._drain_deferred_queue()
+
+                # Phase 0: Self-repair (detect, fix, verify, record)
+                await self._phase_self_repair()
+
+                if not self._running:
+                    break
+
+                # Phase 0a: Self-diagnose pipeline health
                 await self._phase_self_diagnose()
 
                 if not self._running:
@@ -720,6 +973,39 @@ class ResearchLoop:
             except Exception as e:
                 logger.error(f"Research loop error: {e}", exc_info=True)
                 await asyncio.sleep(120)
+
+    async def _phase_self_repair(self) -> None:
+        """
+        Self-repair phase — detect issues, fix them autonomously, verify,
+        and record to Hermes. Runs every 5 cycles to avoid overhead.
+        """
+        if self._cycles % 5 != 1:
+            return  # Only run every 5 cycles (cycle 1, 6, 11, ...)
+
+        try:
+            from tools.self_repair import get_repair_engine
+            engine = get_repair_engine()
+            result = await engine.run_repair_cycle()
+
+            if result["fixed"] > 0:
+                logger.info(
+                    f"Self-repair: fixed {result['fixed']}/{result['issues_found']} issues"
+                )
+
+            # Record phase success for pipeline integrity tracking
+            try:
+                from tools.pipeline_integrity import get_checker
+                get_checker().record_phase_result("self_repair", True)
+            except Exception:
+                pass
+
+        except Exception as e:
+            logger.error(f"Self-repair phase failed: {e}", exc_info=True)
+            try:
+                from tools.pipeline_integrity import get_checker
+                get_checker().record_phase_result("self_repair", False)
+            except Exception:
+                pass
 
     async def _phase_self_diagnose(self) -> None:
         """
@@ -964,10 +1250,27 @@ class ResearchLoop:
                 except Exception as e:
                     logger.warning(f"DIAG: Claude escalation failed: {e}")
             else:
-                # Can't escalate now — don't mark as escalated, try next cycle
+                # Defer diagnostic escalation to queue for when Claude returns
+                diag_report = (
+                    "CALLISTO SELF-DIAGNOSTIC — CRITICAL ISSUES DETECTED\n\n"
+                    + "\n".join(
+                        f"[{i['severity']}] {i['message']}" for i in issues
+                    )
+                    + "\n\nPipeline state:\n"
+                    f"- Cycles: {self._cycles}\n"
+                    f"- Hypotheses generated: {self._hypotheses_generated}\n"
+                    f"- Backtests run: {self._backtests_run}\n"
+                    f"- Promotions: {self._promotions}\n"
+                    f"- Rejections: {self._rejections}\n\n"
+                    f"Analyze these diagnostics and suggest specific fixes. "
+                    f"Focus on: which data is missing, what to collect, "
+                    f"and whether the pipeline should pause or adjust parameters."
+                )
+                await self._work_queue.enqueue("diagnostic_escalation", diag_report, priority=1)
+                self._downtime_tracker.item_queued()
                 logger.warning(
-                    f"DIAG: {len(new_critical)} critical issues but Claude unavailable "
-                    f"— will retry next cycle"
+                    f"DIAG: {len(new_critical)} critical issues deferred to work queue "
+                    f"(Claude unavailable)"
                 )
 
         # Mark non-critical issues as seen too (no re-escalation)
@@ -1279,10 +1582,69 @@ class ResearchLoop:
             except Exception as e:
                 logger.warning(f"Claude hypothesis generation failed: {e}")
 
-        # ── FALLBACK: Template-based generation when Claude unavailable ──
+        # ── FALLBACK: Template + local model generation when Claude unavailable ──
         if not used_claude:
+            # Defer the Claude prompt so it runs when Claude comes back
+            from tools.claude_code import is_available as _ca
+            if not _ca():
+                try:
+                    all_hypos = await self.hypothesis_manager.list_hypotheses()
+                    existing_names = [h["name"] for h in all_hypos]
+                    focus_context = self.focus_manager.get_focus_context_for_prompt()
+                    # Build and enqueue the same prompt Claude would have gotten
+                    deferred_prompt = (
+                        f"CALLISTO HYPOTHESIS GENERATION — Deferred from Cycle #{self._cycles}\n\n"
+                        f"Generate 3-5 novel, testable sports betting hypotheses.\n\n"
+                        f"EXISTING NAMES (avoid duplicates): {json.dumps(existing_names[:30])}\n\n"
+                        f"{focus_context}\n\n"
+                        f"RESPOND WITH JSON: {{\"hypotheses\": [{{\"name\": \"...\", \"thesis\": \"...\", "
+                        f"\"sport\": \"...\", \"market_type\": \"...\", \"edge_threshold\": 0.03}}]}}"
+                    )
+                    await self._work_queue.enqueue("hypothesis_gen", deferred_prompt, priority=2)
+                    self._downtime_tracker.item_queued()
+                    logger.info("Research: hypothesis gen deferred to work queue (Claude unavailable)")
+                except Exception as e:
+                    logger.warning(f"Failed to enqueue deferred hypothesis gen: {e}")
+
+                # Try local model fallback for quick hypothesis ideas
+                try:
+                    from tools.work_queue import local_fallback_hypothesis_gen
+                    pipeline_state = (
+                        f"Cycles: {self._cycles}, Hypotheses: {self._hypotheses_generated}, "
+                        f"Backtests: {self._backtests_run}"
+                    )
+                    all_hypos = await self.hypothesis_manager.list_hypotheses()
+                    existing_names = [h["name"] for h in all_hypos]
+                    focus_context = self.focus_manager.get_focus_context_for_prompt()
+                    local_hypos = await local_fallback_hypothesis_gen(
+                        pipeline_state, existing_names, focus_context
+                    )
+                    for nh in local_hypos:
+                        try:
+                            await self.hypothesis_manager.create_hypothesis(
+                                name=nh.get("name", f"local_gen_{self._cycles}"),
+                                thesis=nh.get("thesis", ""),
+                                sport=nh.get("sport", "basketball_nba"),
+                                market_type=nh.get("market_type", "spreads"),
+                                edge_threshold=nh.get("edge_threshold", 0.03),
+                                model_config={
+                                    "source": "local_fallback_gen",
+                                    "cycle": self._cycles,
+                                    "training_period_start": training_period_start,
+                                    "training_period_end": training_period_end,
+                                    "forward_test_start": forward_test_start,
+                                },
+                            )
+                            total_created += 1
+                        except Exception as e:
+                            logger.debug(f"Local fallback hypothesis creation failed: {e}")
+                    if local_hypos:
+                        logger.info(f"Research: local model generated {len(local_hypos)} hypotheses")
+                except Exception as e:
+                    logger.debug(f"Local fallback hypothesis gen failed: {e}")
+
+            # Template fallback always runs when Claude didn't
             logger.info("Research: using template fallback for hypothesis generation")
-            # Focus sports first with higher hypothesis quota, then the rest
             ordered_sports = self.focus_manager.get_ordered_research_sports()
             for sport in ordered_sports:
                 try:
@@ -1356,10 +1718,12 @@ class ResearchLoop:
         except Exception as e:
             logger.warning(f"Data quality pre-check failed: {e}")
 
-        # Sort drafts by focus area priority (focus sports first), then take batch
+        # Sort drafts by focus area priority (focus sports first), then by sport
+        # data availability (NBA/NFL before MLB — more historical data = better backtests)
         drafts = self.focus_manager.sort_by_focus(drafts, sport_key="sport")
+        drafts.sort(key=lambda h: SPORT_PRIORITY.get(h.get("sport", ""), 99))
         to_test = drafts[:BACKTEST_BATCH_SIZE]
-        logger.info(f"Research: backtesting {len(to_test)} hypotheses (focus-area prioritized)")
+        logger.info(f"Research: backtesting {len(to_test)} hypotheses (sport-priority + focus-area sorted)")
 
         for h in to_test:
             if not self._running:
@@ -1699,7 +2063,7 @@ class ResearchLoop:
                     )
                     # Alert Marco — this thesis is proven
                     try:
-                        await telegram.send_message(
+                        await telegram.alert_system(
                             f"HYPOTHESIS PROVEN: {h['name']}\n"
                             f"Thesis: {h['thesis'][:200]}\n"
                             f"Status: LIVE — ready for real money\n"
@@ -1809,13 +2173,14 @@ class ResearchLoop:
         Sends the top 10 hypotheses by signal count with their win/loss/edge
         stats to Claude for interpretation. Claude identifies genuine signals,
         rejects noise, and suggests threshold modifications.
+
+        When Claude is unavailable: defers the prompt to the work queue AND
+        runs a local rules-based interpretation as fallback.
         """
         from tools.claude_code import is_available as claude_available, claude_code_query
 
         now = time.time()
         if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
-            return
-        if not claude_available():
             return
 
         db = self.data_collector._db
@@ -1890,6 +2255,38 @@ class ResearchLoop:
             f"- modify: promising hypotheses that need threshold adjustments\n"
             f"- Only include fields you have actionable items for\n"
         )
+
+        if not claude_available():
+            # Defer to queue for when Claude returns
+            await self._work_queue.enqueue("interpret_backtests", prompt, priority=2)
+            self._downtime_tracker.item_queued()
+            logger.info("Research: backtest interpretation deferred to work queue (Claude unavailable)")
+
+            # Run local rules-based interpretation as fallback
+            try:
+                from tools.work_queue import local_fallback_interpret
+                local_actions = await local_fallback_interpret(hypo_data)
+                rejected = 0
+                for hid in local_actions.get("reject", []):
+                    try:
+                        await self.hypothesis_manager.update_status(
+                            hid, "rejected", "local_fallback_interpret"
+                        )
+                        rejected += 1
+                        self._rejections += 1
+                    except Exception:
+                        pass
+                if rejected:
+                    logger.info(
+                        f"Research: local fallback interpretation rejected {rejected} "
+                        f"noise hypotheses"
+                    )
+                insights = local_actions.get("insights", "")
+                if insights:
+                    logger.info(f"Research: local interpretation — {insights[:300]}")
+            except Exception as e:
+                logger.debug(f"Local fallback interpretation failed: {e}")
+            return
 
         try:
             result = await claude_code_query(prompt, hermes_caller="deep_work")
@@ -2176,6 +2573,10 @@ class ResearchLoop:
 
         NO cooldown gate — deep work is the most valuable phase. If Claude
         is available, use it. The rate limiter handles the rest.
+
+        When Claude is unavailable: defers the prompt to work queue AND
+        runs local model fallback for basic maintenance (reject zero-signal
+        hypotheses, gather pipeline metrics).
         """
         from tools.claude_code import is_available as claude_available, claude_code_query
         import time as _time
@@ -2183,7 +2584,34 @@ class ResearchLoop:
         now = _time.time()
         # No cooldown check — deep work should always fire if Claude is available
         if not claude_available():
-            return
+            # Local fallback: basic rule-based deep work
+            try:
+                from tools.work_queue import local_fallback_deep_work
+                db = self.data_collector._db
+                actions = await local_fallback_deep_work(db)
+
+                rejected = 0
+                for hid in actions.get("reject_ids", []):
+                    try:
+                        await self.hypothesis_manager.update_status(
+                            hid, "rejected", "local_fallback_deep_work"
+                        )
+                        rejected += 1
+                        self._rejections += 1
+                    except Exception:
+                        pass
+                if rejected:
+                    logger.info(f"Research: local fallback deep work rejected {rejected} hypotheses")
+                for issue in actions.get("pipeline_issues", []):
+                    logger.info(f"Research: local fallback identified — {issue}")
+            except Exception as e:
+                logger.debug(f"Local fallback deep work failed: {e}")
+
+            # NOTE: prompt is deferred below AFTER it's built (need metrics first)
+            # We'll set a flag and enqueue at the end
+            _defer_deep_work = True
+        else:
+            _defer_deep_work = False
 
         logger.info("Research: Claude deep work phase — actionable output only")
 
@@ -2327,6 +2755,13 @@ class ResearchLoop:
             f"- Only include fields you have actionable items for\n"
         )
 
+        # If Claude unavailable, defer the fully-built prompt and return
+        if _defer_deep_work:
+            await self._work_queue.enqueue("deep_work", prompt, priority=3)
+            self._downtime_tracker.item_queued()
+            logger.info("Research: deep work prompt deferred to work queue (Claude unavailable)")
+            return
+
         try:
             result = await claude_code_query(prompt, hermes_caller="deep_work")
             self._last_claude_call = _time.time()
@@ -2416,9 +2851,35 @@ class ResearchLoop:
                         self._hypotheses_generated += created
                         logger.info(f"Research: Claude created {created} new hypotheses")
 
-                    # Act 3: Log pipeline issues for next self-diagnostic
-                    for issue in actions.get("pipeline_issues", []):
-                        logger.warning(f"Research: Claude identified issue — {issue}")
+                    # Act 3: Convert pipeline issues into structured findings
+                    # and route them to self-repair for automatic fixes
+                    pipeline_issues = actions.get("pipeline_issues", [])
+                    if pipeline_issues:
+                        findings = []
+                        for issue in pipeline_issues:
+                            logger.warning(f"Research: Claude identified issue — {issue}")
+                            # Classify severity based on keywords
+                            issue_lower = issue.lower() if isinstance(issue, str) else ""
+                            if any(kw in issue_lower for kw in ["identical", "same games", "filtering bug", "broken"]):
+                                severity = "CRITICAL"
+                            elif any(kw in issue_lower for kw in ["prioritize", "threshold", "zero promotion", "low sample"]):
+                                severity = "HIGH"
+                            else:
+                                severity = "LOW"
+                            findings.append({"severity": severity, "description": issue})
+
+                        # Route to self-repair engine
+                        try:
+                            from tools.self_repair import get_repair_engine
+                            engine = get_repair_engine()
+                            repair_results = await engine.handle_claude_findings(findings)
+                            for r in repair_results:
+                                if r["fixed"]:
+                                    logger.info(f"Deep work auto-fix: {r['action']} — {r['detail']}")
+                                else:
+                                    logger.warning(f"Deep work unfixed: {r['action']} — {r['detail']}")
+                        except Exception as e:
+                            logger.warning(f"Failed to route findings to self-repair: {e}")
 
                 except (json.JSONDecodeError, ValueError) as e:
                     logger.warning(f"Claude deep work returned non-JSON: {e}")
@@ -2462,8 +2923,6 @@ class ResearchLoop:
 
         now = time.time()
         if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
-            return
-        if not claude_available():
             return
 
         db = self.data_collector._db
@@ -2570,6 +3029,13 @@ class ResearchLoop:
             f"- Store key findings via Hermes record_learning()\n"
         )
 
+        if not claude_available():
+            # Defer system improvement to queue for when Claude returns
+            await self._work_queue.enqueue("system_improvement", prompt, priority=4)
+            self._downtime_tracker.item_queued()
+            logger.info("Research: system improvement deferred to work queue (Claude unavailable)")
+            return
+
         try:
             result = await claude_code_query(prompt, hermes_caller="deep_work")
             self._last_claude_call = time.time()
@@ -2658,7 +3124,7 @@ class ResearchLoop:
                     + "\n\n".join(f"- {m}" for m in critical_msgs[:3])
                 )
                 try:
-                    await telegram.send_message(alert_text)
+                    await telegram.alert_system(alert_text)
                 except Exception as e:
                     logger.warning(f"Failed to send integrity alert via Telegram: {e}", exc_info=True)
 
@@ -2680,6 +3146,16 @@ class ResearchLoop:
         # Include pipeline integrity info
         integrity_report = get_checker().get_latest_report()
 
+        # Include work queue status (async call — best-effort)
+        work_queue_status = {}
+        try:
+            import asyncio
+            work_queue_status = asyncio.get_event_loop().run_until_complete(
+                self._work_queue.get_status()
+            ) if not asyncio.get_event_loop().is_running() else {}
+        except Exception:
+            pass
+
         return {
             "running": self._running,
             "cycles_completed": self._cycles,
@@ -2692,6 +3168,8 @@ class ResearchLoop:
             "focus_areas": self.focus_manager._focus_areas,
             "claude_code": claude_stats(),
             "pipeline_integrity": integrity_report,
+            "work_queue": work_queue_status,
+            "claude_downtime": self._downtime_tracker.get_status(),
             "intervals": {
                 "research_cycle_seconds": RESEARCH_CYCLE_INTERVAL,
                 "data_collection_seconds": DATA_COLLECTION_INTERVAL,

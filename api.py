@@ -167,6 +167,11 @@ async def lifespan(app: FastAPI):
     system_health.autonomous_loop = autonomous
     await system_health.start()
 
+    # Heartbeat — independent watchdog for loop stalls and Claude availability
+    from tools.self_repair import Heartbeat
+    heartbeat = Heartbeat()
+    await heartbeat.start()
+
     # Telegram listener — bidirectional communication from phone
     telegram_listener = TelegramListener(
         orchestrator=orchestrator_instance,
@@ -1290,7 +1295,7 @@ async def admin_restart():
     logger.info("RESTART REQUESTED via /admin/restart — shutting down gracefully")
     send_msg = "Callisto restarting (code reload requested)"
     try:
-        await telegram.send_message(send_msg)
+        await telegram.alert_system(send_msg)
     except Exception as e:
         logger.info(f"Telegram restart notification failed (non-critical): {e}")
 
