@@ -117,6 +117,34 @@ EXTENDED_SPORT_CONFIGS = {
         "season_months": list(range(10, 13)) + list(range(1, 7)),  # Oct-Jun
         "label": "AHL",
     },
+    "basketball_ncaam": {
+        "api_sport": "basketball",
+        "api_league": "usa-ncaa-division-i-national-championship",
+        "earliest": "2025-03-01",
+        "season_months": [3, 4],  # March Madness
+        "label": "NCAAM",
+    },
+    "basketball_ncaaw": {
+        "api_sport": "basketball",
+        "api_league": "usa-ncaa-division-i-national-championship-women",
+        "earliest": "2025-03-01",
+        "season_months": [3, 4],  # March Madness
+        "label": "NCAAW",
+    },
+    "baseball_mlb": {
+        "api_sport": "baseball",
+        "api_league": "usa-mlb",
+        "earliest": "2025-03-01",
+        "season_months": list(range(3, 11)),  # Mar-Oct
+        "label": "MLB",
+    },
+    "basketball_gleague": {
+        "api_sport": "basketball",
+        "api_league": "usa-nba-g-league",
+        "earliest": "2024-11-01",
+        "season_months": list(range(11, 13)) + list(range(1, 5)),  # Nov-Apr
+        "label": "G-League",
+    },
 }
 
 # All configs combined
@@ -125,7 +153,8 @@ SPORT_CONFIGS = {**CORE_SPORT_CONFIGS, **EXTENDED_SPORT_CONFIGS}
 SPORT_ALIASES = {
     "nba": "basketball_nba", "nhl": "icehockey_nhl", "nfl": "americanfootball_nfl",
     "mls": "soccer_mls", "nwsl": "soccer_nwsl", "ufl": "americanfootball_ufl",
-    "usl": "soccer_usl", "ahl": "icehockey_ahl",
+    "usl": "soccer_usl", "ahl": "icehockey_ahl", "ncaam": "basketball_ncaam",
+    "ncaaw": "basketball_ncaaw", "mlb": "baseball_mlb", "gleague": "basketball_gleague",
 }
 
 # ── API helpers ───────────────────────────────────────────────────────
@@ -434,10 +463,10 @@ def store_game_result(conn: sqlite3.Connection, sport: str, event: dict, regime:
     """Store a game result from a historical event."""
     home = event.get("home", "")
     away = event.get("away", "")
-    score = event.get("score", {})
+    score = event.get("scores", {}) or event.get("score", {})
     status = event.get("status", "")
 
-    if status not in ("ended", "finished", "closed") and not score:
+    if status not in ("ended", "finished", "closed", "settled") and not score:
         return
 
     home_score = score.get("home")
@@ -526,26 +555,39 @@ async def import_sport(
             d += timedelta(days=1)
 
         uncached = window_dates - cached_dates
-        if not uncached:
-            stats["dates_skipped_cached"] += len(window_dates)
-            continue
 
         if dry_run:
-            logger.info(f"[{label}] Would fetch {w_start} → {w_end} ({len(uncached)} uncached dates)")
-            stats["dates_processed"] += len(uncached)
+            if uncached:
+                logger.info(f"[{label}] Would fetch {w_start} → {w_end} ({len(uncached)} uncached dates)")
+                stats["dates_processed"] += len(uncached)
+            else:
+                stats["dates_skipped_cached"] += len(window_dates)
             continue
 
-        # Fetch events for this window
+        # Fetch events for this window (always, for game results even if odds cached)
         events = await get_events(
             config["api_sport"], config["api_league"], w_start, w_end,
         )
         stats["api_requests"] += 1
 
         if not events:
-            stats["dates_skipped_no_events"] += len(uncached)
+            if not uncached:
+                stats["dates_skipped_cached"] += len(window_dates)
+            else:
+                stats["dates_skipped_no_events"] += len(uncached)
             continue
 
-        # Group events by date
+        # Always store game results for all events
+        for ev in events:
+            regime = classify_regime(sport_key, ev.get("date", "")[:10] or w_start)
+            store_game_result(conn, sport_key, ev, regime)
+
+        if not uncached:
+            stats["dates_skipped_cached"] += len(window_dates)
+            conn.commit()
+            continue
+
+        # Group events by date for odds fetching
         events_by_date: dict[str, list] = {}
         for ev in events:
             ev_date = ev.get("date", "")[:10]
@@ -563,8 +605,6 @@ async def import_sport(
                 if not eid:
                     continue
 
-                # Store game result
-                store_game_result(conn, sport_key, ev, regime)
                 stats["game_results_imported"] += 1
 
                 # Fetch odds
