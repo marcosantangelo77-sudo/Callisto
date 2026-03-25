@@ -1205,9 +1205,25 @@ class BacktestEngine:
             consensus_a = sum(v[0] for v in fair_a_values) / non_target_count
             consensus_b = sum(v[0] for v in fair_b_values) / non_target_count
 
+            # Filter outlier books before computing best-line.
+            # The Odds API occasionally returns swapped sides for a book
+            # (e.g., favorite priced as dog). A single swapped book poisons
+            # max()-based best-line with fake 70%+ edges. Fix: exclude any
+            # book whose devigged fair prob deviates >15pp from consensus.
+            OUTLIER_THRESHOLD = 0.15  # 15 percentage points
+            clean_a = [(v, bk) for v, bk in fair_a_values
+                        if abs(v - consensus_a) <= OUTLIER_THRESHOLD]
+            clean_b = [(v, bk) for v, bk in fair_b_values
+                        if abs(v - consensus_b) <= OUTLIER_THRESHOLD]
+            # Fall back to all values if filtering is too aggressive
+            if not clean_a:
+                clean_a = fair_a_values
+            if not clean_b:
+                clean_b = fair_b_values
+
             # Find the sharpest line for each side (highest devigged fair prob)
-            best_a_val, best_a_book = max(fair_a_values, key=lambda x: x[0])
-            best_b_val, best_b_book = max(fair_b_values, key=lambda x: x[0])
+            best_a_val, best_a_book = max(clean_a, key=lambda x: x[0])
+            best_b_val, best_b_book = max(clean_b, key=lambda x: x[0])
 
             # Use cross-book best line when we have enough books for a reliable signal
             use_crossbook = non_target_count >= 3
