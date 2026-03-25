@@ -474,7 +474,16 @@ class BacktestEngine:
     UNFILTERABLE_CONTEXT_FACTORS = {
         "weather", "temperature", "wind", "wind_speed", "wind_direction",
         "travel_distance", "timezone_crossing", "altitude",
-        "pitcher_history", "player_trade_recency", "player_impact_rating",
+        "venue_type",  # dome, indoor, outdoor, retractable roof
+        "pitcher_history", "pitcher_velocity", "pitcher_workload",
+        "pitcher_pitch_type",  # sinkerball, breaking ball, pitch mix
+        "player_trade_recency", "player_impact_rating",
+        "bullpen_status", "battery_composition",
+        "spring_training_stats", "roster_composition",
+        "first_inning_stats",
+        "umpire_tendencies",  # hp umpire, zone width
+        "coaching_staff",  # manager, coach, scheme changes
+        "school_identity", "team_identity",
         "referee_crew", "referee_foul_tendency", "public_betting_pct",
         "handle_estimate", "line_movement_velocity", "line_movement_direction",
         "prev_game_margin", "starter_4q_minutes_prev",
@@ -488,7 +497,7 @@ class BacktestEngine:
         "season_avg_total", "pre_bye_scoring_trend_last_3",
         "first_half_total", "defensive_rank_both_teams", "extra_rest_days",
         "opponent_record", "head_to_head_record", "both_teams_short_rest",
-        "opponent_days_rest", "defensive_rating_slow_team",
+        "opponent_days_rest",
         "pre_bye_scoring_trend_last_3",
     }
 
@@ -504,10 +513,11 @@ class BacktestEngine:
         r"\bcold\b": "temperature",
         r"\bwind\b": "wind",
         r"\bfastball.velo": "pitcher_velocity",
-        r"\bvelo(city)?\b.*drop": "pitcher_velocity",
+        r"\bvelo(city)?\b.*(drop|gain)": "pitcher_velocity",
         r"\bmph\b": "pitcher_velocity",
         r"\bpitch.count": "pitcher_workload",
         r"\bbullpen\b": "bullpen_status",
+        r"\bthin.bullpen\b": "bullpen_status",
         r"\bopener\b.*inning": "bullpen_status",
         r"\bcatcher\b": "battery_composition",
         r"\bbattery\b": "battery_composition",
@@ -517,9 +527,11 @@ class BacktestEngine:
         r"\bspring.training\b": "spring_training_stats",
         r"\bspring.era\b": "spring_training_stats",
         r"\bspring.*k/9\b": "spring_training_stats",
+        r"\bspring.*\bip\b": "spring_training_stats",
         r"\bwhiff.rate\b": "spring_training_stats",
         r"\broster.turnover\b": "roster_composition",
         r"\bnew.lineup\b": "roster_composition",
+        r"\bnew.team\b": "roster_composition",
         r"\b\d\+.new\b.*starter": "roster_composition",
         r"\boffseason\b.*acqui": "roster_composition",
         r"\bfree.agency\b": "roster_composition",
@@ -528,11 +540,26 @@ class BacktestEngine:
         r"\bfirst.inning\b": "first_inning_stats",
         r"\bdivision.rival": "head_to_head_record",
         r"\bfamiliarity\b": "head_to_head_record",
+        r"\brevenge\b": "head_to_head_record",
+        r"\bformer.team\b": "head_to_head_record",
         r"\baces?\b.*first.start": "pitcher_history",
         r"\bseason.debut\b": "pitcher_history",
         r"\bfirst.start\b": "pitcher_history",
         r"\bk/9\b": "pitcher_history",
         r"\bera\b.*under|under.*\bera\b": "pitcher_history",
+        r"\bsinkerball\b": "pitcher_pitch_type",
+        r"\bbreaking.ball\b": "pitcher_pitch_type",
+        r"\bpitch.mix\b": "pitcher_pitch_type",
+        r"\bcurveball\b": "pitcher_pitch_type",
+        r"\bslider\b": "pitcher_pitch_type",
+        r"\bchangeup\b": "pitcher_pitch_type",
+        r"\bumpire\b": "umpire_tendencies",
+        r"\bhp.umpire\b": "umpire_tendencies",
+        r"\bwide.zone\b": "umpire_tendencies",
+        r"\bstrike.zone\b": "umpire_tendencies",
+        r"\bmanager\b": "coaching_staff",
+        r"\bcoach\b": "coaching_staff",
+        r"\bscheme\b": "coaching_staff",
         r"\bhbcu\b": "school_identity",
         r"\breligious\b": "school_identity",
         r"\bcohesion\b": "team_identity",
@@ -547,7 +574,9 @@ class BacktestEngine:
         Returns list of inferred context needs, or empty list if the hypothesis
         appears to be purely line-based (no game-context filtering needed).
         """
-        text = f"{thesis} {name}".lower()
+        # Replace underscores/hyphens with spaces so \b word boundaries match
+        # hypothesis names like "sp_dome_to_cold" (where _ is a word char in regex)
+        text = f"{thesis} {name}".lower().replace("_", " ").replace("-", " ")
         inferred = set()
         for pattern, factor in BacktestEngine._CONTEXT_KEYWORD_MAP.items():
             if re.search(pattern, text):
