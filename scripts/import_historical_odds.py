@@ -5,17 +5,24 @@ Fetches all available historical events + closing odds for target sports,
 stores in historical_odds_cache with regime tags, and imports game results.
 
 Usage:
-    python scripts/import_historical_odds.py                  # All sports, full range
+    python scripts/import_historical_odds.py                  # Core sports (NBA/NHL/NFL)
     python scripts/import_historical_odds.py --sport nba      # NBA only
+    python scripts/import_historical_odds.py --sport mls      # MLS only
+    python scripts/import_historical_odds.py --all            # All available sports
+    python scripts/import_historical_odds.py --discover-golf  # Discover + import golf leagues
     python scripts/import_historical_odds.py --from 2025-01-01 --to 2025-03-01
     python scripts/import_historical_odds.py --dry-run        # Show what would be imported
 
 Coverage (odds-api.io Pro):
-    NBA:  Oct 2024 → present
-    NHL:  Oct 2024 → present
-    NFL:  Sep 2024 → present
-    MLB:  Not available (use import_historical.py for AusSportsBetting/SBR)
-    NCAAB: Not available
+    NBA:   Oct 2024 -> present
+    NHL:   Oct 2024 -> present
+    NFL:   Sep 2024 -> present
+    MLS:   Feb 2025 -> present
+    NWSL:  Mar 2025 -> present
+    UFL:   Mar 2025 -> present
+    Golf:  Dynamic discovery (per-tournament leagues, no persistent slug)
+    MLB:   NOT AVAILABLE (zero historical events)
+    NCAAB: NOT AVAILABLE
 """
 
 import argparse
@@ -48,7 +55,8 @@ logger = logging.getLogger("import_historical_odds")
 DB_PATH = PROJECT_ROOT / "memory" / "callisto.db"
 
 # ── Sport configurations ──────────────────────────────────────────────
-SPORT_CONFIGS = {
+# Core sports: imported by default
+CORE_SPORT_CONFIGS = {
     "basketball_nba": {
         "api_sport": "basketball",
         "api_league": "usa-nba",
@@ -72,7 +80,53 @@ SPORT_CONFIGS = {
     },
 }
 
-SPORT_ALIASES = {"nba": "basketball_nba", "nhl": "icehockey_nhl", "nfl": "americanfootball_nfl"}
+# Extended sports: imported with --all flag
+EXTENDED_SPORT_CONFIGS = {
+    "soccer_mls": {
+        "api_sport": "football",
+        "api_league": "usa-mls",
+        "earliest": "2025-02-01",
+        "season_months": list(range(2, 12)),  # Feb-Nov
+        "label": "MLS",
+    },
+    "soccer_nwsl": {
+        "api_sport": "football",
+        "api_league": "usa-national-womens-soccer-league",
+        "earliest": "2025-03-01",
+        "season_months": list(range(3, 12)),  # Mar-Nov
+        "label": "NWSL",
+    },
+    "americanfootball_ufl": {
+        "api_sport": "american-football",
+        "api_league": "usa-ufl",
+        "earliest": "2025-03-01",
+        "season_months": list(range(3, 8)),  # Mar-Jul
+        "label": "UFL",
+    },
+    "soccer_usl": {
+        "api_sport": "football",
+        "api_league": "usa-usl-championship",
+        "earliest": "2025-03-01",
+        "season_months": list(range(3, 12)),  # Mar-Nov
+        "label": "USL",
+    },
+    "icehockey_ahl": {
+        "api_sport": "ice-hockey",
+        "api_league": "usa-ahl",
+        "earliest": "2024-10-01",
+        "season_months": list(range(10, 13)) + list(range(1, 7)),  # Oct-Jun
+        "label": "AHL",
+    },
+}
+
+# All configs combined
+SPORT_CONFIGS = {**CORE_SPORT_CONFIGS, **EXTENDED_SPORT_CONFIGS}
+
+SPORT_ALIASES = {
+    "nba": "basketball_nba", "nhl": "icehockey_nhl", "nfl": "americanfootball_nfl",
+    "mls": "soccer_mls", "nwsl": "soccer_nwsl", "ufl": "americanfootball_ufl",
+    "usl": "soccer_usl", "ahl": "icehockey_ahl",
+}
 
 # ── API helpers ───────────────────────────────────────────────────────
 import httpx
@@ -155,7 +209,15 @@ def _safe_float(val) -> float:
 
 
 def normalize_event(raw: dict, sport_key: str) -> dict | None:
-    """Normalize a raw odds-api.io event into Callisto format."""
+    """Normalize a raw odds-api.io event into Callisto format.
+
+    odds-api.io format:
+        bookmakers: { "BookName": [ {name: "ML", odds: [{home: "1.65", away: "2.25"}]}, ... ] }
+        - Odds values are STRINGS (decimal), not floats
+        - ML market odds list may contain a single {home, away} object
+        - Spread/Totals have multiple lines; pick the one closest to even
+        - Also stores player props for future use
+    """
     home = raw.get("home", "")
     away = raw.get("away", "")
     if not home or not away:
@@ -166,6 +228,8 @@ def normalize_event(raw: dict, sport_key: str) -> dict | None:
         return None
 
     normalized_bookmakers = []
+    player_props = []
+
     for bm_name, bm_markets in bookmakers_raw.items():
         if not isinstance(bm_markets, list):
             continue
@@ -226,6 +290,21 @@ def normalize_event(raw: dict, sport_key: str) -> dict | None:
                         {"name": "Under", "price": _decimal_to_american(under_dec), "point": hdp},
                     ]})
 
+            elif mkt_name == "Player Props":
+                for o in odds_list:
+                    label = o.get("label", "")
+                    hdp = _safe_float(o.get("hdp", 0))
+                    over_dec = _safe_float(o.get("over", 0))
+                    under_dec = _safe_float(o.get("under", 0))
+                    if label and hdp > 0 and over_dec > 1 and under_dec > 1:
+                        player_props.append({
+                            "book": slug,
+                            "label": label,
+                            "line": hdp,
+                            "over": _decimal_to_american(over_dec),
+                            "under": _decimal_to_american(under_dec),
+                        })
+
         if markets:
             normalized_bookmakers.append({
                 "key": slug,
@@ -236,7 +315,7 @@ def normalize_event(raw: dict, sport_key: str) -> dict | None:
     if not normalized_bookmakers:
         return None
 
-    return {
+    result = {
         "id": str(raw.get("id", "")),
         "sport_key": sport_key,
         "home_team": home,
@@ -244,6 +323,10 @@ def normalize_event(raw: dict, sport_key: str) -> dict | None:
         "commence_time": raw.get("date", ""),
         "bookmakers": normalized_bookmakers,
     }
+    if player_props:
+        result["player_props"] = player_props
+
+    return result
 
 
 # ── Database operations ───────────────────────────────────────────────
@@ -446,11 +529,186 @@ async def import_sport(
     return stats
 
 
+# ── Golf league discovery ─────────────────────────────────────────────
+
+GOLF_DISCOVERY_DB_PATH = PROJECT_ROOT / "memory" / "callisto.db"
+GOLF_LEAGUE_TABLE = "golf_league_discovery"
+
+
+def _ensure_golf_table(conn: sqlite3.Connection):
+    """Create golf league discovery table if needed."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS golf_league_discovery (
+            slug TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL,
+            event_count INTEGER DEFAULT 0,
+            has_historical_data INTEGER DEFAULT 0,
+            tournament_type TEXT DEFAULT 'matchup'
+        )
+    """)
+    conn.commit()
+
+
+async def discover_golf_leagues(dry_run: bool = False) -> list[dict]:
+    """Discover all active and historical golf league slugs on odds-api.io.
+
+    Golf on odds-api.io uses per-tournament rotating league slugs
+    (e.g., 'masters-tournament-matchup', 'hero-indian-open-1st-round').
+    This function catalogs them by scanning live events, then probes
+    historical availability for each discovered slug.
+    """
+    conn = sqlite3.connect(str(GOLF_DISCOVERY_DB_PATH))
+    _ensure_golf_table(conn)
+
+    # Load previously discovered slugs
+    known = {}
+    for row in conn.execute("SELECT slug, name, has_historical_data FROM golf_league_discovery").fetchall():
+        known[row[0]] = {"name": row[1], "has_historical": bool(row[2])}
+
+    # Step 1: Scan live events to find current golf leagues
+    logger.info("[Golf Discovery] Scanning live golf events...")
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        params = {"apiKey": API_KEY, "sport": "golf"}
+        try:
+            resp = await client.get(f"{API_BASE}/events", params=params)
+            resp.raise_for_status()
+            events = resp.json()
+        except Exception as e:
+            logger.error(f"[Golf Discovery] Failed to fetch live events: {e}")
+            events = []
+
+    new_leagues = {}
+    today = datetime.now().strftime("%Y-%m-%d")
+    for ev in events:
+        lg = ev.get("league", {})
+        slug = lg.get("slug", "")
+        name = lg.get("name", "")
+        if slug and slug not in known:
+            new_leagues[slug] = name
+
+    if new_leagues:
+        logger.info(f"[Golf Discovery] Found {len(new_leagues)} new league(s): {list(new_leagues.keys())}")
+    else:
+        logger.info(f"[Golf Discovery] No new leagues (tracking {len(known)} known)")
+
+    # Step 2: Classify tournament type from slug
+    def _classify_slug(slug: str) -> str:
+        if "outright" in slug or "winner" in slug:
+            return "outright"
+        if "1st-round" in slug or "2nd-round" in slug or "3rd-round" in slug or "4th-round" in slug:
+            return "round_matchup"
+        if "matchup" in slug or "tournament" in slug:
+            return "tournament_matchup"
+        return "other"
+
+    # Step 3: Probe historical data for new leagues
+    for slug, name in new_leagues.items():
+        has_historical = 0
+        # Probe a few date ranges
+        for probe_start, probe_end in [
+            ("2025-01-01", "2025-01-31"),
+            ("2025-04-01", "2025-04-30"),
+            ("2025-07-01", "2025-07-31"),
+            ("2025-10-01", "2025-10-31"),
+        ]:
+            test_events = await get_events("golf", slug, probe_start, probe_end)
+            if test_events:
+                has_historical = 1
+                logger.info(f"[Golf Discovery] {slug}: historical data available ({len(test_events)} events in {probe_start[:7]})")
+                break
+            await asyncio.sleep(REQUEST_DELAY)
+
+        ttype = _classify_slug(slug)
+        conn.execute(
+            "INSERT OR REPLACE INTO golf_league_discovery "
+            "(slug, name, first_seen, last_seen, event_count, has_historical_data, tournament_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (slug, name, today, today, 0, has_historical, ttype),
+        )
+
+    # Update last_seen for known leagues that are still active
+    for slug in known:
+        if slug in {ev.get("league", {}).get("slug", "") for ev in events}:
+            conn.execute("UPDATE golf_league_discovery SET last_seen = ? WHERE slug = ?", (today, slug))
+
+    conn.commit()
+
+    # Step 4: Import odds for all discovered leagues with events
+    all_leagues = conn.execute(
+        "SELECT slug, name, tournament_type FROM golf_league_discovery"
+    ).fetchall()
+
+    imported = []
+    for slug, name, ttype in all_leagues:
+        logger.info(f"[Golf] Checking {name} ({slug}, type={ttype})...")
+
+        # For live leagues, import current events
+        league_events = [ev for ev in events if ev.get("league", {}).get("slug") == slug]
+        if not league_events:
+            continue
+
+        sport_key = f"golf_{slug.replace('-', '_')}"
+        regime = "current"
+        games = []
+        api_requests = 0
+
+        for ev in league_events:
+            eid = ev.get("id")
+            if not eid:
+                continue
+
+            store_game_result(conn, "golf_pga", ev, regime)
+
+            if not dry_run:
+                odds = await get_event_odds(eid)
+                api_requests += 1
+                if odds and odds.get("bookmakers"):
+                    normalized = normalize_event(odds, "golf_pga")
+                    if normalized:
+                        games.append(normalized)
+
+        ev_date = today
+        if games:
+            store_odds_cache(conn, "golf_pga", ev_date, games, regime)
+            conn.commit()
+
+        imported.append({
+            "league": name,
+            "slug": slug,
+            "type": ttype,
+            "events": len(league_events),
+            "with_odds": len(games),
+            "api_requests": api_requests,
+        })
+        logger.info(f"[Golf] {name}: {len(league_events)} events, {len(games)} with odds")
+
+    conn.close()
+
+    # Summary
+    print("\n" + "=" * 60)
+    print("GOLF LEAGUE DISCOVERY SUMMARY")
+    print("=" * 60)
+    print(f"  Total leagues tracked: {len(all_leagues)}")
+    print(f"  New leagues found:     {len(new_leagues)}")
+    for imp in imported:
+        print(f"  {imp['league']}:")
+        print(f"    Type: {imp['type']}, Events: {imp['events']}, With odds: {imp['with_odds']}")
+    print("=" * 60)
+
+    return imported
+
+
 async def main():
     parser = argparse.ArgumentParser(description="Bulk import historical odds via odds-api.io Pro")
-    parser.add_argument("--sport", type=str, help="Sport to import (nba, nhl, nfl, or all)")
+    parser.add_argument("--sport", type=str, help="Sport to import (nba, nhl, nfl, mls, nwsl, ufl, usl, ahl)")
+    parser.add_argument("--all", action="store_true", help="Import all available sports (core + extended)")
     parser.add_argument("--from", dest="from_date", type=str, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--to", dest="to_date", type=str, help="End date (YYYY-MM-DD)")
+    parser.add_argument("--discover-golf", action="store_true", help="Discover and import golf leagues")
+    parser.add_argument("--recent", action="store_true",
+                        help="Only import last 90 days (odds retention window)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be imported")
     args = parser.parse_args()
 
@@ -458,15 +716,23 @@ async def main():
         logger.error("ODDS_API_IO_KEY not set in environment")
         sys.exit(1)
 
+    # Golf discovery mode
+    if args.discover_golf:
+        await discover_golf_leagues(args.dry_run)
+        return
+
     # Determine sports to import
-    if args.sport and args.sport != "all":
+    if args.sport:
         sport_key = SPORT_ALIASES.get(args.sport.lower(), args.sport)
         if sport_key not in SPORT_CONFIGS:
             logger.error(f"Unknown sport: {args.sport}. Available: {list(SPORT_ALIASES.keys())}")
             sys.exit(1)
         sports = {sport_key: SPORT_CONFIGS[sport_key]}
-    else:
+    elif args.all:
         sports = SPORT_CONFIGS
+    else:
+        # Default: core sports only
+        sports = CORE_SPORT_CONFIGS
 
     to_date = args.to_date or datetime.now().strftime("%Y-%m-%d")
 
@@ -474,7 +740,10 @@ async def main():
     t0 = time.time()
 
     for sport_key, config in sports.items():
-        from_date = args.from_date or config["earliest"]
+        if args.recent:
+            from_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+        else:
+            from_date = args.from_date or config["earliest"]
         stats = await import_sport(sport_key, config, from_date, to_date, args.dry_run)
         all_stats.append(stats)
 
