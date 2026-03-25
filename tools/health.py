@@ -322,7 +322,7 @@ class SystemHealth:
                 # Count key tables
                 counts = {}
                 for table in ["hypotheses", "backtest_events", "embeddings",
-                              "game_contexts", "player_stats"]:
+                              "game_contexts", "game_results", "player_stats"]:
                     try:
                         cursor = await db.execute(f"SELECT COUNT(*) FROM {table}")
                         counts[table] = (await cursor.fetchone())[0]

@@ -800,11 +800,13 @@ class HypothesisManager:
                 }
 
             # Events exist — now check minimum quality bar
+            # Must match PROMOTION_GATES["backtesting→paper_trading"]["min_signals"]
             n = len(events)
-            if n < 20:
+            min_for_promotion = PROMOTION_GATES["backtesting→paper_trading"]["min_signals"]
+            if n < min_for_promotion:
                 return {
                     "action": "held",
-                    "reason": f"Only {n} backtest events — need at least 20 before promotion.",
+                    "reason": f"Only {n}/{min_for_promotion} signal events — need more before promotion.",
                 }
 
         elif status == "paper_trading":

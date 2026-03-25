@@ -1816,18 +1816,38 @@ class BacktestEngine:
             return {"resolved": 0, "unresolved": 0}
 
         # Build a lookup of game results indexed by (sport, date) -> list of games
+        # Primary: game_results table. Fallback: game_contexts table (has scores too).
+        from collections import defaultdict
+        games_by_date = defaultdict(list)
+        seen = set()
+
         result_cursor = await self._db.execute(
             "SELECT sport, game_date, home_team, away_team, home_score, away_score "
             "FROM game_results",
         )
         result_rows = await result_cursor.fetchall()
-
-        # Index by (sport, date) for fuzzy team matching
-        from collections import defaultdict
-        games_by_date = defaultdict(list)
         for r_sport, r_date, r_home, r_away, r_hscore, r_ascore in result_rows:
+            key = (r_sport, r_date, r_home, r_away)
+            seen.add(key)
             games_by_date[(r_sport, r_date)].append((r_home, r_away, r_hscore, r_ascore))
             games_by_date[("", r_date)].append((r_home, r_away, r_hscore, r_ascore))
+
+        # Fallback: game_contexts also stores scores from ESPN
+        ctx_cursor = await self._db.execute(
+            "SELECT sport, game_date, home_team, away_team, home_score, away_score "
+            "FROM game_contexts WHERE home_score IS NOT NULL AND away_score IS NOT NULL",
+        )
+        ctx_rows = await ctx_cursor.fetchall()
+        ctx_added = 0
+        for r_sport, r_date, r_home, r_away, r_hscore, r_ascore in ctx_rows:
+            key = (r_sport, r_date, r_home, r_away)
+            if key not in seen:
+                seen.add(key)
+                games_by_date[(r_sport, r_date)].append((r_home, r_away, r_hscore, r_ascore))
+                games_by_date[("", r_date)].append((r_home, r_away, r_hscore, r_ascore))
+                ctx_added += 1
+        if ctx_added > 0:
+            logger.info(f"Resolution: added {ctx_added} games from game_contexts fallback")
 
         resolved_count = 0
         match_failures = 0
