@@ -84,10 +84,11 @@ class HistoricalOddsFetcher:
         """
         Fetch historical odds for a sport on a specific date.
 
-        Source cascade (cheapest first):
+        Source cascade (best data first):
           1. SQLite cache (free)
-          2. OddsPapi (1 req per call, 250/month free, includes Pinnacle)
-          3. The Odds API (10 credits per call, 500/month free)
+          2. Odds-API.io Pro (15 books, 30K req/hr, includes sharp + exchange)
+          3. OddsPapi (1 req per call, 250/month free, includes Pinnacle)
+          4. The Odds API (10 credits per call, 500/month free)
 
         Args:
             sport: Sport key (e.g., 'basketball_nba')
@@ -104,26 +105,86 @@ class HistoricalOddsFetcher:
             logger.debug(f"Cache hit: {sport} {date}")
             return cached
 
-        # Source 1: OddsPapi (1 credit, includes sharp books)
+        # Source 1: Odds-API.io Pro (15 books, best quality)
+        result = await self._fetch_via_odds_api_io(sport, date, markets)
+        if result and result.get("games"):
+            await self._cache_response(sport, date, None, markets, result, 1)
+            return result
+
+        # Source 2: OddsPapi (1 credit, includes sharp books)
         result = await self._fetch_via_oddspapi(sport, date, markets)
         if result and result.get("games"):
             credits_cost = 1  # OddsPapi costs 1 request regardless of markets
             await self._cache_response(sport, date, None, markets, result, credits_cost)
             return result
 
-        # Source 2: The Odds API (10 credits per call — expensive)
+        # Source 3: The Odds API (10 credits per call — expensive)
         result = await self._fetch_via_odds_api(sport, date, regions, markets, odds_format)
         if result and result.get("games"):
             credits_cost = len(markets.split(",")) * len(regions.split(","))
             await self._cache_response(sport, date, None, markets, result, credits_cost)
             return result
 
-        # Both sources failed
+        # All sources failed
         source_errors = []
         if result and result.get("error"):
             source_errors.append(f"Odds API: {result['error']}")
         logger.warning(f"Historical odds {sport} {date}: all sources failed — {source_errors}")
         return result or {"error": "All historical odds sources failed", "games": []}
+
+    async def _fetch_via_odds_api_io(
+        self, sport: str, date: str, markets: str,
+    ) -> dict:
+        """Try Odds-API.io Pro for historical odds (15 books, 1 request).
+
+        Uses /historical/events to find events for a date, then
+        /historical/odds to get closing odds + scores.
+        """
+        try:
+            from tools.odds_api_io import (
+                get_historical_events, get_historical_odds, get_usage_status,
+                _normalize_event_odds, SPORT_MAP, SPORT_TITLES,
+            )
+
+            usage = get_usage_status()
+            if not usage.get("api_key_set"):
+                return {"error": "Odds-API.io key not set", "games": []}
+            if usage.get("requests_remaining_this_hour", 0) < 5:
+                return {"error": "Odds-API.io rate limit low", "games": []}
+
+            # Get historical events for this sport/date
+            hist = await get_historical_events(sport, date, date)
+            events = hist.get("events", [])
+            if not events:
+                return {"error": f"No historical events for {sport} on {date}", "games": []}
+
+            # Get closing odds for each event via /historical/odds
+            event_ids = [e.get("id") for e in events if e.get("id")]
+            games = []
+
+            for eid in event_ids:
+                raw = await get_historical_odds(eid)
+                if isinstance(raw, dict) and raw.get("bookmakers"):
+                    normalized = _normalize_event_odds(raw, {}, sport)
+                    if normalized:
+                        games.append(normalized)
+
+            if games:
+                logger.info(
+                    f"Historical odds via Odds-API.io Pro: {sport} {date} → "
+                    f"{len(games)} games (15 books)"
+                )
+            return {
+                "sport": sport,
+                "date": date,
+                "timestamp": f"{date}T00:00:00Z",
+                "games": games,
+                "game_count": len(games),
+                "source": "odds_api_io_pro",
+            }
+        except Exception as e:
+            logger.debug(f"Odds-API.io Pro historical failed: {e}")
+            return {"error": str(e), "games": []}
 
     async def _fetch_via_oddspapi(
         self, sport: str, date: str, markets: str,

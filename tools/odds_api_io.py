@@ -961,6 +961,12 @@ async def get_historical_events(
     sport_slug = mapping.get("sport", sport)
     league_slug = mapping.get("league", "")
 
+    # API requires RFC3339 format (e.g., 2026-03-20T00:00:00Z)
+    if from_date and "T" not in from_date:
+        from_date = f"{from_date}T00:00:00Z"
+    if to_date and "T" not in to_date:
+        to_date = f"{to_date}T23:59:59Z"
+
     params: dict = {"sport": sport_slug, "from": from_date, "to": to_date}
     if league_slug:
         params["league"] = league_slug

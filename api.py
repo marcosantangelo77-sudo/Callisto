@@ -1298,13 +1298,14 @@ async def sync_context(ctx: ContextSync):
 
 
 @app.post("/admin/restart")
-async def admin_restart():
+async def admin_restart(confirm: str = ""):
     """Graceful restart — exits process, watchdog brings it back with new code.
 
-    This is how Claude Code (or any session) triggers a code reload
-    without Marco needing to be physically present. The watchdog.bat
-    restarts within 15 seconds.
+    Requires confirm=YES to prevent accidental restarts.
+    Without watchdog.bat running, this will KILL the system with no relaunch.
     """
+    if confirm != "YES":
+        return {"error": "Add ?confirm=YES to actually restart. WARNING: without watchdog, system will not relaunch."}
     logger.info("RESTART REQUESTED via /admin/restart — shutting down gracefully")
     send_msg = "Callisto restarting (code reload requested)"
     try:

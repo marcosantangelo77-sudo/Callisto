@@ -118,6 +118,7 @@ class OddsWebSocket:
                     ping_interval=30,
                     ping_timeout=10,
                     close_timeout=5,
+                    max_size=2**23,  # 8MB — exchange data with depth can be large
                 ) as ws:
                     self._ws = ws
                     self._connected_at = time.time()
