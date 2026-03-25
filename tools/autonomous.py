@@ -1081,22 +1081,34 @@ class ResearchLoop:
                 logger.info(f"Research cycle #{self._cycles} starting")
 
                 # ── Queue drain: if Claude just became available, burn through deferred work ──
-                await self._drain_deferred_queue()
+                try:
+                    await self._drain_deferred_queue()
+                except Exception as e:
+                    logger.warning(f"Queue drain failed (non-fatal): {e}")
 
                 # Phase 0: Self-repair (detect, fix, verify, record)
-                await self._phase_self_repair()
+                try:
+                    await self._phase_self_repair()
+                except Exception as e:
+                    logger.warning(f"Self-repair failed (non-fatal): {e}")
 
                 if not self._running:
                     break
 
                 # Phase 0a: Self-diagnose pipeline health
-                await self._phase_self_diagnose()
+                try:
+                    await self._phase_self_diagnose()
+                except Exception as e:
+                    logger.warning(f"Self-diagnose failed (non-fatal): {e}")
 
                 if not self._running:
                     break
 
                 # Phase 0b: Refresh signals (retroactive threshold updates)
-                await self._phase_refresh_signals()
+                try:
+                    await self._phase_refresh_signals()
+                except Exception as e:
+                    logger.warning(f"Signal refresh failed (non-fatal): {e}")
 
                 if not self._running:
                     break
