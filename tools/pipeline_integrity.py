@@ -753,38 +753,55 @@ class PipelineIntegrityChecker:
                 completed_runs = (await cursor.fetchone())[0]
 
                 if completed_runs > 0:
+                    # Distinguish truly broken resolution (unresolved events)
+                    # from expected 0-signal runs (events resolved, but no edge found)
                     cursor = await db.execute(
                         "SELECT COUNT(*) FROM backtest_runs "
                         "WHERE completed_at IS NOT NULL "
-                        "AND total_events > 0 "
-                        "AND (actual_win = 0 AND actual_loss = 0 AND hit_rate IS NULL)"
+                        "AND total_events > 0 AND unresolved > 0"
                     )
-                    null_result_runs = (await cursor.fetchone())[0]
+                    unresolved_runs = (await cursor.fetchone())[0]
 
-                    if null_result_runs > 0:
-                        pct = null_result_runs / completed_runs * 100
+                    cursor = await db.execute(
+                        "SELECT COUNT(*) FROM backtest_runs "
+                        "WHERE completed_at IS NOT NULL "
+                        "AND total_events > 0 AND signals_generated = 0 "
+                        "AND unresolved = 0"
+                    )
+                    zero_signal_runs = (await cursor.fetchone())[0]
+
+                    if unresolved_runs > 0:
+                        pct = unresolved_runs / completed_runs * 100
                         severity = SEVERITY_CRITICAL if pct > 50 else SEVERITY_WARNING
                         zero_checks.append(
-                            f"backtest_results_null: {null_result_runs}/{completed_runs} "
-                            f"completed runs ({pct:.0f}%) have events but 0 wins, "
-                            f"0 losses, null hit_rate — resolution pipeline broken"
+                            f"backtest_unresolved: {unresolved_runs}/{completed_runs} "
+                            f"completed runs ({pct:.0f}%) have events awaiting "
+                            f"game result resolution"
                         )
-                        # Promote to its own issue if critical
                         if severity == SEVERITY_CRITICAL:
                             self._issues.append(IntegrityIssue(
                                 check_name="backtest_resolution_failure",
                                 severity=SEVERITY_CRITICAL,
                                 message=(
-                                    f"Backtest resolution completely broken: "
-                                    f"{null_result_runs}/{completed_runs} runs "
-                                    f"have events but zero resolved results"
+                                    f"Backtest resolution failing: "
+                                    f"{unresolved_runs}/{completed_runs} runs "
+                                    f"have unresolved events (missing game results)"
                                 ),
                                 details={
-                                    "null_result_runs": null_result_runs,
+                                    "unresolved_runs": unresolved_runs,
                                     "completed_runs": completed_runs,
                                     "pct_broken": round(pct, 1),
                                 },
                             ))
+
+                    if zero_signal_runs > 0:
+                        pct = zero_signal_runs / completed_runs * 100
+                        if pct > 80:
+                            zero_checks.append(
+                                f"zero_signal_rate: {zero_signal_runs}/{completed_runs} "
+                                f"runs ({pct:.0f}%) found 0 signals — edge thresholds "
+                                f"may be too high or devig data too thin (check books_used)"
+                            )
 
                 if zero_checks:
                     self._issues.append(IntegrityIssue(

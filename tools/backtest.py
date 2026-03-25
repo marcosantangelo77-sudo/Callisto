@@ -1809,6 +1809,12 @@ class BacktestEngine:
 
             if not scores:
                 match_failures += 1
+                if match_failures <= 5:
+                    logger.debug(
+                        f"Resolution miss: {ev_sport} {game_date} "
+                        f"{home_team} vs {away_team} — "
+                        f"no matching game_result found"
+                    )
                 continue
 
             home_score, away_score = scores

@@ -1607,15 +1607,21 @@ class ResearchLoop:
 
                 prompt = (
                     f"CALLISTO HYPOTHESIS GENERATION — Cycle #{self._cycles}\n\n"
-                    f"You are the primary reasoning engine for an autonomous sports betting "
-                    f"research system. Generate novel, testable hypotheses.\n\n"
+                    f"You are a skeptical quantitative researcher. Your default stance: "
+                    f"most hypotheses are noise. Your job is to find the rare ones that aren't.\n\n"
+                    f"BEFORE GENERATING: scrutinize the pipeline state below. If something "
+                    f"is broken or data quality is insufficient, say so in a 'pipeline_warning' "
+                    f"field instead of generating garbage hypotheses.\n\n"
                     f"PIPELINE STATE:\n"
                     f"  Total hypotheses: {len(all_hypos)} "
                     f"({draft_count} draft, {active_count} active, {rejected_count} rejected)\n"
+                    f"  Rejection rate: {rejected_count}/{max(1, rejected_count + active_count)}"
+                    f" — if this is >90%, challenge whether the pipeline can test ANY hypothesis\n"
                     f"  Sports: {', '.join(RESEARCH_SPORTS)}\n"
                     f"  Data ranges: {json.dumps(date_ranges)}\n"
                     f"  Collection stats: {json.dumps(data_stats)}\n"
-                    f"  Model: consensus devig (power method) across 3+ books\n\n"
+                    f"  Model: consensus devig (power method) — needs 3+ books to be reliable. "
+                    f"If most events show books_used=1, the devig is meaningless.\n\n"
                     f"EXISTING HYPOTHESIS NAMES (avoid duplicates):\n"
                     f"  {json.dumps(existing_names[:50])}\n\n"
                     f"{focus_context}\n\n"
@@ -1634,14 +1640,18 @@ class ResearchLoop:
                     f'"sport": "basketball_nba", '
                     f'"market_type": "spreads|totals|h2h|player_props", '
                     f'"edge_threshold": 0.015}}\n'
-                    f"]}}\n\n"
+                    f'], "pipeline_warning": "optional — flag if data quality makes testing pointless"}}\n\n'
                     f"RULES:\n"
                     f"- Generate 3-5 hypotheses per call\n"
                     f"- At least 2 hypotheses MUST be for the PRIORITY FOCUS AREAS listed above\n"
-                    f"- Each must be testable with game-level odds data we have\n"
+                    f"- Each must be testable with the ACTUAL data we have (check collection stats)\n"
                     f"- Names must be unique (not in existing list)\n"
                     f"- Thesis must be specific and falsifiable\n"
-                    f"- Prefer focus area sports, then sports with the most data\n"
+                    f"- Steelman each hypothesis before including it: what is the strongest "
+                    f"case that this edge exists? If you can't make that case, drop it.\n"
+                    f"- If the pipeline state shows systemic issues (high rejection rate, "
+                    f"thin data, broken resolution), flag them — do NOT just generate more "
+                    f"hypotheses into a broken funnel\n"
                 )
 
                 result = await claude_code_query(prompt, hermes_caller="hypothesis_gen")
@@ -2405,24 +2415,32 @@ class ResearchLoop:
 
         prompt = (
             f"CALLISTO BACKTEST INTERPRETATION — Cycle #{self._cycles}\n\n"
-            f"You are analyzing backtest results for an autonomous betting research system.\n"
-            f"Determine which hypotheses show genuine signal vs random noise.\n\n"
+            f"You are a statistician reviewing backtest results. Your bias is toward "
+            f"skepticism: most patterns are noise, and you must prove otherwise.\n\n"
+            f"Before evaluating any hypothesis, ask: was this a FAIR test?\n"
+            f"- If events=15 and signals=0, that is NOT enough data to reject — hold it.\n"
+            f"- If avg_edge is computed from 1 book, the entire edge is an artifact.\n"
+            f"- If all hypotheses show similar event counts, the backtest filter is broken.\n\n"
             f"HYPOTHESIS BACKTEST RESULTS (top 10 by signal count):\n"
             f"{json.dumps(hypo_data, indent=2)}\n\n"
             f"STATISTICAL CONTEXT:\n"
             f"- A fair coin has ~50% hit rate. Signal needs to beat that consistently.\n"
-            f"- With <30 resolved bets, results are mostly noise (wide confidence intervals).\n"
+            f"- With <30 resolved bets, results are noise. DO NOT reject on thin data.\n"
             f"- avg_edge > 0.03 with hit_rate > 0.53 over 50+ resolved is promising.\n"
             f"- 0 signals after 50+ events means the hypothesis never fires — reject it.\n"
-            f"- Low signal rate (<5%) with poor hit rate means the threshold may be wrong.\n\n"
+            f"- Low signal rate (<5%) with poor hit rate: lower the threshold, don't kill it.\n"
+            f"- Before rejecting: steelman the hypothesis. What is the strongest case it's real?\n"
+            f"  Only reject if you can refute that case with the data.\n\n"
             f"RESPOND WITH EXACTLY THIS JSON (no other text):\n"
-            f'{{"reject": ["hypothesis_id1", "hypothesis_id2"], '
+            f'{{"data_quality_assessment": "honest 1-sentence verdict on whether these backtests are reliable", '
+            f'"reject": ["hypothesis_id — ONLY with 50+ events AND fair test conditions"], '
             f'"modify": [{{"id": "hypothesis_id", "new_threshold": 0.025, "reason": "..."}}], '
-            f'"insights": "Brief analysis of what patterns are working and what isn\'t"}}\n\n'
+            f'"insights": "What patterns are working, what isn\'t, and what the pipeline should change"}}\n\n'
             f"RULES:\n"
-            f"- reject: hypotheses that are clearly noise (0 signals, or terrible hit rate with enough data)\n"
-            f"- modify: promising hypotheses that need threshold adjustments\n"
-            f"- Only include fields you have actionable items for\n"
+            f"- data_quality_assessment FIRST: are these results trustworthy?\n"
+            f"- reject: ONLY hypotheses with clear disproof (0 signals after 50+ events with 3+ books)\n"
+            f"- modify: lower thresholds on promising hypotheses rather than killing them\n"
+            f"- If data quality is poor, say so and recommend holding rather than rejecting\n"
         )
 
         if not claude_available():
@@ -2896,8 +2914,10 @@ class ResearchLoop:
 
         prompt = (
             f"CALLISTO AUTONOMOUS SYSTEM — DEEP WORK CYCLE #{self._cycles}\n"
-            f"You are the reasoning engine for an autonomous research system.\n"
-            f"Your output MUST be structured JSON that the system can parse and act on.\n\n"
+            f"You are a critical analyst auditing an autonomous research pipeline.\n"
+            f"Your primary obligation is honesty about what is working and what is broken.\n"
+            f"pipeline_issues takes PRIORITY over new_hypotheses — fix the funnel before "
+            f"pouring more hypotheses into it.\n\n"
             f"PIPELINE STATE:\n"
             f"  Backtest events: {metrics.get('bt_events', 0)} total, "
             f"{metrics.get('bt_signals', 0)} signals ({(metrics.get('bt_signals',0) / max(1,metrics.get('bt_events',1))) * 100:.1f}%)\n"
@@ -2905,23 +2925,29 @@ class ResearchLoop:
             f"  Odds cache: {json.dumps(metrics.get('odds_cache', {}))}\n"
             f"  Promotions: {self._promotions} | Rejections: {self._rejections}\n"
             f"  Cycles: {self._cycles} | Data collections: {self._data_collections}\n\n"
+            f"CRITICAL QUESTIONS (answer these honestly before generating anything):\n"
+            f"  1. What is the promotion rate? If 0%, why — bad hypotheses or broken pipeline?\n"
+            f"  2. Signal rate {(metrics.get('bt_signals',0) / max(1,metrics.get('bt_events',1))) * 100:.1f}% — "
+            f"is this because edges don't exist, or because devig uses too few books?\n"
+            f"  3. Are hypotheses getting a fair trial, or dying before results are collected?\n\n"
             f"{focus_context}\n\n"
             f"TOP HYPOTHESES BY SIGNALS:\n"
             + ("\n".join(top_hypos) if top_hypos else "  (none with signals)") + "\n\n"
             f"RESPOND WITH EXACTLY THIS JSON STRUCTURE (no other text):\n"
-            f'{{"reject_ids": ["hypothesis_id1", ...], '
+            f'{{"pipeline_issues": ["MOST IMPORTANT — specific, actionable problems"], '
+            f'"reject_ids": ["hypothesis_id1", ...], '
             f'"promising_sports": ["sport1", ...], '
             f'"new_hypotheses": [{{"name": "...", "thesis": "...", "sport": "...", '
-            f'"market_type": "...", "edge_threshold": 0.015}}], '
-            f'"pipeline_issues": ["issue description", ...]}}\n\n'
+            f'"market_type": "...", "edge_threshold": 0.015}}]}}\n\n'
             f"{scrutiny_info}\n"
             f"RULES:\n"
-            f"- reject_ids: hypotheses with 0 signals after 50+ events (data disproves them)\n"
-            f"- new_hypotheses: 3-5 NOVEL, testable — prioritize FOCUS AREA sports above\n"
-            f"- pipeline_issues: specific, actionable problems you observe in the metrics\n"
-            f"  - If multiple hypotheses tested the EXACT SAME number of events, flag it as a pipeline issue\n"
-            f"  - If a 'totals under' hypothesis has the same event count as a 'totals over' hypothesis, that's a filtering bug\n"
-            f"- Only include fields you have actionable items for\n"
+            f"- pipeline_issues FIRST: what is structurally preventing any hypothesis from succeeding?\n"
+            f"  - If multiple hypotheses tested the EXACT SAME events, that is a filtering bug\n"
+            f"  - If 0 promotions after {self._cycles} cycles, diagnose the bottleneck explicitly\n"
+            f"  - If devig uses <3 books on most events, the edge detection is unreliable\n"
+            f"- reject_ids: ONLY hypotheses with 50+ events, 0 signals, AND adequate data quality\n"
+            f"- new_hypotheses: 3-5 NOVEL, testable — but ONLY if the pipeline can actually test them.\n"
+            f"  If the funnel is broken, say so and generate 0.\n"
         )
 
         # If Claude unavailable, defer the fully-built prompt and return
@@ -3176,26 +3202,27 @@ class ResearchLoop:
 
         prompt = (
             f"CALLISTO SYSTEM IMPROVEMENT REVIEW — Cycle #{self._cycles}\n\n"
-            f"You are reviewing the autonomous research pipeline to suggest "
-            f"specific, implementable improvements.\n\n"
+            f"You are an adversarial auditor of this pipeline. Your job is to find "
+            f"the single biggest bottleneck and propose a concrete fix.\n\n"
             f"PIPELINE METRICS:\n{json.dumps(metrics, indent=2)}\n\n"
             f"RECENT SUGGESTIONS (already made, avoid repeating):\n"
             f"{json.dumps(metrics.get('recent_suggestions', []))}\n\n"
             f"RESPOND WITH EXACTLY THIS JSON (no other text):\n"
-            f'{{"improvements": [\n'
+            f'{{"diagnosis": "1-sentence root cause of why 0 hypotheses have been promoted", '
+            f'"improvements": [\n'
             f'  {{"category": "data_collection|hypothesis_gen|backtesting|evaluation|infrastructure", '
             f'"suggestion": "Specific actionable improvement", '
             f'"priority": "high|medium|low", '
             f'"rationale": "Why this would help based on the metrics"}}\n'
             f"]}}\n\n"
             f"RULES:\n"
-            f"- 2-4 suggestions per review\n"
+            f"- diagnosis FIRST: why has the promotion rate been 0%? Be brutally specific.\n"
+            f"- 2-4 suggestions, ranked by impact on the BOTTLENECK (not generic improvements)\n"
             f"- Each must be specific and implementable (not vague)\n"
-            f"- Prioritize based on biggest impact on pipeline throughput\n"
-            f"- Focus on: signal rate, data quality, hypothesis diversity, "
-            f"promotion rate, resolution rate\n"
+            f"- If the bottleneck is data quality (few books, thin markets), say so\n"
+            f"- If the bottleneck is evaluation criteria (too strict), say so\n"
+            f"- Do NOT suggest generating more hypotheses if the funnel is broken\n"
             f"- Do NOT repeat recent suggestions\n"
-            f"- Store key findings via Hermes record_learning()\n"
         )
 
         if not claude_available():

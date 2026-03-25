@@ -687,6 +687,19 @@ class HypothesisManager:
                 # data collection, especially for sports with few games.
                 if eval_cycles >= 10:
                     if total_events > 0:
+                        # Check data quality before rejecting — 1-book devig
+                        # produces garbage edges, don't blame the hypothesis.
+                        avg_books = await self._avg_books_used(hypothesis_id)
+                        if avg_books is not None and avg_books < 2.0:
+                            return {
+                                "action": "held",
+                                "reason": (
+                                    f"0 signals in {total_events} events but avg "
+                                    f"books_used={avg_books:.1f} — devig data too thin "
+                                    f"to produce reliable edges. Holding for better data."
+                                ),
+                            }
+
                         # Check run-level stats before rejecting — the run may
                         # have real resolved data even if 0 signals at threshold.
                         run_stats = await self._get_best_run_stats(hypothesis_id)
@@ -701,6 +714,19 @@ class HypothesisManager:
                                 ),
                             }
 
+                        # Check for unresolved events — don't reject if results
+                        # haven't been collected yet
+                        unresolved = await self._count_unresolved(hypothesis_id)
+                        if unresolved > 0:
+                            return {
+                                "action": "held",
+                                "reason": (
+                                    f"{unresolved}/{total_events} events still "
+                                    f"unresolved (awaiting game results). "
+                                    f"Cannot reject without resolution data."
+                                ),
+                            }
+
                         await self.update_status(
                             hypothesis_id, "rejected",
                             "auto:no_edge_after_backtest",
@@ -709,6 +735,7 @@ class HypothesisManager:
                             "action": "rejected",
                             "reason": (
                                 f"Backtested {total_events} events over {eval_cycles} cycles "
+                                f"with {avg_books:.1f} avg books "
                                 f"but 0 generated signals (no exploitable edge found)."
                             ),
                         }
@@ -872,6 +899,43 @@ class HypothesisManager:
             "avg_edge": row[3],
             "avg_ev": row[4],
         }
+
+    async def _avg_books_used(self, hypothesis_id: str) -> Optional[float]:
+        """Average books_used across backtest events for this hypothesis.
+
+        Returns None if no events have model_factors with books_used.
+        A value < 2.0 means the devig was based on a single book — unreliable.
+        """
+        cursor = await self._db.execute(
+            "SELECT model_factors FROM backtest_events "
+            "WHERE hypothesis_id = ? AND model_factors IS NOT NULL "
+            "LIMIT 50",
+            (hypothesis_id,),
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            return None
+        import json as _json
+        books = []
+        for (mf,) in rows:
+            try:
+                factors = _json.loads(mf)
+                b = factors.get("books_used")
+                if b is not None:
+                    books.append(b)
+            except (ValueError, TypeError):
+                continue
+        return sum(books) / len(books) if books else None
+
+    async def _count_unresolved(self, hypothesis_id: str) -> int:
+        """Count backtest events that haven't been resolved against game results."""
+        cursor = await self._db.execute(
+            "SELECT COUNT(*) FROM backtest_events "
+            "WHERE hypothesis_id = ? AND actual_result IS NULL",
+            (hypothesis_id,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
 
     async def _get_paper_trades(self, hypothesis_id: str) -> list[dict]:
         """Get all paper trades for a hypothesis."""
