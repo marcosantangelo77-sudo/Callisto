@@ -586,8 +586,14 @@ class HypothesisManager:
         if status == "backtesting":
             events = await self._get_backtest_signals(hypothesis_id)
             if not events:
-                # Check for stale hypothesis: auto-reject if stuck with no data
-                # Use evaluate_cycle_count from model_config to track cycles
+                # No signal events — check if there are ANY backtest events at all.
+                # This distinguishes "never backtested" from "backtested but no edge found."
+                total_events_row = await (await self._db.execute(
+                    "SELECT COUNT(*) FROM backtest_events WHERE hypothesis_id = ?",
+                    (hypothesis_id,),
+                )).fetchone()
+                total_events = total_events_row[0] if total_events_row else 0
+
                 model_config = h.get("model_config", {})
                 if isinstance(model_config, str):
                     import json as _json
@@ -604,15 +610,38 @@ class HypothesisManager:
                 await self._db.commit()
 
                 if eval_cycles >= 5:
-                    await self.update_status(
-                        hypothesis_id, "rejected",
-                        "auto:no_backtest_data_after_5_cycles",
-                    )
-                    return {
-                        "action": "rejected",
-                        "reason": f"No backtest events after {eval_cycles} evaluation cycles — untestable.",
-                    }
+                    if total_events > 0:
+                        # Hypothesis was tested but found no edge — legitimate rejection
+                        await self.update_status(
+                            hypothesis_id, "rejected",
+                            "auto:no_edge_after_backtest",
+                        )
+                        return {
+                            "action": "rejected",
+                            "reason": (
+                                f"Backtested {total_events} events over {eval_cycles} cycles "
+                                f"but 0 generated signals (no exploitable edge found)."
+                            ),
+                        }
+                    else:
+                        # Never got backtested at all
+                        await self.update_status(
+                            hypothesis_id, "rejected",
+                            "auto:no_backtest_data_after_5_cycles",
+                        )
+                        return {
+                            "action": "rejected",
+                            "reason": f"No backtest events after {eval_cycles} evaluation cycles — untestable.",
+                        }
 
+                if total_events > 0:
+                    return {
+                        "action": "held",
+                        "reason": (
+                            f"{total_events} events tested but 0 signals "
+                            f"(cycle {eval_cycles}/5 before auto-reject)."
+                        ),
+                    }
                 return {
                     "action": "held",
                     "reason": f"No backtest events yet (cycle {eval_cycles}/5 before auto-reject).",

@@ -166,6 +166,41 @@ class BacktestEngine:
         devig_method = config.get("devig_method", "power")
         min_books = config.get("consensus_min_books", 2)
 
+        # ── SPRING TRAINING GATE ──
+        # MLB spring training (Feb-late March) uses split-squad rosters, shortened
+        # starts, and matchups that don't appear in any results source. Backtesting
+        # against spring training produces unresolvable events. Skip it.
+        if sport == "baseball_mlb":
+            from datetime import datetime as _dt_check
+            try:
+                end_dt = _dt_check.strptime(end_date, "%Y-%m-%d")
+                # MLB Opening Day is typically late March. Spring training games
+                # before March 27 are exhibition games with unreliable matchups.
+                mlb_season_start = _dt_check(end_dt.year, 3, 27)
+                if end_dt < mlb_season_start:
+                    return {
+                        "hypothesis_id": hypothesis_id,
+                        "hypothesis_name": h_name,
+                        "error": "spring_training",
+                        "detail": (
+                            f"Date range [{start_date} .. {end_date}] falls entirely "
+                            f"in MLB spring training. Spring training matchups from "
+                            f"odds sources don't match actual results — skipping."
+                        ),
+                        "total_events": 0,
+                        "signals_generated": 0,
+                    }
+                # Clamp start_date to season start if range spans the boundary
+                start_dt = _dt_check.strptime(start_date, "%Y-%m-%d")
+                if start_dt < mlb_season_start:
+                    start_date = mlb_season_start.strftime("%Y-%m-%d")
+                    logger.info(
+                        f"Backtest {hypothesis_id}: clamped MLB start_date to "
+                        f"{start_date} (skip spring training)"
+                    )
+            except ValueError:
+                pass
+
         # ── HYPOTHESIS-AWARE FILTERING ──
         # Parse line-based filters from thesis text, model_config, and name (Tier 1)
         # NOTE: pass h_name (readable name like "mlb_ace_first_start_over_total")
@@ -930,8 +965,10 @@ class BacktestEngine:
         if not non_target_books:
             return 0, 0
 
-        # Adapt min_books: need at least 1 non-target book for devig
-        effective_min_books = min(min_books, max(1, len(non_target_books)))
+        # Require at least 2 non-target books for meaningful edge detection.
+        # With only 1 non-target book, consensus_devig produces fair_prob ≈
+        # book_implied → edge ≈ 0 always (0% signal rate in production data).
+        effective_min_books = max(2, min(min_books, len(non_target_books)))
 
         return await self._process_game_lines(
             run_id, hypothesis_id, game, game_date, snapshot_time,

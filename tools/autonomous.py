@@ -1877,13 +1877,20 @@ class ResearchLoop:
                         f"is UNTESTABLE — {result.get('detail', 'no context data')}. "
                         f"Moving back to draft."
                     )
-                    # Move back to draft so it doesn't block the pipeline
                     try:
                         await self.hypothesis_manager.update_status(
                             h["hypothesis_id"], "draft", "auto:untestable"
                         )
                     except Exception as e:
                         logger.warning(f"Failed to revert {h['hypothesis_id']} to draft: {e}")
+                    continue
+
+                # Handle spring training — don't penalize, just skip until season starts
+                if result.get("error") == "spring_training":
+                    logger.info(
+                        f"Research: skipping {h['hypothesis_id']} ({h.get('name', '?')}) — "
+                        f"MLB spring training, will retry after season start"
+                    )
                     continue
 
                 # Store temporal metadata in backtest result for integrity checking
