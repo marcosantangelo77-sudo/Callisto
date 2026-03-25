@@ -311,8 +311,14 @@ class HypothesisManager:
         Run all statistical tests on a hypothesis at a given stage.
         Returns comprehensive significance report.
         """
+        used_all_events = False
         if stage == "backtest":
             events = await self._get_backtest_signals(hypothesis_id)
+            if not events:
+                # Fall back to ALL resolved events — lets us evaluate hypotheses
+                # even when edge_threshold suppressed all signals
+                events = await self._get_backtest_resolved(hypothesis_id)
+                used_all_events = bool(events)
         elif stage == "paper_trade":
             events = await self._get_paper_trades(hypothesis_id)
         else:
@@ -419,6 +425,7 @@ class HypothesisManager:
             "stage": stage,
             "sample_size": resolved,
             "unresolved": unresolved,
+            "used_all_events": used_all_events,
             "results": {
                 "wins": wins,
                 "losses": losses,
@@ -588,7 +595,20 @@ class HypothesisManager:
         if status == "backtesting":
             events = await self._get_backtest_signals(hypothesis_id)
             if not events:
-                # No signal events — check if there are ANY backtest events at all.
+                # No signal events — try ALL resolved events before entering rejection path.
+                # evaluate_significance now falls back to resolved events, so run it
+                # to populate stats even without signal-level data.
+                resolved_events = await self._get_backtest_resolved(hypothesis_id)
+                if resolved_events:
+                    # Run significance on resolved events — this populates stats
+                    sig_report = await self.evaluate_significance(hypothesis_id, "backtest")
+                    if sig_report.get("sample_size", 0) > 0:
+                        logger.info(
+                            f"Hypothesis {hypothesis_id}: 0 signals but {sig_report['sample_size']} "
+                            f"resolved events evaluated (hit_rate={sig_report.get('results', {}).get('hit_rate', 'N/A')})"
+                        )
+
+                # Check if there are ANY backtest events at all.
                 # This distinguishes "never backtested" from "backtested but no edge found."
                 total_events_row = await (await self._db.execute(
                     "SELECT COUNT(*) FROM backtest_events WHERE hypothesis_id = ?",
@@ -627,10 +647,30 @@ class HypothesisManager:
                             (new_threshold, json.dumps(model_config), hypothesis_id),
                         )
                         await self._db.commit()
+
+                        # Retroactively update signal_generated on existing events
+                        # so evaluate_significance can see them without re-backtesting
+                        cursor = await self._db.execute(
+                            "UPDATE backtest_events "
+                            "SET signal_generated = CASE WHEN ev_pct >= ? THEN 1 ELSE 0 END "
+                            "WHERE hypothesis_id = ?",
+                            (new_threshold, hypothesis_id),
+                        )
+                        await self._db.commit()
+                        retroactive_count = cursor.rowcount
+                        # Count how many are now signals
+                        sig_cursor = await (await self._db.execute(
+                            "SELECT COUNT(*) FROM backtest_events "
+                            "WHERE hypothesis_id = ? AND signal_generated = 1",
+                            (hypothesis_id,),
+                        )).fetchone()
+                        new_signals = sig_cursor[0] if sig_cursor else 0
+
                         logger.info(
                             f"Hypothesis {hypothesis_id}: lowered edge_threshold "
                             f"from {edge_diag['current_threshold']:.3f} to {new_threshold:.3f} "
-                            f"(max observed edge: {edge_diag['max_edge']:.3f})"
+                            f"(max observed edge: {edge_diag['max_edge']:.3f}). "
+                            f"Retroactively updated {retroactive_count} events → {new_signals} signals"
                         )
                         return {
                             "action": "threshold_adjusted",
@@ -638,7 +678,8 @@ class HypothesisManager:
                                 f"0 signals in {total_events} events because edge_threshold "
                                 f"({edge_diag['current_threshold']:.1%}) exceeds max observed "
                                 f"edge ({edge_diag['max_edge']:.1%}). Lowered to "
-                                f"{new_threshold:.1%} and reset eval cycles."
+                                f"{new_threshold:.1%} and reset eval cycles. "
+                                f"Retroactively updated {new_signals} events to signals."
                             ),
                         }
 
@@ -750,6 +791,22 @@ class HypothesisManager:
         cursor = await self._db.execute(
             "SELECT * FROM backtest_events "
             "WHERE hypothesis_id = ? AND signal_generated = 1 "
+            "ORDER BY game_date",
+            (hypothesis_id,),
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+
+    async def _get_backtest_resolved(self, hypothesis_id: str) -> list[dict]:
+        """Get all resolved backtest events (regardless of signal_generated).
+
+        Fallback for evaluate_significance when 0 signal events exist —
+        lets us determine if the thesis has any merit before auto-rejecting.
+        """
+        cursor = await self._db.execute(
+            "SELECT * FROM backtest_events "
+            "WHERE hypothesis_id = ? AND actual_result IS NOT NULL "
             "ORDER BY game_date",
             (hypothesis_id,),
         )

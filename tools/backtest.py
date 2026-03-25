@@ -451,7 +451,7 @@ class BacktestEngine:
             hypothesis_id, "backtest"
         )
 
-        # Update run with statistical results
+        # Update run with statistical results from signal evaluation
         if sig_report.get("sample_size", 0) > 0:
             sig = sig_report.get("significance", {})
             risk = sig_report.get("risk", {})
@@ -479,6 +479,15 @@ class BacktestEngine:
                 ),
             )
             await self._db.commit()
+        else:
+            # No signal events — still populate run stats from ALL resolved events
+            # so the run isn't stuck with null win/loss/hit_rate
+            updated = await self.recalculate_run_stats(run_id)
+            if updated:
+                logger.info(
+                    f"Backtest {run_id}: 0 signal events but populated run stats "
+                    f"from resolved events"
+                )
 
         return {
             "run_id": run_id,
