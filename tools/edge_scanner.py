@@ -60,9 +60,30 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads") -> list[di
                 continue
 
             all_lines = best["all_lines"]
-            best_line = best["best"]
-            worst_line = best["worst"]
-            price_spread = best["spread_across_books"]
+
+            # SPREAD POINT VALIDATION: For spreads/totals, only compare lines
+            # with the same point value.  Mixing e.g. +1.5 and -1.5 (or alt
+            # spreads like +2.5) produces phantom 20-30% "edges" that are
+            # actually two completely different bets being compared.
+            if market in ("spreads", "totals"):
+                from collections import Counter
+                point_counts = Counter(l.get("point") for l in all_lines)
+                if len(point_counts) > 1:
+                    # Keep only lines matching the most common point value
+                    dominant_point = point_counts.most_common(1)[0][0]
+                    mismatched = [l for l in all_lines if l.get("point") != dominant_point]
+                    if mismatched:
+                        logger.warning(
+                            f"Point mismatch for {team} {market}: points={dict(point_counts)}, "
+                            f"keeping only point={dominant_point}"
+                        )
+                    all_lines = [l for l in all_lines if l.get("point") == dominant_point]
+                    if len(all_lines) < 2:
+                        continue
+
+            best_line = max(all_lines, key=lambda x: x["price"])
+            worst_line = min(all_lines, key=lambda x: x["price"])
+            price_spread = best_line["price"] - worst_line["price"]
 
             # H2H sanity check: if lines contain both large positive and large
             # negative prices, both sides of the market leaked into one team's
@@ -84,6 +105,14 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads") -> list[di
             implied_range = max(implied_probs) - min(implied_probs)
             avg_implied = sum(implied_probs) / len(implied_probs)
 
+            # Sanity: implied range > 25% is almost certainly data contamination
+            if implied_range > 0.25:
+                logger.warning(
+                    f"Implausible implied range {implied_range:.1%} for {team} "
+                    f"{market} — likely data contamination, skipping"
+                )
+                continue
+
             # Classify which books are sharp vs soft for this line
             sharp_lines = [l for l in all_lines if l["bookmaker"].lower() in SHARP_TITLES]
             soft_lines = [l for l in all_lines if l["bookmaker"].lower() in SOFT_TITLES]
@@ -104,7 +133,7 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads") -> list[di
                     edge = sharp_consensus - soft_implied
                     # Cap: real edges in efficient markets top out ~15%.
                     # Anything higher is almost certainly a data/calc bug.
-                    if edge > 0.30:
+                    if edge > 0.20:
                         logger.warning(
                             f"Implausible edge {edge:.1%} for {team} at "
                             f"{sl['bookmaker']} — likely data contamination"
