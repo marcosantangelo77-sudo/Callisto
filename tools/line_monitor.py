@@ -749,11 +749,37 @@ class LineMonitor:
             if len(all_lines) < 2:
                 continue
 
+            # ── Sanity checks (mirrors edge_scanner.py) ──
+
+            # H2H contamination: if lines contain both large positive AND large
+            # negative prices, both sides of the market leaked into one team's
+            # set (e.g. favorite -750 mixed with underdog +610). Skip.
+            if market == "h2h":
+                prices = [l["price"] for l in all_lines]
+                has_big_pos = any(p > 150 for p in prices)
+                has_big_neg = any(p < -150 for p in prices)
+                if has_big_pos and has_big_neg:
+                    logger.warning(
+                        f"Edge eval: H2H contamination for {target_team} — "
+                        f"prices span {min(prices)} to {max(prices)}, skipping"
+                    )
+                    continue
+
             # Consensus implied probability = average across all bookmakers
             implied_probs = [
                 calculate_implied_probability(line["price"])
                 for line in all_lines
             ]
+
+            # Implied range sanity: >25% range is data contamination
+            implied_range = max(implied_probs) - min(implied_probs)
+            if implied_range > 0.25:
+                logger.warning(
+                    f"Edge eval: implausible implied range {implied_range:.1%} "
+                    f"for {target_team} {market}, skipping"
+                )
+                continue
+
             consensus_prob = sum(implied_probs) / len(implied_probs)
 
             # The moved line's implied probability
@@ -762,6 +788,15 @@ class LineMonitor:
             # If the moved line implies LOWER probability than consensus,
             # there may be value (market overreacted against this team)
             edge = consensus_prob - moved_implied
+
+            # Edge cap: real market edges top out ~15%. Anything above 20%
+            # is almost certainly a data/calculation bug.
+            if edge > 0.20:
+                logger.warning(
+                    f"Edge eval: implausible edge {edge:.1%} for {target_team} "
+                    f"{market} @ {movement['bookmaker']}, skipping"
+                )
+                continue
 
             if abs(edge) >= MIN_EDGE_ALERT:
                 ev_result = calculate_ev(
