@@ -2003,8 +2003,36 @@ class ResearchLoop:
         # data availability (NBA/NFL before MLB — more historical data = better backtests)
         drafts = self.focus_manager.sort_by_focus(drafts, sport_key="sport")
         drafts.sort(key=lambda h: SPORT_PRIORITY.get(h.get("sport", ""), 99))
-        to_test = drafts[:BACKTEST_BATCH_SIZE]
-        logger.info(f"Research: backtesting {len(to_test)} hypotheses (sport-priority + focus-area sorted)")
+
+        # Pre-filter: remove hypotheses that will definitely be skipped
+        # (context_coverage < 0.5). Without this, the same 20 untestable
+        # hypotheses clog the batch every cycle and nothing testable runs.
+        from tools.backtest import BacktestEngine
+        testable = []
+        for h in drafts:
+            mc = h.get("model_config", {})
+            if isinstance(mc, str):
+                try:
+                    mc = json.loads(mc)
+                except (json.JSONDecodeError, TypeError):
+                    mc = {}
+            ctx_coverage = BacktestEngine.compute_context_coverage(mc)
+            if ctx_coverage >= 0.5 and not mc.get("context_factors"):
+                h_thesis = h.get("thesis", "")
+                h_name = h.get("name", "")
+                inferred = BacktestEngine._infer_context_needs(h_thesis, h_name)
+                if inferred:
+                    continue  # Skip — will fail context check anyway
+            elif ctx_coverage < 0.5:
+                continue  # Skip — insufficient context coverage
+            testable.append(h)
+
+        skipped = len(drafts) - len(testable)
+        to_test = testable[:BACKTEST_BATCH_SIZE]
+        logger.info(
+            f"Research: backtesting {len(to_test)} hypotheses "
+            f"({skipped} skipped as untestable, {len(testable)} testable)"
+        )
 
         for h in to_test:
             if not self._running:
