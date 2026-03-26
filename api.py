@@ -1843,6 +1843,27 @@ async def update_hypothesis(hypothesis_id: str, request: Request):
         if "status" in req:
             new_status = req["status"]
             promoted_by = req.get("promoted_by", "api")
+            force = req.get("force", False)
+            old_status = h.get("status", "draft")
+
+            # Enforce promotion gates for forward transitions unless force=True
+            stage_order = ["draft", "backtesting", "paper_trading", "live", "retired"]
+            old_idx = stage_order.index(old_status) if old_status in stage_order else -1
+            new_idx = stage_order.index(new_status) if new_status in stage_order else -1
+            is_forward = new_idx > old_idx and new_status not in ("retired", "rejected")
+
+            if is_forward and not force and old_status in ("backtesting", "paper_trading"):
+                readiness = await hypothesis_manager.check_promotion_readiness(hypothesis_id)
+                if not readiness.get("ready"):
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"Promotion gate failed: {old_status} → {new_status}",
+                            "checks": readiness.get("checks", []),
+                            "hint": "Pass force=true to override",
+                        },
+                    )
+
             now = __import__("datetime").datetime.now(
                 __import__("datetime").timezone.utc
             ).isoformat()

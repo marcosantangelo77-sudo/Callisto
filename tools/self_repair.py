@@ -98,7 +98,15 @@ class Heartbeat:
                     self._last_cycle_time = time.monotonic()
                 else:
                     stall_duration = time.monotonic() - self._last_cycle_time
-                    if stall_duration > LOOP_STALL_THRESHOLD:
+                    # Suppress stall warnings when Claude is rate-limited —
+                    # the loop is expected to idle during cooldown periods.
+                    claude_info = rl.get("claude_code", {})
+                    claude_cooldown = (
+                        not claude_info.get("available", True)
+                        and claude_info.get("calls_this_window", 0)
+                            >= claude_info.get("max_calls_per_hour", 999)
+                    )
+                    if stall_duration > LOOP_STALL_THRESHOLD and not claude_cooldown:
                         logger.warning(f"Heartbeat: research loop stalled for {stall_duration:.0f}s (cycle {current_cycle})")
                         # Record to Hermes
                         try:

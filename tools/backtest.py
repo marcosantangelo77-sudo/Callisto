@@ -1096,6 +1096,49 @@ class BacktestEngine:
                 filters["dog_fav_filter"] = "favorite"
                 logger.info(f"dog_fav_filter 'favorite' inferred from hypothesis name: {hypothesis_id}")
 
+        # 6. Thesis direction — detect bearish hypotheses (bet AGAINST filtered side)
+        # E.g., "nba_heavy_favorite_ml_overpriced" → bet the underdog, not the favorite.
+        # When bearish + a directional filter exists, flip the filter so we
+        # evaluate and record the CORRECT bet side.
+        #
+        # IMPORTANT: Only use the hypothesis NAME for bearish detection, not the
+        # thesis text. The name encodes intent (what we bet on), while the thesis
+        # explains the phenomenon. A thesis like "underdogs have value because
+        # favorites are overpriced" is BULLISH on underdogs — detecting "overpriced"
+        # in the thesis would falsely trigger a bearish flip.
+        bearish_name = False
+        if h_id_lower:
+            name_parts = set(h_id_lower.replace("-", "_").split("_"))
+            bearish_name = bool(name_parts & {
+                "overpriced", "overvalued", "inflated",
+                "fade", "fading",
+            })
+
+        if bearish_name:
+            flipped = False
+            if "dog_fav_filter" in filters:
+                old = filters["dog_fav_filter"]
+                filters["dog_fav_filter"] = (
+                    "underdog" if old == "favorite" else "favorite"
+                )
+                flipped = True
+                logger.info(
+                    "Bearish thesis detected for %s: flipped dog_fav_filter "
+                    "%s → %s", hypothesis_id, old, filters["dog_fav_filter"],
+                )
+            if "home_away_filter" in filters:
+                old = filters["home_away_filter"]
+                filters["home_away_filter"] = (
+                    "away" if old == "home" else "home"
+                )
+                flipped = True
+                logger.info(
+                    "Bearish thesis detected for %s: flipped home_away_filter "
+                    "%s → %s", hypothesis_id, old, filters["home_away_filter"],
+                )
+            if flipped:
+                filters["_bearish_flip"] = True
+
         return filters
 
     def _matches_hypothesis_conditions(
