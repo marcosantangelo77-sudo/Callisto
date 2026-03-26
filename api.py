@@ -306,8 +306,12 @@ class TaskResponse(BaseModel):
 @app.post("/task", response_model=TaskResponse)
 async def submit_task(submission: TaskSubmission):
     """Submit a query for AGP session processing."""
-    task_id = await queue.submit_task(submission.query, submission.priority)
-    return TaskResponse(task_id=task_id)
+    try:
+        task_id = await queue.submit_task(submission.query, submission.priority)
+        return TaskResponse(task_id=task_id)
+    except Exception as e:
+        logger.error(f"POST /task failed: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
 
 @app.get("/task/{task_id}")
