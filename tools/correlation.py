@@ -35,6 +35,26 @@ from tools.odds_api import calculate_implied_probability
 
 logger = logging.getLogger("callisto.correlation")
 
+# ---------------------------------------------------------------------------
+# Module-level learned correlation store (set by api.py at startup)
+# ---------------------------------------------------------------------------
+# When set, get_correlation() blends hardcoded priors with empirically
+# learned estimates (Bayesian shrinkage). When None, falls back to
+# hardcoded values only (backward compatible).
+_learned_store: "Optional[LearnedCorrelationStore]" = None
+
+
+def set_learned_store(store) -> None:
+    """Wire the LearnedCorrelationStore into all correlation lookups."""
+    global _learned_store
+    _learned_store = store
+    logger.info("Learned correlation store wired into correlation engine")
+
+
+def get_learned_store():
+    """Return the module-level learned store (or None)."""
+    return _learned_store
+
 
 # ---------------------------------------------------------------------------
 # Sport-specific correlation matrices
@@ -352,8 +372,10 @@ def get_correlation(
         prior = 0.0
 
     # Blend with learned estimate if available
-    if learned_store is not None:
-        return learned_store.get_blended(sport_key, norm_a, norm_b, prior)
+    # Use explicit parameter first, fall back to module-level singleton
+    store = learned_store if learned_store is not None else _learned_store
+    if store is not None:
+        return store.get_blended(sport_key, norm_a, norm_b, prior)
 
     return prior
 

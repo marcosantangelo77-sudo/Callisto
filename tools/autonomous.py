@@ -4571,6 +4571,15 @@ class ResearchLoop:
                 "consecutive_no_progress": self._consecutive_no_progress,
                 "window": self._progress_window[-3:] if self._progress_window else [],
             },
+            "regime_analysis": {
+                "teams_cached": len(_regime_cache),
+                "teams_with_signals": sum(
+                    1 for v in _regime_cache.values()
+                    if v.get("has_edge_signal")
+                ),
+                "last_run": self._last_regime_analysis,
+                "interval_cycles": REGIME_ANALYSIS_INTERVAL,
+            },
             "intervals": {
                 "research_cycle_seconds": RESEARCH_CYCLE_INTERVAL,
                 "data_collection_seconds": DATA_COLLECTION_INTERVAL,
