@@ -1145,7 +1145,8 @@ class BacktestEngine:
 
             # Find books that have both sides
             common_books = set(side_a_books.keys()) & set(side_b_books.keys())
-            if len(common_books) < min_books:
+            # +1 because target book will be excluded from consensus later
+            if len(common_books) < min_books + 1:
                 continue
 
             # Check target book has both sides
