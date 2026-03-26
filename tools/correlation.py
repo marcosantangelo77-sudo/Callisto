@@ -306,14 +306,24 @@ def _normalize_market(market: str) -> str:
     return MARKET_ALIASES.get(key, key)
 
 
-def get_correlation(market_a: str, market_b: str, sport: str) -> float:
+def get_correlation(
+    market_a: str,
+    market_b: str,
+    sport: str,
+    learned_store: "Optional[LearnedCorrelationStore]" = None,
+) -> float:
     """
     Look up the correlation coefficient between two markets for a given sport.
+
+    If a learned_store is provided, returns a Bayesian blend of the hardcoded
+    prior and the empirically learned estimate (weighted by sample size).
+    Without learned_store, returns the hardcoded value (backward compatible).
 
     Args:
         market_a: First market (e.g., "qb_passing_yards", "passing_yards", "points")
         market_b: Second market (e.g., "team_total", "game_total")
         sport: Sport key (e.g., "nfl", "nba", "mlb", "nhl")
+        learned_store: Optional learned correlation store for data-driven blending
 
     Returns:
         Pearson correlation coefficient from -1.0 to 1.0.
@@ -334,20 +344,18 @@ def get_correlation(market_a: str, market_b: str, sport: str) -> float:
         logger.warning(f"No correlation matrix for sport '{sport}'. Assuming independence.")
         return 0.0
 
-    # Check both orderings
-    rho = matrix.get((norm_a, norm_b))
-    if rho is not None:
-        return rho
-    rho = matrix.get((norm_b, norm_a))
-    if rho is not None:
-        return rho
+    # Check both orderings for hardcoded prior
+    prior = matrix.get((norm_a, norm_b))
+    if prior is None:
+        prior = matrix.get((norm_b, norm_a))
+    if prior is None:
+        prior = 0.0
 
-    # Not found — assume independence
-    logger.debug(
-        f"No correlation entry for ({norm_a}, {norm_b}) in {sport_key}. "
-        f"Returning 0.0 (independent)."
-    )
-    return 0.0
+    # Blend with learned estimate if available
+    if learned_store is not None:
+        return learned_store.get_blended(sport_key, norm_a, norm_b, prior)
+
+    return prior
 
 
 def _american_to_implied(odds: int) -> float:
