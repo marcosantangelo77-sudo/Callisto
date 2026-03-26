@@ -599,6 +599,14 @@ class ResearchLoop:
         await self.focus_manager.load_from_db()
         focus_sports = self.focus_manager.get_focus_sports()
         logger.info(f"Research focus areas loaded: {focus_sports}")
+        # Subscribe to event bus for reactive data collection
+        try:
+            from tools.event_bus import get_event_bus, EVENT_GAME_COMPLETED
+            bus = get_event_bus()
+            bus.subscribe(EVENT_GAME_COMPLETED, self._on_game_completed)
+            logger.info("Research loop subscribed to game_completed events")
+        except Exception as e:
+            logger.debug(f"Event bus subscription failed (non-critical): {e}")
         # One-time backfill of temporal metadata on legacy hypotheses
         await self._backfill_temporal_metadata()
         # One-time: lower edge_thresholds that are too high (real edges cap at ~2.5%)
@@ -610,6 +618,20 @@ class ResearchLoop:
         await self._requeue_threshold_rejections()
         self._task = asyncio.create_task(self._loop())
         logger.info("Research loop started — autonomous hypothesis machine online")
+
+    async def _on_game_completed(self, event_data: dict) -> None:
+        """Reactive handler: immediately collect data when a game completes."""
+        sport = event_data.get("sport", "")
+        game_date = event_data.get("game_date", "")
+        if not sport or not game_date:
+            return
+        try:
+            date_str = game_date.replace("-", "")
+            await self.data_collector.collect_box_scores(sport, date_str)
+            await self.data_collector.collect_play_by_play(sport, date_str)
+            logger.info(f"Reactive collection: {sport} game completed on {game_date}")
+        except Exception as e:
+            logger.debug(f"Reactive collection failed for {sport} {game_date}: {e}")
 
     async def _backfill_temporal_metadata(self) -> None:
         """Backfill training_period_end on legacy hypotheses that lack temporal metadata.
