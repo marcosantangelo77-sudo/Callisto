@@ -2109,6 +2109,31 @@ class ResearchLoop:
         if not drafts:
             return
 
+        # ── Pre-filter: skip drafts that already have 0-event backtest runs ──
+        # Hypotheses with prior 0-event runs are likely untestable with current
+        # data. The circuit breaker will reject after 2, but skipping here avoids
+        # wasting one more cycle re-running them before the breaker fires.
+        already_zero = set()
+        try:
+            db = self.data_collector._db
+            if db:
+                cursor = await db.execute(
+                    "SELECT DISTINCT hypothesis_id FROM backtest_runs "
+                    "WHERE total_events = 0"
+                )
+                already_zero = {row[0] for row in await cursor.fetchall()}
+                if already_zero:
+                    before = len(drafts)
+                    drafts = [h for h in drafts if h.get("hypothesis_id") not in already_zero]
+                    skipped_zero = before - len(drafts)
+                    if skipped_zero > 0:
+                        logger.info(
+                            f"Research: skipped {skipped_zero} drafts with prior "
+                            f"0-event backtest runs (awaiting circuit breaker)"
+                        )
+        except Exception as e:
+            logger.warning(f"Pre-filter for 0-event drafts failed: {e}")
+
         # Pre-check which sports have usable odds (>=2 books)
         sports_with_odds = set()
         try:
@@ -2421,6 +2446,34 @@ class ResearchLoop:
 
                 total_events = result.get("total_events", 0)
                 if total_events == 0:
+                    # ── Circuit breaker: reject after 2 consecutive 0-event runs ──
+                    # Without this, hypotheses like nhl_playoff_clinch_letdown_total_over
+                    # get re-run 5-6 times with 0 events each, wasting backtest cycles.
+                    try:
+                        db = self.data_collector._db
+                        if db:
+                            prev_runs = await db.execute(
+                                "SELECT COUNT(*) FROM backtest_runs "
+                                "WHERE hypothesis_id = ? AND total_events = 0",
+                                (h["hypothesis_id"],),
+                            )
+                            zero_count = (await prev_runs.fetchone())[0]
+                            if zero_count >= 2:
+                                await self.hypothesis_manager.update_status(
+                                    h["hypothesis_id"], "rejected",
+                                    f"auto:zero_events_circuit_breaker — {zero_count} consecutive "
+                                    f"backtest runs with 0 events. Context filters may be too "
+                                    f"restrictive or insufficient historical data for {sport}."
+                                )
+                                self._rejections += 1
+                                logger.info(
+                                    f"Research: CIRCUIT BREAKER — rejected {h['hypothesis_id']} "
+                                    f"({h.get('name', '?')}) after {zero_count} zero-event runs"
+                                )
+                                continue
+                    except Exception as e:
+                        logger.warning(f"Circuit breaker check failed for {h['hypothesis_id']}: {e}")
+
                     logger.warning(
                         f"Research: backtest {h['hypothesis_id']} produced 0 events "
                         f"({start_date} to {end_date}) — no historical odds data for {sport}?"

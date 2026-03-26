@@ -530,6 +530,17 @@ class BacktestEngine:
                 f"that didn't match schedule requirements"
             )
 
+        # ── Compound filter fallback ──
+        # When ALL games are filtered out (total_events == 0 but we had games),
+        # the compound context filter is too restrictive. Log prominently so
+        # the circuit breaker in autonomous.py can act on it.
+        if total_events == 0 and context_filtered > 0:
+            logger.warning(
+                f"Backtest {run_id}: COMPOUND FILTER KILLED ALL EVENTS — "
+                f"{context_filtered} games filtered, 0 survived. "
+                f"Hypothesis may need simpler context requirements."
+            )
+
         logger.info(
             f"Backtest {run_id}: {multibook_dates} dates with multi-book data, "
             f"{singlebook_skipped} dates with single-book only (no cross-book edges)"
@@ -1389,14 +1400,19 @@ class BacktestEngine:
             away_wp = game_context.get("away_win_pct", 0.5)
 
             if re.search(r"\bclinch", text):
-                if home_wp < 0.60 and away_wp < 0.60:
+                # 65%+ win pct = likely clinched (top ~6 teams per conference)
+                # Previous 60% was too loose — captured mid-tier teams
+                if home_wp < 0.65 and away_wp < 0.65:
                     return False
             elif re.search(r"\beliminated\b|\btanking\b", text):
-                if home_wp > 0.40 and away_wp > 0.40:
+                # 35%- win pct = likely eliminated/tanking
+                # Previous 40% was too loose — captured mediocre teams
+                if home_wp > 0.35 and away_wp > 0.35:
                     return False
             elif re.search(r"\bbubble\b|\bdesperate\b|\bmust.win\b|\bplayoff.race\b", text):
-                # Bubble/desperate = at least one team in the playoff fight (40-60% win pct)
-                if not (0.40 <= home_wp <= 0.60 or 0.40 <= away_wp <= 0.60):
+                # Bubble/desperate = at least one team in tight playoff fight
+                # Narrowed from 40-60% to 43-57% to exclude comfortable mid-table
+                if not (0.43 <= home_wp <= 0.57 or 0.43 <= away_wp <= 0.57):
                     return False
 
         # ── Both teams short rest filter ──
