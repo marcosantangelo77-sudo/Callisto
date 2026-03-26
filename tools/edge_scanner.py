@@ -30,8 +30,67 @@ from tools.market_microstructure import compute_market_metrics
 
 logger = logging.getLogger("callisto.edge_scanner")
 
+# Hardcoded fallback — always used when Granger data is unavailable
+_STATIC_SHARP_TITLES = {"pinnacle", "lowvig.ag", "bookmaker.eu", "betonline.ag", "betcris", "circa", "betfair exchange", "betfair", "sbobet"}
 
-def scan_cross_book_edges(games: list[dict], market: str = "spreads") -> list[dict]:
+# Cache for Granger-derived sharp leader per sport (sport -> (leader, timestamp))
+_granger_sharp_cache: dict[str, tuple[str, float]] = {}
+_GRANGER_CACHE_TTL = 3600  # 1 hour — re-query DB at most once per hour
+
+
+def get_sharp_titles_for_sport(sport: str = "") -> set[str]:
+    """Return the set of sharp book titles, enriched by Granger leadership data.
+
+    If Granger temporal prediction analysis has identified a leader for this
+    sport, that book is added to the sharp set. Falls back to the static
+    hardcoded set when no Granger data exists.
+
+    This is a sync function safe for the hot path — it reads from a cache
+    populated by the async Granger phase in the research loop.
+    """
+    import time
+    sharp = set(_STATIC_SHARP_TITLES)
+
+    if not sport:
+        return sharp
+
+    cached = _granger_sharp_cache.get(sport)
+    if cached:
+        leader, ts = cached
+        if time.time() - ts < _GRANGER_CACHE_TTL and leader:
+            sharp.add(leader)
+            return sharp
+
+    # Try async lookup — but only if we're inside a running event loop
+    # If not, just return the static set (the cache will be populated by
+    # the research loop's Granger phase)
+    try:
+        import asyncio
+        import os
+        loop = asyncio.get_running_loop()
+        # We're in an async context — schedule cache refresh but don't block
+        db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+        loop.create_task(_refresh_granger_cache(sport, db_path))
+    except RuntimeError:
+        pass  # No running loop — return static set
+
+    return sharp
+
+
+async def _refresh_granger_cache(sport: str, db_path: str) -> None:
+    """Refresh the Granger sharp leader cache for a sport."""
+    import time
+    try:
+        from tools.granger_causality import get_sharp_leader
+        leader = await get_sharp_leader(db_path, sport)
+        _granger_sharp_cache[sport] = (leader, time.time())
+        if leader:
+            logger.info(f"Granger sharp leader for {sport}: {leader}")
+    except Exception as e:
+        logger.debug(f"Granger cache refresh failed for {sport}: {e}")
+
+
+def scan_cross_book_edges(games: list[dict], market: str = "spreads", sport: str = "") -> list[dict]:
     """
     Scan all games for cross-bookmaker pricing divergence.
 
@@ -40,10 +99,12 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads") -> list[di
 
     Sharp books (Pinnacle, Circa, Bookmaker.eu) set the true line.
     Soft books (FanDuel, DraftKings, BetMGM) lag behind and offer value.
+
+    When Granger temporal prediction data is available for the sport,
+    the identified leader book is dynamically added to the sharp set.
     """
-    # Books ranked by sharpness — match on TITLE (what find_best_line returns)
-    # Also match on key format for direct API comparisons
-    SHARP_TITLES = {"pinnacle", "lowvig.ag", "bookmaker.eu", "betonline.ag", "betcris", "circa", "betfair exchange", "betfair", "sbobet"}
+    # Dynamic sharp set — Granger leader (if available) enriches the static set
+    SHARP_TITLES = get_sharp_titles_for_sport(sport)
     SOFT_TITLES = {"fanduel", "draftkings", "betmgm", "pointsbet", "caesars", "betrivers", "mybookie.ag", "bovada", "betus", "fanatics", "fanatics sportsbook"}
 
     edges = []
@@ -357,9 +418,10 @@ def full_edge_scan(snapshot: dict) -> dict:
     }
 
     # Cross-book divergence
+    sport = snapshot.get("sport", "")
     for market in ["spreads", "h2h", "totals"]:
         key = f"cross_book_{market}"
-        edges = scan_cross_book_edges(games, market=market)
+        edges = scan_cross_book_edges(games, market=market, sport=sport)
         report[key] = edges
         if edges:
             logger.info(

@@ -1289,6 +1289,17 @@ class ResearchLoop:
                 except Exception as e:
                     logger.warning(f"Phase integrity_check failed (non-fatal): {e}")
 
+                if not self._running:
+                    break
+
+                # Phase 10: Granger temporal prediction — identify sharp book leaders (weekly)
+                try:
+                    await asyncio.wait_for(self._phase_granger_analysis(), timeout=300)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase granger_analysis timed out after 300s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase granger_analysis failed (non-fatal): {e}")
+
                 # ── Progress tracking: detect spinning ──
                 await self._check_progress()
 
@@ -3600,6 +3611,100 @@ class ResearchLoop:
                 logger.info("Research: Claude rate limited — will retry next cycle")
         except Exception as e:
             logger.warning(f"Claude deep work failed: {e}", exc_info=True)
+
+    async def _phase_granger_analysis(self) -> None:
+        """Granger temporal prediction phase — identify which books lead each sport.
+
+        Runs weekly (every ~100 cycles at 1-min intervals). Checks the most
+        recent computed_at timestamp in granger_results and skips if the last
+        analysis is less than 7 days old.
+
+        Results feed into edge_scanner's dynamic sharp book classification:
+        when a book is identified as the temporal leader for a sport, it is
+        added to the sharp set for edge detection in that sport.
+        """
+        import aiosqlite
+        from tools.granger_causality import analyze_book_leadership, store_results
+
+        db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+
+        # Check if we ran recently (within 7 days) — skip if so
+        try:
+            async with aiosqlite.connect(db_path) as db:
+                await db.execute("PRAGMA busy_timeout = 5000")
+                cursor = await db.execute(
+                    "SELECT MAX(computed_at) FROM granger_results"
+                )
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    last_computed = datetime.fromisoformat(row[0])
+                    age_days = (datetime.now(timezone.utc) - last_computed).total_seconds() / 86400
+                    if age_days < 7:
+                        logger.debug(
+                            f"Granger analysis: last run {age_days:.1f} days ago, "
+                            f"skipping (< 7 days)"
+                        )
+                        return
+        except Exception as e:
+            # Table might not exist yet or be empty — proceed with analysis
+            logger.debug(f"Granger recency check failed (will run analysis): {e}")
+
+        # Run analysis for each focus sport
+        focus_sports = self.focus_manager.get_focus_sports()
+        if not focus_sports:
+            focus_sports = RESEARCH_SPORTS[:4]  # Default: top 4 by data availability
+
+        total_stored = 0
+        for sport in focus_sports:
+            if not self._running:
+                break
+            try:
+                results = await analyze_book_leadership(db_path, sport)
+                leader = results.get("leader_book")
+                score = results.get("leader_score", 0)
+                n_pairs = results.get("n_pairs_tested", 0)
+
+                if results.get("warning"):
+                    logger.info(
+                        f"Granger {sport}: {results['warning']}"
+                    )
+                    continue
+
+                if leader:
+                    logger.info(
+                        f"Granger {sport}: leader={leader} "
+                        f"(score={score:.3f}, pairs={n_pairs}, "
+                        f"books={results.get('books_tested', [])})"
+                    )
+                else:
+                    logger.info(
+                        f"Granger {sport}: no clear leader "
+                        f"(pairs={n_pairs}, books={results.get('books_tested', [])})"
+                    )
+
+                stored = await store_results(db_path, results)
+                total_stored += stored
+
+                # Update edge_scanner's cache immediately
+                if leader:
+                    from tools.edge_scanner import _granger_sharp_cache
+                    _granger_sharp_cache[sport] = (leader, time.time())
+
+            except Exception as e:
+                logger.warning(f"Granger analysis failed for {sport}: {e}")
+
+        if total_stored:
+            logger.info(
+                f"Granger phase complete: {total_stored} results stored "
+                f"across {len(focus_sports)} sports"
+            )
+
+        # Record phase success for pipeline integrity tracking
+        try:
+            from tools.pipeline_integrity import get_checker
+            get_checker().record_phase_result("granger_analysis", True)
+        except Exception:
+            pass
 
     async def _phase_system_improvement(self) -> None:
         """Self-improvement phase — runs every SYSTEM_IMPROVEMENT_INTERVAL cycles.

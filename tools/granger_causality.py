@@ -1,11 +1,15 @@
 """
-Granger causality — identify which book's line movements predict others.
+Granger temporal prediction — identify which book's line movements predict others.
 
 Tests whether book A's price changes help predict book B's future price
 changes beyond what B's own history predicts. The "sharp leader" per
-sport/market is the book that most often Granger-causes others.
+sport/market is the book whose movements most often temporally predict others.
 
-Uses VAR (Vector Autoregression) with F-test for causal direction.
+NOTE: This measures temporal prediction, not causal direction. A book that
+consistently moves first may be reacting to the same information faster,
+not necessarily causing the movement.
+
+Uses VAR (Vector Autoregression) with F-test for temporal precedence.
 Runs as a periodic analysis during deep work cycles (weekly), not real-time.
 Results are cached in granger_results table.
 
@@ -15,7 +19,7 @@ Gracefully degrades when insufficient data (<100 paired observations).
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import numpy as np
@@ -34,17 +38,18 @@ def granger_test(
     max_lag: int = 3,
 ) -> dict:
     """
-    Test if x Granger-causes y.
+    Test if x temporally predicts y (Granger test).
 
     Uses F-test comparing:
       Restricted model: y_t = a0 + a1*y_{t-1} + ... + ap*y_{t-p} + e
       Unrestricted: y_t = a0 + a1*y_{t-1} + ... + b1*x_{t-1} + ... + e
 
-    If unrestricted significantly reduces RSS → x helps predict y → x Granger-causes y.
+    If unrestricted significantly reduces RSS, x's history helps predict y
+    beyond y's own history — x temporally leads y.
 
     Args:
-        x: time series of "cause" (e.g., Pinnacle price changes)
-        y: time series of "effect" (e.g., DraftKings price changes)
+        x: time series of "leader" (e.g., Pinnacle price changes)
+        y: time series of "follower" (e.g., DraftKings price changes)
         max_lag: maximum lag to test (tests 1..max_lag, picks best by AIC)
 
     Returns:
@@ -171,7 +176,8 @@ async def analyze_book_leadership(
     Run pairwise Granger tests between books for a sport.
 
     Uses line_movements table to build time series of price changes per book.
-    Identifies the "sharp leader" — the book that most often Granger-causes others.
+    Identifies the "sharp leader" — the book whose movements most often
+    temporally predict others' subsequent movements.
 
     Returns dict with leader_book, pair_results, and data sufficiency info.
     """
@@ -325,16 +331,24 @@ async def get_sharp_leader(
     sport: str,
     market_type: str = "h2h",
 ) -> Optional[str]:
-    """Return the identified sharp leader book from most recent analysis."""
+    """Return the identified sharp leader book from most recent analysis.
+
+    Only considers results from the last 30 days to prevent stale data
+    from persisting through regime changes (e.g., a book changing its
+    pricing model or data feed).
+    """
     import aiosqlite
 
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout = 5000")
+        # Only consider results from the last 30 days to avoid stale regime data
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         cursor = await db.execute(
             "SELECT book_a, book_b, direction FROM granger_results "
             "WHERE sport = ? AND market_type = ? AND is_significant = 1 "
+            "AND computed_at > ? "
             "ORDER BY computed_at DESC LIMIT 20",
-            (sport, market_type),
+            (sport, market_type, cutoff),
         )
         rows = await cursor.fetchall()
 
