@@ -56,6 +56,7 @@ class TaskQueue:
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA busy_timeout = 120000")
         await self._db.executescript(TASK_SCHEMA_SQL)
         await self._db.commit()
 
@@ -65,71 +66,105 @@ class TaskQueue:
             self._db = None
 
     async def submit_task(self, query: str, priority: int = 0) -> int:
-        """Submit a new task. Returns task_id."""
-        cursor = await self._db.execute(
-            """INSERT INTO task_queue (query, priority, created_at)
-               VALUES (?, ?, ?)""",
-            (query, priority, datetime.now(timezone.utc).isoformat()),
-        )
-        await self._db.commit()
-        return cursor.lastrowid
+        """Submit a new task. Returns task_id. Retries on DB lock."""
+        import asyncio as _asyncio
+        for attempt in range(5):
+            try:
+                cursor = await self._db.execute(
+                    """INSERT INTO task_queue (query, priority, created_at)
+                       VALUES (?, ?, ?)""",
+                    (query, priority, datetime.now(timezone.utc).isoformat()),
+                )
+                await self._db.commit()
+                return cursor.lastrowid
+            except Exception as e:
+                if "locked" in str(e).lower() and attempt < 4:
+                    wait = 2 ** attempt
+                    await _asyncio.sleep(wait)
+                else:
+                    raise
 
     async def get_next(self) -> Optional[dict]:
-        """Atomically claim the next pending task. Returns task dict or None."""
-        # Find highest priority pending task
-        row = await self._db.execute_fetchall(
-            """SELECT task_id, query, priority FROM task_queue
-               WHERE status = 'PENDING'
-               ORDER BY priority DESC, created_at ASC
-               LIMIT 1""",
-        )
-        if not row:
-            return None
+        """Atomically claim the next pending task. Returns task dict or None. Retries on DB lock."""
+        import asyncio as _asyncio
+        for attempt in range(5):
+            try:
+                row = await self._db.execute_fetchall(
+                    """SELECT task_id, query, priority FROM task_queue
+                       WHERE status = 'PENDING'
+                       ORDER BY priority DESC, created_at ASC
+                       LIMIT 1""",
+                )
+                if not row:
+                    return None
 
-        task_id, query, priority = row[0]
-        now = datetime.now(timezone.utc).isoformat()
+                task_id, query, priority = row[0]
+                now = datetime.now(timezone.utc).isoformat()
 
-        # Atomic claim via UPDATE with WHERE status check
-        cursor = await self._db.execute(
-            """UPDATE task_queue
-               SET status = 'PROCESSING', started_at = ?
-               WHERE task_id = ? AND status = 'PENDING'""",
-            (now, task_id),
-        )
-        await self._db.commit()
+                cursor = await self._db.execute(
+                    """UPDATE task_queue
+                       SET status = 'PROCESSING', started_at = ?
+                       WHERE task_id = ? AND status = 'PENDING'""",
+                    (now, task_id),
+                )
+                await self._db.commit()
 
-        if cursor.rowcount == 0:
-            return None  # another worker claimed it
+                if cursor.rowcount == 0:
+                    return None
 
-        return {"task_id": task_id, "query": query, "priority": priority}
+                return {"task_id": task_id, "query": query, "priority": priority}
+            except Exception as e:
+                if "locked" in str(e).lower() and attempt < 4:
+                    wait = 2 ** attempt
+                    await _asyncio.sleep(wait)
+                else:
+                    raise
 
     async def complete_task(
         self, task_id: int, result: dict, session_id: Optional[str] = None
     ) -> None:
-        """Mark a task as completed with its result."""
-        await self._db.execute(
-            """UPDATE task_queue
-               SET status = 'COMPLETED', result = ?, session_id = ?,
-                   completed_at = ?
-               WHERE task_id = ?""",
-            (
-                json.dumps(result, ensure_ascii=False),
-                session_id,
-                datetime.now(timezone.utc).isoformat(),
-                task_id,
-            ),
-        )
-        await self._db.commit()
+        """Mark a task as completed with its result. Retries on DB lock."""
+        import asyncio as _asyncio
+        for attempt in range(5):
+            try:
+                await self._db.execute(
+                    """UPDATE task_queue
+                       SET status = 'COMPLETED', result = ?, session_id = ?,
+                           completed_at = ?
+                       WHERE task_id = ?""",
+                    (
+                        json.dumps(result, ensure_ascii=False),
+                        session_id,
+                        datetime.now(timezone.utc).isoformat(),
+                        task_id,
+                    ),
+                )
+                await self._db.commit()
+                return
+            except Exception as e:
+                if "locked" in str(e).lower() and attempt < 4:
+                    await _asyncio.sleep(2 ** attempt)
+                else:
+                    raise
 
     async def fail_task(self, task_id: int, error: str) -> None:
-        """Mark a task as failed with error details."""
-        await self._db.execute(
-            """UPDATE task_queue
-               SET status = 'FAILED', error = ?, completed_at = ?
-               WHERE task_id = ?""",
-            (error, datetime.now(timezone.utc).isoformat(), task_id),
-        )
-        await self._db.commit()
+        """Mark a task as failed with error details. Retries on DB lock."""
+        import asyncio as _asyncio
+        for attempt in range(5):
+            try:
+                await self._db.execute(
+                    """UPDATE task_queue
+                       SET status = 'FAILED', error = ?, completed_at = ?
+                       WHERE task_id = ?""",
+                    (error, datetime.now(timezone.utc).isoformat(), task_id),
+                )
+                await self._db.commit()
+                return
+            except Exception as e:
+                if "locked" in str(e).lower() and attempt < 4:
+                    await _asyncio.sleep(2 ** attempt)
+                else:
+                    raise
 
     async def get_task(self, task_id: int) -> Optional[dict]:
         """Get task by ID."""
