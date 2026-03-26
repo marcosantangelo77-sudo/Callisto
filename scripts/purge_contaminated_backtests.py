@@ -36,7 +36,9 @@ async def main():
         print(f"Database not found at {DB_PATH}")
         sys.exit(1)
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=120) as db:
+        await db.execute("PRAGMA busy_timeout = 120000")
+        await db.execute("PRAGMA journal_mode = WAL")
         # Current state
         cursor = await db.execute("SELECT COUNT(*) FROM backtest_events")
         total_events = (await cursor.fetchone())[0]

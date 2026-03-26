@@ -1275,7 +1275,7 @@ class BacktestEngine:
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             run_id, event_id, hypothesis_id, event_sport,
-                            None, mkt_key, point, team, eval_target,
+                            None, mkt_key, side_signed_point, team, eval_target,
                             target_price, round(target_implied, 6),
                             round(fair_val, 6),
                             json.dumps({
@@ -2030,10 +2030,12 @@ class BacktestEngine:
 
         hit_rate = wins / total_decided if total_decided > 0 else None
 
-        # Calculate avg_edge, avg_ev from resolved events
+        # Calculate avg_edge, avg_ev from signal-generated events only
         cursor = await self._db.execute(
-            "SELECT AVG(edge), AVG(ev_pct), AVG(clv_implied) FROM backtest_events "
-            "WHERE run_id = ? AND actual_result IS NOT NULL",
+            "SELECT AVG(CASE WHEN signal_generated = 1 THEN edge END), "
+            "AVG(CASE WHEN signal_generated = 1 THEN ev_pct END), "
+            "AVG(CASE WHEN signal_generated = 1 THEN clv_implied END) "
+            "FROM backtest_events WHERE run_id = ? AND actual_result IS NOT NULL",
             (run_id,),
         )
         row = await cursor.fetchone()
