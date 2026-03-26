@@ -964,44 +964,66 @@ async def promote_hypothesis(hypothesis_id: str):
 
 @app.patch("/hypothesis/{hypothesis_id}")
 async def update_hypothesis(hypothesis_id: str, request: Request):
-    """Update hypothesis status, threshold, model_config, or notes."""
+    """Update hypothesis status, threshold, model_config, or notes.
+
+    Uses a fresh DB connection per request to avoid stale-handle failures
+    on the long-lived hypothesis_manager._db connection.
+    """
+    import json as _json
+    from tools.schema import open_db
+
     req = await request.json()
     h = await hypothesis_manager.get_hypothesis(hypothesis_id)
     if not h:
         raise HTTPException(status_code=404, detail="Hypothesis not found")
     results = {}
-    if "status" in req:
-        results["status"] = await hypothesis_manager.update_status(
-            hypothesis_id, req["status"], promoted_by=req.get("promoted_by", "api")
-        )
-    if "edge_threshold" in req:
-        await hypothesis_manager._db.execute(
-            "UPDATE hypotheses SET edge_threshold = ?, updated_at = CURRENT_TIMESTAMP "
-            "WHERE hypothesis_id = ?",
-            (req["edge_threshold"], hypothesis_id),
-        )
-        await hypothesis_manager._db.commit()
-        results["edge_threshold"] = req["edge_threshold"]
-    if "model_config" in req:
-        import json as _json
-        raw = h.get("model_config", "{}")
-        existing = _json.loads(raw) if isinstance(raw, str) else (raw or {})
-        existing.update(req["model_config"])
-        await hypothesis_manager._db.execute(
-            "UPDATE hypotheses SET model_config = ?, updated_at = CURRENT_TIMESTAMP "
-            "WHERE hypothesis_id = ?",
-            (_json.dumps(existing), hypothesis_id),
-        )
-        await hypothesis_manager._db.commit()
-        results["model_config"] = existing
-    if "notes" in req:
-        await hypothesis_manager._db.execute(
-            "UPDATE hypotheses SET notes = ?, updated_at = CURRENT_TIMESTAMP "
-            "WHERE hypothesis_id = ?",
-            (req["notes"], hypothesis_id),
-        )
-        await hypothesis_manager._db.commit()
-        results["notes"] = req["notes"]
+    db = None
+    try:
+        db = await open_db()
+        if "status" in req:
+            new_status = req["status"]
+            promoted_by = req.get("promoted_by", "api")
+            now = __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ).isoformat()
+            await db.execute(
+                "UPDATE hypotheses SET status = ?, updated_at = ?, "
+                "promoted_at = ?, promoted_by = ? WHERE hypothesis_id = ?",
+                (new_status, now, now, promoted_by, hypothesis_id),
+            )
+            results["status"] = new_status
+            logger.info(f"Hypothesis {hypothesis_id} → {new_status} (by {promoted_by})")
+        if "edge_threshold" in req:
+            await db.execute(
+                "UPDATE hypotheses SET edge_threshold = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE hypothesis_id = ?",
+                (req["edge_threshold"], hypothesis_id),
+            )
+            results["edge_threshold"] = req["edge_threshold"]
+        if "model_config" in req:
+            raw = h.get("model_config", "{}")
+            existing = _json.loads(raw) if isinstance(raw, str) else (raw or {})
+            existing.update(req["model_config"])
+            await db.execute(
+                "UPDATE hypotheses SET model_config = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE hypothesis_id = ?",
+                (_json.dumps(existing), hypothesis_id),
+            )
+            results["model_config"] = existing
+        if "notes" in req:
+            await db.execute(
+                "UPDATE hypotheses SET notes = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE hypothesis_id = ?",
+                (req["notes"], hypothesis_id),
+            )
+            results["notes"] = req["notes"]
+        await db.commit()
+    except Exception as e:
+        logger.error(f"PATCH /hypothesis/{hypothesis_id} failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if db:
+            await db.close()
     return {"hypothesis_id": hypothesis_id, "updated": results}
 
 
