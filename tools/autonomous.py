@@ -1293,8 +1293,12 @@ class ResearchLoop:
                 await self._check_progress()
 
                 # Force garbage collection after each cycle — large numpy arrays
-                # from embedding operations don't always get freed promptly
+                # and JSON dicts from backtest processing don't always get freed promptly.
+                # Also clear linecache (tracemalloc causes it to grow ~1.5 MB/session).
                 gc.collect()
+                gc.collect()  # Second pass catches reference cycles
+                import linecache
+                linecache.clearcache()
 
                 # Proactive DB prune — prop_snapshots grows 15K rows/hr
                 try:

@@ -51,9 +51,13 @@ PROMOTION_GATES = {
     },
 }
 
-# Auto-rejection: if p > 0.20 with sufficient N, the data disproves the thesis
-AUTO_REJECT_P = 0.30
-AUTO_REJECT_MIN_N = 30             # lowered from 50 — reject faster to clear queue
+# Auto-rejection: if p > threshold with sufficient signal-level N, reject.
+# Only applies to signal-level evaluation (not all-events fallback).
+# Previous threshold of 0.30 with N=30 was rejecting hypotheses that had
+# data but no signal-level evidence yet — conflating "no edge detected at
+# current threshold" with "data disproves thesis."
+AUTO_REJECT_P = 0.50               # Reject only when signal data actively disproves thesis
+AUTO_REJECT_MIN_N = 15             # Need 15 resolved signals (not events) to reject
 
 STAGE_ORDER = ["draft", "backtesting", "paper_trading", "live", "retired"]
 
@@ -261,7 +265,7 @@ class HypothesisManager:
                 f"gap {model_config.get('temporal_split_gap_days', 7)}d"
             )
 
-        for attempt in range(5):
+        for attempt in range(8):
             try:
                 await self._db.execute(
                     "INSERT INTO hypotheses "
@@ -276,10 +280,12 @@ class HypothesisManager:
                 logger.info(f"Hypothesis created: {hid} — {name}")
                 return hid
             except Exception as e:
-                if "locked" in str(e).lower() and attempt < 4:
+                if "locked" in str(e).lower() and attempt < 7:
                     import asyncio
-                    wait = 2 ** attempt
-                    logger.warning(f"DB locked on hypothesis create (attempt {attempt+1}/5), retrying in {wait}s")
+                    # Jittered backoff: 0.5, 1, 2, 4, 8, 16, 32s (total ~63s)
+                    import random
+                    wait = min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5)
+                    logger.warning(f"DB locked on hypothesis create (attempt {attempt+1}/8), retrying in {wait:.1f}s")
                     await asyncio.sleep(wait)
                 else:
                     raise
@@ -578,9 +584,13 @@ class HypothesisManager:
             else:
                 checks.append(f"PASS: Drawdown {mdd:.1%}")
 
-        # Auto-rejection check
+        # Auto-rejection check — only reject based on signal-level data.
+        # If we fell back to all-events (used_all_events=True), the p-value
+        # reflects "random bet outcomes" not "edge thesis is wrong."
+        used_all_events = report.get("used_all_events", False)
         should_reject = (
-            p > AUTO_REJECT_P and n > AUTO_REJECT_MIN_N
+            p > AUTO_REJECT_P and n >= AUTO_REJECT_MIN_N
+            and not used_all_events
         )
 
         next_stage = STAGE_ORDER[STAGE_ORDER.index(status) + 1] if ready else None
@@ -664,7 +674,7 @@ class HypothesisManager:
                 # Before rejecting, check if the edge threshold is too high.
                 # If events exist but 0 signals, the threshold may be suppressing
                 # valid edges. Check edge distribution first.
-                if total_events > 0 and eval_cycles >= 5:
+                if total_events > 0 and eval_cycles >= 2:
                     edge_diag = await self._diagnose_edge_threshold(hypothesis_id)
                     if edge_diag.get("threshold_too_high"):
                         # Auto-lower threshold and give more cycles
@@ -740,9 +750,9 @@ class HypothesisManager:
                                 ),
                             }
 
-                # Use 10 cycles (not 5) before rejecting — gives more time for
-                # data collection, especially for sports with few games.
-                if eval_cycles >= 10:
+                # Use 6 cycles before rejecting — gives time for threshold
+                # adjustment (at cycle 2) plus 4 more cycles to accumulate signals.
+                if eval_cycles >= 6:
                     if total_events > 0:
                         # Check data quality before rejecting — 1-book devig
                         # produces garbage edges, don't blame the hypothesis.

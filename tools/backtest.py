@@ -478,6 +478,9 @@ class BacktestEngine:
                 sport, date_str, snapshot, target_book,
             )
             games = snapshot.get("games", [])
+            snapshot_time = snapshot.get("timestamp", date_str)
+            # Release the top-level snapshot dict early — games list is all we need
+            del snapshot
 
             # Track data quality
             has_target = False
@@ -510,7 +513,7 @@ class BacktestEngine:
                     hypothesis_id=hypothesis_id,
                     game=game,
                     game_date=date_str,
-                    snapshot_time=snapshot.get("timestamp", date_str),
+                    snapshot_time=snapshot_time,
                     market_type=market_type,
                     target_book=target_book,
                     edge_threshold=edge_threshold,
@@ -1553,6 +1556,7 @@ class BacktestEngine:
 
         events = 0
         signals = 0
+        _pending_rows: list[tuple] = []  # Collect rows for batch INSERT
 
         # Organize lines by (market, outcome_name, point) -> book -> price
         lines_by_key = {}
@@ -1735,14 +1739,7 @@ class BacktestEngine:
                     event_id = game.get("id") or f"{game_date}|{home}|{away}"
                     event_sport = game.get("sport_key") or h_sport
 
-                    await self._db.execute(
-                        "INSERT INTO backtest_events "
-                        "(run_id, event_id, hypothesis_id, sport, player, market, "
-                        "line, side, book, book_odds_american, book_implied_prob, "
-                        "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
-                        "signal_generated, game_date, snapshot_time) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
+                    _pending_rows.append((
                             run_id, event_id, hypothesis_id, event_sport,
                             None, mkt_key, side_signed_point, team, eval_target,
                             target_price, round(target_implied, 6),
@@ -1762,10 +1759,20 @@ class BacktestEngine:
                             }),
                             round(edge, 6), round(ev, 6), round(kelly, 6),
                             is_signal, game_date, snapshot_time,
-                        ),
-                    )
+                    ))
 
-        await self._db.commit()
+        # Batch INSERT all rows in one transaction — dramatically reduces lock contention
+        if _pending_rows:
+            await self._db.executemany(
+                "INSERT INTO backtest_events "
+                "(run_id, event_id, hypothesis_id, sport, player, market, "
+                "line, side, book, book_odds_american, book_implied_prob, "
+                "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
+                "signal_generated, game_date, snapshot_time) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                _pending_rows,
+            )
+            await self._db.commit()
         return events, signals
 
     async def _process_game_props(
@@ -1790,6 +1797,7 @@ class BacktestEngine:
         bookmakers = game.get("bookmakers", [])
         events = 0
         signals = 0
+        _pending_rows: list[tuple] = []  # Collect rows for batch INSERT
 
         # Organize props: (player, market, line) -> book -> {Over, Under}
         prop_lines = {}
@@ -1906,14 +1914,7 @@ class BacktestEngine:
 
                 event_id = game.get("id", "")
 
-                await self._db.execute(
-                    "INSERT INTO backtest_events "
-                    "(run_id, event_id, hypothesis_id, sport, player, market, "
-                    "line, side, book, book_odds_american, book_implied_prob, "
-                    "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
-                    "signal_generated, game_date, snapshot_time) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
+                _pending_rows.append((
                         run_id, event_id, hypothesis_id, game.get("sport_key", ""),
                         player, mkt_key, line, side, target_book,
                         target_price, round(target_implied, 6),
@@ -1929,10 +1930,20 @@ class BacktestEngine:
                         }),
                         round(edge, 6), round(ev, 6), round(kelly, 6),
                         is_signal, game_date, snapshot_time,
-                    ),
-                )
+                ))
 
-        await self._db.commit()
+        # Batch INSERT all rows in one transaction
+        if _pending_rows:
+            await self._db.executemany(
+                "INSERT INTO backtest_events "
+                "(run_id, event_id, hypothesis_id, sport, player, market, "
+                "line, side, book, book_odds_american, book_implied_prob, "
+                "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
+                "signal_generated, game_date, snapshot_time) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                _pending_rows,
+            )
+            await self._db.commit()
         return events, signals
 
     async def resolve_with_scores(

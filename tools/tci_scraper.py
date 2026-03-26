@@ -399,21 +399,25 @@ def compute_tci(roster: dict, team_info: dict) -> dict:
     }
 
 
-_espn_teams_cache: dict[str, list] = {}
+_espn_teams_cache: dict[str, tuple[list, float]] = {}  # key -> (teams, timestamp)
+_ESPN_CACHE_TTL = 3600  # 1 hour
 
 
 async def _get_all_espn_teams(
     sport: str = "basketball",
     league: str = "womens-college-basketball",
 ) -> list[dict]:
-    """Fetch and cache all ESPN teams for a league."""
+    """Fetch and cache all ESPN teams for a league (1h TTL)."""
+    import time
     cache_key = f"{sport}/{league}"
     if cache_key in _espn_teams_cache:
-        return _espn_teams_cache[cache_key]
+        teams, ts = _espn_teams_cache[cache_key]
+        if time.time() - ts < _ESPN_CACHE_TTL:
+            return teams
     url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams?limit=400"
     data = await _espn_get(url)
     teams = data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
-    _espn_teams_cache[cache_key] = teams
+    _espn_teams_cache[cache_key] = (teams, time.time())
     return teams
 
 

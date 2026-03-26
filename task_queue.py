@@ -7,6 +7,7 @@ Shares callisto.db with the memory system; uses WAL mode.
 
 import json
 import os
+import random
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
@@ -89,7 +90,7 @@ class TaskQueue:
     async def submit_task(self, query: str, priority: int = 0) -> int:
         """Submit a new task. Returns task_id. Retries on DB lock."""
         import asyncio as _asyncio
-        for attempt in range(5):
+        for attempt in range(8):
             try:
                 cursor = await self._db.execute(
                     """INSERT INTO task_queue (query, priority, created_at)
@@ -99,8 +100,8 @@ class TaskQueue:
                 await self._db.commit()
                 return cursor.lastrowid
             except Exception as e:
-                if "locked" in str(e).lower() and attempt < 4:
-                    wait = 2 ** attempt
+                if "locked" in str(e).lower() and attempt < 7:
+                    wait = min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5)
                     await _asyncio.sleep(wait)
                 else:
                     raise
@@ -108,7 +109,7 @@ class TaskQueue:
     async def get_next(self) -> Optional[dict]:
         """Atomically claim the next pending task. Returns task dict or None. Retries on DB lock."""
         import asyncio as _asyncio
-        for attempt in range(5):
+        for attempt in range(8):
             try:
                 row = await self._db.execute_fetchall(
                     """SELECT task_id, query, priority FROM task_queue
@@ -135,8 +136,8 @@ class TaskQueue:
 
                 return {"task_id": task_id, "query": query, "priority": priority}
             except Exception as e:
-                if "locked" in str(e).lower() and attempt < 4:
-                    wait = 2 ** attempt
+                if "locked" in str(e).lower() and attempt < 7:
+                    wait = min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5)
                     await _asyncio.sleep(wait)
                 else:
                     raise
@@ -146,7 +147,7 @@ class TaskQueue:
     ) -> None:
         """Mark a task as completed with its result. Retries on DB lock."""
         import asyncio as _asyncio
-        for attempt in range(5):
+        for attempt in range(8):
             try:
                 await self._db.execute(
                     """UPDATE task_queue
@@ -163,15 +164,15 @@ class TaskQueue:
                 await self._db.commit()
                 return
             except Exception as e:
-                if "locked" in str(e).lower() and attempt < 4:
-                    await _asyncio.sleep(2 ** attempt)
+                if "locked" in str(e).lower() and attempt < 7:
+                    await _asyncio.sleep(min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5))
                 else:
                     raise
 
     async def fail_task(self, task_id: int, error: str) -> None:
         """Mark a task as failed with error details. Retries on DB lock."""
         import asyncio as _asyncio
-        for attempt in range(5):
+        for attempt in range(8):
             try:
                 await self._db.execute(
                     """UPDATE task_queue
@@ -182,8 +183,8 @@ class TaskQueue:
                 await self._db.commit()
                 return
             except Exception as e:
-                if "locked" in str(e).lower() and attempt < 4:
-                    await _asyncio.sleep(2 ** attempt)
+                if "locked" in str(e).lower() and attempt < 7:
+                    await _asyncio.sleep(min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5))
                 else:
                     raise
 

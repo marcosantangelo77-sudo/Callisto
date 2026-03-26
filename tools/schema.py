@@ -23,8 +23,9 @@ async def open_db(db_path: str = None) -> aiosqlite.Connection:
     if db_path is None:
         db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
     db = await aiosqlite.connect(db_path)
-    await db.execute("PRAGMA busy_timeout = 60000")  # 60s — prevents 'database is locked' during bulk writes
-    await db.execute("PRAGMA journal_mode = WAL")     # WAL mode for concurrent reads during writes
+    await db.execute("PRAGMA busy_timeout = 60000")   # 60s — prevents 'database is locked' during bulk writes
+    await db.execute("PRAGMA journal_mode = WAL")      # WAL mode for concurrent reads during writes
+    await db.execute("PRAGMA synchronous = NORMAL")    # Safe with WAL, reduces fsync overhead
     return db
 
 logger = logging.getLogger("callisto.schema")
@@ -793,8 +794,18 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         # Set PRAGMAs before schema creation — these persist for the connection
         await db.execute("PRAGMA busy_timeout = 120000")
         await db.execute("PRAGMA journal_mode = WAL")
-        await db.commit()  # commit PRAGMA changes before executescript
-        await db.executescript(SCHEMA_SQL)
+        await db.execute("PRAGMA synchronous = NORMAL")  # Safe with WAL, reduces fsync
+        await db.commit()
+        # Run schema statements individually instead of executescript() to avoid
+        # EXCLUSIVE lock. executescript() blocks ALL concurrent readers/writers;
+        # individual execute() calls use WAL-mode write lock (readers can continue).
+        for stmt in SCHEMA_SQL.split(";"):
+            stmt = stmt.strip()
+            if stmt and not stmt.startswith("--"):
+                try:
+                    await db.execute(stmt)
+                except Exception:
+                    pass  # IF NOT EXISTS / OR IGNORE handles duplicates
         await db.commit()
 
         # Migrations: add regime columns (safe if already exists)
