@@ -956,6 +956,47 @@ async def promote_hypothesis(hypothesis_id: str):
     return {"promoted": False, **readiness}
 
 
+@app.patch("/hypothesis/{hypothesis_id}")
+async def update_hypothesis(hypothesis_id: str, req: dict):
+    """Update hypothesis status, threshold, model_config, or notes."""
+    h = await hypothesis_manager.get_hypothesis(hypothesis_id)
+    if not h:
+        raise HTTPException(status_code=404, detail="Hypothesis not found")
+    results = {}
+    if "status" in req:
+        results["status"] = await hypothesis_manager.update_status(
+            hypothesis_id, req["status"], promoted_by=req.get("promoted_by", "api")
+        )
+    if "edge_threshold" in req:
+        await hypothesis_manager._db.execute(
+            "UPDATE hypotheses SET edge_threshold = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE hypothesis_id = ?",
+            (req["edge_threshold"], hypothesis_id),
+        )
+        await hypothesis_manager._db.commit()
+        results["edge_threshold"] = req["edge_threshold"]
+    if "model_config" in req:
+        import json as _json
+        existing = _json.loads(h.get("model_config", "{}") or "{}")
+        existing.update(req["model_config"])
+        await hypothesis_manager._db.execute(
+            "UPDATE hypotheses SET model_config = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE hypothesis_id = ?",
+            (_json.dumps(existing), hypothesis_id),
+        )
+        await hypothesis_manager._db.commit()
+        results["model_config"] = existing
+    if "notes" in req:
+        await hypothesis_manager._db.execute(
+            "UPDATE hypotheses SET notes = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE hypothesis_id = ?",
+            (req["notes"], hypothesis_id),
+        )
+        await hypothesis_manager._db.commit()
+        results["notes"] = req["notes"]
+    return {"hypothesis_id": hypothesis_id, "updated": results}
+
+
 @app.post("/backtest/run")
 async def run_backtest(req: BacktestRequest):
     """Start a backtest run on a hypothesis against historical data."""
@@ -1219,18 +1260,61 @@ async def full_system_status():
     status["claude_code"] = claude_stats()
     status["line_monitor"] = line_monitor.get_status() if line_monitor else None
 
-    # Add hypothesis summary
+    # Add hypothesis summary — ground-truth from DB, not in-memory counters
     if hypothesis_manager:
         try:
-            all_h = await hypothesis_manager.list_hypotheses()
+            db = hypothesis_manager._db
+            # Status counts direct from DB
+            cursor = await db.execute(
+                "SELECT status, COUNT(*) FROM hypotheses GROUP BY status"
+            )
+            status_counts = {row[0]: row[1] for row in await cursor.fetchall()}
+            total = sum(status_counts.values())
+
+            # Ground-truth backtest event/signal counts from backtest_events table
+            cursor = await db.execute(
+                "SELECT COUNT(*), "
+                "SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) "
+                "FROM backtest_events"
+            )
+            row = await cursor.fetchone()
+            total_events = row[0] or 0
+            total_signals = row[1] or 0
+
+            # Per-status event counts (only for backtesting hypotheses)
+            cursor = await db.execute(
+                "SELECT h.status, COUNT(be.id), "
+                "SUM(CASE WHEN be.signal_generated = 1 THEN 1 ELSE 0 END) "
+                "FROM backtest_events be "
+                "JOIN hypotheses h ON be.hypothesis_id = h.hypothesis_id "
+                "GROUP BY h.status"
+            )
+            events_by_status = {
+                row[0]: {"events": row[1] or 0, "signals": row[2] or 0}
+                for row in await cursor.fetchall()
+            }
+
+            # Active backtesting: only hypotheses with actual events
+            cursor = await db.execute(
+                "SELECT COUNT(DISTINCT be.hypothesis_id) "
+                "FROM backtest_events be "
+                "JOIN hypotheses h ON be.hypothesis_id = h.hypothesis_id "
+                "WHERE h.status = 'backtesting'"
+            )
+            active_backtesting = (await cursor.fetchone())[0] or 0
+
             status["hypotheses"] = {
-                "total": len(all_h),
-                "draft": sum(1 for h in all_h if h["status"] == "draft"),
-                "backtesting": sum(1 for h in all_h if h["status"] == "backtesting"),
-                "paper_trading": sum(1 for h in all_h if h["status"] == "paper_trading"),
-                "live": sum(1 for h in all_h if h["status"] == "live"),
-                "rejected": sum(1 for h in all_h if h["status"] == "rejected"),
-                "retired": sum(1 for h in all_h if h["status"] == "retired"),
+                "total": total,
+                "draft": status_counts.get("draft", 0),
+                "backtesting": status_counts.get("backtesting", 0),
+                "backtesting_with_data": active_backtesting,
+                "paper_trading": status_counts.get("paper_trading", 0),
+                "live": status_counts.get("live", 0),
+                "rejected": status_counts.get("rejected", 0),
+                "retired": status_counts.get("retired", 0),
+                "backtest_events_total": total_events,
+                "backtest_signals_total": total_signals,
+                "events_by_status": events_by_status,
             }
         except Exception as e:
             logger.warning(f"Failed to get hypothesis summary for full-status: {e}")
