@@ -2728,9 +2728,9 @@ class ResearchLoop:
                        h.edge_threshold, h.status,
                        COUNT(CASE WHEN be.signal_generated=1 THEN 1 END) as sigs,
                        COUNT(*) as events,
-                       SUM(CASE WHEN be.actual_result='won' THEN 1 ELSE 0 END) as wins,
-                       SUM(CASE WHEN be.actual_result='lost' THEN 1 ELSE 0 END) as losses,
-                       SUM(CASE WHEN be.actual_result='push' THEN 1 ELSE 0 END) as pushes,
+                       SUM(CASE WHEN be.signal_generated=1 AND be.actual_result='won' THEN 1 ELSE 0 END) as wins,
+                       SUM(CASE WHEN be.signal_generated=1 AND be.actual_result='lost' THEN 1 ELSE 0 END) as losses,
+                       SUM(CASE WHEN be.signal_generated=1 AND be.actual_result='push' THEN 1 ELSE 0 END) as pushes,
                        AVG(CASE WHEN be.signal_generated=1 THEN be.edge END) as avg_edge,
                        AVG(CASE WHEN be.signal_generated=1 THEN be.ev_pct END) as avg_ev
                 FROM hypotheses h
@@ -3506,8 +3506,8 @@ class ResearchLoop:
             cursor = await db.execute(
                 "SELECT COUNT(*) total, "
                 "SUM(CASE WHEN signal_generated=1 THEN 1 ELSE 0 END) signals, "
-                "SUM(CASE WHEN actual_result='won' THEN 1 ELSE 0 END) wins, "
-                "SUM(CASE WHEN actual_result='lost' THEN 1 ELSE 0 END) losses, "
+                "SUM(CASE WHEN signal_generated=1 AND actual_result='won' THEN 1 ELSE 0 END) wins, "
+                "SUM(CASE WHEN signal_generated=1 AND actual_result='lost' THEN 1 ELSE 0 END) losses, "
                 "SUM(CASE WHEN actual_result IS NULL THEN 1 ELSE 0 END) unresolved "
                 "FROM backtest_events"
             )

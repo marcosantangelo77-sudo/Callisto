@@ -2003,10 +2003,11 @@ class BacktestEngine:
         return [r[0] for r in await cursor.fetchall()]
 
     async def recalculate_run_stats(self, run_id: str) -> bool:
-        """Recalculate win/loss/hit_rate for a run from its resolved events."""
+        """Recalculate win/loss/hit_rate for a run from its SIGNALED events only."""
         cursor = await self._db.execute(
             "SELECT actual_result, COUNT(*) FROM backtest_events "
             "WHERE run_id = ? AND actual_result IS NOT NULL "
+            "AND signal_generated = 1 "
             "GROUP BY actual_result",
             (run_id,),
         )
@@ -2226,9 +2227,9 @@ class BacktestEngine:
             "SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) as signals, "
             "AVG(CASE WHEN signal_generated = 1 THEN edge END) as avg_edge, "
             "AVG(CASE WHEN signal_generated = 1 THEN ev_pct END) as avg_ev, "
-            "SUM(CASE WHEN actual_result = 'won' THEN 1 ELSE 0 END) as wins, "
-            "SUM(CASE WHEN actual_result = 'lost' THEN 1 ELSE 0 END) as losses, "
-            "SUM(CASE WHEN actual_result = 'push' THEN 1 ELSE 0 END) as pushes "
+            "SUM(CASE WHEN signal_generated = 1 AND actual_result = 'won' THEN 1 ELSE 0 END) as wins, "
+            "SUM(CASE WHEN signal_generated = 1 AND actual_result = 'lost' THEN 1 ELSE 0 END) as losses, "
+            "SUM(CASE WHEN signal_generated = 1 AND actual_result = 'push' THEN 1 ELSE 0 END) as pushes "
             "FROM backtest_events WHERE run_id = ?",
             (run_id,),
         )
