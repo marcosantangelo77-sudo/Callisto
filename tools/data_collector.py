@@ -944,6 +944,308 @@ class DataCollector:
             "unmatched": unmatched,
         }
 
+    # ── ESPN PLAY-BY-PLAY ──
+
+    async def collect_play_by_play(
+        self,
+        sport: str,
+        date: Optional[str] = None,
+    ) -> dict:
+        """
+        Collect play-by-play and win probability data from ESPN summary endpoint.
+
+        Dense data: ~400-500 plays per NBA game with coordinates, scoring runs,
+        momentum shifts, pace metrics, and real-time win probabilities.
+
+        Stores in game_contexts.context_json under 'play_by_play' and 'win_probability' keys.
+        """
+        espn_sport = ESPN_SPORTS.get(sport)
+        if not espn_sport:
+            return {"error": f"Unsupported sport: {sport}", "games": 0}
+
+        category, league = espn_sport
+        if date is None:
+            date = datetime.now(timezone.utc).strftime("%Y%m%d")
+
+        client = _get_client()
+        url = f"{ESPN_BASE}/{category}/{league}/scoreboard"
+        params = {"dates": date}
+
+        try:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            scoreboard = resp.json()
+        except Exception as e:
+            logger.error(f"ESPN scoreboard error for PBP: {e}")
+            return {"error": str(e), "games": 0}
+
+        game_date_fmt = f"{date[:4]}-{date[4:6]}-{date[6:8]}"
+        games_enriched = 0
+        events = scoreboard.get("events", [])
+
+        for event in events:
+            if event.get("status", {}).get("type", {}).get("completed") is not True:
+                continue
+
+            event_id = event.get("id", "")
+            summary_url = (
+                f"https://site.api.espn.com/apis/site/v2/sports/"
+                f"{category}/{league}/summary"
+            )
+
+            try:
+                summary_resp = await client.get(summary_url, params={"event": event_id})
+                summary_resp.raise_for_status()
+                summary = summary_resp.json()
+            except Exception as e:
+                logger.warning(f"PBP fetch failed for {event_id}: {e}")
+                continue
+
+            plays = summary.get("plays", [])
+            win_probs = summary.get("winprobability", [])
+
+            if not plays:
+                continue
+
+            # Extract key PBP metrics
+            scoring_plays = [p for p in plays if p.get("scoringPlay")]
+            total_plays = len(plays)
+
+            # Compute pace metrics per period
+            periods = {}
+            for play in plays:
+                period_num = play.get("period", {}).get("number", 0)
+                if period_num not in periods:
+                    periods[period_num] = {"plays": 0, "scoring_plays": 0}
+                periods[period_num]["plays"] += 1
+                if play.get("scoringPlay"):
+                    periods[period_num]["scoring_plays"] += 1
+
+            # Win probability momentum: biggest swings
+            momentum_swings = []
+            if len(win_probs) >= 2:
+                for i in range(1, len(win_probs)):
+                    prev_wp = win_probs[i - 1].get("homeWinPercentage", 0.5)
+                    curr_wp = win_probs[i].get("homeWinPercentage", 0.5)
+                    swing = abs(curr_wp - prev_wp)
+                    if swing >= 0.05:  # 5%+ swing = significant momentum shift
+                        momentum_swings.append({
+                            "play_id": win_probs[i].get("playId"),
+                            "swing": round(swing, 3),
+                            "direction": "home" if curr_wp > prev_wp else "away",
+                            "wp_after": round(curr_wp, 3),
+                        })
+
+            # Store enrichment data
+            pbp_summary = {
+                "total_plays": total_plays,
+                "scoring_plays": len(scoring_plays),
+                "periods": periods,
+                "momentum_swings": sorted(
+                    momentum_swings, key=lambda x: x["swing"], reverse=True
+                )[:10],  # Top 10 biggest swings
+                "final_home_wp": round(
+                    win_probs[-1].get("homeWinPercentage", 0.5), 3
+                ) if win_probs else None,
+                "max_home_wp": round(
+                    max(wp.get("homeWinPercentage", 0.5) for wp in win_probs), 3
+                ) if win_probs else None,
+                "min_home_wp": round(
+                    min(wp.get("homeWinPercentage", 0.5) for wp in win_probs), 3
+                ) if win_probs else None,
+            }
+
+            # Update existing game_context with PBP data
+            cursor = await self._db.execute(
+                "SELECT id, context_json FROM game_contexts "
+                "WHERE sport = ? AND event_id = ?",
+                (sport, event_id),
+            )
+            row = await cursor.fetchone()
+            if row:
+                ctx_id, ctx_json = row
+                ctx = json.loads(ctx_json) if ctx_json else {}
+                ctx["play_by_play"] = pbp_summary
+                await self._db.execute(
+                    "UPDATE game_contexts SET context_json = ? WHERE id = ?",
+                    (json.dumps(ctx), ctx_id),
+                )
+                games_enriched += 1
+                logger.debug(
+                    f"PBP enrichment: {event_id} — {total_plays} plays, "
+                    f"{len(momentum_swings)} momentum swings"
+                )
+
+        await self._db.commit()
+        logger.info(
+            f"Play-by-play: enriched {games_enriched} {sport} games on {game_date_fmt}"
+        )
+        return {
+            "sport": sport,
+            "date": game_date_fmt,
+            "games_enriched": games_enriched,
+        }
+
+    # ── BASEBALL SAVANT / STATCAST ──
+
+    async def collect_statcast(
+        self,
+        start_date: str,
+        end_date: Optional[str] = None,
+        player_type: str = "pitcher",
+    ) -> dict:
+        """
+        Collect pitch-level Statcast data from Baseball Savant (free).
+
+        118 columns per pitch: velocity, spin rate, exit velocity, launch angle,
+        expected batting average, zone, pitch type, etc.
+
+        Stores aggregated pitcher/batter stats in player_stats table.
+
+        Args:
+            start_date: YYYY-MM-DD format
+            end_date: YYYY-MM-DD format (defaults to start_date)
+            player_type: 'pitcher' or 'batter'
+        """
+        if end_date is None:
+            end_date = start_date
+
+        client = _get_client()
+        url = "https://baseballsavant.mlb.com/statcast_search/csv"
+        params = {
+            "all": "true",
+            "type": "details",
+            "game_date_gt": start_date,
+            "game_date_lt": end_date,
+            "player_type": player_type,
+            "min_pitches": "1",
+        }
+
+        try:
+            resp = await client.get(url, params=params, timeout=60.0, follow_redirects=True)
+            resp.raise_for_status()
+        except Exception as e:
+            logger.error(f"Statcast fetch error: {e}")
+            return {"error": str(e), "pitches": 0}
+
+        content = resp.text
+        if not content or len(content) < 100:
+            return {"error": "Empty response from Baseball Savant", "pitches": 0}
+
+        # Use csv module for proper quoted-field handling
+        import csv
+        import io
+
+        reader = csv.DictReader(io.StringIO(content))
+        # Clean BOM from header field names
+        if reader.fieldnames:
+            reader.fieldnames = [
+                f.strip().strip('"').strip('\ufeff"').strip('\ufeff')
+                for f in reader.fieldnames
+            ]
+
+        rows_list = list(reader)
+        total_pitches = len(rows_list)
+        if total_pitches == 0:
+            return {"error": "No data rows", "pitches": 0}
+
+        # Aggregate by pitcher for storage
+        pitcher_stats = {}
+        for row in rows_list:
+
+            pitcher = (row.get("player_name") or "").strip()
+            game_date = (row.get("game_date") or start_date).strip()
+            if not pitcher:
+                continue
+
+            key = (pitcher, game_date)
+            if key not in pitcher_stats:
+                pitcher_stats[key] = {
+                    "pitches": 0,
+                    "strikeouts": 0,
+                    "velocities": [],
+                    "exit_velocities": [],
+                    "events": [],
+                    "pitcher_team": (
+                        (row.get("home_team") or "").strip()
+                        if (row.get("inning_topbot") or "") == "Bot"
+                        else (row.get("away_team") or "").strip()
+                    ),
+                }
+
+            stats = pitcher_stats[key]
+            stats["pitches"] += 1
+
+            # Aggregate key metrics
+            try:
+                vel = float(row.get("release_speed") or "0")
+                if 50 < vel < 110:  # Sane velocity range (mph)
+                    stats["velocities"].append(vel)
+            except (ValueError, TypeError):
+                pass
+
+            try:
+                ev = float(row.get("launch_speed") or "0")
+                if 10 < ev < 130:  # Sane exit velocity range (mph)
+                    stats["exit_velocities"].append(ev)
+            except (ValueError, TypeError):
+                pass
+
+            event = (row.get("events") or "").strip()
+            if event:
+                stats["events"].append(event)
+                if event in ("strikeout", "strikeout_double_play"):
+                    stats["strikeouts"] += 1
+
+        # Store aggregated stats
+        stored = 0
+        for (pitcher, game_date), stats in pitcher_stats.items():
+            avg_velo = round(sum(stats["velocities"]) / len(stats["velocities"]), 1) if stats["velocities"] else None
+            avg_ev = round(sum(stats["exit_velocities"]) / len(stats["exit_velocities"]), 1) if stats["exit_velocities"] else None
+
+            stat_entries = {
+                "pitches": stats["pitches"],
+                "strikeouts": stats["strikeouts"],
+                "avg_velocity": avg_velo,
+                "avg_exit_velocity": avg_ev,
+            }
+
+            for stat_type, stat_value in stat_entries.items():
+                if stat_value is None:
+                    continue
+                try:
+                    await self._db.execute(
+                        "INSERT OR IGNORE INTO player_stats "
+                        "(sport, event_id, game_date, player_name, team, stat_type, stat_value) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            "baseball_mlb",
+                            f"statcast_{game_date}",
+                            game_date,
+                            pitcher,
+                            stats.get("pitcher_team", ""),
+                            f"statcast_{stat_type}",
+                            str(stat_value),
+                        ),
+                    )
+                    stored += 1
+                except Exception as e:
+                    logger.debug(f"Statcast store error for {pitcher}: {e}")
+
+        await self._db.commit()
+        logger.info(
+            f"Statcast: {total_pitches} pitches from {len(pitcher_stats)} pitchers, "
+            f"stored {stored} stat entries ({start_date} to {end_date})"
+        )
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "player_type": player_type,
+            "total_pitches": total_pitches,
+            "pitchers": len(pitcher_stats),
+            "stats_stored": stored,
+        }
+
     # ── EMBEDDING PIPELINE ──
 
     async def get_unembedded_contexts(

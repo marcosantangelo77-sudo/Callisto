@@ -116,27 +116,41 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
 #   "frontier" = PRIMARY capable (Claude Code)
 #   "high"     = SECONDARY max (strong local models)
 #   "medium"   = SIGNAL max (fast local models)
+# Installed models (March 2026, RTX 4070 Ti Super 16GB):
+#   nemotron-cascade-2:latest  24GB (MoE 30B, 3B active, partial CPU offload)
+#   gpt-oss:20b / manager      13GB (fits VRAM, 140 tok/s, matches o3-mini)
+#   deepseek-r1:14b             9GB (best chain-of-thought at 14B)
+#   mistral-small:24b          14GB (strong reasoning, tight VRAM fit)
+#   qwen2.5:14b                 9GB (good structured JSON output)
+#   qwen3.5:4b                3.4GB (ultra-fast classification)
+#
+# TurboQuant status: NOT yet integrated in llama.cpp/Ollama.
+# When available, extends context windows 3-5x on existing models.
+# Does NOT change model selection — only context length.
 MODEL_LADDER: dict[str, list[dict]] = {
     "reasoning": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
-        {"model": "nemotron-cascade-2:latest", "quality": "high", "timeout": 90},
-        {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},
+        {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},          # 140 tok/s, best local reasoning
+        {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},      # Deep CoT reasoning
+        {"model": "nemotron-cascade-2:latest", "quality": "high", "timeout": 90},  # MoE fallback
         {"model": "qwen3.5:4b", "quality": "medium", "timeout": 60},
     ],
     "classification": [
         {"model": "qwen3.5:4b", "quality": "medium", "timeout": 30},
     ],
     "review": [
-        {"model": "manager:latest", "quality": "high", "timeout": 60},
+        {"model": "manager:latest", "quality": "high", "timeout": 60},        # GPT-OSS 20B via Modelfile
     ],
     "code_generation": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},
         {"model": "nemotron-cascade-2:latest", "quality": "high", "timeout": 90},
     ],
     "hypothesis_gen": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},      # CoT ideal for hypothesis
+        {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},
         {"model": "nemotron-cascade-2:latest", "quality": "high", "timeout": 90},
-        {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},
     ],
 }
 

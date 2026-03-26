@@ -1599,6 +1599,8 @@ class ResearchLoop:
                     scores = await self.data_collector.collect_scores(sport, date_str)
                     if scores.get("completed", 0) > 0:
                         await self.data_collector.collect_box_scores(sport, date_str)
+                        # Enrich with play-by-play and win probability data
+                        await self.data_collector.collect_play_by_play(sport, date_str)
 
                 # Resolve pending paper trades for the same window
                 for dt in dates:
@@ -1609,6 +1611,15 @@ class ResearchLoop:
                 self._data_collections += 1
             except Exception as e:
                 logger.warning(f"Data collection failed for {sport}: {e}")
+
+        # Statcast pitch-level data for MLB (free from Baseball Savant)
+        if "baseball_mlb" in ordered_sports:
+            try:
+                for dt in dates[:3]:  # Last 3 days only (Statcast is dense)
+                    date_fmt = dt.strftime("%Y-%m-%d")
+                    await self.data_collector.collect_statcast(date_fmt)
+            except Exception as e:
+                logger.warning(f"Statcast collection failed: {e}")
 
         # Collect pre-calculated value bets from Odds-API.io Pro
         # These are updated every 5 seconds with EV computed from consensus
