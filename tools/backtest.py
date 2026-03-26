@@ -69,7 +69,7 @@ class BacktestEngine:
 
     async def initialize(self) -> None:
         self._db = await aiosqlite.connect(self.db_path)
-        await self._db.execute("PRAGMA busy_timeout = 30000")
+        await self._db.execute("PRAGMA busy_timeout = 120000")
         logger.info("Backtest engine initialized")
 
     async def close(self) -> None:
