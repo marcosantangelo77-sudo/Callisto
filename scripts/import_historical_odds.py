@@ -474,12 +474,26 @@ def store_odds_cache(conn: sqlite3.Connection, sport: str, date: str, games: lis
         "game_count": len(games),
         "source": "odds_api_io_pro",
     })
-    conn.execute(
+    _execute_with_retry(
+        conn,
         "INSERT OR REPLACE INTO historical_odds_cache "
         "(sport, snapshot_date, event_id, market_type, response_json, credits_cost, regime) "
         "VALUES (?, ?, NULL, 'h2h,spreads,totals', ?, 1, ?)",
         (sport, date, cache_entry, regime),
     )
+
+
+def _execute_with_retry(conn: sqlite3.Connection, sql: str, params: tuple, max_retries: int = 5):
+    """Execute SQL with retry on database lock."""
+    for attempt in range(max_retries):
+        try:
+            conn.execute(sql, params)
+            return
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e) and attempt < max_retries - 1:
+                time.sleep(1 + attempt * 2)  # 1s, 3s, 5s, 7s, 9s
+                continue
+            raise
 
 
 def store_game_result(conn: sqlite3.Connection, sport: str, event: dict, regime: str):
@@ -509,7 +523,8 @@ def store_game_result(conn: sqlite3.Connection, sport: str, event: dict, regime:
 
     game_date_str = event.get("date", "")[:10]
 
-    conn.execute(
+    _execute_with_retry(
+        conn,
         "INSERT OR IGNORE INTO game_results "
         "(sport, game_date, home_team, away_team, home_score, away_score, "
         "total_score, spread_result, winner, source, regime) "
