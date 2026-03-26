@@ -131,7 +131,7 @@ class EventBus:
 
                 if batch:
                     async with aiosqlite.connect(db_path) as db:
-                        await db.execute("PRAGMA busy_timeout = 5000")
+                        await db.execute("PRAGMA busy_timeout = 60000")
                         await db.executemany(
                             "INSERT INTO event_log (event_type, event_data) VALUES (?, ?)",
                             [(e["event_type"], e["event_data"]) for e in batch],

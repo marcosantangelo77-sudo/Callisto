@@ -454,6 +454,19 @@ class BacktestEngine:
         total_signals = 0
         multibook_dates = 0
         singlebook_skipped = 0
+        context_filtered = 0
+
+        # ── Pre-compute schedule context for game-level filtering ──
+        use_context_filter = self._needs_context_filter(h_name, thesis, config)
+        schedule_context = {}
+        if use_context_filter:
+            schedule_context = await self._build_schedule_context(
+                sport, start_date, end_date,
+            )
+            logger.info(
+                f"Backtest {hypothesis_id}: context filter ENABLED — "
+                f"{len(schedule_context)} games have schedule context"
+            )
 
         for date_str in dates_in_range:
             snapshot = await self.historical_fetcher.fetch_historical_odds(
@@ -479,11 +492,18 @@ class BacktestEngine:
                 singlebook_skipped += 1
 
             for game in games:
-                # The Odds API date-based endpoint returns games for the
-                # requested UTC date. Don't re-filter by Eastern time —
-                # that skips most evening games (commence 00:00-05:00 UTC
-                # = 7pm-midnight ET, which is when most games happen).
-                # Trust the API's date grouping instead.
+                # ── Game-level context filter ──
+                # Apply schedule-derived filters BEFORE processing lines.
+                # This is where b2b, road_trip, clinched, sandwich, etc. take effect.
+                if use_context_filter and schedule_context:
+                    home = game.get("home_team", "")
+                    away = game.get("away_team", "")
+                    game_ctx = schedule_context.get((date_str, home, away), {})
+                    if not self._game_matches_context_filter(
+                        game_ctx, h_name, thesis, config,
+                    ):
+                        context_filtered += 1
+                        continue
 
                 events, signals = await self._process_game(
                     run_id=run_id,
@@ -503,6 +523,12 @@ class BacktestEngine:
                 )
                 total_events += events
                 total_signals += signals
+
+        if context_filtered > 0:
+            logger.info(
+                f"Backtest {run_id}: context filter removed {context_filtered} games "
+                f"that didn't match schedule requirements"
+            )
 
         logger.info(
             f"Backtest {run_id}: {multibook_dates} dates with multi-book data, "
@@ -670,22 +696,23 @@ class BacktestEngine:
         # ── Derivable but NOT YET IMPLEMENTED ──
         # These have data in game_contexts / game_results / player_stats,
         # but no code maps them to event-level filters yet.
-        "days_rest", "days_since_last_game", "extra_rest_days",
-        "both_teams_short_rest", "opponent_days_rest",
-        "prev_game_margin", "starter_4q_minutes_prev",
+        # NOTE: days_rest, back_to_back, playoff_standing, revenge_game_flag,
+        # schedule_context, etc. are NOW implemented — see FILTERABLE_CONTEXT_FACTORS
+        # and _build_schedule_context() / _game_matches_context_filter().
+        "starter_4q_minutes_prev",
         "home_pace_rank", "away_pace_rank", "pace_differential",
         "home_team_pace_rank", "away_team_pace_rank",
         "head_to_head_record", "opponent_record",
-        "divisional_matchup", "conference_tier",
+        "conference_tier",
         "team_identity", "school_identity",
         "seed_number",
-        "playoff_standing",
-        "revenge_game_flag",
         "hours_before_tip",
         "foul_rates", "foul_rate", "personal_fouls_per_game",
         "defensive_efficiency", "adjusted_defensive_efficiency",
         "tempo", "pace", "offensive_efficiency",
         "overtime_history", "prior_game_overtime",
+        "schedule_context",   # sandwich, trap game, letdown, look-ahead — no game-level filter
+        "tournament_round",   # Sweet 16, Elite 8, etc. — no round detection from dates alone
         # ── No data source ──
         "weather", "temperature", "wind", "wind_speed", "wind_direction",
         "travel_distance", "timezone_crossing", "altitude",
@@ -1108,6 +1135,302 @@ class BacktestEngine:
 
         filterable_count = len(context_factors) - unfilterable_count
         return filterable_count / len(context_factors)
+
+    # ── SCHEDULE CONTEXT COMPUTATION ──
+    # Derive game-level context from game_results so contextual filters
+    # (b2b, days_rest, road_trip, sandwich, clinched, revenge) can actually
+    # filter games instead of being no-ops.
+
+    # Factors that ARE now filterable via schedule context.
+    # When adding a new derivable factor: implement it in _build_schedule_context,
+    # add matching logic in _game_matches_context_filter, and list it here.
+    FILTERABLE_CONTEXT_FACTORS = {
+        "days_rest", "days_since_last_game", "extra_rest_days",
+        "back_to_back", "is_b2b_second_night", "back_to_back_second_night",
+        "both_teams_short_rest", "opponent_days_rest",
+        "consecutive_road_games", "road_trip_game_number",
+        "schedule_density", "games_in_last_4_days", "schedule_context",
+        "revenge_game_flag", "is_revenge_game",
+        "prev_game_margin", "divisional_matchup",
+        "playoff_standing",
+    }
+
+    async def _build_schedule_context(
+        self, sport: str, start_date: str, end_date: str,
+    ) -> dict:
+        """Pre-compute schedule context for all games in a date range.
+
+        Returns dict keyed by (game_date, home_team, away_team) with context:
+            home_days_rest / away_days_rest: int
+            home_b2b / away_b2b: bool — team played yesterday
+            home_road_streak / away_road_streak: int — consecutive away games
+            home_games_in_4 / away_games_in_4: int — schedule density
+            home_prev_margin / away_prev_margin: float
+            is_revenge: bool — teams played recently
+            home_sandwich / away_sandwich: bool — game squeezed between two others
+            home_win_pct / away_win_pct: float — season record approximation
+        """
+        from datetime import datetime as dt
+
+        buffer_start = dt.strptime(start_date, "%Y-%m-%d") - timedelta(days=30)
+        buffer_start_str = buffer_start.strftime("%Y-%m-%d")
+
+        rows = await self._db.execute_fetchall(
+            """SELECT game_date, home_team, away_team, home_score, away_score,
+                      total_score, spread_result, winner
+               FROM game_results
+               WHERE sport = ? AND game_date >= ? AND game_date <= ?
+               ORDER BY game_date""",
+            (sport, buffer_start_str, end_date),
+        )
+
+        if not rows:
+            return {}
+
+        # Build per-team game lists
+        team_games: dict[str, list] = {}
+        for r in rows:
+            gd, home, away, hs, as_, ts, sr, winner = r
+            hs = hs or 0
+            as_ = as_ or 0
+            home_margin = hs - as_
+            team_games.setdefault(home, []).append(
+                (gd, away, True, home_margin, winner)
+            )
+            team_games.setdefault(away, []).append(
+                (gd, home, False, -home_margin, winner)
+            )
+
+        for t in team_games:
+            team_games[t].sort(key=lambda x: x[0])
+
+        context = {}
+        for r in rows:
+            gd, home, away = r[0], r[1], r[2]
+            if gd < start_date:
+                continue
+
+            ctx: dict = {}
+            for team, prefix in [(home, "home"), (away, "away")]:
+                tg = team_games.get(team, [])
+                opp = away if prefix == "home" else home
+                is_home_side = prefix == "home"
+                idx = None
+                for i, g in enumerate(tg):
+                    if g[0] == gd and g[2] == is_home_side and g[1] == opp:
+                        idx = i
+                        break
+                if idx is None:
+                    ctx[f"{prefix}_days_rest"] = 99
+                    ctx[f"{prefix}_b2b"] = False
+                    ctx[f"{prefix}_road_streak"] = 0
+                    ctx[f"{prefix}_games_in_4"] = 1
+                    ctx[f"{prefix}_prev_margin"] = 0.0
+                    continue
+
+                # Days rest
+                if idx > 0:
+                    prev_date = tg[idx - 1][0]
+                    d1 = dt.strptime(gd, "%Y-%m-%d")
+                    d0 = dt.strptime(prev_date, "%Y-%m-%d")
+                    days_rest = (d1 - d0).days
+                    prev_margin = tg[idx - 1][3]
+                else:
+                    days_rest = 99
+                    prev_margin = 0.0
+
+                ctx[f"{prefix}_days_rest"] = days_rest
+                ctx[f"{prefix}_b2b"] = (days_rest == 1)
+                ctx[f"{prefix}_prev_margin"] = prev_margin
+
+                # Road streak
+                road_streak = 0
+                if not is_home_side:
+                    for j in range(idx, -1, -1):
+                        if not tg[j][2]:
+                            road_streak += 1
+                        else:
+                            break
+                else:
+                    for j in range(idx - 1, -1, -1):
+                        if not tg[j][2]:
+                            road_streak += 1
+                        else:
+                            break
+                ctx[f"{prefix}_road_streak"] = road_streak
+
+                # Games in last 4 days (schedule density)
+                game_dt = dt.strptime(gd, "%Y-%m-%d")
+                four_days_ago = (game_dt - timedelta(days=4)).strftime("%Y-%m-%d")
+                games_in_4 = sum(1 for g in tg if four_days_ago < g[0] <= gd)
+                ctx[f"{prefix}_games_in_4"] = games_in_4
+
+            # Revenge game: teams played in last 30 days
+            home_games = team_games.get(home, [])
+            ctx["is_revenge"] = any(
+                g[1] == away and g[0] < gd and g[0] >= buffer_start_str
+                for g in home_games
+            )
+
+            # Sandwich game: game within 2 days before AND within 2 days after
+            for team, prefix in [(home, "home"), (away, "away")]:
+                tg = team_games.get(team, [])
+                game_dt = dt.strptime(gd, "%Y-%m-%d")
+                has_prev_close = any(
+                    0 < (game_dt - dt.strptime(g[0], "%Y-%m-%d")).days <= 2
+                    for g in tg if g[0] < gd
+                )
+                has_next_close = any(
+                    0 < (dt.strptime(g[0], "%Y-%m-%d") - game_dt).days <= 2
+                    for g in tg if g[0] > gd
+                )
+                ctx[f"{prefix}_sandwich"] = has_prev_close and has_next_close
+
+            # Team records for playoff standing approximation
+            for team, prefix in [(home, "home"), (away, "away")]:
+                tg = team_games.get(team, [])
+                wins = sum(1 for g in tg if g[0] < gd and g[4] == team)
+                losses = sum(1 for g in tg if g[0] < gd and g[4] and g[4] != team)
+                ctx[f"{prefix}_wins"] = wins
+                ctx[f"{prefix}_losses"] = losses
+                total = wins + losses
+                ctx[f"{prefix}_win_pct"] = wins / total if total > 0 else 0.5
+
+            context[(gd, home, away)] = ctx
+
+        logger.info(
+            f"Schedule context: computed for {len(context)} games "
+            f"({sport}, {start_date} to {end_date})"
+        )
+        return context
+
+    @staticmethod
+    def _game_matches_context_filter(
+        game_context: dict,
+        hypothesis_name: str,
+        thesis: str,
+        config: dict,
+    ) -> bool:
+        """Check if a game matches the hypothesis's contextual requirements.
+
+        Uses hypothesis name, thesis text, and config.context_factors to determine
+        what context conditions are needed, then checks them against the pre-computed
+        game context.
+
+        Returns True if the game should be processed, False to skip.
+        """
+        name_lower = hypothesis_name.lower().replace("-", " ").replace("_", " ")
+        thesis_lower = (thesis or "").lower()
+        text = f"{name_lower} {thesis_lower}"
+        context_factors = config.get("context_factors", [])
+        cf_set = {f.lower().replace(" ", "_") for f in context_factors}
+
+        if not game_context:
+            return True  # No context data — don't filter
+
+        # ── Back-to-back filter ──
+        if ("back_to_back" in cf_set or "is_b2b_second_night" in cf_set
+                or "back_to_back_second_night" in cf_set
+                or re.search(r"\bb2b\b|\bback.to.back\b", text)):
+            if not game_context.get("home_b2b") and not game_context.get("away_b2b"):
+                return False
+
+        # ── Days rest filter ──
+        if ("days_rest" in cf_set or "days_since_last_game" in cf_set
+                or re.search(r"\bshort.rest\b|\brest.mismatch\b", text)):
+            home_rest = game_context.get("home_days_rest", 99)
+            away_rest = game_context.get("away_days_rest", 99)
+            if home_rest > 2 and away_rest > 2:
+                return False
+
+        # ── Extra rest filter ──
+        if "extra_rest_days" in cf_set or re.search(r"\bextra.rest\b", text):
+            home_rest = game_context.get("home_days_rest", 1)
+            away_rest = game_context.get("away_days_rest", 1)
+            if home_rest < 3 and away_rest < 3:
+                return False
+
+        # ── Road trip filter ──
+        if ("consecutive_road_games" in cf_set or "road_trip_game_number" in cf_set
+                or re.search(r"\broad.trip\b|\b\d\+?\s*(?:road|away)\b|\bconsecutive.(?:road|away)\b", text)):
+            threshold = 3
+            m = re.search(r"(\d)\+?\s*(?:road|away)", text)
+            if m:
+                threshold = int(m.group(1))
+            away_streak = game_context.get("away_road_streak", 0)
+            home_road_before = game_context.get("home_road_streak", 0)
+            if away_streak < threshold and home_road_before < threshold:
+                return False
+
+        # ── Schedule density (3in4, 4in5) filter ──
+        if ("schedule_density" in cf_set or "games_in_last_4_days" in cf_set
+                or re.search(r"\b3.?in.?4\b|\b4.?in.?5\b|\bschedule.compress\b|\bschedule.density\b", text)):
+            home_g4 = game_context.get("home_games_in_4", 1)
+            away_g4 = game_context.get("away_games_in_4", 1)
+            if home_g4 < 3 and away_g4 < 3:
+                return False
+
+        # ── Sandwich game filter ──
+        if ("schedule_context" in cf_set
+                or re.search(r"\bsandwich\b|\btrap.game\b|\bletdown\b", text)):
+            if not game_context.get("home_sandwich") and not game_context.get("away_sandwich"):
+                return False
+
+        # ── Revenge game filter ──
+        if ("revenge_game_flag" in cf_set or "is_revenge_game" in cf_set
+                or re.search(r"\brevenge\b|\bformer.team\b", text)):
+            if not game_context.get("is_revenge"):
+                return False
+
+        # ── Playoff standing / clinched / eliminated filter ──
+        if ("playoff_standing" in cf_set
+                or re.search(r"\bclinch|\beliminated\b|\btanking\b|\bplayoff.race\b|\bdesperate\b", text)):
+            home_wp = game_context.get("home_win_pct", 0.5)
+            away_wp = game_context.get("away_win_pct", 0.5)
+
+            if re.search(r"\bclinch", text):
+                if home_wp < 0.60 and away_wp < 0.60:
+                    return False
+            elif re.search(r"\beliminated\b|\btanking\b", text):
+                if home_wp > 0.40 and away_wp > 0.40:
+                    return False
+            elif re.search(r"\bdesperate\b|\bmust.win\b|\bplayoff.race\b", text):
+                if not (0.40 <= home_wp <= 0.60 or 0.40 <= away_wp <= 0.60):
+                    return False
+
+        # ── Both teams short rest filter ──
+        if "both_teams_short_rest" in cf_set:
+            home_rest = game_context.get("home_days_rest", 99)
+            away_rest = game_context.get("away_days_rest", 99)
+            if home_rest > 1 or away_rest > 1:
+                return False
+
+        return True
+
+    @staticmethod
+    def _needs_context_filter(hypothesis_name: str, thesis: str, config: dict) -> bool:
+        """Quick check: does this hypothesis need game-level context filtering?
+
+        Returns True if the hypothesis references any schedule-derivable context
+        factor in its name, thesis, or context_factors config.
+        """
+        context_factors = config.get("context_factors", [])
+        cf_set = {f.lower().replace(" ", "_") for f in context_factors}
+        if cf_set & BacktestEngine.FILTERABLE_CONTEXT_FACTORS:
+            return True
+
+        text = f"{hypothesis_name} {thesis or ''}".lower().replace("_", " ").replace("-", " ")
+        schedule_patterns = [
+            r"\bb2b\b", r"\bback.to.back\b", r"\bdays?.rest\b", r"\bshort.rest\b",
+            r"\broad.trip\b", r"\bconsecutive.(?:road|away)\b",
+            r"\b3.?in.?4\b", r"\b4.?in.?5\b", r"\bschedule.(?:compress|density)\b",
+            r"\bsandwich\b", r"\btrap.game\b", r"\bletdown\b",
+            r"\brevenge\b", r"\bformer.team\b",
+            r"\bclinch", r"\beliminated\b", r"\btanking\b", r"\bplayoff.(?:race|bubble)\b",
+            r"\bdesperate\b", r"\bmust.win\b",
+            r"\bextra.rest\b", r"\brest.mismatch\b",
+        ]
+        return any(re.search(p, text) for p in schedule_patterns)
 
     async def _process_game(
         self,

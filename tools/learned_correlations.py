@@ -61,7 +61,7 @@ class LearnedCorrelationStore:
 
     async def initialize(self) -> None:
         self._db = await aiosqlite.connect(self.db_path)
-        await self._db.execute("PRAGMA busy_timeout = 10000")
+        await self._db.execute("PRAGMA busy_timeout = 60000")
         # Load existing estimates into cache
         cursor = await self._db.execute(
             "SELECT sport, market_a, market_b, n, mean_a, mean_b, "

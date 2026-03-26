@@ -93,7 +93,7 @@ class LineMonitor:
     async def initialize(self) -> None:
         """Create tables for odds snapshots and alerts."""
         self._db = await aiosqlite.connect(self.db_path)
-        await self._db.execute("PRAGMA busy_timeout = 10000")
+        await self._db.execute("PRAGMA busy_timeout = 60000")
         await self._db.executescript("""
             CREATE TABLE IF NOT EXISTS odds_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

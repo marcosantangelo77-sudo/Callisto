@@ -406,7 +406,7 @@ class FocusAreaManager:
         import aiosqlite
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute("PRAGMA busy_timeout = 10000")
+                await db.execute("PRAGMA busy_timeout = 60000")
                 cursor = await db.execute(
                     "SELECT sport, priority, subtopic, reason FROM research_focus_areas "
                     "WHERE active = 1 ORDER BY priority ASC"
@@ -447,7 +447,7 @@ class FocusAreaManager:
         """Replace all focus areas with new ones. Persists to DB."""
         import aiosqlite
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("PRAGMA busy_timeout = 10000")
+            await db.execute("PRAGMA busy_timeout = 60000")
             # Deactivate all existing
             await db.execute("UPDATE research_focus_areas SET active = 0")
             # Insert new ones
@@ -1290,7 +1290,7 @@ class ResearchLoop:
                     _prune_db = self.db_path
                     _prune_cutoff = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
                     async with aiosqlite.connect(_prune_db) as _pdb:
-                        await _pdb.execute("PRAGMA busy_timeout = 5000")
+                        await _pdb.execute("PRAGMA busy_timeout = 60000")
                         r = await (await _pdb.execute(
                             "DELETE FROM prop_snapshots WHERE snapshot_time < ?",
                             (_prune_cutoff,)
@@ -1634,7 +1634,7 @@ class ResearchLoop:
         db_path = self.backtest_engine.db_path
         try:
             async with aiosqlite.connect(db_path) as db:
-                await db.execute("PRAGMA busy_timeout = 10000")
+                await db.execute("PRAGMA busy_timeout = 60000")
                 # Find events where edge now exceeds threshold but signal=0
                 updated = await db.execute(
                     """UPDATE backtest_events SET signal_generated = 1

@@ -92,7 +92,7 @@ class DeferredWorkQueue:
         if self._initialized:
             return
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("PRAGMA busy_timeout = 10000")
+            await db.execute("PRAGMA busy_timeout = 60000")
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS deferred_work_queue (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,7 +112,7 @@ class DeferredWorkQueue:
         """Add work to the deferred queue. Lower priority number = higher priority."""
         await self._ensure_table()
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("PRAGMA busy_timeout = 10000")
+            await db.execute("PRAGMA busy_timeout = 60000")
             # Cap at 50 pending items — drop lowest priority if full
             row = await (await db.execute(
                 "SELECT COUNT(*) FROM deferred_work_queue WHERE status = 'pending'"
@@ -138,7 +138,7 @@ class DeferredWorkQueue:
         await self._ensure_table()
         items = []
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("PRAGMA busy_timeout = 10000")
+            await db.execute("PRAGMA busy_timeout = 60000")
             rows = await (await db.execute(
                 "SELECT id, work_type, prompt, priority, created_at "
                 "FROM deferred_work_queue "
@@ -166,7 +166,7 @@ class DeferredWorkQueue:
     async def mark_done(self, item_id: int, result: str = "") -> None:
         """Mark a drained item as completed."""
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("PRAGMA busy_timeout = 10000")
+            await db.execute("PRAGMA busy_timeout = 60000")
             await db.execute(
                 "UPDATE deferred_work_queue SET status = 'done', result = ?, "
                 "executed_at = ? WHERE id = ?",
@@ -177,7 +177,7 @@ class DeferredWorkQueue:
     async def mark_failed(self, item_id: int, error: str = "") -> None:
         """Mark a drained item as failed — it goes back to pending for retry."""
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("PRAGMA busy_timeout = 10000")
+            await db.execute("PRAGMA busy_timeout = 60000")
             await db.execute(
                 "UPDATE deferred_work_queue SET status = 'pending', "
                 "result = ? WHERE id = ?",
@@ -189,7 +189,7 @@ class DeferredWorkQueue:
         """Return count of pending items."""
         await self._ensure_table()
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("PRAGMA busy_timeout = 10000")
+            await db.execute("PRAGMA busy_timeout = 60000")
             row = await (await db.execute(
                 "SELECT COUNT(*) FROM deferred_work_queue WHERE status = 'pending'"
             )).fetchone()
@@ -199,7 +199,7 @@ class DeferredWorkQueue:
         """Return queue status."""
         await self._ensure_table()
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("PRAGMA busy_timeout = 10000")
+            await db.execute("PRAGMA busy_timeout = 60000")
             counts = {}
             rows = await (await db.execute(
                 "SELECT status, COUNT(*) FROM deferred_work_queue GROUP BY status"
