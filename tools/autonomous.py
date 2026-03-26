@@ -1171,14 +1171,21 @@ class ResearchLoop:
                     break
 
                 # Phase 2: Generate hypotheses (if due)
-                await self._phase_generate_hypotheses()
+                try:
+                    await asyncio.wait_for(self._phase_generate_hypotheses(), timeout=300)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase generate_hypotheses timed out after 300s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase generate_hypotheses failed (non-fatal): {e}")
 
                 if not self._running:
                     break
 
                 # Phase 3: Collect data (if due — runs every 5 min)
                 try:
-                    await self._phase_collect_data()
+                    await asyncio.wait_for(self._phase_collect_data(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase collect_data timed out after 120s — skipping")
                 except Exception as e:
                     logger.warning(f"Data collection failed (non-fatal): {e}")
 
@@ -1187,7 +1194,9 @@ class ResearchLoop:
 
                 # Phase 4: Embed new data
                 try:
-                    await self._phase_embed_data()
+                    await asyncio.wait_for(self._phase_embed_data(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase embed_data timed out after 120s — skipping")
                 except Exception as e:
                     logger.warning(f"Embedding failed (non-fatal): {e}")
 
@@ -1195,43 +1204,78 @@ class ResearchLoop:
                     break
 
                 # Phase 5: Evaluate and promote/reject
-                await self._phase_evaluate()
+                try:
+                    await asyncio.wait_for(self._phase_evaluate(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase evaluate timed out after 120s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase evaluate failed (non-fatal): {e}")
 
                 if not self._running:
                     break
 
                 # Phase 5b: Claude interprets backtest results (signal vs noise)
-                await self._phase_interpret_backtests()
+                try:
+                    await asyncio.wait_for(self._phase_interpret_backtests(), timeout=300)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase interpret_backtests timed out after 300s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase interpret_backtests failed (non-fatal): {e}")
 
                 if not self._running:
                     break
 
                 # Phase 6: Paper trade active hypotheses
-                await self._phase_paper_trade()
+                try:
+                    await asyncio.wait_for(self._phase_paper_trade(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase paper_trade timed out after 120s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase paper_trade failed (non-fatal): {e}")
 
                 if not self._running:
                     break
 
                 # Phase 6b: Execute live bets on proven hypotheses
-                await self._phase_live_execute()
+                try:
+                    await asyncio.wait_for(self._phase_live_execute(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase live_execute timed out after 120s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase live_execute failed (non-fatal): {e}")
 
                 if not self._running:
                     break
 
                 # Phase 7: Claude deep analysis — use remaining budget
-                await self._phase_claude_deep_work()
+                try:
+                    await asyncio.wait_for(self._phase_claude_deep_work(), timeout=300)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase claude_deep_work timed out after 300s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase claude_deep_work failed (non-fatal): {e}")
 
                 if not self._running:
                     break
 
                 # Phase 8: System self-improvement (every N cycles)
-                await self._phase_system_improvement()
+                try:
+                    await asyncio.wait_for(self._phase_system_improvement(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase system_improvement timed out after 120s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase system_improvement failed (non-fatal): {e}")
 
                 if not self._running:
                     break
 
                 # Phase 9: Pipeline integrity check (every N cycles)
-                await self._phase_integrity_check()
+                try:
+                    await asyncio.wait_for(self._phase_integrity_check(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase integrity_check timed out after 120s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase integrity_check failed (non-fatal): {e}")
 
                 # ── Progress tracking: detect spinning ──
                 await self._check_progress()
