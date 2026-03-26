@@ -791,7 +791,7 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
     os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
     async with aiosqlite.connect(db_path) as db:
         # Set PRAGMAs before schema creation — these persist for the connection
-        await db.execute("PRAGMA busy_timeout = 10000")
+        await db.execute("PRAGMA busy_timeout = 120000")
         await db.execute("PRAGMA journal_mode = WAL")
         await db.commit()  # commit PRAGMA changes before executescript
         await db.executescript(SCHEMA_SQL)
