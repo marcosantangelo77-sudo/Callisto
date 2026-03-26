@@ -196,7 +196,8 @@ class HypothesisManager:
 
     async def initialize(self) -> None:
         self._db = await aiosqlite.connect(self.db_path)
-        await self._db.execute("PRAGMA busy_timeout = 10000")
+        await self._db.execute("PRAGMA journal_mode = WAL")
+        await self._db.execute("PRAGMA busy_timeout = 120000")
         logger.info("Hypothesis manager initialized")
 
     async def close(self) -> None:
@@ -260,18 +261,28 @@ class HypothesisManager:
                 f"gap {model_config.get('temporal_split_gap_days', 7)}d"
             )
 
-        await self._db.execute(
-            "INSERT INTO hypotheses "
-            "(hypothesis_id, name, thesis, sport, market_type, model_config, "
-            "edge_threshold, status, min_sample_size, significance_level, "
-            "created_at, updated_at, notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)",
-            (hid, name, thesis, sport, market_type, json.dumps(model_config),
-             edge_threshold, min_sample_size, significance_level, now, now, notes),
-        )
-        await self._db.commit()
-        logger.info(f"Hypothesis created: {hid} — {name}")
-        return hid
+        for attempt in range(5):
+            try:
+                await self._db.execute(
+                    "INSERT INTO hypotheses "
+                    "(hypothesis_id, name, thesis, sport, market_type, model_config, "
+                    "edge_threshold, status, min_sample_size, significance_level, "
+                    "created_at, updated_at, notes) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)",
+                    (hid, name, thesis, sport, market_type, json.dumps(model_config),
+                     edge_threshold, min_sample_size, significance_level, now, now, notes),
+                )
+                await self._db.commit()
+                logger.info(f"Hypothesis created: {hid} — {name}")
+                return hid
+            except Exception as e:
+                if "locked" in str(e).lower() and attempt < 4:
+                    import asyncio
+                    wait = 2 ** attempt
+                    logger.warning(f"DB locked on hypothesis create (attempt {attempt+1}/5), retrying in {wait}s")
+                    await asyncio.sleep(wait)
+                else:
+                    raise
 
     async def get_hypothesis(self, hypothesis_id: str) -> Optional[dict]:
         cursor = await self._db.execute(

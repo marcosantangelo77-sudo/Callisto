@@ -1582,7 +1582,8 @@ class ResearchLoop:
         self._last_data_collect = now
 
         # Determine how far back to collect
-        lookback_days = 7  # default: rolling 7-day window
+        # First collection: 7-day window. Subsequent: 2-day window (today + yesterday)
+        lookback_days = 7 if self._data_collections == 0 else 2
 
         # One-time bulk backfill when data is thin
         if not self._bulk_backfill_done:
