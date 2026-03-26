@@ -378,6 +378,97 @@ class CLVTracker:
         await self._db.commit()
         logger.info(f"Initial bankroll set: ${balance}")
 
+    async def forecast_clv(
+        self,
+        bet_id: Optional[int] = None,
+        sport: Optional[str] = None,
+    ) -> list[dict]:
+        """Forecast CLV for pending bets using predict_closing_line.
+
+        For each pending bet, estimates the closing line and pre-game CLV.
+        This is useful for paper-trading evaluation: know whether your bet
+        is likely +CLV before the game even starts.
+
+        Returns a list of dicts, one per bet, with the forecasted CLV.
+        """
+        from tools.market_psychology import predict_closing_line
+        from datetime import datetime as _dt
+
+        where = "WHERE result = 'pending'"
+        params: list = []
+        if bet_id is not None:
+            where += " AND id = ?"
+            params.append(bet_id)
+        if sport:
+            where += " AND sport = ?"
+            params.append(sport)
+
+        cursor = await self._db.execute(
+            f"SELECT * FROM bets {where} ORDER BY placed_at DESC LIMIT 50",
+            params,
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        bets = [dict(zip(cols, row)) for row in rows]
+
+        forecasts = []
+        now = datetime.now(timezone.utc)
+
+        for bet in bets:
+            point = bet.get("placement_point")
+            if point is None:
+                # Moneyline bets don't have a point — skip CLV point forecast
+                forecasts.append({
+                    "bet_id": bet["id"],
+                    "sport": bet.get("sport", ""),
+                    "team": bet.get("team", ""),
+                    "market": bet.get("market", ""),
+                    "forecast_skipped": True,
+                    "reason": "No placement point (moneyline) — CLV forecast requires spread/total",
+                })
+                continue
+
+            bet_sport = bet.get("sport", "basketball_nba")
+            bet_market = bet.get("market", "spreads")
+
+            # Estimate hours to game — use placed_at timestamp + typical lead time
+            # In reality the game start time would be in the events table; we
+            # approximate with a default of 4 hours if we can't determine it.
+            hours_to_game = 4.0  # conservative default
+
+            try:
+                prediction = predict_closing_line(
+                    current_line=point,
+                    hours_to_game=hours_to_game,
+                    sport=bet_sport,
+                    market=bet_market,
+                    current_price=bet.get("placement_odds"),
+                )
+
+                forecasts.append({
+                    "bet_id": bet["id"],
+                    "sport": bet_sport,
+                    "team": bet.get("team", ""),
+                    "market": bet_market,
+                    "placement_odds": bet.get("placement_odds"),
+                    "placement_point": point,
+                    "predicted_closing_line": prediction.get("predicted_close"),
+                    "expected_movement": prediction.get("expected_movement"),
+                    "prediction_confidence": prediction.get("prediction_confidence"),
+                    "clv_estimate": prediction.get("clv_estimate"),
+                    "recommendation": prediction.get("recommendation"),
+                    "confidence_interval_68": prediction.get("confidence_interval_68"),
+                })
+            except Exception as e:
+                logger.warning(f"CLV forecast failed for bet #{bet['id']}: {e}")
+                forecasts.append({
+                    "bet_id": bet["id"],
+                    "forecast_skipped": True,
+                    "reason": str(e),
+                })
+
+        return forecasts
+
     async def get_all_bets(
         self,
         result: Optional[str] = None,
