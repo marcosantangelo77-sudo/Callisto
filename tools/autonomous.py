@@ -1851,7 +1851,7 @@ class ResearchLoop:
                     f'{{"hypotheses": [\n'
                     f'  {{"name": "unique_snake_case_name", '
                     f'"thesis": "Clear testable statement", '
-                    f'"sport": "basketball_nba", '
+                    f'"sport": "<sport_key from focus areas or RESEARCH_SPORTS>", '
                     f'"market_type": "spreads|totals|h2h|player_props", '
                     f'"edge_threshold": 0.015}}\n'
                     f'], "pipeline_warning": "optional — flag if data quality makes testing pointless"}}\n\n'
@@ -2064,11 +2064,6 @@ class ResearchLoop:
         except Exception as e:
             logger.warning(f"Data quality pre-check failed: {e}")
 
-        # Sort drafts by focus area priority (focus sports first), then by sport
-        # data availability (NBA/NFL before MLB — more historical data = better backtests)
-        drafts = self.focus_manager.sort_by_focus(drafts, sport_key="sport")
-        drafts.sort(key=lambda h: SPORT_PRIORITY.get(h.get("sport", ""), 99))
-
         # Pre-filter: remove hypotheses that will definitely be skipped
         # (context_coverage < 0.5). Without this, the same 20 untestable
         # hypotheses clog the batch every cycle and nothing testable runs.
@@ -2092,11 +2087,47 @@ class ResearchLoop:
                 continue  # Skip — insufficient context coverage
             testable.append(h)
 
+        # Sport-balanced batching: round-robin across sports instead of
+        # pure priority sort. This prevents NBA from saturating the queue
+        # and starving all other sports (root cause of 0 non-NBA backtests).
+        from collections import defaultdict
+        by_sport = defaultdict(list)
+        for h in testable:
+            sport = h.get("sport", "unknown")
+            by_sport[sport].append(h)
+
+        # Sort sports by focus priority, then by SPORT_PRIORITY
+        focus_sports = self.focus_manager.get_ordered_research_sports()
+        sport_order = []
+        for s in focus_sports:
+            if s in by_sport:
+                sport_order.append(s)
+        for s in sorted(by_sport.keys(), key=lambda x: SPORT_PRIORITY.get(x, 99)):
+            if s not in sport_order:
+                sport_order.append(s)
+
+        # Round-robin: take hypotheses from each sport in turns
+        to_test = []
+        sport_idx = {s: 0 for s in sport_order}
+        while len(to_test) < BACKTEST_BATCH_SIZE:
+            added_any = False
+            for sport in sport_order:
+                if len(to_test) >= BACKTEST_BATCH_SIZE:
+                    break
+                idx = sport_idx[sport]
+                if idx < len(by_sport[sport]):
+                    to_test.append(by_sport[sport][idx])
+                    sport_idx[sport] = idx + 1
+                    added_any = True
+            if not added_any:
+                break
+
         skipped = len(drafts) - len(testable)
-        to_test = testable[:BACKTEST_BATCH_SIZE]
+        sports_in_batch = set(h.get("sport", "?") for h in to_test)
         logger.info(
-            f"Research: backtesting {len(to_test)} hypotheses "
-            f"({skipped} skipped as untestable, {len(testable)} testable)"
+            f"Research: backtesting {len(to_test)} hypotheses across {len(sports_in_batch)} sports "
+            f"({skipped} skipped as untestable, {len(testable)} testable, "
+            f"sports: {sorted(sports_in_batch)})"
         )
 
         for h in to_test:
