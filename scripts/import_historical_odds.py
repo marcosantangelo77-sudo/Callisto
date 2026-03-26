@@ -529,7 +529,9 @@ async def import_sport(
     dry_run: bool = False,
 ) -> dict:
     """Import all historical data for a sport within a date range."""
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=120)
+    conn.execute("PRAGMA busy_timeout = 120000")
+    conn.execute("PRAGMA journal_mode = WAL")
 
     # Ensure regime column exists
     try:
