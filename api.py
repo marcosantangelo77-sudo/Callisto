@@ -1443,6 +1443,11 @@ async def full_system_status():
 @app.get("/tasks")
 async def list_tasks(status: Optional[str] = None, limit: int = 10):
     """List recent tasks from the queue."""
+    # Refresh WAL snapshot to see externally-committed rows
+    try:
+        await queue._db.commit()
+    except Exception:
+        pass
     rows = await queue._db.execute_fetchall(
         """SELECT task_id, query, status, priority, session_id,
                   created_at, started_at, completed_at

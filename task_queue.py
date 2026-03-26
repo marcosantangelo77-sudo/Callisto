@@ -109,6 +109,12 @@ class TaskQueue:
     async def get_next(self) -> Optional[dict]:
         """Atomically claim the next pending task. Returns task dict or None. Retries on DB lock."""
         import asyncio as _asyncio
+        # Commit to release any implicit read transaction — refreshes WAL snapshot
+        # so we can see rows inserted by external processes (e.g. direct DB writes)
+        try:
+            await self._db.commit()
+        except Exception:
+            pass
         for attempt in range(8):
             try:
                 row = await self._db.execute_fetchall(
@@ -190,6 +196,11 @@ class TaskQueue:
 
     async def get_task(self, task_id: int) -> Optional[dict]:
         """Get task by ID."""
+        # Refresh WAL snapshot so we see externally-committed rows
+        try:
+            await self._db.commit()
+        except Exception:
+            pass
         rows = await self._db.execute_fetchall(
             "SELECT * FROM task_queue WHERE task_id = ?", (task_id,)
         )
