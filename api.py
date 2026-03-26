@@ -1984,7 +1984,7 @@ async def research_generate(sport: str = "basketball_nba", max_hypotheses: int =
     return {"generated": len(created), "hypotheses": created}
 
 
-@app.post("/hypothesis/batch-reject")
+@app.post("/research/batch-reject")
 async def batch_reject_hypotheses(request: Request):
     """Batch-reject draft hypotheses matching regex patterns.
 
