@@ -963,8 +963,9 @@ async def promote_hypothesis(hypothesis_id: str):
 
 
 @app.patch("/hypothesis/{hypothesis_id}")
-async def update_hypothesis(hypothesis_id: str, req: dict):
+async def update_hypothesis(hypothesis_id: str, request: Request):
     """Update hypothesis status, threshold, model_config, or notes."""
+    req = await request.json()
     h = await hypothesis_manager.get_hypothesis(hypothesis_id)
     if not h:
         raise HTTPException(status_code=404, detail="Hypothesis not found")
