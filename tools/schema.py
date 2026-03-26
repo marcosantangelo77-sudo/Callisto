@@ -708,6 +708,17 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
             except Exception:
                 pass  # Column already exists
 
+        # Migration: add binary embedding blob column for numpy storage
+        try:
+            await db.execute("ALTER TABLE embeddings ADD COLUMN embedding_blob BLOB")
+            await db.commit()
+            logger.info("Added embedding_blob column to embeddings table")
+        except Exception:
+            pass  # Column already exists
+
+        # Backfill: convert existing JSON embeddings to binary blobs
+        await _backfill_embedding_blobs(db)
+
         # One-time migration: backfill signals table from backtest_events
         await _backfill_signals_from_backtests(db)
 
@@ -715,6 +726,45 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         await _backfill_regimes(db)
 
     logger.info("Schema ensured")
+
+
+async def _backfill_embedding_blobs(db) -> None:
+    """Convert existing JSON-serialized embeddings to numpy binary blobs.
+
+    Idempotent — only processes rows where embedding_blob IS NULL.
+    Runs in batches of 500 to avoid holding the DB lock too long.
+    """
+    import json
+    import numpy as np
+
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM embeddings WHERE embedding_blob IS NULL"
+    )
+    pending = (await cursor.fetchone())[0]
+    if pending == 0:
+        return
+
+    logger.info(f"Backfilling {pending} embedding blobs from JSON...")
+    total = 0
+    while True:
+        cursor = await db.execute(
+            "SELECT id, embedding_json FROM embeddings "
+            "WHERE embedding_blob IS NULL LIMIT 500"
+        )
+        rows = await cursor.fetchall()
+        if not rows:
+            break
+        for row_id, emb_json in rows:
+            blob = np.array(json.loads(emb_json), dtype=np.float32).tobytes()
+            await db.execute(
+                "UPDATE embeddings SET embedding_blob = ? WHERE id = ?",
+                (blob, row_id),
+            )
+        await db.commit()
+        total += len(rows)
+        logger.info(f"  Backfilled {total}/{pending} embedding blobs")
+
+    logger.info(f"Embedding blob backfill complete: {total} rows converted")
 
 
 async def _backfill_regimes(db) -> None:

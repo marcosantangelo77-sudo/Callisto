@@ -8,8 +8,8 @@ Embeddings let Callisto:
   3. Cluster contexts to discover recurring mispricing patterns
   4. Generate hypotheses from statistical anomalies in clusters
 
-Vector storage: SQLite with JSON-serialized float arrays. Pure Python cosine
-similarity. No numpy/faiss dependency — keeps the stack minimal.
+Vector storage: SQLite with numpy binary blobs (3KB/vector) + JSON fallback.
+Similarity search: numpy vectorized batch cosine (50-100x faster than pure Python).
 
 Model: nomic-embed-text (137M params, 768-dim) via Ollama REST API.
 Throughput: ~200 embeddings/sec on CPU, batched.
@@ -24,6 +24,7 @@ from typing import Optional
 
 import aiosqlite
 import httpx
+import numpy as np
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -58,13 +59,30 @@ def _content_hash(text: str) -> str:
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Cosine similarity between two vectors. Pure Python."""
+    """Cosine similarity between two vectors. Pure Python fallback for single pairs."""
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
     if norm_a < 1e-9 or norm_b < 1e-9:
         return 0.0
     return dot / (norm_a * norm_b)
+
+
+def _to_blob(embedding: list[float]) -> bytes:
+    """Serialize embedding list to compact binary blob (768 * 4 = 3072 bytes)."""
+    return np.array(embedding, dtype=np.float32).tobytes()
+
+
+def _from_blob(blob: bytes) -> np.ndarray:
+    """Deserialize binary blob back to numpy array."""
+    return np.frombuffer(blob, dtype=np.float32).copy()
+
+
+def _deserialize_embedding(row_blob, row_json) -> np.ndarray:
+    """Prefer binary blob, fall back to JSON for pre-migration rows."""
+    if row_blob is not None:
+        return _from_blob(row_blob)
+    return np.array(json.loads(row_json), dtype=np.float32)
 
 
 async def embed_text(text: str) -> list[float]:
@@ -125,13 +143,14 @@ class VectorStore:
         content_hash = _content_hash(text)
         cursor = await self._db.execute(
             "INSERT OR IGNORE INTO embeddings "
-            "(collection, content_hash, content_text, embedding_json, metadata_json) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "(collection, content_hash, content_text, embedding_json, embedding_blob, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 collection,
                 content_hash,
                 text,
                 json.dumps(embedding),
+                _to_blob(embedding),
                 json.dumps(metadata) if metadata else None,
             ),
         )
@@ -149,13 +168,14 @@ class VectorStore:
             content_hash = _content_hash(text)
             cursor = await self._db.execute(
                 "INSERT OR IGNORE INTO embeddings "
-                "(collection, content_hash, content_text, embedding_json, metadata_json) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "(collection, content_hash, content_text, embedding_json, embedding_blob, metadata_json) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     collection,
                     content_hash,
                     text,
                     json.dumps(embedding),
+                    _to_blob(embedding),
                     json.dumps(metadata) if metadata else None,
                 ),
             )
@@ -174,30 +194,60 @@ class VectorStore:
         """
         Find the top_k most similar items in a collection.
 
-        Loads all embeddings and computes cosine similarity in Python.
-        For collections < 100K items this is fast enough (~50ms for 10K).
+        Uses numpy vectorized cosine similarity for batch computation.
+        Loads all embeddings once, computes all similarities in a single matrix op.
         """
         cursor = await self._db.execute(
-            "SELECT id, content_text, embedding_json, metadata_json "
+            "SELECT id, content_text, embedding_blob, embedding_json, metadata_json "
             "FROM embeddings WHERE collection = ?",
             (collection,),
         )
         rows = await cursor.fetchall()
+        if not rows:
+            return []
 
-        results = []
-        for row_id, text, emb_json, meta_json in rows:
-            emb = json.loads(emb_json)
-            sim = cosine_similarity(query_embedding, emb)
-            if sim >= min_similarity:
-                results.append({
-                    "id": row_id,
-                    "text": text,
-                    "similarity": round(sim, 6),
-                    "metadata": json.loads(meta_json) if meta_json else None,
-                })
+        # Deserialize all embeddings into a matrix
+        ids = []
+        texts = []
+        meta_jsons = []
+        emb_list = []
+        for row_id, text, emb_blob, emb_json, meta_json in rows:
+            ids.append(row_id)
+            texts.append(text)
+            meta_jsons.append(meta_json)
+            emb_list.append(_deserialize_embedding(emb_blob, emb_json))
 
-        results.sort(key=lambda x: x["similarity"], reverse=True)
-        return results[:top_k]
+        # Vectorized batch cosine similarity
+        matrix = np.vstack(emb_list)  # (N, 768)
+        query_vec = np.array(query_embedding, dtype=np.float32)  # (768,)
+        norms = np.linalg.norm(matrix, axis=1)
+        query_norm = np.linalg.norm(query_vec)
+        # Avoid division by zero
+        denom = norms * query_norm
+        denom[denom < 1e-9] = 1e-9
+        sims = (matrix @ query_vec) / denom  # (N,)
+
+        # Filter and sort
+        mask = sims >= min_similarity
+        valid_indices = np.where(mask)[0]
+        if len(valid_indices) == 0:
+            return []
+
+        valid_sims = sims[valid_indices]
+        top_count = min(top_k, len(valid_indices))
+        top_local = np.argpartition(valid_sims, -top_count)[-top_count:]
+        top_local = top_local[np.argsort(valid_sims[top_local])[::-1]]
+        top_indices = valid_indices[top_local]
+
+        return [
+            {
+                "id": ids[i],
+                "text": texts[i],
+                "similarity": round(float(sims[i]), 6),
+                "metadata": json.loads(meta_jsons[i]) if meta_jsons[i] else None,
+            }
+            for i in top_indices
+        ]
 
     async def search_text(
         self,
@@ -356,6 +406,9 @@ class VectorStore:
         Single-linkage clustering by cosine similarity.
         Groups items where similarity >= threshold.
 
+        Uses precomputed similarity matrix for O(N^2) pairwise computation
+        instead of per-pair Python loops.
+
         Args:
             collection: embedding collection to cluster
             threshold: minimum cosine similarity to join a cluster
@@ -366,69 +419,69 @@ class VectorStore:
         """
         if data_period:
             cursor = await self._db.execute(
-                "SELECT id, content_text, embedding_json, metadata_json "
+                "SELECT id, content_text, embedding_blob, embedding_json, metadata_json "
                 "FROM embeddings WHERE collection = ? "
                 "AND json_extract(metadata_json, '$.data_period') = ?",
                 (collection, data_period),
             )
         else:
             cursor = await self._db.execute(
-                "SELECT id, content_text, embedding_json, metadata_json "
+                "SELECT id, content_text, embedding_blob, embedding_json, metadata_json "
                 "FROM embeddings WHERE collection = ?",
                 (collection,),
             )
         rows = await cursor.fetchall()
 
+        if not rows:
+            return []
+
+        # Build items and embedding matrix
         items = []
-        for row_id, text, emb_json, meta_json in rows:
+        emb_list = []
+        for row_id, text, emb_blob, emb_json, meta_json in rows:
             items.append({
                 "id": row_id,
                 "text": text,
-                "embedding": json.loads(emb_json),
                 "metadata": json.loads(meta_json) if meta_json else None,
             })
+            emb_list.append(_deserialize_embedding(emb_blob, emb_json))
 
-        if not items:
-            return []
+        # Precompute full cosine similarity matrix
+        matrix = np.vstack(emb_list)  # (N, 768)
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        norms[norms < 1e-9] = 1e-9
+        normalized = matrix / norms
+        sim_matrix = normalized @ normalized.T  # (N, N) pairwise cosine
 
-        # Single-linkage clustering
-        assigned = [False] * len(items)
+        # Single-linkage clustering using precomputed matrix
+        n = len(items)
+        assigned = [False] * n
         clusters = []
 
-        for i in range(len(items)):
+        for i in range(n):
             if assigned[i]:
                 continue
-            cluster = [items[i]]
+            cluster_indices = [i]
             assigned[i] = True
 
-            for j in range(i + 1, len(items)):
+            for j in range(i + 1, n):
                 if assigned[j]:
                     continue
-                # Check similarity to any item in current cluster
-                for member in cluster:
-                    sim = cosine_similarity(
-                        member["embedding"], items[j]["embedding"]
-                    )
-                    if sim >= threshold:
-                        cluster.append(items[j])
+                # Check if j is similar to ANY member of the cluster
+                for member_idx in cluster_indices:
+                    if sim_matrix[member_idx, j] >= threshold:
+                        cluster_indices.append(j)
                         assigned[j] = True
                         break
 
-            clusters.append(cluster)
+            clusters.append(cluster_indices)
 
-        # Sort by cluster size descending, strip embeddings from output
+        # Sort by cluster size descending, return items without embeddings
         clusters.sort(key=len, reverse=True)
         return [
-            [
-                {
-                    "id": item["id"],
-                    "text": item["text"],
-                    "metadata": item["metadata"],
-                }
-                for item in cluster
-            ]
-            for cluster in clusters
-            if len(cluster) >= 2  # Only return clusters with 2+ items
+            [items[i] for i in cluster_indices]
+            for cluster_indices in clusters
+            if len(cluster_indices) >= 2
         ]
 
 
