@@ -75,6 +75,14 @@ def score_edge(
     hours_to_game: Optional[float] = None,
     market_hhi: Optional[float] = None,
     market_entropy: Optional[float] = None,
+    regime_data: Optional[dict] = None,
+    kl_divergence: Optional[float] = None,
+    js_divergence: Optional[float] = None,
+    number_shading_detected: bool = False,
+    shading_value_side: Optional[str] = None,
+    trap_line_confidence: Optional[float] = None,
+    trap_actionable_side: Optional[str] = None,
+    attention_opportunity: Optional[float] = None,
 ) -> EdgeConfidence:
     """
     Score a detected edge using AGP confidence methodology.
@@ -88,6 +96,25 @@ def score_edge(
         cross_method_confirmed: Edge found by multiple methods (devig + cross-book + simulation)
         is_live: Whether this is a live/in-play market
         hours_to_game: Hours until game starts (None if unknown)
+        regime_data: Optional dict from full_regime_analysis() for the team.
+            Used to adjust confidence based on regime changes, recency bias,
+            and mean reversion signals.
+        kl_divergence: KL divergence between opening and current lines for this game.
+            High KL = active price discovery, edges in this game are higher quality.
+            Low KL = stale/thin market, edge may be noise from illiquidity.
+        js_divergence: Jensen-Shannon divergence (symmetric KL). Used as secondary
+            signal when KL is available.
+        number_shading_detected: True if the line sits on a public-magnet number.
+            Book is exploiting public clustering; the opposite side has value.
+        shading_value_side: 'opposite' or 'this_side' — which side benefits
+            from the shading.  Boosts confidence when edge aligns with value side.
+        trap_line_confidence: 0-1 confidence that the line is a trap (from
+            detect_trap_line).  High confidence trap = reduce trust in the
+            "obvious" public side, boost contrarian.
+        trap_actionable_side: 'opposite_public' if contrarian side has value.
+        attention_opportunity: 0-1 score from attention_arbitrage.  Higher means
+            the market is thin (marquee events drawing eyeballs elsewhere),
+            so edges may persist longer.
 
     Returns:
         EdgeConfidence with AGP-compliant score, tier, and reasoning.
@@ -217,8 +244,150 @@ def score_edge(
             reasons.append(f"Books in strong agreement (entropy={market_entropy:.2f}) — edge may be stale")
     factors["market_entropy"] = round(entropy_adj, 3)
 
+    # Step 11: Regime analysis adjustments
+    regime_adj = 0.0
+    if regime_data and isinstance(regime_data, dict):
+        # 11a: Regime change detected — edge aligns with unpriced shift
+        power_rating = regime_data.get("power_rating", {})
+        regime_label = power_rating.get("regime", "stable") if isinstance(power_rating, dict) else "stable"
+        if regime_label in ("improving", "declining"):
+            regime_adj += 0.05
+            reasons.append(f"Regime change detected ({regime_label}) — public may not have priced shift")
+
+        # 11b: Recency bias — public overreacting to recent streak
+        recency = regime_data.get("recency_bias")
+        if recency and isinstance(recency, dict):
+            bias_mag = recency.get("bias_magnitude", 0)
+            bias_dir = recency.get("bias_direction", "neutral")
+            if bias_mag > 0.4:
+                regime_adj += 0.05
+                reasons.append(
+                    f"High recency bias ({bias_dir}, magnitude={bias_mag:.2f}) — "
+                    f"public likely overweighting recent streak"
+                )
+            elif bias_mag > 0.2:
+                regime_adj += 0.02
+                reasons.append(f"Moderate recency bias ({bias_dir}, magnitude={bias_mag:.2f})")
+
+        # 11c: Mean reversion signal — penalize edges that bet WITH a trend expected to revert
+        mean_rev = regime_data.get("mean_reversion")
+        if mean_rev and isinstance(mean_rev, dict):
+            if mean_rev.get("reversion_expected") and mean_rev.get("confidence", 0) > 0.6:
+                # If the team is performing far above/below mean and reversion is expected,
+                # edges betting on continuation of the trend are less reliable
+                z = mean_rev.get("current_zscore", 0)
+                if abs(z) > 1.5:
+                    regime_adj -= 0.03
+                    direction = "downward" if z > 0 else "upward"
+                    reasons.append(
+                        f"Mean reversion expected ({direction}, z={z:.1f}) — "
+                        f"trend continuation edges are riskier"
+                    )
+
+        # Clamp regime adjustment to reasonable range
+        regime_adj = max(-0.08, min(0.10, regime_adj))
+    factors["regime_analysis"] = round(regime_adj, 3)
+
+    # Step 12: KL divergence — market information flow
+    # High KL = significant price discovery between snapshots, meaning the market
+    # is actively processing information. Edges surviving active price discovery
+    # are higher quality signals. Low KL = stale/unchanged lines, could indicate
+    # thin market with no information flow (edge may be illiquidity artifact).
+    kl_adj = 0.0
+    if kl_divergence is not None:
+        if kl_divergence > 0.05:
+            # Strong price discovery — edges here are battle-tested
+            kl_adj = 0.06
+            reasons.append(
+                f"High KL divergence ({kl_divergence:.4f}) — active price discovery, "
+                f"edge survived informed market"
+            )
+        elif kl_divergence > 0.01:
+            # Moderate price discovery — market is moving, edge is plausible
+            kl_adj = 0.03
+            reasons.append(
+                f"Moderate KL divergence ({kl_divergence:.4f}) — market actively processing info"
+            )
+        elif kl_divergence < 0.001:
+            # Near-zero KL — lines haven't moved, could be thin/stale market
+            kl_adj = -0.04
+            reasons.append(
+                f"Very low KL divergence ({kl_divergence:.4f}) — stale lines, "
+                f"edge may be illiquidity artifact"
+            )
+        # JS divergence provides a secondary symmetric signal
+        if js_divergence is not None and js_divergence > 0.03:
+            kl_adj += 0.02
+            reasons.append(
+                f"High JS divergence ({js_divergence:.4f}) — symmetric price movement confirms info flow"
+            )
+    factors["kl_divergence"] = round(kl_adj, 3)
+
+    # Step 13: Market psychology — number shading
+    # When a line sits on a public-magnet number (NFL -3, -7; NBA round totals),
+    # books shade juice toward the popular side. The opposite side carries value.
+    # If our edge aligns with the value side, boost confidence; if it's on the
+    # public side, reduce it.
+    shading_adj = 0.0
+    if number_shading_detected:
+        if shading_value_side == "opposite":
+            shading_adj = 0.06
+            reasons.append(
+                "Number shading detected — line sits on public magnet, "
+                "opposite side (our edge) has value"
+            )
+        elif shading_value_side == "this_side":
+            shading_adj = 0.03
+            reasons.append(
+                "Line near key number but off the magnet — less public "
+                "clustering, slight value on this side"
+            )
+        else:
+            # Shading detected but edge is on the public side
+            shading_adj = -0.04
+            reasons.append(
+                "Number shading detected — edge is on the shaded (public) "
+                "side, book may be exploiting public money"
+            )
+    factors["number_shading"] = round(shading_adj, 3)
+
+    # Step 14: Market psychology — trap line detection
+    # A trap line hasn't moved despite heavy one-sided public action.
+    # The book (and sharps) are comfortable on the opposite side.
+    # Boost contrarian edges, penalize edges aligned with the public trap side.
+    trap_adj = 0.0
+    if trap_line_confidence is not None and trap_line_confidence > 0.30:
+        if trap_actionable_side == "opposite_public":
+            # Our edge is contrarian (aligned with book/sharps against public)
+            trap_adj = min(0.08, trap_line_confidence * 0.10)
+            reasons.append(
+                f"Trap line detected (confidence {trap_line_confidence:.0%}) — "
+                f"edge is contrarian, aligned with book/sharps"
+            )
+        else:
+            # Our edge is on the public side of a trap — reduce confidence
+            trap_adj = -min(0.06, trap_line_confidence * 0.08)
+            reasons.append(
+                f"Trap line detected (confidence {trap_line_confidence:.0%}) — "
+                f"edge is on the public side, book is comfortable against us"
+            )
+    factors["trap_line"] = round(trap_adj, 3)
+
+    # Step 15: Market psychology — attention arbitrage
+    # When marquee events dominate attention, thin markets are less monitored.
+    # Edges in those thin markets may persist longer, giving more time to act.
+    attention_adj = 0.0
+    if attention_opportunity is not None and attention_opportunity > 0.3:
+        attention_adj = min(0.06, attention_opportunity * 0.08)
+        reasons.append(
+            f"Attention arbitrage ({attention_opportunity:.2f}) — thin market "
+            f"while marquee events dominate, edge may persist longer"
+        )
+    factors["attention_arbitrage"] = round(attention_adj, 3)
+
     # Compute raw score
-    raw = base + book_adj + sharp_adj + market_adj + method_adj + live_adj + time_adj + hhi_adj + entropy_adj
+    psych_adj = shading_adj + trap_adj + attention_adj
+    raw = base + book_adj + sharp_adj + market_adj + method_adj + live_adj + time_adj + hhi_adj + entropy_adj + regime_adj + kl_adj + psych_adj
     # Clamp to [0, ceiling]
     score = round(max(0.0, min(raw, ceiling)), 3)
     factors["raw_total"] = round(raw, 3)

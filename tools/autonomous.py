@@ -57,6 +57,27 @@ ANALYSIS_COOLDOWN = 120  # 2 min between analysis runs
 # Don't re-analyze the same edge within this window
 EDGE_DEDUP_WINDOW = 1800  # 30 minutes
 
+# Module-level regime cache — shared between AutonomousLoop and ResearchLoop.
+# ResearchLoop populates it; AutonomousLoop reads it for edge enrichment.
+_regime_cache: dict[str, dict] = {}
+
+
+def get_regime_for_team(sport: str, team_name: str) -> Optional[dict]:
+    """Module-level lookup for cached regime analysis.
+
+    Tries exact match first, then partial match for team name flexibility.
+    """
+    cache_key = f"{sport}:{team_name}"
+    result = _regime_cache.get(cache_key)
+    if result:
+        return result
+    # Partial match — team names vary across data sources
+    team_lower = team_name.lower()
+    for key, val in _regime_cache.items():
+        if key.startswith(sport + ":") and team_lower in key.lower():
+            return val
+    return None
+
 
 class AutonomousLoop:
     """Proactive reasoning engine — turns raw edges into analyzed recommendations."""
@@ -274,6 +295,9 @@ class AutonomousLoop:
                         kl_kw["kl_divergence"] = kl_data.get("kl_divergence")
                         kl_kw["js_divergence"] = kl_data.get("js_divergence")
 
+                    # Look up regime analysis for the team
+                    team_regime = get_regime_for_team(sport, team_name)
+
                     # Score confidence (psychology adjustments applied downstream)
                     conf = score_edge(
                         edge_pct=round(best_soft * 100, 2),
@@ -281,6 +305,7 @@ class AutonomousLoop:
                         book_names=[edge.get("best_line", {}).get("bookmaker", "")],
                         market=mkt_name,
                         has_sharp_book=edge.get("sharp_consensus") is not None,
+                        regime_data=team_regime,
                         **kl_kw,
                     )
 
@@ -734,9 +759,8 @@ class ResearchLoop:
         self._last_progress_check = 0
         self._consecutive_no_progress = 0
 
-        # Regime analysis cache — {team_name: full_regime_analysis result}
+        # Regime analysis — uses module-level _regime_cache (shared with AutonomousLoop)
         # Refreshed every REGIME_ANALYSIS_INTERVAL cycles
-        self._regime_cache: dict[str, dict] = {}
         self._last_regime_analysis = 0
 
         # Deferred work queue + downtime tracker (never-idle loop)
@@ -2098,6 +2122,35 @@ class ResearchLoop:
                 # Build focus area context for the prompt
                 focus_context = self.focus_manager.get_focus_context_for_prompt()
 
+                # Build regime analysis context — highlight teams with actionable signals
+                regime_context = ""
+                if _regime_cache:
+                    regime_lines = []
+                    for cache_key, regime in _regime_cache.items():
+                        if regime.get("has_edge_signal"):
+                            signals = regime.get("actionable_signals", [])
+                            team = regime.get("team", cache_key)
+                            pr = regime.get("power_rating", {})
+                            regime_label = pr.get("regime", "stable") if isinstance(pr, dict) else "stable"
+                            recency = regime.get("recency_bias", {})
+                            bias_dir = recency.get("bias_direction", "neutral") if isinstance(recency, dict) else "neutral"
+                            bias_mag = recency.get("bias_magnitude", 0) if isinstance(recency, dict) else 0
+                            mr = regime.get("mean_reversion", {})
+                            mr_expected = mr.get("reversion_expected", False) if isinstance(mr, dict) else False
+                            mr_z = mr.get("current_zscore", 0) if isinstance(mr, dict) else 0
+                            regime_lines.append(
+                                f"  {team}: regime={regime_label}, "
+                                f"bias={bias_dir}({bias_mag:.2f}), "
+                                f"mean_reversion={'yes' if mr_expected else 'no'}(z={mr_z:.1f}), "
+                                f"signals={signals}"
+                            )
+                    if regime_lines:
+                        regime_context = (
+                            "REGIME ANALYSIS (teams with actionable signals — "
+                            "prioritize hypotheses around these):\n"
+                            + "\n".join(regime_lines[:20]) + "\n\n"
+                        )
+
                 prompt = (
                     f"CALLISTO HYPOTHESIS GENERATION — Cycle #{self._cycles}\n\n"
                     f"You are a skeptical quantitative researcher. Your default stance: "
@@ -2118,6 +2171,7 @@ class ResearchLoop:
                     f"EXISTING HYPOTHESIS NAMES (avoid duplicates):\n"
                     f"  {json.dumps(existing_names[:50])}\n\n"
                     f"{focus_context}\n\n"
+                    f"{regime_context}"
                     f"EDGE TYPES (edges that persist hours, not speed arb):\n"
                     f"  - rest days, travel, altitude, back-to-backs\n"
                     f"  - referee tendencies, scheme matchups\n"
@@ -2173,19 +2227,40 @@ class ResearchLoop:
                         parsed = json.loads(json_str)
                         for nh in parsed.get("hypotheses", []):
                             try:
+                                h_sport = nh.get("sport", "basketball_nba")
+                                h_config = {
+                                    "source": "claude_primary_gen",
+                                    "cycle": self._cycles,
+                                    "training_period_start": training_period_start,
+                                    "training_period_end": training_period_end,
+                                    "forward_test_start": forward_test_start,
+                                }
+                                # Enrich with regime data if available for this sport
+                                if _regime_cache:
+                                    sport_regimes = {
+                                        k: v for k, v in _regime_cache.items()
+                                        if k.startswith(h_sport + ":")
+                                        and v.get("has_edge_signal")
+                                    }
+                                    if sport_regimes:
+                                        # Attach summary of regime signals for backtester
+                                        regime_summary = {}
+                                        for rk, rv in list(sport_regimes.items())[:5]:
+                                            team = rv.get("team", rk)
+                                            rb = rv.get("recency_bias", {})
+                                            regime_summary[team] = {
+                                                "regime": rv.get("power_rating", {}).get("regime", "stable") if isinstance(rv.get("power_rating"), dict) else "stable",
+                                                "recency_bias_score": rb.get("bias_magnitude", 0) if isinstance(rb, dict) else 0,
+                                                "signals": rv.get("actionable_signals", []),
+                                            }
+                                        h_config["regime_signals"] = regime_summary
                                 await self.hypothesis_manager.create_hypothesis(
                                     name=nh.get("name", f"claude_gen_{self._cycles}"),
                                     thesis=nh.get("thesis", ""),
-                                    sport=nh.get("sport", "basketball_nba"),
+                                    sport=h_sport,
                                     market_type=nh.get("market_type", "spreads"),
                                     edge_threshold=nh.get("edge_threshold", 0.015),
-                                    model_config={
-                                        "source": "claude_primary_gen",
-                                        "cycle": self._cycles,
-                                        "training_period_start": training_period_start,
-                                        "training_period_end": training_period_end,
-                                        "forward_test_start": forward_test_start,
-                                    },
+                                    model_config=h_config,
                                 )
                                 total_created += 1
                             except Exception as e:
@@ -3903,7 +3978,7 @@ class ResearchLoop:
 
         Runs every REGIME_ANALYSIS_INTERVAL cycles (regime changes are slow —
         no point re-analyzing every minute). Results are cached in
-        self._regime_cache and fed into:
+        _regime_cache and fed into:
           1. Edge confidence scoring (via regime_data parameter)
           2. Hypothesis generation (regime context in Claude prompt)
           3. Edge candidate enrichment (regime signals on candidates)
@@ -3995,7 +4070,7 @@ class ResearchLoop:
 
                         # Cache the result keyed by team name
                         cache_key = f"{sport}:{team_name}"
-                        self._regime_cache[cache_key] = result
+                        _regime_cache[cache_key] = result
                         total_analyzed += 1
 
                         if result.get("has_edge_signal"):
@@ -4016,7 +4091,7 @@ class ResearchLoop:
             logger.info(
                 f"Regime analysis complete: {total_analyzed} teams analyzed, "
                 f"{total_signals} with actionable signals, "
-                f"cache size: {len(self._regime_cache)}"
+                f"cache size: {len(_regime_cache)}"
             )
 
         # Record phase success for pipeline integrity tracking
@@ -4037,11 +4112,11 @@ class ResearchLoop:
             Full regime analysis dict or None if not cached.
         """
         cache_key = f"{sport}:{team_name}"
-        result = self._regime_cache.get(cache_key)
+        result = _regime_cache.get(cache_key)
         if result:
             return result
         # Try partial match — team names can vary (e.g., "Boston Celtics" vs "Celtics")
-        for key, val in self._regime_cache.items():
+        for key, val in _regime_cache.items():
             if key.startswith(sport + ":") and team_name.lower() in key.lower():
                 return val
         return None

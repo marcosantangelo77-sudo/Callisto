@@ -34,6 +34,7 @@ from tools.odds_api import (
 from tools.devig import power_devig
 from tools.math_utils import american_to_decimal
 from tools.edge_scanner import full_edge_scan, detect_sharp_money
+from tools.kl_divergence import kl_divergence, jensen_shannon, shannon_entropy, store_kl_metrics
 from tools.parlay_scanner import find_correlated_parlay_edges, analyze_live_overreaction
 from tools import telegram
 from tools.dk_scraper import scrape_dk_odds
@@ -85,6 +86,7 @@ class LineMonitor:
         self._snapshots: dict[str, dict] = {}  # sport -> last snapshot (only latest per sport)
         self._alerts: list[dict] = []  # Recent movement alerts (capped at 100)
         self._latest_edge_reports: dict[str, dict] = {}  # sport -> latest edge scan (only latest per sport)
+        self._kl_cache: dict[str, dict] = {}  # "sport:event_id:market" -> KL metrics
         # Self-healing: track consecutive all-source failures per sport.
         # Alert via Telegram only after 3+ consecutive failures.
         self._consecutive_failures: dict[str, int] = {}  # sport -> count
@@ -717,6 +719,10 @@ class LineMonitor:
                 if len(self._alerts) > 100:
                     self._alerts = self._alerts[-100:]
 
+            # Compute KL divergence between previous and current snapshot
+            # Measures information flow — how much the market "learned" between snapshots.
+            await self._compute_and_store_kl(sport, old_snapshot, new_snapshot)
+
         self._snapshots[sport] = new_snapshot
 
     async def _record_movement(self, sport: str, movement: dict) -> None:
@@ -745,6 +751,98 @@ class LineMonitor:
         # Keep only last 100 alerts in memory
         if len(self._alerts) > 100:
             self._alerts = self._alerts[-100:]
+
+    async def _compute_and_store_kl(self, sport: str, old_snapshot: dict, new_snapshot: dict) -> None:
+        """Compute KL divergence between two consecutive snapshots per game.
+
+        For each game present in both snapshots, extract implied probability
+        distributions from each bookmaker and compute KL(new || old) and
+        Jensen-Shannon divergence. High KL = significant price discovery
+        between snapshots. Stores results in kl_metrics table.
+
+        Also caches latest KL per (sport, event_id) in memory for fast
+        lookups by edge_confidence scoring.
+        """
+        try:
+            old_games = {g.get("id"): g for g in old_snapshot.get("games", []) if g.get("id")}
+            new_games = {g.get("id"): g for g in new_snapshot.get("games", []) if g.get("id")}
+
+            common_ids = set(old_games.keys()) & set(new_games.keys())
+            if not common_ids:
+                return
+
+            metrics_batch = []
+            for event_id in common_ids:
+                old_game = old_games[event_id]
+                new_game = new_games[event_id]
+
+                for market_type in ("h2h", "spreads", "totals"):
+                    old_probs = self._extract_implied_probs(old_game, market_type)
+                    new_probs = self._extract_implied_probs(new_game, market_type)
+
+                    if len(old_probs) < 2 or len(new_probs) < 2:
+                        continue
+
+                    # Normalize to same length (use min of both)
+                    n = min(len(old_probs), len(new_probs))
+                    old_sorted = sorted(old_probs)[:n]
+                    new_sorted = sorted(new_probs)[:n]
+
+                    kl = kl_divergence(new_sorted, old_sorted)
+                    js = jensen_shannon(new_sorted, old_sorted)
+
+                    # Only store if there's meaningful divergence
+                    if kl < 1e-8 and js < 1e-8:
+                        continue
+
+                    metric = {
+                        "event_id": event_id,
+                        "sport": sport,
+                        "market_type": market_type,
+                        "kl_divergence": round(kl, 6),
+                        "js_divergence": round(js, 6),
+                        "n_books": n,
+                        "opening_entropy": round(shannon_entropy(old_sorted), 6),
+                        "closing_entropy": round(shannon_entropy(new_sorted), 6),
+                    }
+                    metrics_batch.append(metric)
+
+                    # Cache in memory for edge_confidence lookups
+                    cache_key = f"{sport}:{event_id}:{market_type}"
+                    self._kl_cache[cache_key] = metric
+
+            if metrics_batch:
+                stored = await store_kl_metrics(self.db_path, metrics_batch)
+                logger.info(f"KL metrics {sport}: {stored} game-markets computed (max KL={max(m['kl_divergence'] for m in metrics_batch):.4f})")
+
+        except Exception as e:
+            logger.warning(f"KL divergence computation failed for {sport}: {e}")
+
+    @staticmethod
+    def _extract_implied_probs(game: dict, market_type: str) -> list[float]:
+        """Extract implied probabilities for the first outcome across all bookmakers."""
+        probs = []
+        for bm in game.get("bookmakers", []):
+            for mkt in bm.get("markets", []):
+                if mkt.get("key") != market_type:
+                    continue
+                outcomes = mkt.get("outcomes", [])
+                if not outcomes:
+                    continue
+                price = outcomes[0].get("price", 0)
+                if price == 0:
+                    continue
+                if price > 0:
+                    prob = 100.0 / (price + 100.0)
+                else:
+                    prob = abs(price) / (abs(price) + 100.0)
+                probs.append(prob)
+        return probs
+
+    def get_kl_for_game(self, sport: str, event_id: str, market_type: str = "h2h") -> Optional[dict]:
+        """Look up cached KL metrics for a game. Used by edge_confidence scoring."""
+        cache_key = f"{sport}:{event_id}:{market_type}"
+        return self._kl_cache.get(cache_key)
 
     async def _evaluate_movement(self, sport: str, movement: dict, snapshot: dict) -> None:
         """Evaluate whether a line movement creates a +EV opportunity.
