@@ -1219,6 +1219,9 @@ RESEARCH_SPORTS = [
     "golf_pga",
 ]
 
+# Minimum game contexts required before a sport is eligible for hypothesis generation
+MIN_GAMES_FOR_HYPOTHESIS = 100
+
 
 
 class ResearchLoop:
@@ -2462,6 +2465,52 @@ class ResearchLoop:
                 logger.warning(f"Could not check collection stats for backfill: {e}")
             self._bulk_backfill_done = True
 
+            # Also trigger historical odds backfill from odds-api.io Pro
+            try:
+                from tools.odds_api_io import get_usage_status as _io_usage
+                usage = _io_usage()
+                remaining = usage.get("remaining", 0)
+                if remaining > 1000:
+                    logger.info(
+                        f"Research: triggering historical odds backfill "
+                        f"(odds-api.io budget: {remaining} remaining)"
+                    )
+                    # Use the HistoricalOddsFetcher to backfill all core sports
+                    from api import historical_fetcher as _hf
+                    if _hf:
+                        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                        thirty_ago = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+                        backfill_sports = [
+                            "basketball_nba", "icehockey_nhl",
+                            "americanfootball_nfl", "baseball_mlb",
+                            "basketball_ncaab",
+                        ]
+                        for bs in backfill_sports:
+                            if not self._running:
+                                break
+                            try:
+                                result = await _hf.bulk_fetch_date_range(
+                                    sport=bs,
+                                    start_date=thirty_ago,
+                                    end_date=today_str,
+                                )
+                                fetched = result.get("dates_fetched", 0)
+                                cached = result.get("dates_cached_already", 0)
+                                if fetched > 0:
+                                    logger.info(
+                                        f"Historical backfill {bs}: "
+                                        f"{fetched} new dates, {cached} cached"
+                                    )
+                            except Exception as e:
+                                logger.debug(f"Historical backfill {bs}: {e}")
+                else:
+                    logger.info(
+                        f"Research: skipping historical backfill — "
+                        f"odds-api.io budget low ({remaining})"
+                    )
+            except Exception as e:
+                logger.debug(f"Historical odds backfill: {e}")
+
         logger.info(f"Research: collecting post-game data (last {lookback_days} days)")
 
         today = datetime.now(timezone.utc)
@@ -2542,6 +2591,40 @@ class ResearchLoop:
                         logger.debug(f"Value bet storage: {e}")
         except Exception as e:
             logger.warning(f"Value bets collection failed: {e}")
+
+        # Collect pre-calculated arbitrage opportunities from Odds-API.io Pro
+        try:
+            from tools.odds_api_io import get_arbitrage_bets
+            arb = await get_arbitrage_bets()
+            if arb.get("count", 0) > 0:
+                logger.info(
+                    f"Research: {arb['count']} arbitrage opportunities found "
+                    f"(guaranteed profit regardless of outcome)"
+                )
+                # Store for analysis — arbs indicate book disagreement
+                try:
+                    db = self.data_collector._db
+                    if db:
+                        for bet in arb.get("bets", []):
+                            await db.execute(
+                                "INSERT OR REPLACE INTO ev_opportunities "
+                                "(event_id, book, market, side, ev_pct, "
+                                "source, updated_at) "
+                                "VALUES (?, ?, ?, ?, ?, 'arbitrage', ?)",
+                                (
+                                    bet.get("event_id", ""),
+                                    bet.get("bookmakers", "multi"),
+                                    bet.get("market", ""),
+                                    bet.get("side", "arb"),
+                                    bet.get("profit_pct", 0),
+                                    bet.get("updated_at", ""),
+                                ),
+                            )
+                        await db.commit()
+                except Exception as e:
+                    logger.debug(f"Arbitrage storage: {e}")
+        except Exception as e:
+            logger.debug(f"Arbitrage collection: {e}")
 
     async def _phase_embed_data(self) -> None:
         """Embed new game contexts into the vector store."""
@@ -2775,6 +2858,33 @@ class ResearchLoop:
                         logger.warning(f"Failed to query historical_odds_cache date ranges: {e}")
 
 
+                # ── Filter sports by data availability ──
+                game_counts_by_sport = {}
+                if db:
+                    try:
+                        cursor = await db.execute(
+                            "SELECT sport, COUNT(*) FROM game_contexts GROUP BY sport"
+                        )
+                        for row in await cursor.fetchall():
+                            game_counts_by_sport[row[0]] = row[1]
+                    except Exception:
+                        pass  # Fall back to unfiltered if query fails
+
+                eligible_sports = [
+                    s for s in RESEARCH_SPORTS
+                    if game_counts_by_sport.get(s, 0) >= MIN_GAMES_FOR_HYPOTHESIS
+                ]
+                ineligible_sports = [
+                    f"{s} ({game_counts_by_sport.get(s, 0)} games)"
+                    for s in RESEARCH_SPORTS
+                    if game_counts_by_sport.get(s, 0) < MIN_GAMES_FOR_HYPOTHESIS
+                ]
+                if ineligible_sports:
+                    logger.info(
+                        f"Research: sports below {MIN_GAMES_FOR_HYPOTHESIS}-game minimum "
+                        f"(excluded from hypothesis gen): {ineligible_sports}"
+                    )
+
                 # Build regime analysis context — highlight teams with actionable signals
                 regime_context = ""
                 if _regime_cache:
@@ -2849,14 +2959,16 @@ class ResearchLoop:
                     f"({draft_count} draft, {active_count} active, {rejected_count} rejected)\n"
                     f"  Rejection rate: {rejected_count}/{max(1, rejected_count + active_count)}"
                     f" — if this is >90%, challenge whether the pipeline can test ANY hypothesis\n"
-                    f"  Sports: {', '.join(RESEARCH_SPORTS)}\n"
+                    f"  Eligible sports (>={MIN_GAMES_FOR_HYPOTHESIS} games): {', '.join(eligible_sports)}\n"
+                    f"  Ineligible (insufficient data): {', '.join(ineligible_sports) if ineligible_sports else 'none'}\n"
                     f"  Data ranges: {json.dumps(date_ranges)}\n"
                     f"  Collection stats: {json.dumps(data_stats)}\n"
                     f"  Model: consensus devig (power method) — needs 3+ books to be reliable. "
                     f"If most events show books_used=1, the devig is meaningless.\n\n"
                     f"EXISTING HYPOTHESIS NAMES (avoid duplicates):\n"
                     f"  {json.dumps(existing_names[:50])}\n\n"
-                    f"ALL SPORTS EQUAL: {RESEARCH_SPORTS}\n\n"
+                    f"ELIGIBLE SPORTS ONLY: {eligible_sports}\n"
+                    f"DO NOT generate hypotheses for ineligible sports — they will be auto-rejected.\n\n"
                     f"{regime_context}"
                     f"{correlation_context}"
                     f"EDGE PHILOSOPHY — READ THIS CAREFULLY:\n"
@@ -2939,6 +3051,14 @@ class ResearchLoop:
                         for nh in parsed.get("hypotheses", []):
                             try:
                                 h_sport = nh.get("sport", "basketball_nba")
+                                # Hard gate: reject hypotheses for sports with insufficient data
+                                if eligible_sports and h_sport not in eligible_sports:
+                                    logger.info(
+                                        f"Research: rejected '{nh.get('name')}' — "
+                                        f"sport '{h_sport}' has insufficient data "
+                                        f"({game_counts_by_sport.get(h_sport, 0)} games < {MIN_GAMES_FOR_HYPOTHESIS})"
+                                    )
+                                    continue
                                 h_config = {
                                     "source": "claude_primary_gen",
                                     "cycle": self._cycles,
@@ -3055,8 +3175,29 @@ class ResearchLoop:
                     logger.debug(f"Local fallback hypothesis gen failed: {e}")
 
             # Template fallback always runs when Claude didn't
+            # Re-check data availability for template path
+            _template_eligible = RESEARCH_SPORTS
+            if hasattr(self, 'data_collector') and self.data_collector._db:
+                try:
+                    _gc = {}
+                    cursor = await self.data_collector._db.execute(
+                        "SELECT sport, COUNT(*) FROM game_contexts GROUP BY sport"
+                    )
+                    for row in await cursor.fetchall():
+                        _gc[row[0]] = row[1]
+                    _template_eligible = [
+                        s for s in RESEARCH_SPORTS
+                        if _gc.get(s, 0) >= MIN_GAMES_FOR_HYPOTHESIS
+                    ]
+                    _skipped = [s for s in RESEARCH_SPORTS if s not in _template_eligible]
+                    if _skipped:
+                        logger.info(
+                            f"Research: template gen skipping sports with <{MIN_GAMES_FOR_HYPOTHESIS} games: {_skipped}"
+                        )
+                except Exception:
+                    pass
             logger.info("Research: using template fallback for hypothesis generation")
-            for sport in RESEARCH_SPORTS:
+            for sport in _template_eligible:
                 try:
                     quota = 20
                     created = await self.hypothesis_generator.generate_from_templates(
