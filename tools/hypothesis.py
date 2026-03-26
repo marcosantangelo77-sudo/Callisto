@@ -213,7 +213,7 @@ class HypothesisManager:
         sport: str,
         market_type: str,
         model_config: dict,
-        edge_threshold: float = 0.01,
+        edge_threshold: float = 0.005,
         min_sample_size: int = 50,
         significance_level: float = 0.05,
         notes: str = "",

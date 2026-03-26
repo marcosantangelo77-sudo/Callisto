@@ -1162,6 +1162,7 @@ class BacktestEngine:
             SHARP_BOOKS = {
                 "pinnacle", "lowvig", "lowvig.ag", "circa",
                 "bookmaker.eu", "betonline", "betonline.ag",
+                "betonlineag",
                 "betcris", "betfair_exchange", "sbobet",
             }
 
