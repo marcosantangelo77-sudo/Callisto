@@ -182,14 +182,39 @@ async def get_team_roster(sport: str, team_id: str) -> dict:
 
         data = resp.json()
         players = []
-        for group in data.get("athletes", []):
-            for athlete in group.get("items", []):
+        for entry in data.get("athletes", []):
+            # ESPN uses two formats:
+            # - NHL/MLB: athletes[].items[] (grouped by position)
+            # - NBA/NFL: athletes[] directly (flat list)
+            if "items" in entry:
+                # Grouped format (NHL, MLB)
+                athlete_list = entry["items"]
+            else:
+                # Flat format (NBA, NFL) — entry IS the athlete
+                athlete_list = [entry]
+
+            for athlete in athlete_list:
+                pos = athlete.get("position", {})
+                if isinstance(pos, dict):
+                    pos_abbr = pos.get("abbreviation", "")
+                else:
+                    pos_abbr = str(pos)
+                status = athlete.get("status", {})
+                if isinstance(status, dict):
+                    status_type = status.get("type", "")
+                else:
+                    status_type = str(status)
+                exp = athlete.get("experience", {})
+                if isinstance(exp, dict):
+                    exp_years = exp.get("years", 0)
+                else:
+                    exp_years = exp if isinstance(exp, (int, float)) else 0
                 players.append({
-                    "name": athlete.get("displayName", ""),
-                    "position": athlete.get("position", {}).get("abbreviation", ""),
+                    "name": athlete.get("displayName", athlete.get("fullName", "")),
+                    "position": pos_abbr,
                     "jersey": athlete.get("jersey", ""),
-                    "status": athlete.get("status", {}).get("type", ""),
-                    "experience": athlete.get("experience", {}).get("years", 0),
+                    "status": status_type,
+                    "experience": exp_years,
                 })
 
         return {
