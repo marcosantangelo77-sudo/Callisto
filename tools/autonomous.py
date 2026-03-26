@@ -1113,26 +1113,34 @@ class ResearchLoop:
                 if not self._running:
                     break
 
-                # Phase 1: Collect data (if due)
-                await self._phase_collect_data()
+                # Phase 1: Backtest pending hypotheses (FIRST — highest priority)
+                # Moved before data collection so DB lock contention from
+                # ESPN downloads doesn't starve the backtest pipeline.
+                await self._phase_backtest()
 
                 if not self._running:
                     break
 
-                # Phase 2: Embed new data
-                await self._phase_embed_data()
-
-                if not self._running:
-                    break
-
-                # Phase 3: Generate hypotheses (if due)
+                # Phase 2: Generate hypotheses (if due)
                 await self._phase_generate_hypotheses()
 
                 if not self._running:
                     break
 
-                # Phase 4: Backtest pending hypotheses
-                await self._phase_backtest()
+                # Phase 3: Collect data (if due — runs every 5 min)
+                try:
+                    await self._phase_collect_data()
+                except Exception as e:
+                    logger.warning(f"Data collection failed (non-fatal): {e}")
+
+                if not self._running:
+                    break
+
+                # Phase 4: Embed new data
+                try:
+                    await self._phase_embed_data()
+                except Exception as e:
+                    logger.warning(f"Embedding failed (non-fatal): {e}")
 
                 if not self._running:
                     break
