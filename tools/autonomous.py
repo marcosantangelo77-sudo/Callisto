@@ -3649,7 +3649,8 @@ class ResearchLoop:
         """
         from tools.pipeline_integrity import get_checker, INTEGRITY_CHECK_INTERVAL_CYCLES
 
-        if self._cycles % INTEGRITY_CHECK_INTERVAL_CYCLES != 0:
+        # Always run on cycle 1 (first cycle), then every N cycles
+        if self._cycles > 1 and self._cycles % INTEGRITY_CHECK_INTERVAL_CYCLES != 0:
             return
 
         checker = get_checker()

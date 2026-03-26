@@ -641,7 +641,7 @@ class HypothesisManager:
                 # Check if there are ANY backtest events at all.
                 # This distinguishes "never backtested" from "backtested but no edge found."
                 total_events_row = await (await self._db.execute(
-                    "SELECT COUNT(*) FROM backtest_events WHERE hypothesis_id = ?",
+                    "SELECT COUNT(DISTINCT event_id) FROM backtest_events WHERE hypothesis_id = ?",
                     (hypothesis_id,),
                 )).fetchone()
                 total_events = total_events_row[0] if total_events_row else 0
@@ -692,7 +692,7 @@ class HypothesisManager:
                         retroactive_count = cursor.rowcount
                         # Count how many are now signals
                         sig_cursor = await (await self._db.execute(
-                            "SELECT COUNT(*) FROM backtest_events "
+                            "SELECT COUNT(DISTINCT event_id) FROM backtest_events "
                             "WHERE hypothesis_id = ? AND signal_generated = 1",
                             (hypothesis_id,),
                         )).fetchone()
@@ -891,7 +891,13 @@ class HypothesisManager:
     # ── DATA ACCESSORS ──
 
     async def _get_backtest_signals(self, hypothesis_id: str) -> list[dict]:
-        """Get all backtest events that generated signals."""
+        """Get backtest signal events, deduplicated by unique event.
+
+        Each event_id can appear multiple times (once per book).  For
+        evaluation we keep only the best-edge row per event so sample
+        size reflects independent betting opportunities, not book count.
+        (e.g. 49 unique events = N=49, not N=150 from 49×3 books.)
+        """
         cursor = await self._db.execute(
             "SELECT * FROM backtest_events "
             "WHERE hypothesis_id = ? AND signal_generated = 1 "
@@ -900,13 +906,23 @@ class HypothesisManager:
         )
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-        return [dict(zip(cols, row)) for row in rows]
+        all_events = [dict(zip(cols, row)) for row in rows]
+
+        # Deduplicate: keep best-edge row per unique event
+        best_by_event: dict[str, dict] = {}
+        for event in all_events:
+            eid = event["event_id"]
+            if eid not in best_by_event or (event.get("edge") or 0) > (best_by_event[eid].get("edge") or 0):
+                best_by_event[eid] = event
+
+        return sorted(best_by_event.values(), key=lambda e: e.get("game_date", ""))
 
     async def _get_backtest_resolved(self, hypothesis_id: str) -> list[dict]:
-        """Get all resolved backtest events (regardless of signal_generated).
+        """Get resolved backtest events, deduplicated by unique event.
 
         Fallback for evaluate_significance when 0 signal events exist —
         lets us determine if the thesis has any merit before auto-rejecting.
+        Keeps best-edge row per event_id for same reason as _get_backtest_signals.
         """
         cursor = await self._db.execute(
             "SELECT * FROM backtest_events "
@@ -916,7 +932,15 @@ class HypothesisManager:
         )
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-        return [dict(zip(cols, row)) for row in rows]
+        all_events = [dict(zip(cols, row)) for row in rows]
+
+        best_by_event: dict[str, dict] = {}
+        for event in all_events:
+            eid = event["event_id"]
+            if eid not in best_by_event or (event.get("edge") or 0) > (best_by_event[eid].get("edge") or 0):
+                best_by_event[eid] = event
+
+        return sorted(best_by_event.values(), key=lambda e: e.get("game_date", ""))
 
     async def _diagnose_edge_threshold(self, hypothesis_id: str) -> dict:
         """Check if a hypothesis's edge_threshold is suppressing valid signals.
