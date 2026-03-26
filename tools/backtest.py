@@ -370,10 +370,19 @@ class BacktestEngine:
         # ── DUPLICATE BACKTEST DETECTION ──
         # Multiple hypotheses with different names but same sport/market/filters
         # produce identical event sets. Detect and skip duplicates to save cycles.
+        # IMPORTANT: include context_factors AND context-filter flag in fingerprint
+        # so hypotheses with different game-level conditions (b2b, road trip, rest,
+        # etc.) produce different fingerprints even when line-level filters are
+        # identical and context_factors is empty.
+        context_factors_sorted = sorted(config.get("context_factors", []))
+        uses_context = self._needs_context_filter(h_name, thesis, config)
         fp_parts = json.dumps(
             {"sport": sport, "market": market_type, "start": start_date,
              "end": end_date, "filters": filters, "target": target_book,
-             "threshold": edge_threshold, "devig": devig_method, "min_books": min_books},
+             "threshold": edge_threshold, "devig": devig_method, "min_books": min_books,
+             "context_factors": context_factors_sorted,
+             "uses_context": uses_context,
+             "name": h_name},
             sort_keys=True,
         )
         fingerprint = hashlib.md5(fp_parts.encode()).hexdigest()[:16]
