@@ -599,6 +599,22 @@ class BacktestEngine:
     # Tier 1: Line-based filters (spread range, side, home/away)
     # Tier 2: Contextual filters (weather, travel, etc.) — logged as unavailable
 
+    # Factors that CANNOT be applied as game-level filters during backtesting
+    # because no data source exists to determine them per-game.
+    #
+    # EXCLUDED (derivable from existing data — do NOT add back):
+    #   days_rest, days_since_last_game, extra_rest_days,
+    #   both_teams_short_rest, opponent_days_rest  → schedule dates
+    #   prev_game_margin, starter_4q_minutes_prev  → box scores
+    #   home_pace_rank, away_pace_rank, pace_differential,
+    #   home_team_pace_rank, away_team_pace_rank   → box scores
+    #   head_to_head_record, opponent_record       → game results
+    #   divisional_matchup, conference_tier        → team metadata
+    #   team_identity, school_identity             → P1 research thesis
+    #   tournament_round, seed_number              → bracket data / dates
+    #   playoff_standing                           → standings
+    #   schedule_context, revenge_game_flag        → schedule analysis
+    #   hours_before_tip                           → game time
     UNFILTERABLE_CONTEXT_FACTORS = {
         "weather", "temperature", "wind", "wind_speed", "wind_direction",
         "travel_distance", "timezone_crossing", "altitude",
@@ -611,26 +627,13 @@ class BacktestEngine:
         "first_inning_stats",
         "umpire_tendencies",  # hp umpire, zone width
         "coaching_staff",  # manager, coach, scheme changes
-        "school_identity", "team_identity",
         "referee_crew", "referee_foul_tendency", "public_betting_pct",
         "handle_estimate", "line_movement_velocity", "line_movement_direction",
-        "prev_game_margin", "starter_4q_minutes_prev",
-        "days_rest", "days_since_last_game",
         "bye_week_flag", "bye_week_return", "primetime_flag", "game_slot",
-        "thursday_game", "national_tv_flag", "revenge_game_flag",
-        "divisional_matchup", "conference_tier", "hours_before_tip",
-        "home_pace_rank", "away_pace_rank", "pace_differential",
+        "thursday_game", "national_tv_flag",
         "last_10_possessions_per_game", "defensive_rating_slow_team",
-        "home_team_pace_rank", "away_team_pace_rank",
         "season_avg_total", "pre_bye_scoring_trend_last_3",
-        "first_half_total", "defensive_rank_both_teams", "extra_rest_days",
-        "opponent_record", "head_to_head_record", "both_teams_short_rest",
-        "opponent_days_rest",
-        "pre_bye_scoring_trend_last_3",
-        "playoff_standing",  # eliminated, tanking, clinched, play-in race
-        "schedule_context",  # sandwich, letdown, trap game, look-ahead
-        "tournament_round",  # Sweet 16, Elite 8, Final Four, Round of 32/64
-        "seed_number",  # team seed, seed matchup, lower/higher seed
+        "first_half_total", "defensive_rank_both_teams",
         "postseason_stage",  # playoff round, series length, elimination game
     }
 
@@ -643,7 +646,7 @@ class BacktestEngine:
         r"\boutdoor\b": "venue_type",
         r"\bweather\b": "weather",
         r"\btemperature\b": "temperature",
-        r"\bcold\b": "temperature",
+        r"\bcold.weather\b": "temperature",
         r"\bwind\b": "wind",
         r"\bfastball.velo": "pitcher_velocity",
         r"\bvelo(city)?\b.*(drop|gain)": "pitcher_velocity",
@@ -678,7 +681,6 @@ class BacktestEngine:
         r"\baces?\b.*first.*start": "pitcher_history",
         r"\bace\b.*starter": "pitcher_history",
         r"\bseason.debut\b": "pitcher_history",
-        r"\bfirst.*start": "pitcher_history",
         r"\bfirst.*career.*start": "pitcher_history",
         r"\bcareer.*debut": "pitcher_history",
         r"\bk/9\b": "pitcher_history",
@@ -779,6 +781,9 @@ class BacktestEngine:
 
         Returns list of inferred context needs, or empty list if the hypothesis
         appears to be purely line-based (no game-context filtering needed).
+
+        Only returns factors that are in UNFILTERABLE_CONTEXT_FACTORS — keywords
+        that map to derivable/filterable factors should not block backtesting.
         """
         # Replace underscores/hyphens with spaces so \b word boundaries match
         # hypothesis names like "sp_dome_to_cold" (where _ is a word char in regex)
@@ -786,7 +791,9 @@ class BacktestEngine:
         inferred = set()
         for pattern, factor in BacktestEngine._CONTEXT_KEYWORD_MAP.items():
             if re.search(pattern, text):
-                inferred.add(factor)
+                # Only block if the factor is truly unfilterable
+                if factor in BacktestEngine.UNFILTERABLE_CONTEXT_FACTORS:
+                    inferred.add(factor)
         return sorted(inferred)
 
     @staticmethod
