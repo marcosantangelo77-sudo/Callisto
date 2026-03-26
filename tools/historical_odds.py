@@ -32,9 +32,19 @@ class HistoricalOddsFetcher:
     async def initialize(self) -> None:
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA busy_timeout = 120000")
+        # Separate read-only connection for cache lookups.
+        # In WAL mode, readers never block writers and vice versa.
+        # This prevents backtest cache reads from being blocked by
+        # concurrent writes from line_monitor/data_collector.
+        self._read_db = await aiosqlite.connect(
+            f"file:{self.db_path}?mode=ro", uri=True
+        )
+        await self._read_db.execute("PRAGMA busy_timeout = 5000")
         logger.info("Historical odds fetcher initialized")
 
     async def close(self) -> None:
+        if self._read_db:
+            await self._read_db.close()
         if self._db:
             await self._db.close()
 
@@ -171,7 +181,8 @@ class HistoricalOddsFetcher:
 
     async def get_cached_date_range(self, sport: str) -> tuple[Optional[str], Optional[str]]:
         """Returns (earliest_date, latest_date) in cache for a sport."""
-        cursor = await self._db.execute(
+        db = self._read_db if self._read_db else self._db
+        cursor = await db.execute(
             "SELECT MIN(snapshot_date), MAX(snapshot_date) "
             "FROM historical_odds_cache WHERE sport = ?",
             (sport,),
@@ -183,7 +194,8 @@ class HistoricalOddsFetcher:
 
     async def get_cached_dates(self, sport: str) -> list[str]:
         """List all cached dates for a sport."""
-        cursor = await self._db.execute(
+        db = self._read_db if self._read_db else self._db
+        cursor = await db.execute(
             "SELECT DISTINCT snapshot_date FROM historical_odds_cache "
             "WHERE sport = ? ORDER BY snapshot_date",
             (sport,),
@@ -193,7 +205,8 @@ class HistoricalOddsFetcher:
 
     async def get_cache_stats(self) -> dict:
         """Return cache usage statistics."""
-        cursor = await self._db.execute(
+        db = self._read_db if self._read_db else self._db
+        cursor = await db.execute(
             "SELECT sport, COUNT(*) as entries, "
             "MIN(snapshot_date) as earliest, MAX(snapshot_date) as latest, "
             "SUM(credits_cost) as total_credits "
@@ -257,15 +270,19 @@ class HistoricalOddsFetcher:
     async def _get_cached(
         self, sport: str, date: str, event_id: Optional[str], market_type: str,
     ) -> Optional[dict]:
-        """Check SQLite cache for a historical odds response."""
+        """Check SQLite cache for a historical odds response.
+
+        Uses read-only connection to avoid WAL write lock contention.
+        """
+        db = self._read_db if self._read_db else self._db
         if event_id:
-            cursor = await self._db.execute(
+            cursor = await db.execute(
                 "SELECT response_json FROM historical_odds_cache "
                 "WHERE sport = ? AND snapshot_date = ? AND event_id = ? AND market_type = ?",
                 (sport, date, event_id, market_type),
             )
         else:
-            cursor = await self._db.execute(
+            cursor = await db.execute(
                 "SELECT response_json FROM historical_odds_cache "
                 "WHERE sport = ? AND snapshot_date = ? AND event_id IS NULL AND market_type = ?",
                 (sport, date, market_type),
