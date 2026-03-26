@@ -882,10 +882,22 @@ class BacktestEngine:
         r"\bovertime\b.*prior\b": "prior_game_overtime",
         r"\bovertime\b.*previous\b": "prior_game_overtime",
         r"\bclose.game.*intensity\b": "overtime_history",
-        # Schedule / matchup type factors
+        # Schedule / matchup type factors — season timing, date-based filters
         r"\binterleague\b": "schedule_type",
         r"\bopening.day\b": "schedule_type",
         r"\bopener\b": "schedule_type",
+        r"\bopening.week\b": "schedule_type",
+        r"\bopening.series\b": "schedule_type",
+        r"\bearly.season\b": "schedule_type",
+        r"\bfirst.week\b": "schedule_type",
+        r"\bfirst.series\b": "schedule_type",
+        r"\bfirst.\d+.games?\b": "schedule_type",
+        r"\bseason.open": "schedule_type",
+        r"\bday.game.*night|night.*day.game\b": "schedule_type",
+        r"\bday.after.night\b": "schedule_type",
+        r"\bapril\b": "schedule_type",
+        r"\bsp.rust\b": "schedule_type",
+        r"\bpitcher.rust\b": "schedule_type",
         # Specific venue names
         r"\bcoors\b": "venue_type",
         r"\bfenway\b": "venue_type",
