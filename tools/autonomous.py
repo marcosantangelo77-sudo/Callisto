@@ -1124,13 +1124,17 @@ class ResearchLoop:
 
                 # ── Queue drain: if Claude just became available, burn through deferred work ──
                 try:
-                    await self._drain_deferred_queue()
+                    await asyncio.wait_for(self._drain_deferred_queue(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Queue drain timed out after 120s — skipping")
                 except Exception as e:
                     logger.warning(f"Queue drain failed (non-fatal): {e}")
 
                 # Phase 0: Self-repair (detect, fix, verify, record)
                 try:
-                    await self._phase_self_repair()
+                    await asyncio.wait_for(self._phase_self_repair(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase self_repair timed out after 120s — skipping")
                 except Exception as e:
                     logger.warning(f"Self-repair failed (non-fatal): {e}")
 
@@ -1139,7 +1143,9 @@ class ResearchLoop:
 
                 # Phase 0a: Self-diagnose pipeline health
                 try:
-                    await self._phase_self_diagnose()
+                    await asyncio.wait_for(self._phase_self_diagnose(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase self_diagnose timed out after 120s — skipping")
                 except Exception as e:
                     logger.warning(f"Self-diagnose failed (non-fatal): {e}")
 
@@ -1148,7 +1154,9 @@ class ResearchLoop:
 
                 # Phase 0b: Refresh signals (retroactive threshold updates)
                 try:
-                    await self._phase_refresh_signals()
+                    await asyncio.wait_for(self._phase_refresh_signals(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase refresh_signals timed out after 120s — skipping")
                 except Exception as e:
                     logger.warning(f"Signal refresh failed (non-fatal): {e}")
 
@@ -1162,7 +1170,11 @@ class ResearchLoop:
                 if hasattr(self, 'line_monitor') and self.line_monitor:
                     self.line_monitor._paused = True
                 try:
-                    await self._phase_backtest()
+                    await asyncio.wait_for(self._phase_backtest(), timeout=600)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase backtest timed out after 600s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase backtest failed (non-fatal): {e}")
                 finally:
                     if hasattr(self, 'line_monitor') and self.line_monitor:
                         self.line_monitor._paused = False
