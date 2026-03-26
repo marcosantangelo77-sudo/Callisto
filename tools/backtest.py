@@ -378,31 +378,18 @@ class BacktestEngine:
         )
         fingerprint = hashlib.md5(fp_parts.encode()).hexdigest()[:16]
 
+        # Primary check: exact fingerprint match (includes filters, threshold, etc.)
         existing = await self._db.execute_fetchall(
             """SELECT br.hypothesis_id, br.run_id, br.total_events, br.signals_generated,
                       br.hit_rate, br.avg_edge, br.is_significant, h.name
                FROM backtest_runs br
                JOIN hypotheses h ON h.hypothesis_id = br.hypothesis_id
-               WHERE br.run_config LIKE '%' || ? || '%'
+               WHERE json_extract(br.run_config, '$.backtest_fingerprint') = ?
                  AND br.hypothesis_id != ?
-                 AND br.date_range_start = ? AND br.date_range_end = ?
                  AND br.total_events > 0
                LIMIT 1""",
-            (sport, hypothesis_id, start_date, end_date),
+            (fingerprint, hypothesis_id),
         )
-        if not existing:
-            # Faster check: look for exact fingerprint in run_config
-            existing = await self._db.execute_fetchall(
-                """SELECT br.hypothesis_id, br.run_id, br.total_events, br.signals_generated,
-                          br.hit_rate, br.avg_edge, br.is_significant, h.name
-                   FROM backtest_runs br
-                   JOIN hypotheses h ON h.hypothesis_id = br.hypothesis_id
-                   WHERE json_extract(br.run_config, '$.backtest_fingerprint') = ?
-                     AND br.hypothesis_id != ?
-                     AND br.total_events > 0
-                   LIMIT 1""",
-                (fingerprint, hypothesis_id),
-            )
         if existing:
             dup = existing[0]
             logger.warning(
@@ -1885,6 +1872,7 @@ class BacktestEngine:
         devig_method: str,
         min_books: int,
         config: dict,
+        filters: Optional[dict] = None,
     ) -> tuple[int, int]:
         """
         Process player props for a game.
@@ -1990,6 +1978,11 @@ class BacktestEngine:
                 ("Over", consensus_over, best_over_val, best_over_book, target_data["Over"]),
                 ("Under", consensus_under, best_under_val, best_under_book, target_data["Under"]),
             ]:
+                # Apply side_filter from hypothesis filters (e.g. "Over" or "Under")
+                if filters and "side_filter" in filters:
+                    if side.lower() != filters["side_filter"].lower():
+                        continue
+
                 fair_val = best_val if use_crossbook else consensus
                 edge_method = "cross_book_best_line" if use_crossbook else "consensus_devig"
 
@@ -2666,6 +2659,11 @@ class BacktestEngine:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         now = datetime.now(timezone.utc).isoformat()
 
+        # Parse hypothesis-specific filters (same as main backtest path)
+        thesis = h.get("thesis", "")
+        h_name = h.get("name", "")
+        filters = self._parse_hypothesis_filters(thesis, config, h_name)
+
         for game in games:
             # Use same processing logic as backtest
             if h["market_type"].startswith("player_"):
@@ -2681,6 +2679,7 @@ class BacktestEngine:
                     devig_method=devig_method,
                     min_books=min_books,
                     config=config,
+                    filters=filters,
                 )
             else:
                 events, _ = await self._process_game_lines(
@@ -2696,6 +2695,7 @@ class BacktestEngine:
                     min_books=min_books,
                     config=config,
                     h_sport=h.get("sport", ""),
+                    filters=filters,
                 )
 
         # Retrieve signals that were just generated with run_id="paper"
