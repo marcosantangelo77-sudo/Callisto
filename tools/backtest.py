@@ -1252,9 +1252,19 @@ class BacktestEngine:
                     kelly = kelly_binary(fair_val, american_to_decimal(target_price))
                     edge = fair_val - target_implied
 
+                    # Sanity check: absurd edges (>15%) are almost always
+                    # data quality issues (book has team names swapped vs
+                    # consensus). Skip entirely — don't cap and pretend it's real.
                     MAX_EDGE_MAGNITUDE = 0.15
                     if abs(edge) > MAX_EDGE_MAGNITUDE:
-                        edge = MAX_EDGE_MAGNITUDE if edge > 0 else -MAX_EDGE_MAGNITUDE
+                        continue
+
+                    # Direction sanity: if fair_val > 0.5 but book prices this
+                    # side as a heavy underdog (or vice versa), the consensus
+                    # and book disagree on which team is favored. Data error.
+                    if (fair_val > 0.6 and target_implied < 0.3) or \
+                       (fair_val < 0.3 and target_implied > 0.6):
+                        continue
 
                     is_signal = edge >= edge_threshold
 

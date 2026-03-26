@@ -3167,8 +3167,8 @@ class ResearchLoop:
                     "FROM backtest_events"
                 )
                 row = await cursor.fetchone()
-            metrics["bt_events"] = row[0] if row else 0
-            metrics["bt_signals"] = row[1] if row else 0
+            metrics["bt_events"] = (row[0] or 0) if row else 0
+            metrics["bt_signals"] = (row[1] or 0) if row else 0
 
             # Avg books in historical odds
             cursor = await db.execute(
