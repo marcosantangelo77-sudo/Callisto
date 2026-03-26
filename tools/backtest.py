@@ -269,14 +269,25 @@ class BacktestEngine:
         # game-level filtering (dome teams, weather, pitcher stats, etc.).
         # Detect this from thesis/name keywords and compute effective coverage.
         inferred_unfilterable = self._infer_context_needs(thesis, h_name)
-        if inferred_unfilterable and not config.get("context_factors"):
-            # Hypothesis needs context filtering but wasn't tagged — override coverage
-            context_coverage = 0.0
-            unfilterable = inferred_unfilterable
+        if inferred_unfilterable:
+            # Merge inferred unfilterable needs into coverage assessment.
+            # Previously only fired when context_factors was empty — MLB hypotheses
+            # with non-empty context_factors (e.g. ["season_week", "park_type"])
+            # bypassed this check entirely, causing identical event sets.
+            existing = set(
+                f.lower().replace(" ", "_") for f in config.get("context_factors", [])
+            )
+            merged = existing | set(inferred_unfilterable)
+            filterable_in_merged = sum(
+                1 for f in merged
+                if f in BacktestEngine.FILTERABLE_CONTEXT_FACTORS
+            )
+            context_coverage = filterable_in_merged / len(merged) if merged else 1.0
+            unfilterable = list(set(unfilterable or []) | set(inferred_unfilterable))
             logger.warning(
                 f"Backtest {hypothesis_id} ({h_name}): inferred unfilterable "
                 f"context needs from thesis/name: {inferred_unfilterable}. "
-                f"context_factors was empty — effective coverage overridden to 0%."
+                f"Effective coverage after merge: {context_coverage:.0%}."
             )
 
         if context_coverage < 0.5:
@@ -1217,13 +1228,15 @@ class BacktestEngine:
         if not context_factors:
             return 1.0  # No context needed — pure line-based, fully filterable
 
-        unfilterable_count = sum(
+        # WHITELIST logic: only factors with actual filtering code count as filterable.
+        # Previously used blacklist (UNFILTERABLE), but unknown factors like
+        # "season_week", "park_type" slipped through as falsely "filterable".
+        filterable_count = sum(
             1 for f in context_factors
-            if f.lower().replace(" ", "_") in BacktestEngine.UNFILTERABLE_CONTEXT_FACTORS
-            or f.lower() in BacktestEngine.UNFILTERABLE_CONTEXT_FACTORS
+            if f.lower().replace(" ", "_") in BacktestEngine.FILTERABLE_CONTEXT_FACTORS
+            or f.lower() in BacktestEngine.FILTERABLE_CONTEXT_FACTORS
         )
 
-        filterable_count = len(context_factors) - unfilterable_count
         return filterable_count / len(context_factors)
 
     # ── SCHEDULE CONTEXT COMPUTATION ──
