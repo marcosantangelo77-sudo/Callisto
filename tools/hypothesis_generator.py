@@ -576,6 +576,13 @@ class HypothesisGenerator:
             if sport not in template["sport_filter"]:
                 continue
 
+            # Skip player prop templates — historical_odds_cache has game-level
+            # lines only. Prop backtesting requires prop_snapshots bridge which
+            # is not yet implemented. Re-enable when prop backtest pipeline exists.
+            market_type_template = template.get("market_type", "")
+            if "player_" in market_type_template:
+                continue
+
             # Generate all variable combinations
             combos = self._expand_variables(template["variables"])
 

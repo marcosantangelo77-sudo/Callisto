@@ -2059,21 +2059,25 @@ class ResearchLoop:
             sport = h.get("sport", "")
             market = h.get("market_type", "")
 
-            # Player prop hypotheses can't be backtested (no historical prop data).
-            # Move to backtesting status — they will accumulate paper trade data
-            # over time and be promoted only when actual evidence exists.
+            # Player prop hypotheses can't be backtested — historical_odds_cache
+            # contains game-level lines only (h2h/spreads/totals), not player props.
+            # prop_snapshots has data but isn't wired to backtest engine yet.
+            # Reject as untestable instead of parking in backtesting with 0 events.
             if market.startswith("player_"):
                 try:
                     await self.hypothesis_manager.update_status(
-                        h["hypothesis_id"], "backtesting", "auto:awaiting_prop_data"
+                        h["hypothesis_id"], "rejected",
+                        "auto:untestable_no_prop_backtest — historical_odds_cache "
+                        "lacks player prop data. Will re-enable when prop backtest "
+                        "pipeline is implemented."
                     )
-                    self._backtests_run += 1
+                    self._rejections += 1
                     logger.info(
-                        f"Research: moved {h['hypothesis_id']} ({market}) "
-                        f"to backtesting — awaiting prop data collection"
+                        f"Research: rejected {h['hypothesis_id']} ({market}) "
+                        f"— no prop backtesting pipeline available"
                     )
                 except Exception as e:
-                    logger.warning(f"Failed to promote prop hypothesis {h['hypothesis_id']}: {e}")
+                    logger.warning(f"Failed to reject prop hypothesis {h['hypothesis_id']}: {e}")
                 continue
 
             # Skip hypotheses where most context conditions are unfilterable.
@@ -2438,6 +2442,47 @@ class ResearchLoop:
                 logger.warning(
                     f"Evaluation failed for {h['hypothesis_id']}: {e}"
                 )
+
+        # ── Draft-level auto-rejection ──
+        # Hypotheses that were backtested but reverted to draft (or never left it)
+        # may have definitive negative-edge data. Reject them instead of letting
+        # them clog the queue forever.
+        MIN_EVENTS_FOR_REJECTION = 30
+        MAX_EDGE_FOR_REJECTION = -0.005  # -0.5% avg edge = definitively disproven
+        try:
+            db = self.hypothesis_manager._db
+            cursor = await db.execute(
+                "SELECT h.hypothesis_id, h.name, h.market_type, "
+                "COUNT(be.id) as events, "
+                "COALESCE(AVG(be.edge), 0) as avg_edge, "
+                "SUM(CASE WHEN be.signal_generated = 1 THEN 1 ELSE 0 END) as signals "
+                "FROM hypotheses h "
+                "JOIN backtest_events be ON h.hypothesis_id = be.hypothesis_id "
+                "WHERE h.status = 'draft' "
+                "GROUP BY h.hypothesis_id "
+                "HAVING events >= ? AND avg_edge < ?",
+                (MIN_EVENTS_FOR_REJECTION, MAX_EDGE_FOR_REJECTION),
+            )
+            draft_rejects = await cursor.fetchall()
+            for row in draft_rejects:
+                hid, hname, mtype, events, avg_edge, signals = row
+                reason = (
+                    f"auto:draft_disproven — {events} events, "
+                    f"avg_edge={avg_edge:.2%}, signals={signals}. "
+                    f"Data definitively disproves thesis."
+                )
+                await self.hypothesis_manager.update_status(hid, "rejected", reason)
+                self._rejections += 1
+                logger.info(
+                    f"Research: REJECTED draft {hid} ({hname}) — "
+                    f"{events} events, avg_edge={avg_edge:.2%}, {signals} signals"
+                )
+            if draft_rejects:
+                logger.info(
+                    f"Research: auto-rejected {len(draft_rejects)} disproven draft hypotheses"
+                )
+        except Exception as e:
+            logger.warning(f"Draft auto-rejection failed: {e}")
 
         # Also evaluate paper trading hypotheses — require BOTH backtest
         # significance AND paper trading data on temporally isolated data

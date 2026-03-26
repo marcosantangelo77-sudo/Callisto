@@ -23,7 +23,8 @@ async def open_db(db_path: str = None) -> aiosqlite.Connection:
     if db_path is None:
         db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
     db = await aiosqlite.connect(db_path)
-    await db.execute("PRAGMA busy_timeout = 10000")
+    await db.execute("PRAGMA busy_timeout = 60000")  # 60s — prevents 'database is locked' during bulk writes
+    await db.execute("PRAGMA journal_mode = WAL")     # WAL mode for concurrent reads during writes
     return db
 
 logger = logging.getLogger("callisto.schema")

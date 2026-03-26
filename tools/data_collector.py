@@ -72,8 +72,8 @@ class DataCollector:
         self._db: Optional[aiosqlite.Connection] = None
 
     async def initialize(self) -> None:
-        self._db = await aiosqlite.connect(self.db_path)
-        await self._db.execute("PRAGMA busy_timeout = 10000")
+        from tools.schema import open_db
+        self._db = await open_db(self.db_path)
         logger.info("Data collector initialized")
 
     async def close(self) -> None:
@@ -1208,8 +1208,8 @@ class DataCollector:
                 if event in ("strikeout", "strikeout_double_play"):
                     stats["strikeouts"] += 1
 
-        # Store aggregated stats
-        stored = 0
+        # Store aggregated stats — batched to reduce DB lock contention
+        batch_rows = []
         for (pitcher, game_date), stats in pitcher_stats.items():
             avg_velo = round(sum(stats["velocities"]) / len(stats["velocities"]), 1) if stats["velocities"] else None
             avg_ev = round(sum(stats["exit_velocities"]) / len(stats["exit_velocities"]), 1) if stats["exit_velocities"] else None
@@ -1224,24 +1224,28 @@ class DataCollector:
             for stat_type, stat_value in stat_entries.items():
                 if stat_value is None:
                     continue
-                try:
-                    await self._db.execute(
-                        "INSERT OR IGNORE INTO player_stats "
-                        "(sport, event_id, game_date, player_name, team, stat_type, stat_value) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            "baseball_mlb",
-                            f"statcast_{game_date}",
-                            game_date,
-                            pitcher,
-                            stats.get("pitcher_team", ""),
-                            f"statcast_{stat_type}",
-                            str(stat_value),
-                        ),
-                    )
-                    stored += 1
-                except Exception as e:
-                    logger.debug(f"Statcast store error for {pitcher}: {e}")
+                batch_rows.append((
+                    "baseball_mlb",
+                    f"statcast_{game_date}",
+                    game_date,
+                    pitcher,
+                    stats.get("pitcher_team", ""),
+                    f"statcast_{stat_type}",
+                    str(stat_value),
+                ))
+
+        stored = 0
+        if batch_rows:
+            try:
+                await self._db.executemany(
+                    "INSERT OR IGNORE INTO player_stats "
+                    "(sport, event_id, game_date, player_name, team, stat_type, stat_value) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    batch_rows,
+                )
+                stored = len(batch_rows)
+            except Exception as e:
+                logger.warning(f"Statcast batch insert failed: {e}")
 
         await self._db.commit()
         logger.info(

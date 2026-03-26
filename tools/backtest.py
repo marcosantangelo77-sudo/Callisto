@@ -68,7 +68,9 @@ class BacktestEngine:
         self._db: Optional[aiosqlite.Connection] = None
 
     async def initialize(self) -> None:
-        self._db = await aiosqlite.connect(self.db_path)
+        from tools.schema import open_db
+        self._db = await open_db(self.db_path)
+        # Override with even longer timeout for bulk backtest writes
         await self._db.execute("PRAGMA busy_timeout = 120000")
         logger.info("Backtest engine initialized")
 
