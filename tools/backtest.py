@@ -627,6 +627,8 @@ class BacktestEngine:
         "opponent_record", "head_to_head_record", "both_teams_short_rest",
         "opponent_days_rest",
         "pre_bye_scoring_trend_last_3",
+        "playoff_standing",  # eliminated, tanking, clinched, play-in race
+        "schedule_context",  # sandwich, letdown, trap game, look-ahead
     }
 
     # Keywords in thesis/name that imply game-level context filtering is needed.
@@ -696,6 +698,21 @@ class BacktestEngine:
         r"\bcohesion\b": "team_identity",
         r"\bidentity\b": "team_identity",
         r"\bcultural\b": "team_identity",
+        # Playoff standing / motivation factors (NBA, NHL, MLB)
+        r"\beliminated\b": "playoff_standing",
+        r"\btanking\b": "playoff_standing",
+        r"\bclinch": "playoff_standing",
+        r"\bplayoff.race\b": "playoff_standing",
+        r"\bplay.in\b": "playoff_standing",
+        r"\bseed.locked\b": "playoff_standing",
+        r"\bmagic.number\b": "playoff_standing",
+        r"\bdesperate\b": "playoff_standing",
+        r"\bmust.win\b": "playoff_standing",
+        r"\bletdown\b": "schedule_context",
+        r"\bsandwich\b": "schedule_context",
+        r"\btrap.game\b": "schedule_context",
+        r"\blook.ahead\b": "schedule_context",
+        r"\boverlay\b": "schedule_context",
         # Rest / schedule factors
         r"\brest\b": "days_rest",
         r"\bb2b\b": "days_rest",
