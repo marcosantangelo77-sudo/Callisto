@@ -1984,6 +1984,71 @@ async def research_generate(sport: str = "basketball_nba", max_hypotheses: int =
     return {"generated": len(created), "hypotheses": created}
 
 
+@app.post("/hypothesis/batch-reject")
+async def batch_reject_hypotheses(request: Request):
+    """Batch-reject draft hypotheses matching regex patterns.
+
+    Body: {"patterns": ["rest|b2b", "weather"], "dry_run": true}
+    Only operates on status='draft'. Returns count and sample of affected.
+    """
+    import re
+    from tools.schema import open_db
+
+    body = await request.json()
+    patterns = body.get("patterns", [])
+    dry_run = body.get("dry_run", True)
+
+    if not patterns:
+        raise HTTPException(status_code=400, detail="patterns list required")
+
+    compiled = [re.compile(p, re.IGNORECASE) for p in patterns]
+
+    db = await open_db()
+    try:
+        cursor = await db.execute(
+            "SELECT hypothesis_id, name, thesis, sport FROM hypotheses WHERE status = 'draft'"
+        )
+        rows = await cursor.fetchall()
+
+        matched = []
+        for row in rows:
+            hid, name, thesis, sport = row
+            text = f"{name or ''} {thesis or ''}"
+            if any(p.search(text) for p in compiled):
+                matched.append({"id": hid, "name": name, "sport": sport})
+
+        if not dry_run and matched:
+            now = __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ).isoformat()
+            ids = [m["id"] for m in matched]
+            # Batch update in chunks of 500
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i+500]
+                placeholders = ",".join("?" * len(chunk))
+                await db.execute(
+                    f"UPDATE hypotheses SET status = 'rejected', updated_at = ?, "
+                    f"promoted_by = 'batch_purge:generic_edge' "
+                    f"WHERE hypothesis_id IN ({placeholders})",
+                    [now] + chunk,
+                )
+            await db.commit()
+            logger.info(f"Batch rejected {len(matched)} generic draft hypotheses")
+
+        by_sport = {}
+        for m in matched:
+            by_sport[m["sport"]] = by_sport.get(m["sport"], 0) + 1
+
+        return {
+            "matched": len(matched),
+            "dry_run": dry_run,
+            "by_sport": by_sport,
+            "sample": [m["name"] for m in matched[:20]],
+        }
+    finally:
+        await db.close()
+
+
 @app.get("/research/sports")
 async def get_research_sports():
     """Get all researched sports — all compete equally."""
