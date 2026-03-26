@@ -83,6 +83,21 @@ def score_edge(
     trap_line_confidence: Optional[float] = None,
     trap_actionable_side: Optional[str] = None,
     attention_opportunity: Optional[float] = None,
+    # --- Line analysis / dead number signals ---
+    rlm_detected: bool = False,
+    rlm_confidence: float = 0.0,
+    rlm_edge_on_sharp_side: bool = False,
+    steam_detected: bool = False,
+    steam_confidence: float = 0.0,
+    steam_edge_on_steam_side: bool = False,
+    is_dead_number: bool = False,
+    key_number_value: float = 0.0,
+    contrarian_value_score: float = 0.0,
+    contrarian_edge_pct: float = 0.0,
+    public_side_edge: bool = False,
+    # --- Injury model signals ---
+    injury_market_adjustment: Optional[float] = None,
+    injury_is_contrarian: bool = False,
 ) -> EdgeConfidence:
     """
     Score a detected edge using AGP confidence methodology.
@@ -115,6 +130,17 @@ def score_edge(
         attention_opportunity: 0-1 score from attention_arbitrage.  Higher means
             the market is thin (marquee events drawing eyeballs elsewhere),
             so edges may persist longer.
+        rlm_detected: True if reverse line movement detected on this game.
+        rlm_confidence: 0-1 confidence score from detect_rlm().
+        rlm_edge_on_sharp_side: True if our edge is on the sharp/RLM side.
+        steam_detected: True if a steam move was detected for this game.
+        steam_confidence: 0-1 confidence score from detect_steam().
+        steam_edge_on_steam_side: True if our edge is on the same side as steam.
+        is_dead_number: True if the spread sits on a dead number (low importance).
+        key_number_value: 0-1 importance of the spread number from dead_numbers module.
+        contrarian_value_score: Historical ROI from fading the public at this %.
+        contrarian_edge_pct: Estimated probability edge from contrarian position.
+        public_side_edge: True if edge is on the public side with no sharp confirmation.
 
     Returns:
         EdgeConfidence with AGP-compliant score, tier, and reasoning.
@@ -385,9 +411,121 @@ def score_edge(
         )
     factors["attention_arbitrage"] = round(attention_adj, 3)
 
+    # Step 16: Reverse line movement (RLM) — strongest sharp money indicator
+    # RLM = line moves AGAINST the public side, meaning sharp money is driving it.
+    # If our edge is on the sharp (RLM) side, big confidence boost.
+    rlm_adj = 0.0
+    if rlm_detected and rlm_confidence > 0.1:
+        if rlm_edge_on_sharp_side:
+            rlm_adj = min(0.08, 0.08 * rlm_confidence)
+            reasons.append(
+                f"RLM detected (confidence {rlm_confidence:.0%}) — edge is on the "
+                f"sharp side (line moving against public). Strong confirmation."
+            )
+        else:
+            # Edge is on the public side of an RLM — reduce confidence
+            rlm_adj = -min(0.06, 0.06 * rlm_confidence)
+            reasons.append(
+                f"RLM detected (confidence {rlm_confidence:.0%}) — edge is on the "
+                f"public side (sharp money going the other way). Caution."
+            )
+    factors["rlm"] = round(rlm_adj, 3)
+
+    # Step 17: Steam move — coordinated sharp action across multiple books
+    # Steam is the highest-conviction sharp signal. Multiple books moving
+    # simultaneously means a syndicate is acting on information.
+    steam_adj = 0.0
+    if steam_detected and steam_confidence > 0.1:
+        if steam_edge_on_steam_side:
+            steam_adj = min(0.10, 0.10 * steam_confidence)
+            reasons.append(
+                f"STEAM MOVE detected (confidence {steam_confidence:.0%}) — edge "
+                f"aligned with coordinated sharp action. Highest-conviction signal."
+            )
+        else:
+            # Edge is against steam — significant red flag
+            steam_adj = -min(0.08, 0.08 * steam_confidence)
+            reasons.append(
+                f"STEAM MOVE detected (confidence {steam_confidence:.0%}) — edge is "
+                f"AGAINST the steam direction. Sharps are on the other side."
+            )
+    factors["steam"] = round(steam_adj, 3)
+
+    # Step 18: Dead number / key number analysis
+    # Dead numbers = low-importance spreads where the book has less risk.
+    # Key numbers = high-importance spreads (3, 7, 10 in NFL) where
+    # crossing the number has huge probability impact.
+    dead_num_adj = 0.0
+    if is_dead_number:
+        dead_num_adj = 0.02
+        reasons.append(
+            "Spread is on a dead number — book has less risk here, "
+            "edge may persist longer"
+        )
+    elif key_number_value > 0.6:
+        dead_num_adj = 0.04
+        reasons.append(
+            f"Spread near high-value key number (importance {key_number_value:.2f}) — "
+            f"crossing this number has significant probability impact"
+        )
+    elif key_number_value > 0.3:
+        dead_num_adj = 0.02
+        reasons.append(
+            f"Spread near moderate key number (importance {key_number_value:.2f})"
+        )
+    factors["dead_number"] = round(dead_num_adj, 3)
+
+    # Step 19: Contrarian value — fading the public
+    # Historical data shows fading lopsided public action is +EV,
+    # especially in football and when combined with sharp signals.
+    contrarian_adj = 0.0
+    if contrarian_edge_pct > 0 and contrarian_value_score > 1.0:
+        # Meaningful contrarian edge (historical ROI > 1%)
+        contrarian_adj = min(0.06, contrarian_edge_pct / 100.0 * 3.0)
+        reasons.append(
+            f"Contrarian value: historical ROI {contrarian_value_score:+.1f}% "
+            f"at this public %, edge estimate +{contrarian_edge_pct:.1f}%"
+        )
+    elif public_side_edge and not rlm_edge_on_sharp_side and not steam_edge_on_steam_side:
+        # Edge is on the public side with no sharp confirmation — penalty
+        contrarian_adj = -0.04
+        reasons.append(
+            "Edge is on the public side with no sharp confirmation "
+            "(no RLM, no steam) — higher risk of being wrong"
+        )
+    factors["contrarian"] = round(contrarian_adj, 3)
+
+    # Step: Injury model adjustment
+    # When the injury model detects that the market hasn't fully priced an
+    # injury AND our edge aligns with the expected adjustment direction,
+    # boost confidence.  When the model flags a contrarian opportunity
+    # (market over-adjusted to star name), boost contrarian edges.
+    injury_adj = 0.0
+    if injury_market_adjustment is not None and injury_market_adjustment != 0:
+        injury_adj = injury_market_adjustment  # already capped at +/-0.10 by caller
+        if injury_market_adjustment > 0:
+            reasons.append(
+                f"Injury model: market under-adjusted (modifier {injury_market_adjustment:+.3f}). "
+                f"Edge aligns with expected adjustment direction."
+            )
+        else:
+            reasons.append(
+                f"Injury model: edge may oppose adjustment direction "
+                f"(modifier {injury_market_adjustment:+.3f})."
+            )
+    if injury_is_contrarian:
+        injury_adj += 0.04
+        reasons.append(
+            "Injury model CONTRARIAN: public over-reacted to star injury. "
+            "Market moved more than model impact suggests — value on injured team."
+        )
+    injury_adj = max(-0.10, min(0.10, injury_adj))
+    factors["injury_model"] = round(injury_adj, 3)
+
     # Compute raw score
+    line_analysis_adj = rlm_adj + steam_adj + dead_num_adj + contrarian_adj
     psych_adj = shading_adj + trap_adj + attention_adj
-    raw = base + book_adj + sharp_adj + market_adj + method_adj + live_adj + time_adj + hhi_adj + entropy_adj + regime_adj + kl_adj + psych_adj
+    raw = base + book_adj + sharp_adj + market_adj + method_adj + live_adj + time_adj + hhi_adj + entropy_adj + regime_adj + kl_adj + psych_adj + line_analysis_adj + injury_adj
     # Clamp to [0, ceiling]
     score = round(max(0.0, min(raw, ceiling)), 3)
     factors["raw_total"] = round(raw, 3)

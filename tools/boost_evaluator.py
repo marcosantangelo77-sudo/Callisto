@@ -17,6 +17,14 @@ import logging
 from typing import Optional
 
 from tools.odds_api import calculate_implied_probability, calculate_ev
+from tools.math_utils import (
+    no_vig_price,
+    calculate_overround,
+    calculate_hold,
+    american_to_decimal,
+    american_to_implied,
+    fair_prob_to_american,
+)
 
 logger = logging.getLogger("callisto.boost_evaluator")
 
@@ -25,17 +33,13 @@ def devig_multiplicative(side_a_odds: int, side_b_odds: int) -> tuple[float, flo
     """
     Devig a two-way market using the multiplicative method (preferred).
 
-    This removes the vig by dividing each side's implied probability
+    Delegates to math_utils.no_vig_price which implements the same
+    multiplicative devigging: divide each side's implied probability
     by the total overround. Most accurate for balanced markets.
 
     Returns (fair_prob_a, fair_prob_b).
     """
-    implied_a = calculate_implied_probability(side_a_odds)
-    implied_b = calculate_implied_probability(side_b_odds)
-    total = implied_a + implied_b  # This is > 1.0 due to vig
-
-    fair_a = implied_a / total
-    fair_b = implied_b / total
+    fair_a, fair_b = no_vig_price(side_a_odds, side_b_odds)
     return round(fair_a, 6), round(fair_b, 6)
 
 
@@ -44,11 +48,15 @@ def devig_additive(side_a_odds: int, side_b_odds: int) -> tuple[float, float]:
     Devig using the additive method — subtract equal vig from each side.
 
     Less accurate than multiplicative for lopsided markets but simpler.
+    Uses math_utils.calculate_overround for the overround calculation.
     """
-    implied_a = calculate_implied_probability(side_a_odds)
-    implied_b = calculate_implied_probability(side_b_odds)
-    overround = (implied_a + implied_b) - 1.0
+    dec_a = american_to_decimal(side_a_odds)
+    dec_b = american_to_decimal(side_b_odds)
+    overround = calculate_overround([dec_a, dec_b])
     half_vig = overround / 2
+
+    implied_a = american_to_implied(side_a_odds)
+    implied_b = american_to_implied(side_b_odds)
 
     fair_a = implied_a - half_vig
     fair_b = implied_b - half_vig
@@ -137,7 +145,7 @@ def evaluate_fixed_boost(
     kelly = calculate_ev(probability=fair_probability, american_odds=boosted_odds, stake=max_stake)
 
     # Fair odds (what the odds SHOULD be)
-    fair_american = _prob_to_american(fair_probability)
+    fair_american = fair_prob_to_american(fair_probability)
 
     return {
         "description": description,
@@ -145,7 +153,7 @@ def evaluate_fixed_boost(
         "type": "FIXED_BOOST",
         "max_stake": max_stake,
         "boosted_odds": boosted_odds,
-        "boosted_decimal": _american_to_decimal(boosted_odds),
+        "boosted_decimal": american_to_decimal(boosted_odds),
         "boosted_implied": round(boosted_implied, 4),
         "fair_probability": round(fair_probability, 4),
         "fair_odds_american": fair_american,
@@ -266,7 +274,7 @@ def evaluate_free_bet(
         description: Description of the promo
         book: Sportsbook
     """
-    decimal_odds = _american_to_decimal(bet_odds)
+    decimal_odds = american_to_decimal(bet_odds)
 
     if stake_returned:
         # Regular bet or no-sweat (stake returned as credit if lost)
@@ -328,8 +336,8 @@ def calculate_hedge(
         hedge_odds: Best available odds on the opposite side (at another book)
         fair_probability: True probability of the boosted side winning
     """
-    boosted_decimal = _american_to_decimal(boosted_odds)
-    hedge_decimal = _american_to_decimal(hedge_odds)
+    boosted_decimal = american_to_decimal(boosted_odds)
+    hedge_decimal = american_to_decimal(hedge_odds)
 
     # Total payout if boosted bet wins
     boosted_payout = boost_stake * boosted_decimal
@@ -515,19 +523,127 @@ def _recommendation(ev_pct: float, max_stake: float) -> str:
         return "Pass — no edge or negative EV."
 
 
-def _american_to_decimal(american: int) -> float:
-    """Convert American odds to decimal."""
-    if american > 0:
-        return 1 + (american / 100)
+def evaluate_boosted_parlay(
+    legs: list[dict],
+    boosted_parlay_odds: int,
+    sport: str,
+    max_stake: float = 100,
+    description: str = "",
+    book: str = "",
+) -> dict:
+    """
+    Evaluate a boosted parlay using correlation-adjusted fair odds.
+
+    Books often boost parlays with correlated legs, making the boost look
+    more generous than it is. This function uses the correlation engine
+    to compute the TRUE fair probability, then compares to the boosted odds.
+
+    Without correlation adjustment, a "50% boost" on a 2-leg parlay where
+    both legs are 0.65-correlated looks like +20% EV. With adjustment,
+    the true probability is higher (because the legs tend to hit together),
+    so the actual edge may be only +5%.
+
+    Args:
+        legs: List of dicts with:
+            - "american_odds" (int): individual leg odds (pre-boost)
+            - "market" (str): market type for correlation lookup
+            - "description" (str, optional): leg description
+        boosted_parlay_odds: The boosted American odds the book is offering
+        sport: Sport key for correlation lookup
+        max_stake: Maximum allowed wager
+        description: Boost description
+        book: Sportsbook offering the boost
+    """
+    from tools.correlation import (
+        correlated_parlay_odds,
+        independent_parlay_odds,
+        detect_anti_correlation,
+    )
+
+    if not legs or len(legs) < 2:
+        return {"error": "Need at least 2 legs for parlay evaluation"}
+
+    # Independent parlay odds (naive: assumes no correlation)
+    independent_odds = independent_parlay_odds(legs)
+
+    # Correlation-adjusted fair parlay odds
+    fair_odds = correlated_parlay_odds(legs, sport=sport)
+
+    # Convert to probabilities for EV calculation
+    boosted_implied = calculate_implied_probability(boosted_parlay_odds)
+    independent_implied = calculate_implied_probability(independent_odds) if independent_odds != 0 else 0.0
+    fair_implied = calculate_implied_probability(fair_odds) if fair_odds != 0 else 0.0
+
+    # Edge: fair probability - boosted implied probability
+    # If fair_implied > boosted_implied, the parlay hits more often than
+    # the boosted price suggests -> +EV
+    edge_naive = independent_implied - boosted_implied  # edge assuming independence
+    edge_correlated = fair_implied - boosted_implied     # edge with correlation adjustment
+
+    # EV calculation using correlation-adjusted fair probability
+    if boosted_parlay_odds > 0:
+        profit_if_win = max_stake * (boosted_parlay_odds / 100)
     else:
-        return 1 + (100 / abs(american))
+        profit_if_win = max_stake * (100 / abs(boosted_parlay_odds))
+
+    ev_naive = (independent_implied * profit_if_win) - ((1 - independent_implied) * max_stake)
+    ev_correlated = (fair_implied * profit_if_win) - ((1 - fair_implied) * max_stake)
+    ev_pct_naive = (ev_naive / max_stake) * 100 if max_stake > 0 else 0
+    ev_pct_correlated = (ev_correlated / max_stake) * 100 if max_stake > 0 else 0
+
+    # Check for anti-correlated legs
+    anti_warnings = detect_anti_correlation(legs, sport)
+
+    # Rating based on correlation-adjusted EV
+    if ev_pct_correlated > 15:
+        rating = "EXCEPTIONAL"
+    elif ev_pct_correlated > 7:
+        rating = "STRONG"
+    elif ev_pct_correlated > 3:
+        rating = "GOOD"
+    elif ev_pct_correlated > 0:
+        rating = "MARGINAL"
+    else:
+        rating = "NO_EDGE"
+
+    correlation_impact = ev_pct_correlated - ev_pct_naive
+
+    return {
+        "description": description,
+        "book": book,
+        "type": "BOOSTED_PARLAY",
+        "max_stake": max_stake,
+        "num_legs": len(legs),
+        "boosted_odds": boosted_parlay_odds,
+        "boosted_implied": round(boosted_implied, 4),
+        "independent_odds": independent_odds,
+        "independent_implied": round(independent_implied, 4),
+        "fair_correlated_odds": fair_odds,
+        "fair_correlated_implied": round(fair_implied, 4),
+        "edge_naive": round(edge_naive, 4),
+        "edge_correlated": round(edge_correlated, 4),
+        "ev_naive_dollar": round(ev_naive, 2),
+        "ev_naive_pct": round(ev_pct_naive, 2),
+        "ev_correlated_dollar": round(ev_correlated, 2),
+        "ev_correlated_pct": round(ev_pct_correlated, 2),
+        "correlation_impact_pct": round(correlation_impact, 2),
+        "anti_correlation_warnings": anti_warnings if anti_warnings else None,
+        "rating": rating,
+        "recommendation": (
+            _recommendation(ev_pct_correlated, max_stake)
+            + (f" Correlation adjustment: {correlation_impact:+.1f}% EV impact."
+               if abs(correlation_impact) > 0.5 else "")
+            + (" WARNING: legs are anti-correlated." if anti_warnings else "")
+        ),
+        "legs": [
+            {
+                "odds": leg.get("american_odds", 0),
+                "market": leg.get("market", ""),
+                "description": leg.get("description", ""),
+            }
+            for leg in legs
+        ],
+    }
 
 
-def _prob_to_american(prob: float) -> int:
-    """Convert probability to American odds."""
-    if prob <= 0 or prob >= 1:
-        return 0
-    if prob >= 0.5:
-        return int(-100 * prob / (1 - prob))
-    else:
-        return int(100 * (1 - prob) / prob)
+# _prob_to_american removed — now uses math_utils.fair_prob_to_american

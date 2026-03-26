@@ -280,6 +280,19 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads", sport: str
                             except (ValueError, KeyError):
                                 pass
 
+                # Compute no-vig fair probabilities and market hold using math_utils
+                fair_probs = None
+                market_hold = None
+                try:
+                    from tools.math_utils import no_vig_price as _nvp, calculate_hold as _ch, american_to_decimal as _atd
+                    if len(all_lines) >= 2:
+                        # Use best and worst to compute no-vig price range
+                        fair_probs = _nvp(best_line["price"], worst_line["price"])
+                        dec_odds = [_atd(l["price"]) for l in all_lines[:2]]
+                        market_hold = round(_ch(dec_odds), 4)
+                except Exception:
+                    pass
+
                 edges.append({
                     "game": f"{away} @ {home}",
                     "game_id": game.get("id", ""),
@@ -299,6 +312,8 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads", sport: str
                     "implied_range": round(implied_range, 4),
                     "avg_implied": round(avg_implied, 4),
                     "sharp_consensus": round(sharp_consensus, 4) if sharp_consensus else None,
+                    "no_vig_fair_probs": [round(p, 4) for p in fair_probs] if fair_probs else None,
+                    "market_hold": market_hold,
                     "num_bookmakers": len(all_lines),
                     "soft_book_edges": soft_edges,
                     "book_count": len(all_lines),

@@ -448,6 +448,129 @@ class AutonomousLoop:
         self._injury_analysis_cache[cache_key] = result
         return result
 
+
+    # ---- Line analysis signal computation ----
+
+    def _compute_line_analysis_signals(
+        self, sport: str, edge: dict, market: str, game: str, team: str,
+    ) -> dict:
+        """Compute line analysis signals for an edge candidate.
+
+        Returns kwargs dict suitable for passing directly to score_edge().
+        Signals: dead number, key number, public side, contrarian, RLM, steam.
+        """
+        result: dict = {}
+        public_est = None
+
+        # --- Dead number / key number analysis ---
+        if market in ("spreads", "totals"):
+            _dn_sport = sport.lower()
+            if _dn_sport in _DEAD_NUM_SPORT_ALIASES:
+                best_point = edge.get("best_line", {}).get("point")
+                if best_point is not None:
+                    try:
+                        result["is_dead_number"] = _is_dead_number(best_point, _dn_sport)
+                        result["key_number_value"] = _key_number_value(best_point, _dn_sport)
+                    except (ValueError, KeyError):
+                        pass
+
+        # --- Public side estimation and contrarian value ---
+        try:
+            best_line = edge.get("best_line", {})
+            worst_line = edge.get("worst_line", {})
+            best_point = best_line.get("point", 0) or 0
+            worst_point = worst_line.get("point", 0) or 0
+            line_open = worst_point if worst_point else best_point
+            line_current = best_point if best_point else worst_point
+
+            if line_open != 0 or line_current != 0:
+                public_est = estimate_public_side(
+                    line_open=line_open,
+                    line_current=line_current,
+                    sport=sport,
+                    team_a=team,
+                )
+                public_fav = public_est.get("public_favorite", "split")
+                fade_side = public_est.get("fade_side", "neither")
+                est_public_pct = max(
+                    public_est.get("estimated_public_pct_a", 50),
+                    public_est.get("estimated_public_pct_b", 50),
+                )
+                if fade_side != "neither":
+                    is_public_side = (
+                        (public_fav == "A" and fade_side == "B") or
+                        (public_fav == "B" and fade_side == "A")
+                    )
+                    result["public_side_edge"] = is_public_side
+                    cv = contrarian_value(
+                        estimated_public_pct=est_public_pct,
+                        sport=sport,
+                        spread=best_point or 0,
+                    )
+                    result["contrarian_value_score"] = cv.get("adjusted_roi", 0)
+                    result["contrarian_edge_pct"] = cv.get("contrarian_edge", 0)
+        except Exception as e:
+            logger.debug(f"Public side estimation failed for {game}: {e}")
+
+        # --- RLM detection ---
+        try:
+            best_line = edge.get("best_line", {})
+            worst_line = edge.get("worst_line", {})
+            best_price = best_line.get("price", 0)
+            worst_price = worst_line.get("price", 0)
+            movement_dir = best_price - worst_price
+            if public_est and abs(movement_dir) > 5:
+                est_pub = max(
+                    public_est.get("estimated_public_pct_a", 50),
+                    public_est.get("estimated_public_pct_b", 50),
+                )
+                est_money = est_pub * 0.8
+                rlm_result = detect_rlm(
+                    line_movement_direction=movement_dir / 100.0,
+                    public_ticket_pct=est_pub,
+                    public_money_pct=est_money,
+                )
+                if rlm_result.get("is_rlm"):
+                    result["rlm_detected"] = True
+                    result["rlm_confidence"] = rlm_result.get("confidence", 0)
+                    result["rlm_edge_on_sharp_side"] = not result.get("public_side_edge", False)
+        except Exception as e:
+            logger.debug(f"RLM detection failed for {game}: {e}")
+
+        # --- Steam detection ---
+        try:
+            snapshot = self.line_monitor._snapshots.get(sport)
+            if snapshot and snapshot.get("games"):
+                game_id = edge.get("game_id", "")
+                if game_id:
+                    line_snaps = []
+                    for g in snapshot.get("games", []):
+                        if g.get("id") != game_id:
+                            continue
+                        snap_ts = snapshot.get("timestamp", time.time())
+                        for bm in g.get("bookmakers", []):
+                            for mkt in bm.get("markets", []):
+                                if mkt["key"] != market:
+                                    continue
+                                for outcome in mkt.get("outcomes", []):
+                                    if outcome.get("name", "").lower() == team.lower() or market == "totals":
+                                        line_snaps.append({
+                                            "timestamp": snap_ts,
+                                            "line": outcome.get("price", 0),
+                                            "book": bm.get("title", bm.get("key", "unknown")),
+                                        })
+                    if len(line_snaps) >= 4:
+                        steam_results = detect_steam(line_snaps)
+                        if steam_results:
+                            top_steam = steam_results[0]
+                            result["steam_detected"] = True
+                            result["steam_confidence"] = top_steam.get("confidence", 0)
+                            result["steam_edge_on_steam_side"] = True
+        except Exception as e:
+            logger.debug(f"Steam detection failed for {game}: {e}")
+
+        return result
+
     def _find_analysis_candidates(self) -> list[dict]:
         """
         Scan latest edge reports for candidates worth full AGP analysis.
@@ -636,6 +759,92 @@ class AutonomousLoop:
                 f"  * Model edge: {pace_data['pace_model_edge_pct']:.1f}%\n"
             )
 
+        # Build line analysis context (RLM, steam, dead numbers, contrarian, timing)
+        la = candidate.get("line_analysis", {})
+        la_lines = []
+        if la.get("rlm_detected"):
+            side = "SHARP (our edge)" if la.get("rlm_edge_on_sharp_side") else "PUBLIC (against us)"
+            la_lines.append(
+                f"RLM DETECTED (confidence {la.get('rlm_confidence', 0):.0%}): "
+                f"Edge is on the {side} side."
+            )
+        if la.get("steam_detected"):
+            la_lines.append(
+                f"STEAM MOVE DETECTED (confidence {la.get('steam_confidence', 0):.0%}): "
+                f"Coordinated sharp action across books."
+            )
+        if la.get("is_dead_number"):
+            la_lines.append(
+                f"DEAD NUMBER: Spread sits on a dead number "
+                f"(key importance {la.get('key_number_value', 0):.2f}). "
+                f"Book has less risk here."
+            )
+        elif la.get("key_number_value", 0) > 0.5:
+            la_lines.append(
+                f"KEY NUMBER PROXIMITY: Near high-value key number "
+                f"(importance {la.get('key_number_value', 0):.2f})."
+            )
+        if la.get("contrarian_value_score", 0) > 1.0:
+            la_lines.append(
+                f"CONTRARIAN VALUE: Historical ROI {la.get('contrarian_value_score', 0):+.1f}% "
+                f"fading public at this percentage."
+            )
+        if la.get("public_side_edge"):
+            la_lines.append(
+                "WARNING: Edge is on the PUBLIC side with no sharp confirmation."
+            )
+
+        # Add optimal bet timing recommendation
+        try:
+            timing = optimal_bet_timing(sport=sport, market=market)
+            la_lines.append(
+                f"BET TIMING: {timing.get('optimal_window', 'N/A')} "
+                f"(estimated edge: {timing.get('historical_edge_pct', 0):.1f}%)"
+            )
+        except Exception:
+            pass
+
+        la_section = (
+            f"\nLine Analysis Signals:\n" + "\n".join(f"  * {l}" for l in la_lines) + "\n"
+            if la_lines else ""
+        )
+
+        # Build injury model context for the AGP session
+        injury_section = ""
+        inj_data = candidate.get("injury_analysis", {})
+        if inj_data.get("has_injury_edge"):
+            inj_lines = [f"  * {inj_data['market_adjustment_summary']}"]
+            if inj_data.get("is_contrarian"):
+                inj_lines.append(
+                    "  * CONTRARIAN SIGNAL: Market may have over-adjusted to injury news. "
+                    "Public overreaction to star name creates value on the injured team."
+                )
+            for a in inj_data.get("injury_analyses", [])[:3]:
+                imp = a.get("impact")
+                mtch = a.get("matchup_adjusted")
+                mtm = a.get("market_timing")
+                if imp and hasattr(imp, "spread_impact"):
+                    iline = (f"  * {imp.player_name} ({imp.position}, {imp.tier}): "
+                             f"spread impact {imp.spread_impact:+.1f} pts")
+                    if mtch and hasattr(mtch, "adjusted_spread_impact"):
+                        iline += f", matchup-adj {mtch.adjusted_spread_impact:+.1f} pts"
+                    inj_lines.append(iline)
+                if mtm and hasattr(mtm, "pct_adjusted"):
+                    inj_lines.append(
+                        f"    Market {mtm.pct_adjusted:.0%} adjusted, "
+                        f"edge remaining: {mtm.edge_remaining:.2f} pts"
+                    )
+            for prop_opp in inj_data.get("prop_opportunities", [])[:3]:
+                sc = prop_opp.get("stat_change", {})
+                ppg_inc = sc.get("ppg_increase", sc.get("projected_ppg_increase", 0))
+                inj_lines.append(
+                    f"  * PROP OPP: {prop_opp['player']} usage +{prop_opp['usage_increase']:.1f}% "
+                    f"(PPG +{ppg_inc:.1f}) with {prop_opp['absent_player']} out"
+                )
+            injury_section = "\nInjury Model Analysis:\n" + "\n".join(inj_lines) + "\n"
+        elif inj_data.get("market_adjustment_summary"):
+            injury_section = f"\nInjury Status: {inj_data['market_adjustment_summary']}\n"
+
         query = (
             f"AUTONOMOUS EDGE ANALYSIS — {sport}\n"
             f"Game: {game}\n"
@@ -646,12 +855,17 @@ class AutonomousLoop:
             f"Books compared: {candidate['num_bookmakers']}\n"
             f"\nSoft book edges vs sharp:\n{soft_detail}"
             f"{psych_section}"
-            f"{pace_section}\n"
+            f"{pace_section}"
+            f"{la_section}"
+            f"{injury_section}\n"
             f"Pre-scored confidence: {conf.tier} ({conf.score:.2f})\n\n"
             f"TASK: Use available tools to verify this edge. Check injuries, "
             f"check if the line has moved, check player props if relevant. "
-            f"Consider market psychology signals (shading, attention arbitrage) "
-            f"and pace model confirmation (if available) "
+            f"Consider market psychology signals (shading, attention arbitrage), "
+            f"pace model confirmation (if available), line analysis signals "
+            f"(RLM, steam moves, dead numbers, contrarian value, bet timing), "
+            f"and injury model analysis "
+            f"(usage redistribution, market adjustment speed, contrarian signals) "
             f"in your confidence assessment. "
             f"Determine if this is a real exploitable edge on DraftKings or Fanatics, "
             f"or if it's noise. Give a final recommendation with confidence score."
@@ -1829,6 +2043,20 @@ class ResearchLoop:
                 if not self._running:
                     break
 
+                # Phase 2b: Injury-driven prop hypotheses (every 3 cycles)
+                if self._cycles % 3 == 0:
+                    try:
+                        await asyncio.wait_for(
+                            self._phase_injury_prop_hypotheses(), timeout=120,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Phase injury_prop_hypotheses timed out — skipping")
+                    except Exception as e:
+                        logger.warning(f"Injury prop hypothesis phase failed (non-fatal): {e}")
+
+                if not self._running:
+                    break
+
                 # Phase 3: Collect data (if due — runs every 5 min)
                 try:
                     await asyncio.wait_for(self._phase_collect_data(), timeout=120)
@@ -2478,6 +2706,123 @@ class ResearchLoop:
             except Exception as e:
                 logger.warning(f"Embedding failed for context {ctx['id']}: {e}")
 
+    async def _phase_injury_prop_hypotheses(self) -> None:
+        """Generate prop hypotheses from current injury data.
+
+        When a key player is out, redistribute_usage() predicts which
+        teammates absorb the production. This directly feeds into player
+        prop edges: if Tatum is out, Jaylen Brown's usage increases and
+        his over on points has value.
+
+        Creates draft hypotheses for each high-confidence prop opportunity.
+        """
+        from tools.contextual_data import get_injuries as _get_injuries
+        from tools.injury_model import redistribute_usage as _redistribute
+
+        _sport_map = {
+            "basketball_nba": "NBA",
+            "americanfootball_nfl": "NFL",
+            "baseball_mlb": "MLB",
+        }
+
+        active_sports = list(self.line_monitor._snapshots.keys()) if self.line_monitor else []
+        if not active_sports:
+            active_sports = ["basketball_nba"]
+
+        total_created = 0
+        for sport_key in active_sports:
+            model_sport = _sport_map.get(sport_key)
+            if not model_sport:
+                continue
+
+            try:
+                inj_data = await _get_injuries(sport_key)
+            except Exception as e:
+                logger.warning(f"Injury fetch failed for {sport_key}: {e}")
+                continue
+
+            injuries = inj_data.get("injuries", [])
+            # Only process players who are OUT (not questionable)
+            out_players = [i for i in injuries if (i.get("status") or "").lower() == "out"]
+            if not out_players:
+                continue
+
+            for inj in out_players[:10]:  # cap at 10 per sport
+                player = inj.get("player", "")
+                team = inj.get("team", "")
+                position = inj.get("position", "")
+                if not player or not team:
+                    continue
+
+                # Build minimal absent player stats from position heuristics
+                absent_stats = {}
+                if model_sport == "NBA":
+                    # Default to a starter-level stat line; real data would be better
+                    absent_stats = {"ppg": 18.0, "rpg": 5.0, "apg": 4.0, "usage_rate": 25.0}
+                elif model_sport == "NFL":
+                    absent_stats = {"role": position or "WR1"}
+
+                try:
+                    redist = _redistribute(
+                        absent_player=player,
+                        team_roster=[],  # empty roster triggers generic redistribution
+                        sport=model_sport,
+                        absent_player_stats=absent_stats or None,
+                    )
+                except Exception as e:
+                    logger.debug(f"Redistribution failed for {player}: {e}")
+                    continue
+
+                if not redist:
+                    continue
+
+                # Create draft hypotheses for top beneficiaries
+                for r in redist[:3]:
+                    beneficiary = r.player if hasattr(r, "player") else "Unknown"
+                    usage_inc = r.usage_increase if hasattr(r, "usage_increase") else 0
+                    stat_chg = r.projected_stat_change if hasattr(r, "projected_stat_change") else {}
+
+                    if usage_inc < 2.0:
+                        continue  # too small to be actionable
+
+                    hypo_name = (
+                        f"injury_prop_{team}_{beneficiary}_{player}_out"
+                    ).replace(" ", "_").lower()
+
+                    # Check if hypothesis already exists
+                    try:
+                        existing = await self.hypothesis_manager.list_hypotheses()
+                        if any(h["name"] == hypo_name for h in existing):
+                            continue
+                    except Exception:
+                        pass
+
+                    ppg_inc = stat_chg.get("ppg_increase", stat_chg.get("projected_ppg_increase", 0))
+                    description = (
+                        f"With {player} OUT for {team}, {beneficiary} absorbs "
+                        f"+{usage_inc:.1f}% usage (projected +{ppg_inc:.1f} PPG). "
+                        f"Player prop overs for {beneficiary} have value when "
+                        f"{player} is confirmed out."
+                    )
+
+                    try:
+                        await self.hypothesis_manager.create_hypothesis(
+                            name=hypo_name,
+                            description=description,
+                            sport=sport_key,
+                            tags=["injury", "prop", "usage_redistribution", "auto_generated"],
+                        )
+                        total_created += 1
+                        logger.info(
+                            f"Injury prop hypothesis created: {beneficiary} "
+                            f"benefits from {player} OUT (+{usage_inc:.1f}% usage)"
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to create injury prop hypothesis: {e}")
+
+        if total_created:
+            logger.info(f"Injury prop phase: created {total_created} hypotheses")
+
     async def _phase_generate_hypotheses(self) -> None:
         """Generate new hypotheses — Claude Code PRIMARY, templates FALLBACK.
 
@@ -2600,6 +2945,43 @@ class ResearchLoop:
                             + "\n".join(regime_lines[:20]) + "\n\n"
                         )
 
+                # Build correlation context — strongest market pairs per focus sport
+                correlation_context = ""
+                try:
+                    from tools.correlation import list_correlated_markets
+                    corr_lines = []
+                    focus_sports = self.focus_manager.get_focus_sports()
+                    sports_to_check = (
+                        focus_sports[:4] if focus_sports
+                        else ["basketball_nba", "americanfootball_nfl"]
+                    )
+                    key_markets = [
+                        "team_total", "game_total", "team_spread", "player_points",
+                    ]
+                    for fs in sports_to_check:
+                        sport_pairs = []
+                        for km in key_markets:
+                            related = list_correlated_markets(km, fs, min_abs_rho=0.35)
+                            for r in related[:3]:
+                                pair_str = (
+                                    f"{km}<->{r['market']}"
+                                    f"(rho={r['correlation']:.2f})"
+                                )
+                                if pair_str not in sport_pairs:
+                                    sport_pairs.append(pair_str)
+                        if sport_pairs:
+                            corr_lines.append(
+                                f"  {fs}: {', '.join(sport_pairs[:6])}"
+                            )
+                    if corr_lines:
+                        correlation_context = (
+                            "CROSS-MARKET CORRELATIONS (strongest pairs — "
+                            "use for SGP/parlay hypotheses):\n"
+                            + "\n".join(corr_lines) + "\n\n"
+                        )
+                except Exception as e:
+                    logger.debug(f"Correlation context generation failed: {e}")
+
                 prompt = (
                     f"CALLISTO HYPOTHESIS GENERATION — Cycle #{self._cycles}\n\n"
                     f"You are a skeptical quantitative researcher. Your default stance: "
@@ -2621,6 +3003,7 @@ class ResearchLoop:
                     f"  {json.dumps(existing_names[:50])}\n\n"
                     f"{focus_context}\n\n"
                     f"{regime_context}"
+                    f"{correlation_context}"
                     f"EDGE TYPES (edges that persist hours, not speed arb):\n"
                     f"  - rest days, travel, altitude, back-to-backs\n"
                     f"  - referee tendencies, scheme matchups\n"
@@ -2628,6 +3011,7 @@ class ResearchLoop:
                     f"  - weather, revenge games, divisional rivalry\n"
                     f"  - line movement timing, closing line value patterns\n"
                     f"  - player prop mispricing (over/under on stats)\n"
+                    f"  - SGP/parlay correlation mispricing (correlated legs priced as independent)\n"
                     f"  - situational factors books underweight\n\n"
                     f"RESPOND WITH EXACTLY THIS JSON (no other text):\n"
                     f'{{"hypotheses": [\n'

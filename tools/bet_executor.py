@@ -161,39 +161,71 @@ class BetExecutor:
         odds: int,
         bankroll: float,
         confidence: float = 0.6,
+        p_push: float = 0.0,
+        variance_estimate: float = None,
     ) -> float:
         """
-        Compute bet stake using quarter-Kelly with safety caps.
+        Compute bet stake using dynamic Kelly with AGP confidence tiers,
+        uncertainty adjustment, and push-aware sizing.
+
+        Uses kelly_dynamic (confidence + variance aware) as the primary
+        sizer. Falls back to kelly_with_push for spread bets where push
+        is possible. Applies uncertainty_adjusted_kelly when confidence
+        is below VERIFIED tier.
 
         Returns dollar amount to wager (0 if bet should be skipped).
         """
-        from tools.kelly import kelly_full, kelly_fractional
-        from tools.odds_api import calculate_implied_probability
+        from tools.kelly import kelly_dynamic, kelly_fractional
+        from tools.sizing import kelly_with_push, uncertainty_adjusted_kelly
 
-        implied = calculate_implied_probability(odds)
-        fair_prob = implied + edge
+        # Default variance_estimate: half the edge magnitude
+        if variance_estimate is None:
+            variance_estimate = abs(edge) * 0.5
 
-        # Full Kelly fraction
-        if odds > 0:
-            decimal_odds = 1 + (odds / 100)
-        else:
-            decimal_odds = 1 + (100 / abs(odds))
+        # For spread bets with push probability, use push-aware Kelly
+        if p_push > 0:
+            from tools.math_utils import american_to_decimal
+            decimal_odds = american_to_decimal(odds)
+            from tools.odds_api import calculate_implied_probability
+            implied = calculate_implied_probability(odds)
+            fair_prob = implied + edge
 
-        b = decimal_odds - 1  # net payout
-        p = fair_prob
-        q = 1 - p
+            fk = kelly_with_push(fair_prob, p_push, decimal_odds)
 
-        kelly_f = (b * p - q) / b if b > 0 else 0
-        kelly_f = max(0, kelly_f)
+            # Map confidence score to string tier for uncertainty adjustment
+            if confidence >= 0.90:
+                conf_str = "high"
+            elif confidence >= 0.55:
+                conf_str = "medium"
+            else:
+                conf_str = "low"
 
-        # Fractional Kelly
-        stake_fraction = kelly_f * KELLY_FRACTION
+            # Apply uncertainty adjustment for non-verified edges
+            adjusted = uncertainty_adjusted_kelly(fk, edge, conf_str)
+            stake_fraction = min(adjusted, MAX_BET_PCT)
+            stake = round(bankroll * stake_fraction, 2)
 
-        # Cap at max bet percentage
-        stake_fraction = min(stake_fraction, MAX_BET_PCT)
+            if stake < MIN_BET_AMOUNT:
+                return 0.0
+            return stake
 
-        # Dollar amount
-        stake = round(bankroll * stake_fraction, 2)
+        # Primary path: kelly_dynamic integrates AGP confidence tiers,
+        # variance dampening, and hard caps in one call
+        result = kelly_dynamic(
+            edge=edge,
+            odds=odds,
+            confidence_score=confidence,
+            variance_estimate=variance_estimate,
+            bankroll=bankroll,
+            kelly_base_fraction=KELLY_FRACTION,
+        )
+
+        stake = result["stake"]
+
+        # Additional cap at max bet percentage of bankroll
+        max_stake = bankroll * MAX_BET_PCT
+        if stake > max_stake:
+            stake = round(max_stake, 2)
 
         # Floor
         if stake < MIN_BET_AMOUNT:

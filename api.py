@@ -483,9 +483,15 @@ async def get_kl_metrics(sport: Optional[str] = None, limit: int = 50):
 
 @app.post("/odds/parlay-scan/{sport}")
 async def parlay_scan(sport: str):
-    """Scan for correlated parlay edges on a sport. Pulls odds + alternates."""
+    """Scan for correlated parlay edges on a sport. Pulls odds + alternates.
+
+    Combines the parlay_scanner (cross-book alternate line exploitation) with
+    the correlation engine (build_correlated_parlay) to find SGP edges where
+    books misprice correlated legs as independent.
+    """
     from tools.odds_api import get_odds as _get_odds, get_alternate_lines as _get_alt
     from tools.parlay_scanner import find_correlated_parlay_edges
+    from tools.correlation import build_correlated_parlay
 
     # Get standard odds
     odds_data = await _get_odds(sport=sport, regions="us", markets="h2h,spreads,totals")
@@ -493,6 +499,7 @@ async def parlay_scan(sport: str):
         return {"error": odds_data["error"]}
 
     all_edges = []
+    correlated_suggestions = []
     # Scan first 5 games (credit budget awareness)
     for game in odds_data.get("games", [])[:5]:
         event_id = game.get("id", "")
@@ -504,12 +511,149 @@ async def parlay_scan(sport: str):
         edges = find_correlated_parlay_edges(game, alt_data)
         all_edges.extend(edges)
 
+        # Also run correlation engine on standard markets
+        home = game.get("home_team", "")
+        away = game.get("away_team", "")
+        game_data = {"home_team": home, "away_team": away}
+        available_props = []
+        for bm in game.get("bookmakers", []):
+            for mkt in bm.get("markets", []):
+                for outcome in mkt.get("outcomes", []):
+                    price = outcome.get("price", 0)
+                    if price == 0:
+                        continue
+                    point = outcome.get("point")
+                    desc = f"{outcome.get('name', '')} {mkt['key']}"
+                    if point is not None:
+                        desc += f" {point}"
+                    available_props.append({
+                        "market": mkt["key"],
+                        "american_odds": price,
+                        "description": f"{desc} ({bm['title']})",
+                        "side": outcome.get("name", ""),
+                    })
+        if available_props:
+            suggestions = build_correlated_parlay(
+                available_props=available_props[:20],
+                game_data=game_data,
+                sport=sport,
+                min_correlation=0.25,
+                max_legs=3,
+            )
+            for s in suggestions[:5]:
+                if s.get("correlation_edge_pct", 0) > 0.5:
+                    correlated_suggestions.append(s)
+
     return {
         "sport": sport,
         "games_scanned": min(5, odds_data.get("game_count", 0)),
         "edges_found": len(all_edges),
         "edges": all_edges,
+        "correlated_parlay_suggestions": correlated_suggestions,
         "credits": odds_data.get("credits", {}),
+    }
+
+
+@app.get("/odds/sgp-analysis/{sport}")
+async def sgp_analysis(sport: str):
+    """Analyze SGP mispricing and excessive vig for a sport.
+
+    Shows:
+    1. Correlated parlay suggestions (legs that books treat as independent but aren't)
+    2. Anti-correlated pairs to avoid (legs that fight each other)
+    3. Strongest market correlations for this sport
+
+    Uses cached snapshot data — zero extra API credits.
+    """
+    from tools.correlation import (
+        build_correlated_parlay,
+        list_correlated_markets,
+        get_all_correlations,
+    )
+
+    if not line_monitor:
+        raise HTTPException(status_code=503, detail="Line monitor not initialized")
+
+    snapshot = line_monitor._snapshots.get(sport)
+    if not snapshot or not snapshot.get("games"):
+        return {
+            "error": f"No snapshot data for {sport}. "
+            f"Wait for next snapshot cycle or force one via POST /odds/snapshot/{sport}",
+        }
+
+    games = snapshot["games"]
+    all_suggestions = []
+    all_anti = []
+
+    for game in games[:8]:
+        home = game.get("home_team", "")
+        away = game.get("away_team", "")
+        game_data = {"home_team": home, "away_team": away}
+
+        available_props = []
+        for bm in game.get("bookmakers", []):
+            for mkt in bm.get("markets", []):
+                for outcome in mkt.get("outcomes", []):
+                    price = outcome.get("price", 0)
+                    if price == 0:
+                        continue
+                    point = outcome.get("point")
+                    desc = f"{outcome.get('name', '')} {mkt['key']}"
+                    if point is not None:
+                        desc += f" {point}"
+                    available_props.append({
+                        "market": mkt["key"],
+                        "american_odds": price,
+                        "description": f"{desc} ({bm['title']})",
+                        "side": outcome.get("name", ""),
+                    })
+
+        if not available_props:
+            continue
+
+        suggestions = build_correlated_parlay(
+            available_props=available_props[:20],
+            game_data=game_data,
+            sport=sport,
+            min_correlation=0.2,
+            max_legs=3,
+        )
+        for s in suggestions[:5]:
+            if s.get("correlation_edge_pct", 0) > 0.5:
+                all_suggestions.append(s)
+
+        # Check for anti-correlated pairs among available markets
+        from tools.correlation import detect_anti_correlation
+        anti = detect_anti_correlation(available_props[:15], sport)
+        for a in anti:
+            a["game"] = f"{away} @ {home}"
+        all_anti.extend(anti)
+
+    # Get strongest correlations for this sport
+    all_corrs = get_all_correlations(sport)
+    top_correlations = sorted(
+        [
+            {"market_a": k[0], "market_b": k[1], "correlation": v}
+            for k, v in all_corrs.items()
+        ],
+        key=lambda x: abs(x["correlation"]),
+        reverse=True,
+    )[:20]
+
+    return {
+        "sport": sport,
+        "games_analyzed": min(8, len(games)),
+        "correlated_parlay_suggestions": sorted(
+            all_suggestions,
+            key=lambda x: x.get("correlation_edge_pct", 0),
+            reverse=True,
+        )[:15],
+        "anti_correlated_pairs": all_anti[:10],
+        "top_sport_correlations": top_correlations,
+        "cached_parlay_scan": (
+            autonomous.get_parlay_scan_report().get(sport)
+            if autonomous else None
+        ),
     }
 
 
@@ -723,6 +867,221 @@ async def market_psychology_all():
     return autonomous.get_psychology_report()
 
 
+# --- Dead Numbers & Line Analysis ---
+
+@app.get("/odds/dead-numbers/{sport}")
+async def dead_numbers_endpoint(sport: str):
+    """Show dead number steals and key number analysis for a sport.
+
+    Scans current odds snapshot for spreads sitting on dead numbers
+    while other books are on key numbers. Also includes line shopping
+    opportunities and buy-points analysis.
+
+    Uses cached snapshot data (zero extra API credits).
+    """
+    from tools.dead_numbers import (
+        find_dead_number_steals,
+        rank_line_shopping_opportunities,
+        analyze_spread as dn_analyze_spread,
+        SPORT_ALIASES,
+    )
+    from tools.odds_api import find_best_line as _find_best_line
+
+    if not line_monitor:
+        raise HTTPException(status_code=503, detail="Line monitor not initialized")
+
+    snapshot = line_monitor._snapshots.get(sport)
+    if not snapshot or not snapshot.get("games"):
+        return {"error": f"No snapshot data for {sport}. Wait for next snapshot cycle or force one via POST /odds/snapshot/{sport}"}
+
+    _dn_sport = sport.lower()
+    if _dn_sport not in SPORT_ALIASES:
+        return {"error": f"Sport '{sport}' not supported for dead number analysis. Supported: {list(set(SPORT_ALIASES.values()))}"}
+
+    games = snapshot.get("games", [])
+    all_steals = []
+    all_shopping = []
+    spread_analyses = []
+
+    for game in games:
+        home = game.get("home_team", "")
+        away = game.get("away_team", "")
+
+        for team in [home, away]:
+            if not team:
+                continue
+
+            best = _find_best_line(game, market="spreads", team=team)
+            all_lines = best.get("all_lines", [])
+            if not all_lines:
+                continue
+
+            # Build lines list for dead number functions
+            lines_for_dn = [
+                {
+                    "bookmaker": l["bookmaker"],
+                    "spread": l.get("point", 0),
+                    "price": l.get("price", -110),
+                }
+                for l in all_lines
+                if l.get("point") is not None
+            ]
+
+            if not lines_for_dn:
+                continue
+
+            # Analyze the primary spread
+            primary_spread = lines_for_dn[0]["spread"]
+            try:
+                analysis = dn_analyze_spread(primary_spread, sport)
+                analysis["game"] = f"{away} @ {home}"
+                analysis["team"] = team
+                spread_analyses.append(analysis)
+            except (ValueError, KeyError):
+                pass
+
+            # Find dead number steals
+            if len(lines_for_dn) >= 2:
+                try:
+                    steals = find_dead_number_steals(lines_for_dn, sport)
+                    for s in steals:
+                        s["game"] = f"{away} @ {home}"
+                        s["team"] = team
+                    all_steals.extend(steals)
+                except (ValueError, KeyError):
+                    pass
+
+                # Rank line shopping opportunities
+                try:
+                    shopping = rank_line_shopping_opportunities(lines_for_dn, sport)
+                    for s in shopping:
+                        s["game"] = f"{away} @ {home}"
+                        s["team"] = team
+                    all_shopping.extend(shopping)
+                except (ValueError, KeyError):
+                    pass
+
+    all_steals.sort(key=lambda x: x.get("prob_difference", 0), reverse=True)
+    all_shopping.sort(key=lambda x: x.get("prob_difference", 0), reverse=True)
+
+    return {
+        "sport": sport,
+        "games_scanned": len(games),
+        "dead_number_steals": all_steals[:20],
+        "line_shopping_opportunities": all_shopping[:20],
+        "spread_analyses": spread_analyses[:30],
+        "steal_count": len(all_steals),
+        "shopping_count": len(all_shopping),
+    }
+
+
+@app.get("/odds/line-analysis/{sport}")
+async def line_analysis_endpoint(sport: str):
+    """Show RLM, steam moves, public side analysis, and bet timing for a sport.
+
+    Analyzes the current snapshot for reverse line movement (sharp money
+    indicator), steam moves (coordinated sharp action), estimated public
+    side distribution, and optimal bet timing windows.
+
+    Uses cached snapshot data (zero extra API credits).
+    """
+    from tools.line_analysis import (
+        estimate_public_side as la_estimate_public,
+        contrarian_value as la_contrarian,
+        optimal_bet_timing as la_timing,
+        detect_steam as la_detect_steam,
+    )
+    from tools.odds_api import find_best_line as _find_best_line
+
+    if not line_monitor:
+        raise HTTPException(status_code=503, detail="Line monitor not initialized")
+
+    snapshot = line_monitor._snapshots.get(sport)
+    if not snapshot or not snapshot.get("games"):
+        return {"error": f"No snapshot data for {sport}. Wait for next snapshot cycle or force one via POST /odds/snapshot/{sport}"}
+
+    games = snapshot.get("games", [])
+    public_analyses = []
+    contrarian_picks = []
+    timing_info = None
+
+    # Compute bet timing for the sport
+    try:
+        timing_info = la_timing(sport=sport)
+    except Exception:
+        pass
+
+    for game in games:
+        home = game.get("home_team", "")
+        away = game.get("away_team", "")
+
+        # Get spread lines for public side estimation
+        for team_side, team_name in [("home", home), ("away", away)]:
+            if not team_name:
+                continue
+
+            best = _find_best_line(game, market="spreads", team=team_name)
+            all_lines = best.get("all_lines", [])
+            if not all_lines:
+                continue
+
+            # Use best and worst as proxy for open/current
+            prices = [l.get("price", -110) for l in all_lines]
+            points = [l.get("point", 0) for l in all_lines if l.get("point") is not None]
+
+            if not points:
+                continue
+
+            best_point = max(points)
+            worst_point = min(points)
+
+            try:
+                public_est = la_estimate_public(
+                    line_open=worst_point,
+                    line_current=best_point,
+                    sport=sport,
+                    team_a=team_name,
+                    team_b=away if team_side == "home" else home,
+                )
+                public_est["game"] = f"{away} @ {home}"
+                public_est["team"] = team_name
+                public_analyses.append(public_est)
+
+                # If strong public lean, compute contrarian value
+                est_public_pct = max(
+                    public_est.get("estimated_public_pct_a", 50),
+                    public_est.get("estimated_public_pct_b", 50),
+                )
+                if est_public_pct >= 60:
+                    cv = la_contrarian(
+                        estimated_public_pct=est_public_pct,
+                        sport=sport,
+                        spread=best_point,
+                    )
+                    cv["game"] = f"{away} @ {home}"
+                    cv["team"] = team_name
+                    contrarian_picks.append(cv)
+            except Exception:
+                pass
+
+        # Steam detection from snapshot price data
+        # (Note: steam detection works best across multiple snapshots over time;
+        # single-snapshot detection is limited but still catches book-to-book divergence)
+
+    # Sort contrarian picks by adjusted ROI
+    contrarian_picks.sort(key=lambda x: x.get("adjusted_roi", 0), reverse=True)
+
+    return {
+        "sport": sport,
+        "games_scanned": len(games),
+        "public_side_analyses": public_analyses,
+        "contrarian_picks": contrarian_picks[:10],
+        "bet_timing": timing_info,
+        "analysis_count": len(public_analyses),
+        "contrarian_count": len(contrarian_picks),
+    }
+
+
 @app.get("/bets/clv-forecast")
 async def clv_forecast(sport: Optional[str] = None):
     """Forecast pre-game CLV for all pending bets using closing line prediction.
@@ -924,9 +1283,195 @@ async def get_model_environment(venue: str, sport: str = "NFL",
 
 @app.get("/data/injuries/{sport}")
 async def get_injuries(sport: str):
-    """Get current injury report from ESPN."""
+    """Get current injury report from ESPN with model analysis.
+
+    Returns raw injury data plus, for each injured starter/key player,
+    the injury model's quantified impact (spread points, usage redistribution).
+    """
     from tools.contextual_data import get_injuries as _get_injuries
-    return await _get_injuries(sport)
+    from tools.injury_model import player_impact as _player_impact
+
+    data = await _get_injuries(sport)
+    if data.get("error") or not data.get("injuries"):
+        return data
+
+    # Map sport key to model sport code
+    _model_sport_map = {
+        "basketball_nba": "NBA", "basketball_ncaab": "NBA",
+        "americanfootball_nfl": "NFL", "americanfootball_ncaaf": "NFL",
+        "baseball_mlb": "MLB", "icehockey_nhl": "NHL",
+    }
+    model_sport = _model_sport_map.get(sport, "")
+
+    # Enrich each injury with model analysis (lightweight — no matchup/timing)
+    if model_sport:
+        for inj in data["injuries"]:
+            status = (inj.get("status") or "").lower()
+            if status not in ("out", "doubtful"):
+                continue
+            try:
+                result = _player_impact(
+                    player_name=inj.get("player", ""),
+                    team=inj.get("team", ""),
+                    sport=model_sport,
+                    position=inj.get("position", ""),
+                )
+                inj["model_analysis"] = {
+                    "tier": result.tier,
+                    "spread_impact": result.spread_impact,
+                    "total_impact": result.total_impact,
+                    "confidence": result.confidence,
+                    "notes": result.notes[:3],
+                }
+            except Exception:
+                pass  # silently skip model failures
+
+    return data
+
+
+@app.get("/model/injury-impact/{sport}")
+async def injury_impact_model(sport: str):
+    """Run full injury model analysis for today's games.
+
+    Fetches current injuries and scoreboard, then for each game with
+    significant injuries, runs full_injury_analysis (impact quantification,
+    usage redistribution, matchup adjustment, market timing).
+
+    Returns per-game injury impact summaries with prop opportunities.
+    """
+    from tools.contextual_data import get_injuries as _get_injuries, get_scoreboard as _get_sb
+    from tools.injury_model import full_injury_analysis as _full_analysis
+    from dataclasses import asdict
+
+    _model_sport_map = {
+        "basketball_nba": "NBA", "basketball_ncaab": "NBA",
+        "americanfootball_nfl": "NFL", "americanfootball_ncaaf": "NFL",
+        "baseball_mlb": "MLB", "icehockey_nhl": "NHL",
+    }
+    model_sport = _model_sport_map.get(sport, "")
+    if not model_sport:
+        return {"error": f"Sport {sport} not supported by injury model"}
+
+    injuries_data = await _get_injuries(sport)
+    scoreboard = await _get_sb(sport)
+    injuries = injuries_data.get("injuries", [])
+    games = scoreboard.get("games", [])
+
+    if not injuries:
+        return {"sport": sport, "games": [], "message": "No injuries reported"}
+
+    # Build team-to-game mapping
+    team_game_map = {}  # team_name_lower -> game dict
+    for g in games:
+        for side in ["home_team", "away_team"]:
+            tn = g.get(side, "").lower()
+            if tn:
+                team_game_map[tn] = g
+
+    # Group injuries by team
+    team_injuries = {}
+    for inj in injuries:
+        status = (inj.get("status") or "").lower()
+        if status not in ("out", "doubtful"):
+            continue
+        team = inj.get("team", "")
+        team_injuries.setdefault(team, []).append(inj)
+
+    results = []
+    for team, injs in team_injuries.items():
+        # Find the game for this team
+        game = team_game_map.get(team.lower())
+        if not game:
+            # Try partial match
+            for tn, g in team_game_map.items():
+                if any(w in tn for w in team.lower().split() if len(w) > 3):
+                    game = g
+                    break
+        if not game:
+            continue
+
+        home = game.get("home_team", "")
+        away = game.get("away_team", "")
+        opponent = away if team.lower() in home.lower() else home
+        game_name = game.get("name", f"{away} at {home}")
+
+        game_result = {
+            "game": game_name,
+            "team": team,
+            "opponent": opponent,
+            "injuries": [],
+        }
+
+        for inj in injs:
+            try:
+                analysis = _full_analysis(
+                    player_name=inj.get("player", ""),
+                    team=team,
+                    sport=model_sport,
+                    opponent=opponent,
+                    position=inj.get("position", ""),
+                    minutes_since_announced=30.0,
+                )
+                # Convert dataclasses to dicts for JSON serialization
+                summary = {
+                    "player": analysis["player"],
+                    "actionable": analysis.get("actionable", False),
+                    "edge_points": analysis.get("edge_points", 0),
+                }
+                impact = analysis.get("impact")
+                if impact:
+                    summary["impact"] = {
+                        "tier": impact.tier,
+                        "spread_impact": impact.spread_impact,
+                        "total_impact": impact.total_impact,
+                        "confidence": impact.confidence,
+                        "notes": impact.notes[:3],
+                    }
+                matchup = analysis.get("matchup_adjusted")
+                if matchup:
+                    summary["matchup"] = {
+                        "base_impact": matchup.base_impact,
+                        "multiplier": matchup.matchup_multiplier,
+                        "adjusted_spread_impact": matchup.adjusted_spread_impact,
+                        "reasoning": matchup.reasoning[:3],
+                    }
+                mkt = analysis.get("market_timing")
+                if mkt:
+                    summary["market_timing"] = {
+                        "pct_adjusted": mkt.pct_adjusted,
+                        "window_remaining_minutes": mkt.window_remaining_minutes,
+                        "edge_remaining": mkt.edge_remaining,
+                        "tier": mkt.significance_tier,
+                        "notes": mkt.notes[:2],
+                    }
+                # Usage redistribution — top 5 beneficiaries
+                redist = analysis.get("redistribution", [])
+                if redist:
+                    summary["prop_opportunities"] = [
+                        {
+                            "player": r.player,
+                            "role": r.role,
+                            "usage_increase": r.usage_increase,
+                            "stat_change": r.projected_stat_change,
+                        }
+                        for r in redist[:5]
+                    ]
+                game_result["injuries"].append(summary)
+            except Exception as e:
+                game_result["injuries"].append({
+                    "player": inj.get("player", ""),
+                    "error": str(e),
+                })
+
+        if game_result["injuries"]:
+            results.append(game_result)
+
+    return {
+        "sport": sport,
+        "model_sport": model_sport,
+        "game_count": len(results),
+        "games": results,
+    }
 
 
 @app.get("/data/scoreboard/{sport}")
@@ -1076,6 +1621,21 @@ class HedgeRequest(BaseModel):
     fair_probability: float
 
 
+class BoostedParlayLeg(BaseModel):
+    american_odds: int
+    market: str
+    description: str = ""
+
+
+class BoostedParlayRequest(BaseModel):
+    legs: list[BoostedParlayLeg]
+    boosted_parlay_odds: int
+    sport: str
+    max_stake: float = 100
+    description: str = ""
+    book: str = ""
+
+
 class DevigRequest(BaseModel):
     odds_a: int
     odds_b: int
@@ -1163,6 +1723,27 @@ async def devig(req: DevigRequest):
         "additive": {"side_a": add_a, "side_b": add_b},
         "recommended": "multiplicative",
     }
+
+
+@app.post("/boosts/evaluate-parlay")
+async def eval_boosted_parlay(req: BoostedParlayRequest):
+    """Evaluate a boosted parlay using correlation-adjusted fair odds.
+
+    Books often boost parlays with correlated legs, making the boost look
+    more generous than it is. This computes the TRUE fair probability using
+    the correlation engine, then compares to the boosted odds.
+    """
+    from tools.boost_evaluator import evaluate_boosted_parlay
+
+    legs = [leg.dict() for leg in req.legs]
+    return evaluate_boosted_parlay(
+        legs=legs,
+        boosted_parlay_odds=req.boosted_parlay_odds,
+        sport=req.sport,
+        max_stake=req.max_stake,
+        description=req.description,
+        book=req.book,
+    )
 
 
 # --- Hypothesis Testing & Backtesting ---
