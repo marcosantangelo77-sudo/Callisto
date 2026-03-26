@@ -2,7 +2,7 @@
 
 When Claude is unavailable (rate-limited or down), work is:
   1. Enqueued for execution when Claude returns
-  2. Handled locally via Qwen (Sentinel model) as a lightweight fallback
+  2. Handled locally via the model fallback ladder (best available model)
 
 When Claude becomes available again, the queue drains immediately — highest
 priority items first. No work is ever silently dropped.
@@ -30,21 +30,48 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 # ── Local Ollama helper ──
 
 async def _call_local_model(prompt: str, model: str = None, max_tokens: int = 500) -> str:
-    """Call local Ollama model directly. Fast, free, always available."""
-    model = model or LOCAL_MODEL
-    try:
-        import httpx
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(f"{OLLAMA_URL}/api/generate", json={
-                "model": model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"num_predict": max_tokens},
-            })
-            if r.status_code == 200:
-                return r.json().get("response", "")
-    except Exception as e:
-        logger.debug(f"Local model call failed: {e}")
+    """Call local Ollama model via the fallback ladder. Tries best available model."""
+    if model:
+        # Explicit model requested — use it directly
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=60) as c:
+                r = await c.post(f"{OLLAMA_URL}/api/generate", json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"num_predict": max_tokens},
+                })
+                if r.status_code == 200:
+                    return r.json().get("response", "")
+        except Exception as e:
+            logger.debug(f"Local model call ({model}) failed: {e}")
+        return ""
+
+    # Use fallback ladder: try models in quality order
+    fallback_models = [
+        "nemotron-cascade-2:latest",  # Best reasoning (30B MoE, 3B active)
+        "deepseek-r1:14b",            # Strong reasoning fallback
+        LOCAL_MODEL,                   # Fast classification fallback (qwen3.5:4b)
+    ]
+    import httpx
+    for m in fallback_models:
+        try:
+            async with httpx.AsyncClient(timeout=60) as c:
+                r = await c.post(f"{OLLAMA_URL}/api/generate", json={
+                    "model": m,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"num_predict": max_tokens},
+                })
+                if r.status_code == 200:
+                    content = r.json().get("response", "")
+                    if content:
+                        logger.info(f"Local fallback: {m} succeeded ({len(content)} chars)")
+                        return content
+        except Exception as e:
+            logger.debug(f"Local model {m} failed: {e}")
+            continue
     return ""
 
 

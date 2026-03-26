@@ -58,7 +58,7 @@ class AgentConfig:
     supports_native_tools: bool = False  # True = pass tools= to Ollama API
 
 
-# VRAM budget: RTX 5060 Ti 16GB
+# VRAM budget: RTX 4070 Ti Super 16GB
 # Context sizes and batch tuned per-agent role to maximize tp/s and minimize VRAM spill.
 # num_ctx/num_batch/num_predict set in Modelfiles — only override temperature here.
 # Flash attention enabled at Ollama server level (OLLAMA_FLASH_ATTENTION=1).
@@ -68,6 +68,10 @@ class AgentConfig:
 #   Architect: Nemotron Cascade 2 30B-A3B (MoE, 3B active) — outperforms Qwen3.5 on all benchmarks
 #   Manager:   GPT-OSS 20B (MXFP4) — fast, reliable adversarial review
 #   Sentinel:  Qwen3.5 4B — ultra-fast classification, 3GB vs 9GB DeepSeek-R1
+#
+# Fallback ladder: When Claude is rate-limited, tasks fall through
+# quality tiers instead of waiting. Task-type routing sends each task
+# to the most capable available model for that specific capability.
 AGENT_CONFIGS: dict[str, AgentConfig] = {
     "architect": AgentConfig(
         model="nemotron-cascade-2:latest",
@@ -101,6 +105,139 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
         ),
     ),
 }
+
+# ── Model Fallback Ladder ──
+# Task-type-aware routing with graceful degradation.
+# Each task type has an ordered list of models to try.
+# Claude Code is always first for reasoning/code tasks when available.
+# Local models provide zero-downtime fallback at lower quality tiers.
+#
+# Quality tiers map to AGP source class clamping:
+#   "frontier" = PRIMARY capable (Claude Code)
+#   "high"     = SECONDARY max (strong local models)
+#   "medium"   = SIGNAL max (fast local models)
+MODEL_LADDER: dict[str, list[dict]] = {
+    "reasoning": [
+        {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": "nemotron-cascade-2:latest", "quality": "high", "timeout": 90},
+        {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},
+        {"model": "qwen3.5:4b", "quality": "medium", "timeout": 60},
+    ],
+    "classification": [
+        {"model": "qwen3.5:4b", "quality": "medium", "timeout": 30},
+    ],
+    "review": [
+        {"model": "manager:latest", "quality": "high", "timeout": 60},
+    ],
+    "code_generation": [
+        {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": "nemotron-cascade-2:latest", "quality": "high", "timeout": 90},
+    ],
+    "hypothesis_gen": [
+        {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": "nemotron-cascade-2:latest", "quality": "high", "timeout": 90},
+        {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},
+    ],
+}
+
+# Cached OllamaInference instances (one per model, reused)
+_inference_cache: dict[str, "OllamaInference"] = {}
+
+
+def _get_inference(model: str) -> "OllamaInference":
+    """Get or create a cached OllamaInference instance for a model."""
+    if model not in _inference_cache:
+        _inference_cache[model] = OllamaInference(AgentConfig(
+            model=model,
+            default_options={"temperature": 0.1},
+            think=False,
+        ))
+    return _inference_cache[model]
+
+
+async def escalate_with_ladder(
+    prompt: str,
+    system_context: str = "",
+    task_type: str = "reasoning",
+    timeout: Optional[int] = None,
+) -> dict:
+    """
+    Try models in quality order for a given task type.
+
+    Returns first successful result with metadata about which model was used.
+    Claude Code is attempted first when available; local models provide fallback.
+
+    Args:
+        prompt: the task prompt
+        system_context: optional system context (for Claude or system prompt)
+        task_type: one of MODEL_LADDER keys (reasoning, classification, review, etc.)
+        timeout: override timeout (uses ladder default if None)
+
+    Returns:
+        dict with keys: content, model_used, quality, ladder_step, error (if all failed)
+    """
+    from tools.claude_code import claude_code_query, is_available as claude_available
+
+    ladder = MODEL_LADDER.get(task_type, MODEL_LADDER["reasoning"])
+
+    for step, config in enumerate(ladder):
+        model = config["model"]
+        model_timeout = timeout or config["timeout"]
+
+        try:
+            if model == "claude_code":
+                if not claude_available():
+                    logger.debug(f"Ladder step {step}: Claude unavailable, skipping")
+                    continue
+                result = await claude_code_query(
+                    prompt, system_context, timeout=model_timeout
+                )
+                content = result.get("content", "")
+                if content and not result.get("error"):
+                    logger.info(f"Ladder step {step}: Claude Code succeeded")
+                    return {
+                        "content": content,
+                        "model_used": "claude_code",
+                        "quality": config["quality"],
+                        "ladder_step": step,
+                    }
+                logger.warning(f"Ladder step {step}: Claude returned error or empty")
+                continue
+
+            # Local Ollama model
+            agent = _get_inference(model)
+            messages = []
+            if system_context:
+                messages.append({"role": "system", "content": system_context})
+            messages.append({"role": "user", "content": prompt})
+
+            response = await agent.achat(
+                messages, options={"num_predict": 2048}
+            )
+            content = response.get("content", "")
+            if content:
+                logger.info(f"Ladder step {step}: {model} succeeded ({len(content)} chars)")
+                return {
+                    "content": content,
+                    "model_used": model,
+                    "quality": config["quality"],
+                    "ladder_step": step,
+                }
+            logger.warning(f"Ladder step {step}: {model} returned empty")
+
+        except Exception as e:
+            logger.warning(f"Ladder step {step}: {model} failed: {e}")
+            continue
+
+    logger.error(f"All models exhausted for task_type={task_type}")
+    return {
+        "content": "",
+        "model_used": "none",
+        "quality": "none",
+        "ladder_step": -1,
+        "error": "All models in ladder exhausted",
+    }
+
 
 # Function registry for tool execution
 FUNCTION_REGISTRY: dict[str, callable] = {}
