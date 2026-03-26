@@ -1029,7 +1029,7 @@ class BacktestEngine:
                 if 1 <= val <= 20:
                     filters["spread_min"] = val
 
-        # 4. Home/away filter
+        # 4. Home/away filter — from thesis text
         if re.search(r'\bhome\s+(underdog|dog|team|favorite)', thesis_lower):
             filters["home_away_filter"] = "home"
         elif re.search(r'\broad\s+(underdog|dog|team|favorite)', thesis_lower):
@@ -1037,11 +1037,36 @@ class BacktestEngine:
         elif re.search(r'\baway\s+(underdog|dog|team|favorite)', thesis_lower):
             filters["home_away_filter"] = "away"
 
-        # 5. Underdog/favorite filter
+        # 4b. Fallback: extract home/away from hypothesis NAME.
+        # Names like "mlb_opening_week_road_favorites_h2h" or "nba_home_underdog_ats"
+        if "home_away_filter" not in filters and h_id_lower:
+            name_parts = h_id_lower.replace("-", "_").split("_")
+            if "road" in name_parts or "away" in name_parts:
+                filters["home_away_filter"] = "away"
+                logger.info(f"home_away_filter 'away' inferred from hypothesis name: {hypothesis_id}")
+            elif "home" in name_parts:
+                filters["home_away_filter"] = "home"
+                logger.info(f"home_away_filter 'home' inferred from hypothesis name: {hypothesis_id}")
+
+        # 5. Underdog/favorite filter — from thesis text
         if re.search(r'\bunderdog', thesis_lower) and not re.search(r'\bfavorite', thesis_lower):
             filters["dog_fav_filter"] = "underdog"
         elif re.search(r'\bfavorite', thesis_lower) and not re.search(r'\bunderdog', thesis_lower):
             filters["dog_fav_filter"] = "favorite"
+
+        # 5b. Fallback: extract dog/fav from hypothesis NAME if thesis didn't yield it.
+        # Names like "mlb_opening_week_underdog_ml" or "mlb_road_favorite_mispricing"
+        # encode the predicted direction.
+        if "dog_fav_filter" not in filters and h_id_lower:
+            name_parts = set(h_id_lower.replace("-", "_").split("_"))
+            has_dog = bool(name_parts & {"underdog", "dog", "underdogs"})
+            has_fav = bool(name_parts & {"favorite", "favorites", "fav"})
+            if has_dog and not has_fav:
+                filters["dog_fav_filter"] = "underdog"
+                logger.info(f"dog_fav_filter 'underdog' inferred from hypothesis name: {hypothesis_id}")
+            elif has_fav and not has_dog:
+                filters["dog_fav_filter"] = "favorite"
+                logger.info(f"dog_fav_filter 'favorite' inferred from hypothesis name: {hypothesis_id}")
 
         return filters
 
@@ -1053,6 +1078,7 @@ class BacktestEngine:
         home_team: str,
         away_team: str,
         filters: dict,
+        fair_prob: Optional[float] = None,
     ) -> bool:
         """Check if a specific line/side matches the hypothesis conditions.
 
@@ -1063,6 +1089,8 @@ class BacktestEngine:
             home_team: Home team name
             away_team: Away team name
             filters: Pre-parsed filters from _parse_hypothesis_filters()
+            fair_prob: Devigged fair probability for this side (used for
+                h2h favorite/underdog detection where no spread line exists)
 
         Returns True if this line should be processed, False to skip.
         """
@@ -1104,16 +1132,25 @@ class BacktestEngine:
             if home_away == "away" and not is_away_side:
                 return False
 
-        # 5. Underdog/favorite filter (for spreads: negative line = favorite)
+        # 5. Underdog/favorite filter
+        # For spreads: negative line = favorite, positive = underdog
+        # For h2h: fair_prob > 0.5 = favorite, < 0.5 = underdog
         dog_fav = filters.get("dog_fav_filter")
-        if dog_fav and market_type == "spreads" and point is not None:
-            # Negative point = favorite, positive point = underdog
-            is_underdog = point > 0
-            is_favorite = point < 0
-            if dog_fav == "underdog" and not is_underdog:
-                return False
-            if dog_fav == "favorite" and not is_favorite:
-                return False
+        if dog_fav:
+            if market_type == "spreads" and point is not None:
+                is_underdog = point > 0
+                is_favorite = point < 0
+                if dog_fav == "underdog" and not is_underdog:
+                    return False
+                if dog_fav == "favorite" and not is_favorite:
+                    return False
+            elif market_type == "h2h" and fair_prob is not None:
+                is_favorite = fair_prob > 0.5
+                is_underdog = fair_prob < 0.5
+                if dog_fav == "underdog" and not is_underdog:
+                    return False
+                if dog_fav == "favorite" and not is_favorite:
+                    return False
 
         return True
 
@@ -1723,6 +1760,7 @@ class BacktestEngine:
                         home_team=home,
                         away_team=away,
                         filters=filters or {},
+                        fair_prob=fair_val,
                     ):
                         continue
 
