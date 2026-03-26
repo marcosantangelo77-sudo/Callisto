@@ -21,6 +21,7 @@ for fast classification (Sentinel) and embeddings.
 """
 
 import asyncio
+import gc
 import json
 import logging
 import os
@@ -1234,6 +1235,10 @@ class ResearchLoop:
 
                 # ── Progress tracking: detect spinning ──
                 await self._check_progress()
+
+                # Force garbage collection after each cycle — large numpy arrays
+                # from embedding operations don't always get freed promptly
+                gc.collect()
 
                 logger.info(
                     f"Research cycle #{self._cycles} complete — "

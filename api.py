@@ -6,8 +6,10 @@ Runs on port 8420.
 """
 
 import asyncio
+import gc
 import logging
 import os
+import tracemalloc
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -98,6 +100,10 @@ async def task_worker():
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle manager."""
     global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, worker_task
+
+    # Start memory profiling early — before any allocations
+    tracemalloc.start(25)  # 25-frame depth for full stack traces
+    logger.info("tracemalloc started with 25-frame depth")
 
     # Startup — ensure DB schema is up to date
     await ensure_schema()
@@ -1413,6 +1419,109 @@ async def admin_restart(confirm: str = ""):
 
     asyncio.create_task(_delayed_exit())
     return {"status": "restarting", "message": "Watchdog will restart with new code in ~15 seconds"}
+
+
+_tracemalloc_snapshot: Optional[tracemalloc.Snapshot] = None
+
+
+@app.get("/debug/memory")
+async def debug_memory():
+    """tracemalloc snapshot comparison — identifies the top growing allocations.
+
+    First call takes a baseline snapshot. Subsequent calls compare against
+    the previous snapshot and return the top 30 growing allocations by size.
+    Also forces gc.collect() and reports process RSS.
+    """
+    global _tracemalloc_snapshot
+    import psutil
+
+    gc.collect()
+    process = psutil.Process()
+    rss_mb = process.memory_info().rss / (1024 * 1024)
+
+    if not tracemalloc.is_tracing():
+        return {"error": "tracemalloc not active — restart API to enable"}
+
+    current = tracemalloc.take_snapshot()
+    current = current.filter_traces((
+        tracemalloc.Filter(False, "<frozen *>"),
+        tracemalloc.Filter(False, "<unknown>"),
+        tracemalloc.Filter(False, tracemalloc.__file__),
+    ))
+
+    result = {
+        "rss_mb": round(rss_mb, 1),
+        "tracemalloc_traced_mb": round(tracemalloc.get_traced_memory()[0] / (1024 * 1024), 1),
+        "tracemalloc_peak_mb": round(tracemalloc.get_traced_memory()[1] / (1024 * 1024), 1),
+    }
+
+    if _tracemalloc_snapshot is not None:
+        # Compare against previous snapshot — shows what GREW
+        stats = current.compare_to(_tracemalloc_snapshot, "lineno")
+        result["comparison"] = "vs_previous_snapshot"
+        result["top_growth"] = [
+            {
+                "file": str(stat.traceback),
+                "size_kb": round(stat.size / 1024, 1),
+                "size_diff_kb": round(stat.size_diff / 1024, 1),
+                "count": stat.count,
+                "count_diff": stat.count_diff,
+            }
+            for stat in stats[:30]
+        ]
+    else:
+        # First call — just show current top allocations
+        stats = current.statistics("lineno")
+        result["comparison"] = "baseline (first call)"
+        result["top_allocations"] = [
+            {
+                "file": str(stat.traceback),
+                "size_kb": round(stat.size / 1024, 1),
+                "count": stat.count,
+            }
+            for stat in stats[:30]
+        ]
+
+    _tracemalloc_snapshot = current
+    return result
+
+
+@app.get("/debug/memory/top-traces")
+async def debug_memory_traces(limit: int = 10):
+    """Show full stack traces for the top memory consumers."""
+    if not tracemalloc.is_tracing():
+        return {"error": "tracemalloc not active"}
+
+    snapshot = tracemalloc.take_snapshot()
+    snapshot = snapshot.filter_traces((
+        tracemalloc.Filter(False, "<frozen *>"),
+        tracemalloc.Filter(False, "<unknown>"),
+    ))
+    stats = snapshot.statistics("traceback")
+
+    traces = []
+    for stat in stats[:limit]:
+        traces.append({
+            "size_kb": round(stat.size / 1024, 1),
+            "count": stat.count,
+            "traceback": [str(line) for line in stat.traceback.format()],
+        })
+    return {"top_traces": traces}
+
+
+@app.post("/debug/memory/gc")
+async def debug_gc():
+    """Force garbage collection and report stats."""
+    gc.collect()
+    gc.collect()  # Second pass catches ref cycles
+    import psutil
+    rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
+    return {
+        "rss_mb": round(rss_mb, 1),
+        "gc_counts": gc.get_count(),
+        "gc_stats": gc.get_stats(),
+        "tracemalloc_traced_mb": round(tracemalloc.get_traced_memory()[0] / (1024 * 1024), 1),
+    }
 
 
 @app.post("/admin/sql")

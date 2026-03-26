@@ -231,6 +231,7 @@ class VectorStore:
         mask = sims >= min_similarity
         valid_indices = np.where(mask)[0]
         if len(valid_indices) == 0:
+            del matrix, query_vec, norms, denom, sims, emb_list
             return []
 
         valid_sims = sims[valid_indices]
@@ -239,7 +240,7 @@ class VectorStore:
         top_local = top_local[np.argsort(valid_sims[top_local])[::-1]]
         top_indices = valid_indices[top_local]
 
-        return [
+        results = [
             {
                 "id": ids[i],
                 "text": texts[i],
@@ -248,6 +249,10 @@ class VectorStore:
             }
             for i in top_indices
         ]
+
+        # Explicitly free large numpy arrays — they hold ~20MB for 6K+ embeddings
+        del matrix, query_vec, norms, denom, sims, emb_list, valid_sims
+        return results
 
     async def search_text(
         self,
@@ -475,6 +480,9 @@ class VectorStore:
                         break
 
             clusters.append(cluster_indices)
+
+        # Explicitly free the large matrices before building results
+        del matrix, norms, normalized, sim_matrix, emb_list
 
         # Sort by cluster size descending, return items without embeddings
         clusters.sort(key=len, reverse=True)
