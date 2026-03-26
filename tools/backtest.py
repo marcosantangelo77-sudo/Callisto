@@ -192,9 +192,26 @@ class BacktestEngine:
             from datetime import datetime as _dt_check
             try:
                 end_dt = _dt_check.strptime(end_date, "%Y-%m-%d")
-                # MLB Opening Day is typically late March. Spring training games
-                # before March 27 are exhibition games with unreliable matchups.
-                mlb_season_start = _dt_check(end_dt.year, 3, 27)
+                # MLB Opening Day varies by year. Use dynamic detection: check if
+                # game_results has MLB games before falling back to a conservative
+                # date. 2026 season started March 20.
+                mlb_season_start = _dt_check(end_dt.year, 3, 20)
+                try:
+                    if self.db:
+                        import asyncio
+                        # Check for actual MLB regular season games in game_results
+                        cursor = await self.db.execute(
+                            "SELECT MIN(game_date) FROM game_results "
+                            "WHERE sport = 'baseball_mlb' AND game_date >= ? "
+                            "AND game_date LIKE ?",
+                            (f"{end_dt.year}-03-01", f"{end_dt.year}-%"),
+                        )
+                        row = await cursor.fetchone()
+                        if row and row[0]:
+                            actual_start = _dt_check.strptime(row[0][:10], "%Y-%m-%d")
+                            mlb_season_start = actual_start
+                except Exception:
+                    pass  # Fall back to March 20 default
                 if end_dt < mlb_season_start:
                     return {
                         "hypothesis_id": hypothesis_id,
@@ -1510,8 +1527,10 @@ class BacktestEngine:
         bookmaker_count = len(available_books)
 
         # Multi-book edge detection: need at least 3 books total.
-        # Single "consensus" book means no cross-book comparison possible.
-        if bookmaker_count < 3:
+        # Need at least min_books+1 total (min_books for consensus + 1 target).
+        # For thin markets (NCAAW, NWSL) with consensus_min_books=2, allow 2 total.
+        required_total = max(2, min_books + 1)
+        if bookmaker_count < required_total:
             return 0, 0
 
         # target_book is now just a hint — _process_game_lines evaluates
@@ -1604,7 +1623,7 @@ class BacktestEngine:
 
             # Find books that have both sides
             common_books = set(side_a_books.keys()) & set(side_b_books.keys())
-            if len(common_books) < 3:  # Need at least 3 books for consensus + target
+            if len(common_books) < min_books + 1:  # Need min_books for consensus + 1 target
                 continue
 
             # Devig ALL books to get fair values
