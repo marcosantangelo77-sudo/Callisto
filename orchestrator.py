@@ -47,7 +47,7 @@ from tools.parlay_scanner import (
     analyze_prop_mispricing,
     analyze_live_overreaction,
 )
-from tools.contextual_data import get_injuries, get_scoreboard
+from tools.contextual_data import get_injuries, get_scoreboard, get_team_roster
 from tools.line_gaps import scan_line_gaps, scan_prop_gaps
 from tools.prop_scanner import scan_props_ev
 from tools.clv_tracker import CLVTracker
@@ -280,6 +280,26 @@ INJURIES_TOOL = {
                 "sport": {"type": "string", "description": "Sport key", "default": "basketball_ncaab"},
             },
             "required": [],
+        },
+    },
+}
+
+ROSTER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_team_roster",
+        "description": (
+            "Get CURRENT team roster from ESPN. ALWAYS use this before analyzing team-specific "
+            "player data to verify who is actually on the team RIGHT NOW. Do NOT assume rosters "
+            "from previous seasons — players get traded."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sport": {"type": "string", "description": "Sport key (e.g. basketball_nba)"},
+                "team_id": {"type": "string", "description": "ESPN team ID (e.g. 'bos' for Celtics, 'lal' for Lakers)"},
+            },
+            "required": ["sport", "team_id"],
         },
     },
 }
@@ -589,7 +609,7 @@ WARM_CACHE_TOOL = {
 ODDS_TOOLS = [
     ODDS_GET_ODDS_TOOL, ODDS_GET_SCORES_TOOL, ODDS_GET_EVENT_TOOL,
     ODDS_CALCULATE_EV_TOOL, ODDS_ALT_LINES_TOOL, ODDS_PLAYER_PROPS_TOOL,
-    EDGE_SCAN_TOOL, INJURIES_TOOL, SCOREBOARD_TOOL,
+    EDGE_SCAN_TOOL, INJURIES_TOOL, ROSTER_TOOL, SCOREBOARD_TOOL,
     LINE_GAPS_TOOL, BOOST_EVAL_TOOL,
     PROP_SCANNER_TOOL, RECORD_BET_TOOL,
     # New framework tools
@@ -602,6 +622,7 @@ ODDS_TOOLS = [
 HERMES_TOOL_PROMPT = (
     "\nAvailable tools (output <tool_call> to use):\n"
     "SEARCH: web_search(query)\n"
+    "ROSTER: get_team_roster(sport, team_id) — ALWAYS verify current roster before team analysis. Players get traded.\n"
     "ODDS: get_odds(sport), get_scores(sport), get_event_odds(sport, event_id), get_player_props(sport, event_id)\n"
     "DEVIG: devig_market(side_a_american, side_b_american) — remove vig, find true fair probabilities\n"
     "SIM: simulate_game(spread, total, sport) — Monte Carlo simulation for any game\n"
@@ -616,6 +637,30 @@ HERMES_TOOL_PROMPT = (
     "Example: "
     '<tool_call>{"name":"devig_market","arguments":{"side_a_american":-145,"side_b_american":125}}</tool_call>'
 )
+
+import re as _re
+
+# Sports-related keywords that signal we need fresh search results
+_SPORTS_FRESHNESS_PATTERN = _re.compile(
+    r"\b(roster|player|team|lineup|starter|injury|trade|return|"
+    r"celtics|lakers|warriors|nets|knicks|bulls|heat|bucks|"
+    r"nba|nfl|mlb|nhl|ncaa|wnba|pga|"
+    r"prop|props|betting|edge|splits|stats)\b",
+    _re.IGNORECASE,
+)
+
+
+def _detect_freshness(query: str) -> Optional[str]:
+    """Return Brave freshness filter for sports/player queries.
+
+    Sports queries about current rosters, players, and team analysis
+    should default to past month to avoid stale data (e.g., players
+    who were traded appearing on old teams).
+    """
+    if _SPORTS_FRESHNESS_PATTERN.search(query):
+        return "pm"  # past month
+    return None
+
 
 # Compact JSON serialization — fewer tokens in prompts
 _json_compact = lambda obj: json.dumps(obj, separators=(",", ":"))
@@ -720,7 +765,11 @@ class Orchestrator:
                 # Extract a short search query — use first line only, max 200 chars
                 search_query = query.split("\n")[0][:200].strip()
                 pre_queries = [search_query, f"{search_query.rstrip('?').strip()} 2025 2026 latest"]
-                search_task = asyncio.create_task(self._run_searches_parallel(pre_queries))
+                # Sports/player/team queries: enforce freshness to avoid stale roster data
+                freshness = _detect_freshness(query)
+                search_task = asyncio.create_task(
+                    self._run_searches_parallel(pre_queries, freshness=freshness)
+                )
 
             domain = await domain_task
             session.domain = domain
@@ -732,7 +781,9 @@ class Orchestrator:
                 pre_results = await search_task
                 domain_q = self._domain_search_query(query, domain)
                 if domain_q:
-                    extra = await self._run_searches_parallel([domain_q])
+                    extra = await self._run_searches_parallel(
+                        [domain_q], freshness=freshness
+                    )
                     pre_results.extend(extra)
                 pre_results = _dedup_search_results(pre_results)
 
@@ -753,7 +804,9 @@ class Orchestrator:
                     if q not in pre_queries:
                         extra_queries.append(q)
                 if extra_queries:
-                    extra_results = await self._run_searches_parallel(extra_queries)
+                    extra_results = await self._run_searches_parallel(
+                        extra_queries, freshness=freshness
+                    )
                     pre_results.extend(extra_results)
                     pre_results = _dedup_search_results(pre_results)
 
@@ -1040,11 +1093,13 @@ class Orchestrator:
                     logger.warning(f"Skipping malformed evidence: {e}")
         return evidence_list, used_tools
 
-    async def _run_searches_parallel(self, queries: list[str]) -> list[dict]:
-        """Run multiple Brave Search queries in parallel."""
+    async def _run_searches_parallel(
+        self, queries: list[str], freshness: Optional[str] = None
+    ) -> list[dict]:
+        """Run multiple web search queries in parallel with optional freshness filter."""
         async def _single_search(q: str) -> list[dict]:
             try:
-                result = await web_search(q, count=5)
+                result = await web_search(q, count=5, freshness=freshness)
                 return [
                     {
                         "title": r.get("title", ""),
@@ -1132,6 +1187,11 @@ class Orchestrator:
             return report
         if name == "get_injuries":
             return await get_injuries(sport=arguments.get("sport", "basketball_ncaab"))
+        if name == "get_team_roster":
+            return await get_team_roster(
+                sport=arguments.get("sport", "basketball_nba"),
+                team_id=arguments.get("team_id", ""),
+            )
         if name == "get_scoreboard":
             return await get_scoreboard(sport=arguments.get("sport", "basketball_ncaab"))
         if name == "scan_line_gaps":

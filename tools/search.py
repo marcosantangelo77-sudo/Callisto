@@ -31,12 +31,18 @@ async def _check_searxng() -> bool:
     return _searxng_ok
 
 
-async def web_search(query: str, count: int = 5) -> dict:
+async def web_search(
+    query: str, count: int = 5, freshness: Optional[str] = None
+) -> dict:
     """
     Search the web using the best available backend.
 
     Tries SearXNG first (free), falls back to Brave Search API.
     Returns standardized results with AGP source_class tagging.
+
+    Args:
+        freshness: "pd" (past day), "pw" (past week), "pm" (past month),
+                   "py" (past year), or None for no filter.
     """
     if await _check_searxng():
         result = await searxng_search(query, count=count)
@@ -45,7 +51,7 @@ async def web_search(query: str, count: int = 5) -> dict:
         # SearXNG returned no results — fall through to Brave
         logger.warning(f"SearXNG returned no results for '{query}', trying Brave")
 
-    return await brave_search(query, count=count)
+    return await brave_search(query, count=count, freshness=freshness)
 
 
 async def close_all_clients() -> None:
