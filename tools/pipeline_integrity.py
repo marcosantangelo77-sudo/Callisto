@@ -145,6 +145,7 @@ class PipelineIntegrityChecker:
             ("stale_metric_detection", self._check_stale_metrics),
             ("rejection_rate", self._check_rejection_rate),
             ("temporal_isolation", self._check_temporal_isolation),
+            ("calibration_health", self._check_calibration_health),
         ]
 
         for check_name, check_fn in checks:
@@ -697,6 +698,92 @@ class PipelineIntegrityChecker:
 
         except Exception as e:
             logger.warning(f"Temporal isolation check failed: {e}", exc_info=True)
+
+    async def _check_calibration_health(self) -> None:
+        """
+        Check brier scores and information coefficients from hypothesis_stats.
+        Poor calibration (brier > 0.30) or anti-predictive IC (< 0) on
+        hypotheses approaching promotion are warning signs.
+
+        Brier score context:
+            0.25 = coin-flip baseline (predict 0.5 for everything)
+            > 0.30 = worse than a coin flip — model is actively miscalibrated
+            < 0.20 = good calibration
+        """
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
+
+                # Get the latest stats per hypothesis (only active ones)
+                cursor = await db.execute(
+                    "SELECT hs.hypothesis_id, h.name, h.status, "
+                    "hs.brier_score, hs.information_coefficient, hs.sortino "
+                    "FROM hypothesis_stats hs "
+                    "JOIN hypotheses h ON h.hypothesis_id = hs.hypothesis_id "
+                    "WHERE h.status IN ('backtesting', 'paper_trading', 'live') "
+                    "AND hs.brier_score IS NOT NULL "
+                    "ORDER BY hs.computed_at DESC"
+                )
+                rows = await cursor.fetchall()
+
+                if not rows:
+                    return  # No calibration data yet
+
+                # Deduplicate: latest per hypothesis
+                seen = set()
+                poor_calibration = []
+                anti_predictive = []
+                for row in rows:
+                    h_id, name, status, brier, ic, sortino = row
+                    if h_id in seen:
+                        continue
+                    seen.add(h_id)
+
+                    if brier is not None and brier > 0.30:
+                        poor_calibration.append(
+                            f"'{name}' ({status}): brier={brier:.3f}"
+                        )
+                    if ic is not None and ic < -0.05:
+                        anti_predictive.append(
+                            f"'{name}' ({status}): IC={ic:.3f}"
+                        )
+
+                if poor_calibration:
+                    severity = (
+                        SEVERITY_CRITICAL if len(poor_calibration) > 3
+                        else SEVERITY_WARNING
+                    )
+                    self._issues.append(IntegrityIssue(
+                        check_name="calibration_health",
+                        severity=severity,
+                        message=(
+                            f"{len(poor_calibration)} hypotheses have poor calibration "
+                            f"(brier > 0.30, worse than coin-flip): "
+                            f"{'; '.join(poor_calibration[:5])}"
+                        ),
+                        details={
+                            "poor_calibration_count": len(poor_calibration),
+                            "examples": poor_calibration[:10],
+                        },
+                    ))
+
+                if anti_predictive:
+                    self._issues.append(IntegrityIssue(
+                        check_name="calibration_health",
+                        severity=SEVERITY_WARNING,
+                        message=(
+                            f"{len(anti_predictive)} hypotheses have anti-predictive "
+                            f"information coefficient (IC < -0.05): "
+                            f"{'; '.join(anti_predictive[:5])}"
+                        ),
+                        details={
+                            "anti_predictive_count": len(anti_predictive),
+                            "examples": anti_predictive[:10],
+                        },
+                    ))
+
+        except Exception as e:
+            logger.warning(f"Calibration health check failed: {e}", exc_info=True)
 
     # ──────────────────────────────────────────────────────────
     # OUTPUT SANITY CHECKS

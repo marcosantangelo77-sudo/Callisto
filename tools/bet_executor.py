@@ -201,6 +201,79 @@ class BetExecutor:
 
         return stake
 
+    def compute_portfolio_stakes(
+        self,
+        bets: list[dict],
+        bankroll: float,
+    ) -> list[dict]:
+        """
+        Size multiple simultaneous bets with correlation-aware Kelly.
+
+        When multiple bets are open at the same time (e.g., two NBA games
+        tonight), correlated bets should be sized down to avoid concentrating
+        risk. Falls back to individual quarter-Kelly for a single bet.
+
+        Args:
+            bets: List of dicts, each with {edge, odds, confidence,
+                  correlation_with_others, description}.
+            bankroll: Current bankroll in dollars.
+
+        Returns:
+            List of dicts with {description, stake, fraction, ...} per bet.
+        """
+        if not bets:
+            return []
+
+        # Single bet: use standard individual sizing (no portfolio overhead)
+        if len(bets) == 1:
+            b = bets[0]
+            stake = self.compute_stake(
+                b.get("edge", 0.0),
+                b.get("odds", -110),
+                bankroll,
+                b.get("confidence", 0.6),
+            )
+            return [{
+                "description": b.get("description", "Bet 1"),
+                "stake": stake,
+                "fraction": round(stake / bankroll, 6) if bankroll > 0 else 0,
+                "method": "individual_kelly",
+            }]
+
+        # Multiple bets: use correlation-aware portfolio Kelly
+        from tools.kelly import kelly_portfolio
+
+        portfolio_bets = []
+        for b in bets:
+            portfolio_bets.append({
+                "edge": b.get("edge", 0.0),
+                "odds": b.get("odds", -110),
+                "confidence_score": b.get("confidence", 0.6),
+                "variance_estimate": abs(b.get("edge", 0.01)) * 0.5,
+                "correlation_with_others": b.get("correlation_with_others", 0.1),
+                "description": b.get("description", ""),
+            })
+
+        sized = kelly_portfolio(portfolio_bets)
+
+        results = []
+        for item in sized:
+            frac = item.get("final_fraction", 0.0)
+            stake = round(bankroll * frac, 2)
+            if stake < MIN_BET_AMOUNT:
+                stake = 0.0
+            results.append({
+                "description": item.get("description", ""),
+                "stake": stake,
+                "fraction": frac,
+                "correlation": item.get("correlation", 0.0),
+                "tier": item.get("tier", ""),
+                "method": "portfolio_kelly",
+                "portfolio_summary": item.get("portfolio_summary", {}),
+            })
+
+        return results
+
     async def preflight_check(
         self,
         sport: str,

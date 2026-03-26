@@ -32,6 +32,13 @@ from typing import Optional
 from tools import telegram
 from tools.backtest import _signal_confidence
 from tools.edge_confidence import score_edge
+from tools.market_psychology import (
+    detect_number_shading,
+    detect_trap_line,
+    attention_arbitrage,
+    predict_closing_line,
+    full_market_psychology,
+)
 
 logger = logging.getLogger("callisto.autonomous")
 
@@ -67,6 +74,8 @@ class AutonomousLoop:
         self._analyzed_edges: dict[str, float] = {}  # edge_key -> timestamp
         self._session_count = 0
         self._alert_count = 0
+        self._psychology_cache: dict[str, dict] = {}  # sport -> latest psychology signals
+        self._psychology_ts: dict[str, float] = {}    # sport -> last run timestamp
 
     async def start(self) -> None:
         """Start the autonomous reasoning loop."""
@@ -97,6 +106,9 @@ class AutonomousLoop:
 
         while self._running:
             try:
+                # Run market psychology analysis on latest snapshots
+                self._run_market_psychology()
+
                 candidates = self._find_analysis_candidates()
 
                 if candidates:
@@ -121,6 +133,88 @@ class AutonomousLoop:
             except Exception as e:
                 logger.error(f"Autonomous loop error: {e}", exc_info=True)
                 await asyncio.sleep(30)
+
+    def _run_market_psychology(self) -> None:
+        """Run market psychology analysis on latest snapshots.
+
+        Produces per-sport psychology signals (number shading, attention
+        arbitrage) that are cached and merged into edge candidates during
+        scoring.  Runs at most once per ANALYSIS_COOLDOWN to avoid waste.
+        """
+        now = time.time()
+        all_reports = self.line_monitor.get_edge_report()
+        if not isinstance(all_reports, dict):
+            return
+
+        for sport, report in all_reports.items():
+            if not isinstance(report, dict):
+                continue
+            # Throttle: skip if we ran psychology for this sport recently
+            last_ts = self._psychology_ts.get(sport, 0)
+            if now - last_ts < ANALYSIS_COOLDOWN:
+                continue
+
+            # Get the latest snapshot games for this sport
+            snapshot = self.line_monitor._snapshots.get(sport)
+            if not snapshot or not snapshot.get("games"):
+                continue
+
+            try:
+                psych = full_market_psychology(
+                    games=snapshot["games"],
+                    sport=sport,
+                )
+                self._psychology_cache[sport] = psych
+                self._psychology_ts[sport] = now
+
+                shading_count = len(psych.get("number_shading", []))
+                if shading_count > 0:
+                    logger.info(
+                        f"Psychology {sport}: {shading_count} shaded lines detected"
+                    )
+            except Exception as e:
+                logger.warning(f"Market psychology failed for {sport}: {e}")
+
+    def _get_psychology_for_edge(self, sport: str, game: str, team: str, market: str) -> dict:
+        """Extract psychology signals relevant to a specific edge.
+
+        Returns a dict with keys:
+            number_shading_detected: bool
+            shading_value_side: str or None
+            shading_magnitude: int
+            attention_opportunity: float (0-1, higher = thinner market)
+        """
+        result = {
+            "number_shading_detected": False,
+            "shading_value_side": None,
+            "shading_magnitude": 0,
+            "attention_opportunity": 0.0,
+        }
+        psych = self._psychology_cache.get(sport)
+        if not psych:
+            return result
+
+        # Match number shading signals for this game/team/market
+        for shade in psych.get("number_shading", []):
+            shade_game = shade.get("game", "")
+            shade_team = shade.get("team", "")
+            shade_market = shade.get("market", "")
+            if (shade_game == game and
+                    shade_team == team and
+                    shade_market == market):
+                result["number_shading_detected"] = True
+                result["shading_value_side"] = shade.get("value_side")
+                result["shading_magnitude"] = shade.get("shade_magnitude_cents", 0)
+                break
+
+        # Attention arbitrage — sport-level signal
+        attn = psych.get("attention_arbitrage", {})
+        for thin in attn.get("thin_markets", []):
+            if thin.get("sport") == sport:
+                result["attention_opportunity"] = thin.get("opportunity_score", 0.0)
+                break
+
+        return result
 
     def _find_analysis_candidates(self) -> list[dict]:
         """
@@ -164,22 +258,39 @@ class AutonomousLoop:
                     if now - last_analyzed < EDGE_DEDUP_WINDOW:
                         continue
 
-                    # Score confidence
+                    # Gather psychology signals for this edge
+                    game_name = edge.get("game", "")
+                    team_name = edge.get("team", "")
+                    mkt_name = market_key.replace("cross_book_", "")
+                    psych_signals = self._get_psychology_for_edge(
+                        sport, game_name, team_name, mkt_name,
+                    )
+
+                    # Look up KL divergence metrics for this game
+                    game_id = edge.get("game_id", "")
+                    kl_data = self.line_monitor.get_kl_for_game(sport, game_id, mkt_name) if game_id else None
+                    kl_kw = {}
+                    if kl_data:
+                        kl_kw["kl_divergence"] = kl_data.get("kl_divergence")
+                        kl_kw["js_divergence"] = kl_data.get("js_divergence")
+
+                    # Score confidence (psychology adjustments applied downstream)
                     conf = score_edge(
                         edge_pct=round(best_soft * 100, 2),
                         books_compared=edge.get("num_bookmakers", edge.get("book_count", 1)),
                         book_names=[edge.get("best_line", {}).get("bookmaker", "")],
-                        market=market_key.replace("cross_book_", ""),
+                        market=mkt_name,
                         has_sharp_book=edge.get("sharp_consensus") is not None,
+                        **kl_kw,
                     )
 
                     candidates.append({
                         "sport": sport,
                         "edge_key": edge_key,
-                        "game": edge.get("game", ""),
+                        "game": game_name,
                         "game_id": edge.get("game_id", ""),
-                        "team": edge.get("team", ""),
-                        "market": market_key.replace("cross_book_", ""),
+                        "team": team_name,
+                        "market": mkt_name,
                         "implied_range": implied_range,
                         "best_soft_edge": best_soft,
                         "soft_book_edges": soft_edges,
@@ -188,6 +299,7 @@ class AutonomousLoop:
                         "sharp_consensus": edge.get("sharp_consensus"),
                         "num_bookmakers": edge.get("num_bookmakers", 0),
                         "confidence": conf,
+                        "psychology": psych_signals,
                     })
 
         # Sort by edge magnitude — biggest edges first
@@ -232,6 +344,24 @@ class AutonomousLoop:
         best_price = best.get("price", 0)
         best_str = f"+{best_price}" if best_price > 0 else str(best_price)
 
+        # Build market psychology context for the AGP session
+        psych = candidate.get("psychology", {})
+        psych_lines = []
+        if psych.get("number_shading_detected"):
+            psych_lines.append(
+                f"NUMBER SHADING: Line is shaded (magnitude {psych['shading_magnitude']} cents). "
+                f"Value side: {psych['shading_value_side']}."
+            )
+        if psych.get("attention_opportunity", 0) > 0.3:
+            psych_lines.append(
+                f"ATTENTION ARBITRAGE: Thin market opportunity score "
+                f"{psych['attention_opportunity']:.2f} — edges may persist longer."
+            )
+        psych_section = (
+            f"\nMarket Psychology Signals:\n" + "\n".join(f"  * {l}" for l in psych_lines) + "\n"
+            if psych_lines else ""
+        )
+
         query = (
             f"AUTONOMOUS EDGE ANALYSIS — {sport}\n"
             f"Game: {game}\n"
@@ -240,10 +370,13 @@ class AutonomousLoop:
             f"Sharp consensus: {candidate.get('sharp_consensus', 'N/A')}\n"
             f"Best line: {best.get('bookmaker', '?')} {best_str}\n"
             f"Books compared: {candidate['num_bookmakers']}\n"
-            f"\nSoft book edges vs sharp:\n{soft_detail}\n"
+            f"\nSoft book edges vs sharp:\n{soft_detail}"
+            f"{psych_section}\n"
             f"Pre-scored confidence: {conf.tier} ({conf.score:.2f})\n\n"
             f"TASK: Use available tools to verify this edge. Check injuries, "
             f"check if the line has moved, check player props if relevant. "
+            f"Consider market psychology signals (shading, attention arbitrage) "
+            f"in your confidence assessment. "
             f"Determine if this is a real exploitable edge on DraftKings or Fanatics, "
             f"or if it's noise. Give a final recommendation with confidence score."
         )
@@ -319,6 +452,14 @@ class AutonomousLoop:
 
     def get_status(self) -> dict:
         """Return loop status."""
+        now = time.time()
+        psych_summary = {}
+        for sport, psych in self._psychology_cache.items():
+            psych_summary[sport] = {
+                "shaded_lines": len(psych.get("number_shading", [])),
+                "attention_recommendation": psych.get("attention_arbitrage", {}).get("recommendation", "N/A"),
+                "age_seconds": round(now - self._psychology_ts.get(sport, 0)),
+            }
         return {
             "running": self._running,
             "sessions_run": self._session_count,
@@ -326,6 +467,13 @@ class AutonomousLoop:
             "cached_edge_keys": len(self._analyzed_edges),
             "analysis_cooldown_seconds": ANALYSIS_COOLDOWN,
             "min_confidence_to_alert": MIN_CONFIDENCE_TO_ALERT,
+            "market_psychology": psych_summary,
+        }
+
+    def get_psychology_report(self) -> dict:
+        """Return the latest market psychology signals for all sports."""
+        return {
+            sport: psych for sport, psych in self._psychology_cache.items()
         }
 
 
@@ -347,6 +495,7 @@ HYPOTHESIS_GEN_INTERVAL = 120       # 2 min between hypothesis generation — Cl
 BACKTEST_BATCH_SIZE = 50            # Hypotheses to backtest per cycle — 2.5x previous to drain 3K draft queue
 CLAUDE_ESCALATION_COOLDOWN = 10     # 10s cooldown — 45 calls/hr means ~80s natural spacing, let rate limiter govern
 SYSTEM_IMPROVEMENT_INTERVAL = 10    # Run system improvement every N cycles
+REGIME_ANALYSIS_INTERVAL = 5        # Run regime analysis every N cycles — regime changes are slow
 
 # ── Temporal isolation defaults ──
 # Hypotheses train on data before the cutoff, backtest on data after.
@@ -585,6 +734,11 @@ class ResearchLoop:
         self._last_progress_check = 0
         self._consecutive_no_progress = 0
 
+        # Regime analysis cache — {team_name: full_regime_analysis result}
+        # Refreshed every REGIME_ANALYSIS_INTERVAL cycles
+        self._regime_cache: dict[str, dict] = {}
+        self._last_regime_analysis = 0
+
         # Deferred work queue + downtime tracker (never-idle loop)
         from tools.work_queue import get_work_queue, get_downtime_tracker
         self._work_queue = get_work_queue()
@@ -631,6 +785,17 @@ class ResearchLoop:
             await self.data_collector.collect_box_scores(sport, date_str)
             await self.data_collector.collect_play_by_play(sport, date_str)
             logger.info(f"Reactive collection: {sport} game completed on {game_date}")
+
+            # Update learned correlations from this game's data
+            try:
+                from tools.correlation import get_learned_store
+                lcs = get_learned_store()
+                if lcs is not None and self.data_collector._db is not None:
+                    await lcs.update_from_game_data(
+                        self.data_collector._db, sport, game_date,
+                    )
+            except Exception as e:
+                logger.debug(f"Reactive correlation update failed: {e}")
         except Exception as e:
             logger.debug(f"Reactive collection failed for {sport} {game_date}: {e}")
 
@@ -1300,6 +1465,17 @@ class ResearchLoop:
                 except Exception as e:
                     logger.warning(f"Phase granger_analysis failed (non-fatal): {e}")
 
+                if not self._running:
+                    break
+
+                # Phase 11: Regime analysis — detect regime changes, recency bias, mean reversion
+                try:
+                    await asyncio.wait_for(self._phase_regime_analysis(), timeout=180)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase regime_analysis timed out after 180s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase regime_analysis failed (non-fatal): {e}")
+
                 # ── Progress tracking: detect spinning ──
                 await self._check_progress()
 
@@ -1744,6 +1920,19 @@ class ResearchLoop:
                     date_fmt = dt.strftime("%Y-%m-%d")
                     await self.data_collector.resolve_prop_outcomes(sport, date_fmt)
                     await self.data_collector.resolve_game_level_outcomes(sport, date_fmt)
+
+                # Update learned correlations from completed game data
+                try:
+                    from tools.correlation import get_learned_store
+                    lcs = get_learned_store()
+                    if lcs is not None and self.data_collector._db is not None:
+                        for dt in dates:
+                            date_fmt = dt.strftime("%Y-%m-%d")
+                            await lcs.update_from_game_data(
+                                self.data_collector._db, sport, date_fmt,
+                            )
+                except Exception as e:
+                    logger.debug(f"Learned correlation update failed for {sport}: {e}")
 
                 self._data_collections += 1
             except Exception as e:
@@ -3342,13 +3531,15 @@ class ResearchLoop:
         except Exception as e:
             logger.warning(f"Failed to gather metrics for deep work: {e}")
 
-        # Get top backtesting hypotheses by signal count
+        # Get top backtesting hypotheses by UNIQUE signal count
+        # (dedup by event_id to match evaluate_significance, which keeps
+        # best-edge row per event — raw row counts inflate signal/event totals)
         top_hypos = []
         try:
             cursor = await db.execute("""
                 SELECT h.hypothesis_id, h.name, h.thesis, h.sport,
-                       COUNT(CASE WHEN be.signal_generated=1 THEN 1 END) as sigs,
-                       COUNT(*) as events,
+                       COUNT(DISTINCT CASE WHEN be.signal_generated=1 THEN be.event_id END) as sigs,
+                       COUNT(DISTINCT be.event_id) as events,
                        AVG(CASE WHEN be.signal_generated=1 THEN be.edge END) as avg_edge
                 FROM hypotheses h
                 LEFT JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id
@@ -3366,34 +3557,35 @@ class ResearchLoop:
         scrutiny_info = ""
         try:
             cursor = await db.execute("""
-                SELECT h.hypothesis_id, h.name, COUNT(DISTINCT be.event_id) as unique_games,
-                       COUNT(*) as total_events
+                SELECT h.hypothesis_id, h.name,
+                       COUNT(DISTINCT be.event_id) as unique_events,
+                       COUNT(DISTINCT CASE WHEN be.signal_generated=1 THEN be.event_id END) as unique_signals
                 FROM hypotheses h
                 JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id
                 WHERE h.status = 'backtesting'
                 GROUP BY h.hypothesis_id
-                HAVING total_events > 0
-                ORDER BY total_events DESC
+                HAVING unique_events > 0
+                ORDER BY unique_events DESC
                 LIMIT 10
             """)
             game_sets = []
             for r in await cursor.fetchall():
-                game_sets.append(f"  {r[1]}: {r[2]} unique games, {r[3]} events")
+                game_sets.append(f"  {r[1]}: {r[2]} unique events, {r[3]} signals")
 
-            # Check for duplicate game sets (different hypotheses testing identical games)
+            # Check for duplicate game sets (different hypotheses testing identical events)
             cursor2 = await db.execute("""
                 SELECT GROUP_CONCAT(DISTINCT h.name) as hypo_names,
-                       COUNT(DISTINCT be.event_id) as unique_games,
-                       COUNT(*) as total_events
+                       COUNT(DISTINCT be.event_id) as unique_events,
+                       COUNT(DISTINCT CASE WHEN be.signal_generated=1 THEN be.event_id END) as unique_signals
                 FROM hypotheses h
                 JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id
                 WHERE h.status = 'backtesting'
                 GROUP BY h.hypothesis_id
-                HAVING total_events > 10
+                HAVING unique_events > 10
             """)
             event_counts = {}
             for r in await cursor2.fetchall():
-                key = f"{r[1]}g_{r[2]}e"
+                key = f"{r[1]}e_{r[2]}s"
                 if key not in event_counts:
                     event_counts[key] = []
                 event_counts[key].append(r[0])
@@ -3705,6 +3897,154 @@ class ResearchLoop:
             get_checker().record_phase_result("granger_analysis", True)
         except Exception:
             pass
+
+    async def _phase_regime_analysis(self) -> None:
+        """Regime analysis phase — detect regime changes, recency bias, mean reversion.
+
+        Runs every REGIME_ANALYSIS_INTERVAL cycles (regime changes are slow —
+        no point re-analyzing every minute). Results are cached in
+        self._regime_cache and fed into:
+          1. Edge confidence scoring (via regime_data parameter)
+          2. Hypothesis generation (regime context in Claude prompt)
+          3. Edge candidate enrichment (regime signals on candidates)
+
+        Uses ESPN box score data already collected by data_collector to build
+        per-team performance histories, then runs full_regime_analysis() from
+        tools/regime.py.
+        """
+        if self._cycles % REGIME_ANALYSIS_INTERVAL != 0:
+            return
+
+        from tools.regime import full_regime_analysis
+
+        logger.info("Research: running regime analysis phase")
+
+        focus_sports = self.focus_manager.get_focus_sports()
+        if not focus_sports:
+            focus_sports = RESEARCH_SPORTS[:4]
+
+        # Map sport keys to the short sport name used by regime.py
+        sport_short_map = {
+            "basketball_nba": "nba",
+            "americanfootball_nfl": "nfl",
+            "icehockey_nhl": "nhl",
+            "baseball_mlb": "mlb",
+            "basketball_ncaab": "ncaab",
+            "basketball_ncaaw": "ncaaw",
+            "basketball_wnba": "wnba",
+        }
+
+        db = self.data_collector._db
+        if db is None:
+            logger.warning("Regime analysis: data_collector DB not initialized")
+            return
+
+        total_analyzed = 0
+        total_signals = 0
+
+        for sport in focus_sports:
+            if not self._running:
+                break
+
+            sport_short = sport_short_map.get(sport, "nba")
+
+            try:
+                # Query box score data for team performance histories.
+                # box_scores table has: sport, game_date, team_name, points,
+                # opponent_points, plus advanced stats when available.
+                cursor = await db.execute(
+                    "SELECT team_name, points FROM box_scores "
+                    "WHERE sport = ? AND points IS NOT NULL "
+                    "ORDER BY game_date ASC",
+                    (sport,),
+                )
+                rows = await cursor.fetchall()
+
+                if not rows:
+                    logger.debug(f"Regime analysis: no box score data for {sport}")
+                    continue
+
+                # Group by team
+                from collections import defaultdict
+                team_histories: dict[str, list[float]] = defaultdict(list)
+                for team_name, points in rows:
+                    if team_name and points is not None:
+                        team_histories[team_name].append(float(points))
+
+                if not team_histories:
+                    continue
+
+                # Compute league average for this sport
+                all_points = []
+                for pts_list in team_histories.values():
+                    all_points.extend(pts_list)
+                league_avg = sum(all_points) / len(all_points) if all_points else 100.0
+
+                # Run regime analysis for each team with enough data
+                for team_name, history in team_histories.items():
+                    if len(history) < 8:
+                        continue  # Need minimum data for meaningful analysis
+
+                    try:
+                        team_data = {
+                            "name": team_name,
+                            "performance_history": history,
+                            "league_avg": league_avg,
+                        }
+                        result = full_regime_analysis(team_data, sport=sport_short)
+
+                        # Cache the result keyed by team name
+                        cache_key = f"{sport}:{team_name}"
+                        self._regime_cache[cache_key] = result
+                        total_analyzed += 1
+
+                        if result.get("has_edge_signal"):
+                            total_signals += 1
+                            logger.info(
+                                f"Regime signal: {team_name} ({sport_short}) — "
+                                f"{result.get('actionable_signals', [])}"
+                            )
+                    except Exception as e:
+                        logger.debug(f"Regime analysis failed for {team_name}: {e}")
+
+            except Exception as e:
+                logger.warning(f"Regime analysis failed for {sport}: {e}")
+
+        self._last_regime_analysis = time.time()
+
+        if total_analyzed > 0:
+            logger.info(
+                f"Regime analysis complete: {total_analyzed} teams analyzed, "
+                f"{total_signals} with actionable signals, "
+                f"cache size: {len(self._regime_cache)}"
+            )
+
+        # Record phase success for pipeline integrity tracking
+        try:
+            from tools.pipeline_integrity import get_checker
+            get_checker().record_phase_result("regime_analysis", True)
+        except Exception:
+            pass
+
+    def get_regime_for_team(self, sport: str, team_name: str) -> Optional[dict]:
+        """Look up cached regime analysis for a team.
+
+        Args:
+            sport: Sport key (e.g., "basketball_nba")
+            team_name: Team name as it appears in box scores
+
+        Returns:
+            Full regime analysis dict or None if not cached.
+        """
+        cache_key = f"{sport}:{team_name}"
+        result = self._regime_cache.get(cache_key)
+        if result:
+            return result
+        # Try partial match — team names can vary (e.g., "Boston Celtics" vs "Celtics")
+        for key, val in self._regime_cache.items():
+            if key.startswith(sport + ":") and team_name.lower() in key.lower():
+                return val
+        return None
 
     async def _phase_system_improvement(self) -> None:
         """Self-improvement phase — runs every SYSTEM_IMPROVEMENT_INTERVAL cycles.

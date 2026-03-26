@@ -616,6 +616,7 @@ class BacktestEngine:
             edge = sig_report.get("edge_metrics", {})
             clv = sig_report.get("clv", {})
             results = sig_report.get("results", {})
+            cal_score = sig_report.get("calibration_score", {})
 
             await self._db.execute(
                 "UPDATE backtest_runs SET "
@@ -623,7 +624,8 @@ class BacktestEngine:
                 "hit_rate = ?, avg_edge = ?, avg_ev = ?, avg_clv = ?, "
                 "roi_pct = ?, p_value_binomial = ?, p_value_ttest = ?, "
                 "z_score = ?, sharpe_ratio = ?, max_drawdown = ?, "
-                "is_significant = ? "
+                "is_significant = ?, "
+                "sortino_ratio_val = ?, brier_score = ?, information_coefficient = ? "
                 "WHERE run_id = ?",
                 (
                     results.get("wins", 0), results.get("losses", 0),
@@ -633,6 +635,9 @@ class BacktestEngine:
                     sig.get("p_value_binomial"), sig.get("p_value_ttest"),
                     sig.get("z_score"), risk.get("sharpe_ratio"),
                     risk.get("max_drawdown"), sig.get("is_significant", False),
+                    risk.get("sortino_ratio"),
+                    cal_score.get("brier_score"),
+                    cal_score.get("information_coefficient"),
                     run_id,
                 ),
             )

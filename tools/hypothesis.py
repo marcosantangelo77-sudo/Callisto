@@ -23,6 +23,12 @@ from typing import Optional
 import aiosqlite
 from dotenv import load_dotenv
 
+from tools.market_microstructure import (
+    sortino_ratio as _sortino_ratio,
+    brier_score as _brier_score,
+    information_coefficient as _information_coefficient,
+)
+
 load_dotenv()
 
 logger = logging.getLogger("callisto.hypothesis")
@@ -48,6 +54,7 @@ PROMOTION_GATES = {
         "min_clv_rate": 0.50,
         "max_drawdown": 0.30,
         "min_days": 14,
+        "min_sortino": 0.5,        # downside-risk gate — better than Sharpe for betting
     },
 }
 
@@ -422,6 +429,36 @@ class HypothesisManager:
         sr = sharpe_ratio(returns)
         mdd = max_drawdown(returns)
 
+        # ── Microstructure metrics (sortino, brier, IC) ──
+        # Sortino: downside-only risk — better than Sharpe for betting
+        # because we care about loss variance, not upside variance.
+        sortino = _sortino_ratio(returns)
+
+        # Brier score: calibration quality of predicted probabilities
+        brier_preds = []
+        brier_outcomes = []
+        for e in events:
+            if e["actual_result"] in ("won", "lost") and e.get("model_fair_prob") is not None:
+                brier_preds.append(e["model_fair_prob"])
+                brier_outcomes.append(1 if e["actual_result"] == "won" else 0)
+        brier = _brier_score(brier_preds, brier_outcomes)
+
+        # Information coefficient: correlation between predicted and realized edges
+        predicted_edges = []
+        realized_edges = []
+        for e in events:
+            if e.get("edge") is not None and e["actual_result"] in ("won", "lost"):
+                predicted_edges.append(e["edge"])
+                # Realized edge: 1 means the prediction was correct at the predicted
+                # edge magnitude; -1 means it was wrong. Scale by edge for correlation.
+                if e["actual_result"] == "won":
+                    from tools.math_utils import american_to_decimal
+                    dec = american_to_decimal(e["book_odds_american"])
+                    realized_edges.append(dec - 1.0)  # actual return
+                else:
+                    realized_edges.append(-1.0)
+        ic = _information_coefficient(predicted_edges, realized_edges)
+
         # ROI
         total_staked = len(returns)  # $1 per bet
         total_returned = sum(r + 1 for r in returns if r > -1) + sum(0 for r in returns if r <= -1)
@@ -486,9 +523,14 @@ class HypothesisManager:
             },
             "risk": {
                 "sharpe_ratio": round(sr, 4),
+                "sortino_ratio": round(sortino, 4) if sortino is not None else None,
                 "max_drawdown": round(mdd, 4),
             },
             "calibration": cal_bins,
+            "calibration_score": {
+                "brier_score": round(brier, 6) if brier is not None else None,
+                "information_coefficient": round(ic, 4) if ic is not None else None,
+            },
             "recommendation": rec,
         }
 
@@ -498,13 +540,15 @@ class HypothesisManager:
             "INSERT INTO hypothesis_stats "
             "(hypothesis_id, stage, computed_at, total_n, signals_n, win, loss, push_, "
             "hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi_pct, "
-            "sharpe, max_drawdown, p_value, is_significant) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "sharpe, max_drawdown, p_value, is_significant, "
+            "sortino, brier_score, information_coefficient) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (hypothesis_id, stage, now, resolved,
              sum(1 for e in events if e.get("signal_generated")),
              wins, losses, pushes,
              hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi,
-             sr, mdd, p_binomial, is_significant),
+             sr, mdd, p_binomial, is_significant,
+             sortino, brier, ic),
         )
         await self._db.commit()
 
@@ -583,6 +627,20 @@ class HypothesisManager:
                 ready = False
             else:
                 checks.append(f"PASS: Drawdown {mdd:.1%}")
+
+        # Sortino ratio (paper trade → live gate)
+        # Sortino is superior to Sharpe for betting: penalizes only downside
+        # variance, so profitable high-variance strategies aren't punished.
+        if "min_sortino" in gate:
+            sortino_val = report.get("risk", {}).get("sortino_ratio")
+            min_sortino = gate["min_sortino"]
+            if sortino_val is None:
+                checks.append(f"WARN: Sortino unavailable (insufficient data)")
+            elif sortino_val < min_sortino:
+                checks.append(f"FAIL: Sortino {sortino_val:.2f} < {min_sortino}")
+                ready = False
+            else:
+                checks.append(f"PASS: Sortino {sortino_val:.2f} >= {min_sortino}")
 
         # Auto-rejection check — only reject based on signal-level data.
         # If we fell back to all-events (used_all_events=True), the p-value

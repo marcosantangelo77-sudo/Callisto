@@ -38,6 +38,8 @@ from tools.hypothesis_generator import HypothesisGenerator
 from tools.data_collector import DataCollector
 from tools.health import SystemHealth
 from tools.pipeline_integrity import get_checker as get_integrity_checker, initialize as init_integrity
+from tools.learned_correlations import LearnedCorrelationStore
+from tools.correlation import set_learned_store, SPORT_CORRELATIONS
 
 load_dotenv()
 
@@ -65,6 +67,7 @@ hypothesis_generator: Optional[HypothesisGenerator] = None
 data_collector: Optional[DataCollector] = None
 research_loop: Optional[ResearchLoop] = None
 system_health: Optional[SystemHealth] = None
+learned_correlation_store: Optional[LearnedCorrelationStore] = None
 worker_task: Optional[asyncio.Task] = None
 
 
@@ -153,7 +156,7 @@ async def task_worker():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle manager."""
-    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, worker_task
+    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task
 
     # Start memory profiling early — before any allocations
     tracemalloc.start(25)  # 25-frame depth for full stack traces
@@ -161,6 +164,12 @@ async def lifespan(app: FastAPI):
 
     # Startup — ensure DB schema is up to date
     await ensure_schema()
+
+    # Learned correlations — Bayesian blend of hardcoded priors + empirical data
+    learned_correlation_store = LearnedCorrelationStore()
+    await learned_correlation_store.initialize()
+    await learned_correlation_store.seed_from_priors(SPORT_CORRELATIONS)
+    set_learned_store(learned_correlation_store)
 
     memory = MemoryStore()
     await memory.initialize()
@@ -297,6 +306,8 @@ async def lifespan(app: FastAPI):
     await monitor.stop()
     await queue.close()
     await memory.close()
+    if learned_correlation_store:
+        await learned_correlation_store.close()
     # Close search backend clients
     from tools.search import close_all_clients
     await close_all_clients()
@@ -426,6 +437,50 @@ async def get_edges(sport: Optional[str] = None):
     return report
 
 
+@app.get("/odds/kl-metrics")
+async def get_kl_metrics(sport: Optional[str] = None, limit: int = 50):
+    """Get KL divergence metrics — measures information flow between odds snapshots.
+
+    High KL = significant price discovery (sharp info flowing in).
+    Low KL = stale/unchanged lines (thin market, no information flow).
+    """
+    import aiosqlite
+    db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout = 5000")
+        if sport:
+            cursor = await db.execute(
+                "SELECT sport, event_id, market_type, kl_divergence, js_divergence, "
+                "n_books, opening_entropy, closing_entropy, computed_at "
+                "FROM kl_metrics WHERE sport = ? ORDER BY computed_at DESC LIMIT ?",
+                (sport, limit),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT sport, event_id, market_type, kl_divergence, js_divergence, "
+                "n_books, opening_entropy, closing_entropy, computed_at "
+                "FROM kl_metrics ORDER BY computed_at DESC LIMIT ?",
+                (limit,),
+            )
+        rows = await cursor.fetchall()
+
+    metrics = [
+        {
+            "sport": r[0], "event_id": r[1], "market_type": r[2],
+            "kl_divergence": r[3], "js_divergence": r[4],
+            "n_books": r[5], "opening_entropy": r[6], "closing_entropy": r[7],
+            "computed_at": r[8],
+        }
+        for r in rows
+    ]
+    cache_size = len(line_monitor._kl_cache)
+    return {
+        "count": len(metrics),
+        "cached_in_memory": cache_size,
+        "metrics": metrics,
+    }
+
+
 @app.post("/odds/parlay-scan/{sport}")
 async def parlay_scan(sport: str):
     """Scan for correlated parlay edges on a sport. Pulls odds + alternates."""
@@ -516,6 +571,16 @@ async def dk_props(sport: str):
 async def odds_status():
     """Get line monitor status and credit info."""
     return line_monitor.get_status() if line_monitor else {"error": "Monitor not initialized"}
+
+
+@app.get("/odds/learned-correlations")
+async def get_learned_correlations():
+    """Get learned correlation estimates — Bayesian blend of priors + empirical data."""
+    if learned_correlation_store is None:
+        return {"error": "Learned correlation store not initialized"}
+    estimates = await learned_correlation_store.get_all_learned()
+    stats = learned_correlation_store.get_stats()
+    return {"stats": stats, "estimates": estimates}
 
 
 # --- Bet Tracking & CLV ---
@@ -618,6 +683,57 @@ async def stale_lines(sport: str):
 
     stale = find_stale_lines(odds_data.get("games", []))
     return {"count": len(stale), "stale_lines": stale, "credits": odds_data.get("credits", {})}
+
+
+# --- Market Psychology ---
+
+@app.get("/odds/psychology/{sport}")
+async def market_psychology(sport: str):
+    """Run full market psychology analysis — number shading, attention arbitrage.
+
+    Returns signals for all current games in the sport: shaded lines,
+    thin-market opportunities, and closing line predictions.
+    Uses cached snapshot data (zero extra API credits).
+    """
+    from tools.market_psychology import full_market_psychology
+
+    if not line_monitor:
+        raise HTTPException(status_code=503, detail="Line monitor not initialized")
+
+    snapshot = line_monitor._snapshots.get(sport)
+    if not snapshot or not snapshot.get("games"):
+        return {"error": f"No snapshot data for {sport}. Wait for next snapshot cycle or force one via POST /odds/snapshot/{sport}"}
+
+    psych = full_market_psychology(
+        games=snapshot["games"],
+        sport=sport,
+    )
+    return psych
+
+
+@app.get("/odds/psychology")
+async def market_psychology_all():
+    """Return cached market psychology signals for all monitored sports.
+
+    This is the lightweight version — reads from the autonomous loop's
+    cache rather than recomputing.  Zero cost, instant response.
+    """
+    if not autonomous:
+        raise HTTPException(status_code=503, detail="Autonomous loop not initialized")
+    return autonomous.get_psychology_report()
+
+
+@app.get("/bets/clv-forecast")
+async def clv_forecast(sport: Optional[str] = None):
+    """Forecast pre-game CLV for all pending bets using closing line prediction.
+
+    Uses market psychology's predict_closing_line to estimate where each
+    bet's line will close, giving a CLV estimate before the game starts.
+    Useful for paper-trading evaluation.
+    """
+    if not clv_tracker:
+        raise HTTPException(status_code=503, detail="CLV tracker not initialized")
+    return await clv_tracker.forecast_clv(sport=sport)
 
 
 # --- Simulation & Contextual Data ---
@@ -1359,20 +1475,22 @@ async def full_system_status():
             status_counts = {row[0]: row[1] for row in await cursor.fetchall()}
             total = sum(status_counts.values())
 
-            # Ground-truth backtest event/signal counts from backtest_events table
+            # Ground-truth backtest event/signal counts — deduplicated by event_id
+            # (each game generates multiple rows across books; dedup to match
+            # evaluate_significance which keeps best-edge row per event)
             cursor = await db.execute(
-                "SELECT COUNT(*), "
-                "SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) "
+                "SELECT COUNT(DISTINCT event_id), "
+                "COUNT(DISTINCT CASE WHEN signal_generated = 1 THEN event_id END) "
                 "FROM backtest_events"
             )
             row = await cursor.fetchone()
             total_events = row[0] or 0
             total_signals = row[1] or 0
 
-            # Per-status event counts (only for backtesting hypotheses)
+            # Per-status event counts — deduplicated by event_id
             cursor = await db.execute(
-                "SELECT h.status, COUNT(be.id), "
-                "SUM(CASE WHEN be.signal_generated = 1 THEN 1 ELSE 0 END) "
+                "SELECT h.status, COUNT(DISTINCT be.event_id), "
+                "COUNT(DISTINCT CASE WHEN be.signal_generated = 1 THEN be.event_id END) "
                 "FROM backtest_events be "
                 "JOIN hypotheses h ON be.hypothesis_id = h.hypothesis_id "
                 "GROUP BY h.status"

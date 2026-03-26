@@ -825,6 +825,24 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         except Exception:
             pass  # Column already exists
 
+        # Migration: add microstructure metric columns to hypothesis_stats
+        for col in ("sortino", "brier_score", "information_coefficient"):
+            try:
+                await db.execute(f"ALTER TABLE hypothesis_stats ADD COLUMN {col} REAL")
+                await db.commit()
+                logger.info(f"Added {col} column to hypothesis_stats")
+            except Exception:
+                pass  # Column already exists
+
+        # Migration: add microstructure metric columns to backtest_runs
+        for col in ("sortino_ratio_val", "brier_score", "information_coefficient"):
+            try:
+                await db.execute(f"ALTER TABLE backtest_runs ADD COLUMN {col} REAL")
+                await db.commit()
+                logger.info(f"Added {col} column to backtest_runs")
+            except Exception:
+                pass  # Column already exists
+
         # Backfill: convert existing JSON embeddings to binary blobs
         await _backfill_embedding_blobs(db)
 
