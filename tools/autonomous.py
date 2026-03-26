@@ -39,8 +39,39 @@ from tools.market_psychology import (
     predict_closing_line,
     full_market_psychology,
 )
+from tools.line_analysis import (
+    detect_rlm,
+    detect_steam,
+    estimate_public_side,
+    contrarian_value,
+    optimal_bet_timing,
+)
+from tools.dead_numbers import (
+    is_dead_number as _is_dead_number,
+    key_number_value as _key_number_value,
+    find_dead_number_steals,
+    rank_line_shopping_opportunities,
+    buy_points_analysis,
+    SPORT_ALIASES as _DEAD_NUM_SPORT_ALIASES,
+)
+from tools.injury_model import (
+    full_injury_analysis,
+    redistribute_usage,
+    estimate_market_adjustment,
+    player_impact,
+)
 
 logger = logging.getLogger("callisto.autonomous")
+
+# Map odds-API sport keys to injury_model sport codes
+_SPORT_TO_MODEL = {
+    "basketball_nba": "NBA",
+    "americanfootball_nfl": "NFL",
+    "baseball_mlb": "MLB",
+    "basketball_ncaab": "NBA",  # model tables work for college too
+    "americanfootball_ncaaf": "NFL",
+    "icehockey_nhl": "NHL",
+}
 
 # Only analyze edges above these thresholds — don't waste GPU on noise
 # Lowered from 4%/3% — with 3-5 scraped books, legitimate edges start at 2%
@@ -95,8 +126,14 @@ class AutonomousLoop:
         self._analyzed_edges: dict[str, float] = {}  # edge_key -> timestamp
         self._session_count = 0
         self._alert_count = 0
+        self._loop_cycle = 0  # cycle counter for periodic parlay scans
+        self._parlay_scan_cache: dict[str, dict] = {}  # sport -> latest parlay scan results
+        self._parlay_scan_ts: dict[str, float] = {}    # sport -> last scan timestamp
         self._psychology_cache: dict[str, dict] = {}  # sport -> latest psychology signals
         self._psychology_ts: dict[str, float] = {}    # sport -> last run timestamp
+        self._injury_cache: dict[str, dict] = {}      # sport -> injury report from ESPN
+        self._injury_ts: dict[str, float] = {}         # sport -> last fetch timestamp
+        self._injury_analysis_cache: dict[str, dict] = {}  # "sport:game" -> injury analysis results
 
     async def start(self) -> None:
         """Start the autonomous reasoning loop."""
@@ -127,8 +164,20 @@ class AutonomousLoop:
 
         while self._running:
             try:
+                self._loop_cycle += 1
+
                 # Run market psychology analysis on latest snapshots
                 self._run_market_psychology()
+
+                # Refresh injury caches for active sports
+                all_reports = self.line_monitor.get_edge_report()
+                if isinstance(all_reports, dict):
+                    for _sport_key in all_reports:
+                        await self._refresh_injury_cache(_sport_key)
+
+                # Run parlay/SGP correlation scan every 4 cycles
+                if self._loop_cycle % 4 == 0:
+                    await self._phase_parlay_correlation_scan()
 
                 candidates = self._find_analysis_candidates()
 
@@ -237,6 +286,168 @@ class AutonomousLoop:
 
         return result
 
+    def _get_pace_model_confirmation(self, sport: str, game_name: str, report: dict) -> dict:
+        """Check if pace model independently confirms a total edge direction.
+
+        Returns dict with pace_model_confirms (bool), pace_model_direction,
+        pace_model_edge_pct, and pace_model_total.
+        """
+        result = {
+            "pace_model_confirms": False,
+            "pace_model_direction": None,
+            "pace_model_edge_pct": 0.0,
+            "pace_model_total": None,
+        }
+        pace_edges = report.get("pace_model_totals", [])
+        for pe in pace_edges:
+            if pe.get("game") == game_name:
+                result["pace_model_direction"] = pe.get("direction")
+                result["pace_model_edge_pct"] = pe.get("edge_pct", 0.0)
+                result["pace_model_total"] = pe.get("model_total")
+                # Confirms if both cross-book and pace model agree on direction
+                # (caller compares this with the cross-book edge direction)
+                result["pace_model_confirms"] = True
+                break
+        return result
+
+    # ---- Injury model integration ----
+
+    async def _refresh_injury_cache(self, sport: str) -> dict:
+        """Fetch and cache injury data for a sport. Returns cached injuries."""
+        now = time.time()
+        if now - self._injury_ts.get(sport, 0) < 300:
+            return self._injury_cache.get(sport, {})
+        try:
+            from tools.contextual_data import get_injuries as _fetch_inj
+            data = await _fetch_inj(sport)
+            if data and not data.get("error"):
+                self._injury_cache[sport] = data
+                self._injury_ts[sport] = now
+                cnt = data.get("injury_count", 0)
+                if cnt:
+                    logger.info(f"Injury cache refreshed for {sport}: {cnt} injuries")
+            return self._injury_cache.get(sport, {})
+        except Exception as e:
+            logger.warning(f"Injury cache refresh failed for {sport}: {e}")
+            return self._injury_cache.get(sport, {})
+
+    def _get_injuries_for_game(self, sport: str, game_name: str) -> list[dict]:
+        """Extract injuries relevant to a specific game from cache."""
+        injuries = self._injury_cache.get(sport, {}).get("injuries", [])
+        if not injuries or not game_name:
+            return []
+        game_lower = game_name.lower()
+        relevant = []
+        for inj in injuries:
+            team = inj.get("team", "")
+            team_abbr = inj.get("team_abbr", "")
+            status = (inj.get("status") or "").lower()
+            if status not in ("out", "doubtful", "questionable"):
+                continue
+            if (team.lower() in game_lower
+                    or team_abbr.lower() in game_lower
+                    or any(w in game_lower for w in team.lower().split() if len(w) > 3)):
+                relevant.append(inj)
+        return relevant
+
+    def _run_injury_analysis_for_edge(self, sport: str, game_name: str,
+                                       team_name: str) -> dict:
+        """Run injury model on injuries relevant to an edge candidate.
+
+        Returns dict with keys: has_injury_edge, injury_analyses,
+        market_adjustment_summary, confidence_modifier (-0.10..+0.10),
+        is_contrarian, prop_opportunities.
+        """
+        cache_key = f"{sport}:{game_name}"
+        cached = self._injury_analysis_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        model_sport = _SPORT_TO_MODEL.get(sport, "")
+        empty = {"has_injury_edge": False, "injury_analyses": [],
+                 "market_adjustment_summary": "", "confidence_modifier": 0.0,
+                 "is_contrarian": False, "prop_opportunities": []}
+        if not model_sport:
+            self._injury_analysis_cache[cache_key] = empty
+            return empty
+
+        game_injuries = self._get_injuries_for_game(sport, game_name)
+        if not game_injuries:
+            empty["market_adjustment_summary"] = "No significant injuries"
+            self._injury_analysis_cache[cache_key] = empty
+            return empty
+
+        # Parse opponent from game name
+        opponent = ""
+        for sep in [" at ", " vs ", " @ ", " vs. "]:
+            if sep in game_name:
+                parts = game_name.split(sep)
+                if len(parts) == 2:
+                    opponent = (parts[1].strip() if team_name.lower() in parts[0].lower()
+                                else parts[0].strip())
+                break
+
+        analyses = []
+        conf_mod = 0.0
+        is_contrarian = False
+        prop_opps = []
+
+        for inj in game_injuries:
+            player = inj.get("player", "Unknown")
+            team = inj.get("team", team_name)
+            position = inj.get("position", "")
+            status = (inj.get("status") or "").lower()
+            minutes_since = 30.0 if status == "out" else 15.0
+            try:
+                analysis = full_injury_analysis(
+                    player_name=player, team=team, sport=model_sport,
+                    opponent=opponent or "Unknown", position=position,
+                    minutes_since_announced=minutes_since,
+                )
+                analyses.append(analysis)
+                mkt = analysis.get("market_timing")
+                if mkt and hasattr(mkt, "pct_adjusted"):
+                    if mkt.pct_adjusted < 0.70:
+                        conf_mod += min(0.06, mkt.edge_remaining * 0.05)
+                    elif mkt.pct_adjusted > 0.98 and mkt.edge_remaining < 0.01:
+                        matchup = analysis.get("matchup_adjusted")
+                        if matchup and hasattr(matchup, "adjusted_spread_impact"):
+                            if matchup.adjusted_spread_impact < 2.0 and status == "out":
+                                is_contrarian = True
+                                conf_mod += 0.04
+                    for r in analysis.get("redistribution", [])[:3]:
+                        if hasattr(r, "usage_increase") and r.usage_increase > 2.0:
+                            prop_opps.append({
+                                "player": getattr(r, "player", "Unknown"),
+                                "role": getattr(r, "role", ""),
+                                "usage_increase": r.usage_increase,
+                                "stat_change": getattr(r, "projected_stat_change", {}),
+                                "absent_player": player, "absent_team": team,
+                            })
+            except Exception as e:
+                logger.warning(f"Injury analysis failed for {player}: {e}")
+
+        conf_mod = max(-0.10, min(0.10, conf_mod))
+        market_summary = ""
+        out_names = [a["player"] for a in analyses if a.get("impact")]
+        if out_names:
+            market_summary = f"Key absences: {', '.join(out_names[:5])}"
+            adj_pcts = [a["market_timing"].pct_adjusted for a in analyses
+                        if a.get("market_timing") and hasattr(a["market_timing"], "pct_adjusted")]
+            if adj_pcts:
+                market_summary += f" | Market ~{sum(adj_pcts)/len(adj_pcts):.0%} adjusted"
+
+        result = {
+            "has_injury_edge": conf_mod > 0.02 or is_contrarian,
+            "injury_analyses": analyses,
+            "market_adjustment_summary": market_summary,
+            "confidence_modifier": round(conf_mod, 3),
+            "is_contrarian": is_contrarian,
+            "prop_opportunities": prop_opps,
+        }
+        self._injury_analysis_cache[cache_key] = result
+        return result
+
     def _find_analysis_candidates(self) -> list[dict]:
         """
         Scan latest edge reports for candidates worth full AGP analysis.
@@ -245,6 +456,7 @@ class AutonomousLoop:
         - Implied range >= 4% (real disagreement, not noise)
         - Has soft book edges vs sharp consensus >= 3%
         - Not analyzed in the last 30 minutes
+        - For totals: pace model confirmation is attached as supplementary signal
         """
         candidates = []
         now = time.time()
@@ -298,7 +510,21 @@ class AutonomousLoop:
                     # Look up regime analysis for the team
                     team_regime = get_regime_for_team(sport, team_name)
 
-                    # Score confidence (psychology adjustments applied downstream)
+                    # --- Line analysis signals (RLM, steam, dead number, contrarian) ---
+                    line_analysis_kw = self._compute_line_analysis_signals(
+                        sport, edge, mkt_name, game_name, team_name,
+                    )
+
+                    # --- Injury model analysis ---
+                    injury_data = self._run_injury_analysis_for_edge(
+                        sport, game_name, team_name,
+                    )
+                    injury_kw = {}
+                    if injury_data.get("has_injury_edge"):
+                        injury_kw["injury_market_adjustment"] = injury_data["confidence_modifier"]
+                        injury_kw["injury_is_contrarian"] = injury_data["is_contrarian"]
+
+                    # Score confidence (psychology + line analysis + injury)
                     conf = score_edge(
                         edge_pct=round(best_soft * 100, 2),
                         books_compared=edge.get("num_bookmakers", edge.get("book_count", 1)),
@@ -307,7 +533,16 @@ class AutonomousLoop:
                         has_sharp_book=edge.get("sharp_consensus") is not None,
                         regime_data=team_regime,
                         **kl_kw,
+                        **line_analysis_kw,
+                        **injury_kw,
                     )
+
+                    # Pace model confirmation for total edges
+                    pace_confirm = {}
+                    if mkt_name == "totals":
+                        pace_confirm = self._get_pace_model_confirmation(
+                            sport, game_name, report,
+                        )
 
                     candidates.append({
                         "sport": sport,
@@ -325,6 +560,9 @@ class AutonomousLoop:
                         "num_bookmakers": edge.get("num_bookmakers", 0),
                         "confidence": conf,
                         "psychology": psych_signals,
+                        "pace_model": pace_confirm,
+                        "line_analysis": line_analysis_kw,
+                        "injury_analysis": injury_data,
                     })
 
         # Sort by edge magnitude — biggest edges first
@@ -387,6 +625,17 @@ class AutonomousLoop:
             if psych_lines else ""
         )
 
+        # Build pace model confirmation context for totals
+        pace_section = ""
+        pace_data = candidate.get("pace_model", {})
+        if pace_data.get("pace_model_confirms"):
+            pace_section = (
+                f"\nPace Model (Independent Confirmation):\n"
+                f"  * Model total: {pace_data['pace_model_total']}\n"
+                f"  * Model direction: {pace_data['pace_model_direction']}\n"
+                f"  * Model edge: {pace_data['pace_model_edge_pct']:.1f}%\n"
+            )
+
         query = (
             f"AUTONOMOUS EDGE ANALYSIS — {sport}\n"
             f"Game: {game}\n"
@@ -396,11 +645,13 @@ class AutonomousLoop:
             f"Best line: {best.get('bookmaker', '?')} {best_str}\n"
             f"Books compared: {candidate['num_bookmakers']}\n"
             f"\nSoft book edges vs sharp:\n{soft_detail}"
-            f"{psych_section}\n"
+            f"{psych_section}"
+            f"{pace_section}\n"
             f"Pre-scored confidence: {conf.tier} ({conf.score:.2f})\n\n"
             f"TASK: Use available tools to verify this edge. Check injuries, "
             f"check if the line has moved, check player props if relevant. "
             f"Consider market psychology signals (shading, attention arbitrage) "
+            f"and pace model confirmation (if available) "
             f"in your confidence assessment. "
             f"Determine if this is a real exploitable edge on DraftKings or Fanatics, "
             f"or if it's noise. Give a final recommendation with confidence score."
@@ -441,6 +692,57 @@ class AutonomousLoop:
                     target_book = se.get("bookmaker", "?")
                     target_price = se.get("price", 0)
 
+                # Enrich alert with ruin probability, timing value, and unit sizing
+                enrichment_lines = []
+                try:
+                    from tools.kelly import ruin_probability, timing_value, calculate_units
+                    edge_decimal = edge_pct / 100.0
+                    from tools.odds_api import calculate_implied_probability
+                    if target_price:
+                        implied = calculate_implied_probability(target_price)
+                        est_win_rate = min(0.99, implied + edge_decimal)
+                    else:
+                        est_win_rate = 0.55
+
+                    # Ruin probability at quarter-Kelly sizing
+                    bankroll_est = 1000  # Default; real bankroll from DB in executor
+                    avg_stake_est = bankroll_est * 0.01
+                    ruin = ruin_probability(
+                        bankroll=bankroll_est,
+                        avg_stake=avg_stake_est,
+                        win_rate=est_win_rate,
+                        avg_odds=target_price or -110,
+                    )
+                    enrichment_lines.append(
+                        f"Ruin: {ruin.get('ruin_pct', 0):.2f}% ({ruin.get('risk_level', '?')})"
+                    )
+
+                    # Timing value — bet now or wait?
+                    hours_to_game = candidate.get("hours_to_game", 6.0)
+                    timing = timing_value(
+                        current_edge=edge_decimal,
+                        hours_to_game=hours_to_game,
+                        sport=sport,
+                        market=market,
+                    )
+                    enrichment_lines.append(f"Timing: {timing['recommendation']}")
+
+                    # Unit sizing
+                    units = calculate_units(
+                        bankroll=bankroll_est,
+                        edge=edge_decimal,
+                        confidence=final_confidence,
+                    )
+                    enrichment_lines.append(
+                        f"Size: {units['units']:.1f}u ({units['unit_label']})"
+                    )
+                except Exception as e:
+                    logger.debug(f"Edge enrichment failed: {e}")
+
+                enriched_reasoning = conclusion[:200]
+                if enrichment_lines:
+                    enriched_reasoning += "\n" + " | ".join(enrichment_lines)
+
                 await telegram.alert_edge(
                     game=game,
                     team=team,
@@ -450,7 +752,7 @@ class AutonomousLoop:
                     confidence_score=final_confidence,
                     best_book=target_book,
                     best_price=target_price,
-                    reasoning=conclusion[:200],
+                    reasoning=enriched_reasoning,
                 )
                 self._alert_count += 1
                 logger.info(f"Autonomous: Telegram alert sent for {team} {market}")
@@ -459,6 +761,144 @@ class AutonomousLoop:
             logger.warning(f"Autonomous: session timed out for {team} {market}")
         except Exception as e:
             logger.error(f"Autonomous: session failed for {team} {market}: {e}", exc_info=True)
+
+    async def _phase_parlay_correlation_scan(self) -> None:
+        """Scan for correlated parlay edges across all monitored sports.
+
+        Uses build_correlated_parlay() on games with existing single-game edges
+        to check if correlated legs amplify the edge into a stronger parlay play.
+        """
+        from tools.correlation import (
+            build_correlated_parlay,
+            list_correlated_markets,
+        )
+
+        all_reports = self.line_monitor.get_edge_report()
+        if not isinstance(all_reports, dict):
+            return
+
+        now = time.time()
+        total_amplified = 0
+
+        for sport, report in all_reports.items():
+            if not isinstance(report, dict):
+                continue
+            if now - self._parlay_scan_ts.get(sport, 0) < 300:
+                continue
+
+            snapshot = self.line_monitor._snapshots.get(sport)
+            if not snapshot or not snapshot.get("games"):
+                continue
+
+            sport_results = {"amplified_parlays": []}
+
+            for game in snapshot["games"][:10]:
+                home = game.get("home_team", "")
+                away = game.get("away_team", "")
+                game_data = {"home_team": home, "away_team": away}
+                game_label = f"{away} @ {home}"
+
+                available_props = []
+                for bm in game.get("bookmakers", []):
+                    for mkt in bm.get("markets", []):
+                        for outcome in mkt.get("outcomes", []):
+                            price = outcome.get("price", 0)
+                            if price == 0:
+                                continue
+                            point = outcome.get("point")
+                            desc = f"{outcome.get('name', '')} {mkt['key']}"
+                            if point is not None:
+                                desc += f" {point}"
+                            available_props.append({
+                                "market": mkt["key"],
+                                "american_odds": price,
+                                "description": f"{desc} ({bm['title']})",
+                                "side": outcome.get("name", ""),
+                            })
+
+                for market_key in [
+                    "cross_book_spreads",
+                    "cross_book_h2h",
+                    "cross_book_totals",
+                ]:
+                    for edge in report.get(market_key, []):
+                        if edge.get("game", "") != game_label:
+                            continue
+                        edge_team = edge.get("team", "")
+                        edge_market = market_key.replace("cross_book_", "")
+                        best_soft = max(
+                            (
+                                se.get("edge_vs_sharp", 0)
+                                for se in edge.get("soft_book_edges", [])
+                            ),
+                            default=0,
+                        )
+                        if best_soft < MIN_SOFT_EDGE_VS_SHARP:
+                            continue
+                        correlated = list_correlated_markets(
+                            edge_market, sport, min_abs_rho=0.3
+                        )
+                        if not correlated:
+                            continue
+                        try:
+                            suggestions = build_correlated_parlay(
+                                available_props=available_props[:20],
+                                game_data=game_data,
+                                sport=sport,
+                                min_correlation=0.3,
+                                max_legs=3,
+                            )
+                            for s in suggestions[:3]:
+                                if s.get("correlation_edge_pct", 0) > 1.0:
+                                    s["amplifies_edge"] = {
+                                        "original_edge_team": edge_team,
+                                        "original_edge_market": edge_market,
+                                        "original_edge_pct": round(best_soft * 100, 2),
+                                    }
+                                    sport_results["amplified_parlays"].append(s)
+                                    total_amplified += 1
+                        except Exception as e:
+                            logger.debug(
+                                f"Parlay amplification failed for {game_label}: {e}"
+                            )
+
+            self._parlay_scan_cache[sport] = sport_results
+            self._parlay_scan_ts[sport] = now
+            n = len(sport_results["amplified_parlays"])
+            if n > 0:
+                logger.info(f"Parlay scan {sport}: {n} amplified parlays found")
+
+            for parlay in sport_results["amplified_parlays"]:
+                if parlay.get("rating") in ("ELITE", "STRONG"):
+                    try:
+                        leg_desc = ", ".join(
+                            leg.get("description", "?")
+                            for leg in parlay.get("legs", [])
+                        )
+                        await telegram.alert_edge(
+                            game=parlay.get("game", "?"),
+                            team=parlay.get("amplifies_edge", {}).get(
+                                "original_edge_team", "?"
+                            ),
+                            market="SGP_CORRELATED",
+                            edge_pct=parlay.get("correlation_edge_pct", 0),
+                            confidence_tier=parlay.get("rating", "UNKNOWN"),
+                            confidence_score=0.0,
+                            best_book="SGP",
+                            best_price=parlay.get("fair_parlay_odds", 0),
+                            reasoning=f"Correlated parlay ({parlay.get('num_legs', 0)} legs): {leg_desc[:150]}",
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to send parlay alert: {e}")
+
+        if total_amplified > 0:
+            logger.info(
+                f"Parlay correlation scan: {total_amplified} amplified parlays total"
+            )
+
+    def get_parlay_scan_report(self) -> dict:
+        """Return the latest parlay/SGP correlation scan results."""
+        return dict(self._parlay_scan_cache)
 
     def _cleanup_dedup(self) -> None:
         """Remove old entries from the dedup cache."""
@@ -493,6 +933,13 @@ class AutonomousLoop:
             "analysis_cooldown_seconds": ANALYSIS_COOLDOWN,
             "min_confidence_to_alert": MIN_CONFIDENCE_TO_ALERT,
             "market_psychology": psych_summary,
+            "parlay_correlation": {
+                sport: {
+                    "amplified_parlays": len(scan.get("amplified_parlays", [])),
+                    "age_seconds": round(now - self._parlay_scan_ts.get(sport, 0)),
+                }
+                for sport, scan in self._parlay_scan_cache.items()
+            },
         }
 
     def get_psychology_report(self) -> dict:
@@ -3174,7 +3621,8 @@ class ResearchLoop:
             logger.info("Research: no hypotheses with backtest data for interpretation")
             return
 
-        # Format hypothesis data for Claude
+        # Format hypothesis data for Claude — pre-compute significance locally
+        # using local_significance_test to save Claude tokens on basic math
         hypo_data = []
         for r in rows:
             h_id, name, thesis, sport, mkt, thresh, status = r[0], r[1], r[2], r[3], r[4], r[5], r[6]
@@ -3182,7 +3630,8 @@ class ResearchLoop:
             avg_edge, avg_ev = r[12] or 0, r[13] or 0
             resolved = wins + losses + pushes
             hit_rate = wins / max(resolved, 1)
-            hypo_data.append({
+
+            entry = {
                 "id": h_id, "name": name, "thesis": thesis[:200],
                 "sport": sport, "market": mkt, "threshold": thresh,
                 "status": status, "signals": sigs, "events": events,
@@ -3190,7 +3639,25 @@ class ResearchLoop:
                 "hit_rate": round(hit_rate, 4),
                 "avg_edge": round(avg_edge, 5),
                 "avg_ev": round(avg_ev, 5),
-            })
+            }
+
+            # Local significance test — pre-compute p-value and z-score
+            # so Claude can focus on interpretation, not basic math
+            if resolved >= 2:
+                try:
+                    from tools.local_compute import local_significance_test
+                    sig_events = [
+                        {"edge": avg_edge, "won": i < wins}
+                        for i in range(resolved)
+                    ]
+                    sig_result = await local_significance_test(sig_events)
+                    entry["z_score"] = sig_result.get("z_score", 0)
+                    entry["p_value"] = sig_result.get("p_value", 1.0)
+                    entry["significant"] = sig_result.get("significant", False)
+                except Exception:
+                    pass
+
+            hypo_data.append(entry)
 
         prompt = (
             f"CALLISTO BACKTEST INTERPRETATION — Cycle #{self._cycles}\n\n"

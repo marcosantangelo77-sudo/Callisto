@@ -817,6 +817,111 @@ async def simulate_poisson_game(req: PoissonRequest):
     return simulate_poisson(req.home_expected, req.away_expected)
 
 
+@app.get("/model/total/{sport}")
+async def get_model_total(sport: str, venue: str = "", wind_mph: float = None,
+                          wind_dir: str = "", temp_f: float = None,
+                          humidity: float = None, refs: str = ""):
+    """Pace model total projections + environment adjustments for a sport.
+
+    Returns the pace model's independent fair total for each game in the latest
+    odds snapshot, adjusted by environment (venue/weather/refs).  This is an
+    independent total model beyond cross-book divergence.
+    """
+    from tools.edge_scanner import scan_pace_model_total_edges
+
+    # Build weather dict from query params
+    weather_data = None
+    if any(v is not None for v in [wind_mph, temp_f, humidity]):
+        weather_data = {}
+        if wind_mph is not None:
+            weather_data["wind_speed_mph"] = wind_mph
+        if wind_dir:
+            weather_data["wind_direction"] = wind_dir
+        if temp_f is not None:
+            weather_data["temp_f"] = temp_f
+        if humidity is not None:
+            weather_data["humidity_pct"] = humidity
+
+    ref_list = [r.strip() for r in refs.split(",") if r.strip()] or None
+
+    # Get latest snapshot for this sport
+    snapshot = line_monitor._snapshots.get(sport)
+    if not snapshot:
+        return {"error": f"No snapshot available for {sport}. Trigger a snapshot first.",
+                "sport": sport}
+
+    games = snapshot.get("games", [])
+    if not games:
+        return {"error": "No games in snapshot", "sport": sport}
+
+    edges = scan_pace_model_total_edges(
+        games=games,
+        sport=sport,
+        weather_data=weather_data,
+        venue_team=venue or None,
+        refs=ref_list,
+    )
+
+    return {
+        "sport": sport,
+        "game_count": len(games),
+        "model_edges": edges,
+        "edge_count": len(edges),
+        "venue_queried": venue or None,
+        "weather_data": weather_data,
+        "refs": ref_list,
+    }
+
+
+@app.get("/model/environment")
+async def get_model_environment(venue: str, sport: str = "NFL",
+                                wind_mph: float = None, wind_dir: str = "",
+                                temp_f: float = None, humidity: float = None,
+                                precipitation: str = "", refs: str = ""):
+    """Environmental factors for a specific venue/game.
+
+    Returns venue characteristics, weather adjustments, referee tendencies,
+    and the combined total adjustment with confidence level.
+    """
+    from tools.environment import (
+        total_environment_adjustment,
+        get_venue_factors,
+    )
+
+    # Build weather dict
+    weather_data = None
+    if any(v is not None for v in [wind_mph, temp_f, humidity]) or precipitation:
+        weather_data = {}
+        if wind_mph is not None:
+            weather_data["wind_speed_mph"] = wind_mph
+        if wind_dir:
+            weather_data["wind_direction"] = wind_dir
+        if temp_f is not None:
+            weather_data["temp_f"] = temp_f
+        if humidity is not None:
+            weather_data["humidity_pct"] = humidity
+        if precipitation:
+            weather_data["precipitation"] = precipitation
+
+    ref_list = [r.strip() for r in refs.split(",") if r.strip()] or None
+
+    sport_code = sport.upper()
+    venue_info = get_venue_factors(venue, sport_code)
+    env_result = total_environment_adjustment(
+        venue=venue,
+        sport=sport_code,
+        weather=weather_data,
+        refs=ref_list,
+    )
+
+    return {
+        "venue": venue_info,
+        "environment": env_result,
+        "weather_input": weather_data,
+        "refs_input": ref_list,
+    }
+
+
 @app.get("/data/injuries/{sport}")
 async def get_injuries(sport: str):
     """Get current injury report from ESPN."""
