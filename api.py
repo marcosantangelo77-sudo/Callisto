@@ -2018,19 +2018,18 @@ async def batch_reject_hypotheses(request: Request):
                 matched.append({"id": hid, "name": name, "sport": sport})
 
         if not dry_run and matched:
-            now = __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ).isoformat()
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).isoformat()
             ids = [m["id"] for m in matched]
-            # Batch update in chunks of 500
             for i in range(0, len(ids), 500):
                 chunk = ids[i:i+500]
                 placeholders = ",".join("?" * len(chunk))
+                params = tuple([now] + chunk)
                 await db.execute(
                     f"UPDATE hypotheses SET status = 'rejected', updated_at = ?, "
                     f"promoted_by = 'batch_purge:generic_edge' "
                     f"WHERE hypothesis_id IN ({placeholders})",
-                    [now] + chunk,
+                    params,
                 )
             await db.commit()
             logger.info(f"Batch rejected {len(matched)} generic draft hypotheses")
