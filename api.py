@@ -68,6 +68,26 @@ system_health: Optional[SystemHealth] = None
 worker_task: Optional[asyncio.Task] = None
 
 
+def _is_internal_query(query: str) -> bool:
+    """Detect queries that reference internal state and don't need web search."""
+    q = query.lower().strip()
+    # Direct DB lookups
+    if "backtest results for hypothesis" in q:
+        return True
+    # Internal pipeline operations
+    internal_prefixes = (
+        "synthesis override", "synthesis complete", "synthesis review",
+        "deep work cycle", "cycle ", "re-run backtest", "fix ",
+        "triage ", "investigate ", "run pipeline", "recycle ",
+        "track hold", "process task", "reject hypothesis",
+        "generate compound", "verify ", "lower threshold",
+    )
+    for prefix in internal_prefixes:
+        if q.startswith(prefix):
+            return True
+    return False
+
+
 async def task_worker():
     """Background worker: polls task queue and runs AGP sessions."""
     while True:
@@ -78,10 +98,12 @@ async def task_worker():
                 continue
 
             task_id = task["task_id"]
-            logger.info(f"Worker picked up task {task_id}: {task['query']}")
+            query = task["query"]
+            skip_search = _is_internal_query(query)
+            logger.info(f"Worker picked up task {task_id} (skip_search={skip_search}): {query}")
 
             try:
-                result = await orchestrator_instance.run_session(task["query"])
+                result = await orchestrator_instance.run_session(query, skip_search=skip_search)
                 session_id = result.get("session_id")
                 await queue.complete_task(task_id, result, session_id=session_id)
                 logger.info(f"Task {task_id} completed, session {session_id}")
