@@ -88,6 +88,35 @@ def _is_internal_query(query: str) -> bool:
     return False
 
 
+async def _maybe_auto_followup(parent_task_id: int, result: dict) -> None:
+    """If a session concluded with INSUFFICIENT DATA and a clear next step, auto-queue follow-up."""
+    try:
+        summary = result.get("summary", {})
+        conclusion = summary.get("conclusion", "")
+        confidence = summary.get("confidence_score", 1.0)
+        tier = summary.get("confidence_tier", "")
+
+        # Only follow up on low-confidence results with explicit next steps
+        if confidence > 0.50 or "INSUFFICIENT DATA" not in conclusion.upper():
+            return
+
+        # Extract next step from conclusion — look for "Next step:" or "Recommending:"
+        next_step = ""
+        for marker in ["Next step:", "next step:", "Recommending:", "NEXT STEP:"]:
+            if marker in conclusion:
+                next_step = conclusion.split(marker, 1)[1].strip()
+                break
+
+        if not next_step or len(next_step) < 20:
+            return
+
+        followup_query = f"AUTO-FOLLOWUP from task {parent_task_id}: {next_step}"
+        task_id = await queue.submit_task(followup_query, priority=1)
+        logger.info(f"Auto-queued follow-up task {task_id} from parent {parent_task_id}")
+    except Exception as e:
+        logger.warning(f"Auto-followup check failed (non-fatal): {e}")
+
+
 async def task_worker():
     """Background worker: polls task queue and runs AGP sessions."""
     while True:
@@ -107,6 +136,9 @@ async def task_worker():
                 session_id = result.get("session_id")
                 await queue.complete_task(task_id, result, session_id=session_id)
                 logger.info(f"Task {task_id} completed, session {session_id}")
+
+                # Auto-follow-up: if session concluded INSUFFICIENT DATA, queue the next step
+                await _maybe_auto_followup(task_id, result)
             except Exception as e:
                 logger.error(f"Task {task_id} failed: {e}", exc_info=True)
                 await queue.fail_task(task_id, str(e))
