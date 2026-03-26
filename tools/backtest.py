@@ -660,23 +660,33 @@ class BacktestEngine:
     # Tier 1: Line-based filters (spread range, side, home/away)
     # Tier 2: Contextual filters (weather, travel, etc.) — logged as unavailable
 
-    # Factors that CANNOT be applied as game-level filters during backtesting
-    # because no data source exists to determine them per-game.
-    #
-    # EXCLUDED (derivable from existing data — do NOT add back):
-    #   days_rest, days_since_last_game, extra_rest_days,
-    #   both_teams_short_rest, opponent_days_rest  → schedule dates
-    #   prev_game_margin, starter_4q_minutes_prev  → box scores
-    #   home_pace_rank, away_pace_rank, pace_differential,
-    #   home_team_pace_rank, away_team_pace_rank   → box scores
-    #   head_to_head_record, opponent_record       → game results
-    #   divisional_matchup, conference_tier        → team metadata
-    #   team_identity, school_identity             → P1 research thesis
-    #   tournament_round, seed_number              → bracket data / dates
-    #   playoff_standing                           → standings
-    #   schedule_context, revenge_game_flag        → schedule analysis
-    #   hours_before_tip                           → game time
+    # Factors that CANNOT be applied as game-level filters during backtesting.
+    # Split into two groups:
+    #   - No data source exists (weather, pitcher, etc.)
+    #   - Data exists but filter code is NOT yet implemented (rest, pace, etc.)
+    # Both groups are treated as unfilterable. When filter code is written for
+    # a factor, remove it from this set and add to _matches_hypothesis_conditions.
     UNFILTERABLE_CONTEXT_FACTORS = {
+        # ── Derivable but NOT YET IMPLEMENTED ──
+        # These have data in game_contexts / game_results / player_stats,
+        # but no code maps them to event-level filters yet.
+        "days_rest", "days_since_last_game", "extra_rest_days",
+        "both_teams_short_rest", "opponent_days_rest",
+        "prev_game_margin", "starter_4q_minutes_prev",
+        "home_pace_rank", "away_pace_rank", "pace_differential",
+        "home_team_pace_rank", "away_team_pace_rank",
+        "head_to_head_record", "opponent_record",
+        "divisional_matchup", "conference_tier",
+        "team_identity", "school_identity",
+        "seed_number",
+        "playoff_standing",
+        "revenge_game_flag",
+        "hours_before_tip",
+        "foul_rates", "foul_rate", "personal_fouls_per_game",
+        "defensive_efficiency", "adjusted_defensive_efficiency",
+        "tempo", "pace", "offensive_efficiency",
+        "overtime_history", "prior_game_overtime",
+        # ── No data source ──
         "weather", "temperature", "wind", "wind_speed", "wind_direction",
         "travel_distance", "timezone_crossing", "altitude",
         "venue_type",  # dome, indoor, outdoor, retractable roof
@@ -696,6 +706,8 @@ class BacktestEngine:
         "season_avg_total", "pre_bye_scoring_trend_last_3",
         "first_half_total", "defensive_rank_both_teams",
         "postseason_stage",  # playoff round, series length, elimination game
+        "pitcher_identity",  # starting pitcher name/matchup
+        "schedule_type",  # interleague, opening day, etc.
     }
 
     # Keywords in thesis/name that imply game-level context filtering is needed.
@@ -797,8 +809,21 @@ class BacktestEngine:
         r"\bpark.factor": "venue_type",
         r"\bfence.distance\b": "venue_type",
         # Pace / tempo factors
-        r"\bpace\b": "home_pace_rank",
-        r"\btempo\b": "home_pace_rank",
+        r"\bpace\b": "pace",
+        r"\btempo\b": "tempo",
+        # Foul rate / defensive efficiency factors
+        r"\bfoul.rat": "foul_rates",
+        r"\bpersonal.foul": "foul_rates",
+        r"\bfoul.prone\b": "foul_rates",
+        r"\bhigh.foul": "foul_rates",
+        r"\bdefensive.efficiency\b": "defensive_efficiency",
+        r"\badjusted.defensive\b": "adjusted_defensive_efficiency",
+        r"\bdefensive.rating\b": "defensive_efficiency",
+        # Overtime / fatigue from prior game
+        r"\bovertime\b.*fatigue\b": "overtime_history",
+        r"\bovertime\b.*prior\b": "prior_game_overtime",
+        r"\bovertime\b.*previous\b": "prior_game_overtime",
+        r"\bclose.game.*intensity\b": "overtime_history",
         # Schedule / matchup type factors
         r"\binterleague\b": "schedule_type",
         r"\bopening.day\b": "schedule_type",
