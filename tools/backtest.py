@@ -182,7 +182,7 @@ class BacktestEngine:
         h_name = h.get("name", hypothesis_id)  # Readable name for filter parsing
         target_book = config.get("target_book", "draftkings")
         devig_method = config.get("devig_method", "power")
-        min_books = config.get("consensus_min_books", 2)
+        min_books = config.get("consensus_min_books", 3)
 
         # ── SPRING TRAINING GATE ──
         # MLB spring training (Feb-late March) uses split-squad rosters, shortened
@@ -1030,9 +1030,9 @@ class BacktestEngine:
                     filters["spread_min"] = val
 
         # 4. Home/away filter — from thesis text
-        if re.search(r'\bhome\s+(underdog|dog|team|favorite)', thesis_lower):
+        if re.search(r'\bhome\s+(underdog|dog|team|favorite|side|advantage)', thesis_lower):
             filters["home_away_filter"] = "home"
-        elif re.search(r'\broad\s+(underdog|dog|team|favorite)', thesis_lower):
+        elif re.search(r'\b(?:road|away|visitor|visiting)\s+(underdog|dog|team|favorite|side|value)', thesis_lower):
             filters["home_away_filter"] = "away"
         elif re.search(r'\baway\s+(underdog|dog|team|favorite)', thesis_lower):
             filters["home_away_filter"] = "away"
@@ -1041,7 +1041,7 @@ class BacktestEngine:
         # Names like "mlb_opening_week_road_favorites_h2h" or "nba_home_underdog_ats"
         if "home_away_filter" not in filters and h_id_lower:
             name_parts = h_id_lower.replace("-", "_").split("_")
-            if "road" in name_parts or "away" in name_parts:
+            if any(kw in name_parts for kw in ("road", "away", "visitor", "visiting")):
                 filters["home_away_filter"] = "away"
                 logger.info(f"home_away_filter 'away' inferred from hypothesis name: {hypothesis_id}")
             elif "home" in name_parts:
@@ -1059,8 +1059,12 @@ class BacktestEngine:
         # encode the predicted direction.
         if "dog_fav_filter" not in filters and h_id_lower:
             name_parts = set(h_id_lower.replace("-", "_").split("_"))
-            has_dog = bool(name_parts & {"underdog", "dog", "underdogs"})
-            has_fav = bool(name_parts & {"favorite", "favorites", "fav"})
+            has_dog = bool(name_parts & {
+                "underdog", "dog", "underdogs", "undervalued", "upset",
+            })
+            has_fav = bool(name_parts & {
+                "favorite", "favorites", "fav", "chalk",
+            })
             if has_dog and not has_fav:
                 filters["dog_fav_filter"] = "underdog"
                 logger.info(f"dog_fav_filter 'underdog' inferred from hypothesis name: {hypothesis_id}")
@@ -1107,8 +1111,11 @@ class BacktestEngine:
 
         if not filters:
             # No line-based filters parsed — process all lines for this game.
-            # This is expected for generic cross-book edge detection hypotheses
-            # that don't specify home/away, dog/fav, or spread range criteria.
+            # WARNING: This means the hypothesis has no directional filtering.
+            # For generic cross-book edge detection this is acceptable, but for
+            # directional hypotheses (favorite/underdog/home/away) this is a bug
+            # in _parse_hypothesis_filters that causes identical event sets.
+            # We still return True here but callers should check filter coverage.
             return True
 
         # 2. Spread range filter
@@ -2622,7 +2629,7 @@ class BacktestEngine:
         target_book = config.get("target_book", "draftkings")
         edge_threshold = h["edge_threshold"]
         devig_method = config.get("devig_method", "power")
-        min_books = config.get("consensus_min_books", 2)
+        min_books = config.get("consensus_min_books", 3)
 
         signals = []
         games = live_odds.get("games", [])
