@@ -290,7 +290,7 @@ class ClaudeDowntimeTracker:
 # ── Local Model Fallback Functions ──
 
 async def local_fallback_hypothesis_gen(
-    pipeline_state: str, existing_names: list[str], focus_context: str
+    pipeline_state: str, existing_names: list[str], focus_context: str = ""
 ) -> list[dict]:
     """Generate hypotheses using local Qwen model when Claude is down.
 
@@ -299,10 +299,9 @@ async def local_fallback_hypothesis_gen(
     """
     prompt = (
         "You are a sports betting research system. Generate 2 novel, testable "
-        "hypotheses based on situational factors that sportsbooks may underweight.\n\n"
+        "hypotheses across ANY sport based on situational factors that sportsbooks may underweight.\n\n"
         f"Current pipeline:\n{pipeline_state[:500]}\n\n"
         f"Existing hypothesis names (avoid duplicates): {json.dumps(existing_names[:20])}\n\n"
-        f"{focus_context}\n\n"
         "Respond ONLY with JSON:\n"
         '{"hypotheses": [{"name": "unique_snake_case", "thesis": "testable statement", '
         '"sport": "basketball_nba", "market_type": "spreads", "edge_threshold": 0.03}]}'
