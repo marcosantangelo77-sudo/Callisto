@@ -637,6 +637,16 @@ class LineMonitor:
 
         logger.info(f"Snapshot {sport} ({source}): {game_count} games, credits={credits_remaining}")
 
+        # Publish snapshot event to event bus
+        try:
+            from tools.event_bus import get_event_bus, EVENT_SNAPSHOT_TAKEN
+            await get_event_bus().publish(EVENT_SNAPSHOT_TAKEN, {
+                "sport": sport, "game_count": game_count,
+                "source": source, "credits_remaining": credits_remaining,
+            })
+        except Exception:
+            pass  # Event bus not critical
+
         # Also cache in historical_odds_cache format for backtesting.
         # Every live snapshot with multiple books becomes backtest-grade data.
         # This is how the system accumulates real multi-book odds over time.
@@ -685,6 +695,14 @@ class LineMonitor:
                 for mov in significant:
                     await self._record_movement(sport, mov)
                     await self._evaluate_movement(sport, mov, new_snapshot)
+                    # Publish line movement event
+                    try:
+                        from tools.event_bus import get_event_bus, EVENT_LINE_MOVED
+                        await get_event_bus().publish(EVENT_LINE_MOVED, {
+                            "sport": sport, **mov,
+                        })
+                    except Exception:
+                        pass
 
             # Detect sharp money (one book moved, others didn't)
             # Data logged for analysis but NO Telegram alerts — too noisy

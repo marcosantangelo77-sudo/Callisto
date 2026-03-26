@@ -437,6 +437,82 @@ CREATE TABLE IF NOT EXISTS embeddings (
 CREATE INDEX IF NOT EXISTS idx_embeddings_collection ON embeddings(collection);
 
 -- ──────────────────────────────────────────
+-- EVENT LOG: audit trail for event bus
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS event_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    event_data TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_log_type_time ON event_log(event_type, created_at);
+
+-- ──────────────────────────────────────────
+-- LEARNED CORRELATIONS: empirical correlation estimates
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS learned_correlations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sport TEXT NOT NULL,
+    market_a TEXT NOT NULL,
+    market_b TEXT NOT NULL,
+    n INTEGER NOT NULL DEFAULT 0,
+    mean_a REAL DEFAULT 0,
+    mean_b REAL DEFAULT 0,
+    m2_a REAL DEFAULT 0,
+    m2_b REAL DEFAULT 0,
+    co_moment REAL DEFAULT 0,
+    pearson_r REAL DEFAULT 0,
+    ci_low REAL DEFAULT -1,
+    ci_high REAL DEFAULT 1,
+    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(sport, market_a, market_b)
+);
+
+CREATE INDEX IF NOT EXISTS idx_learned_corr_sport
+    ON learned_correlations(sport, market_a, market_b);
+
+-- ──────────────────────────────────────────
+-- KL METRICS: information flow between opening and closing lines
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS kl_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sport TEXT NOT NULL,
+    event_id TEXT,
+    market_type TEXT NOT NULL,
+    kl_divergence REAL NOT NULL,
+    js_divergence REAL,
+    n_books INTEGER,
+    opening_entropy REAL,
+    closing_entropy REAL,
+    computed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(sport, event_id, market_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kl_sport_time ON kl_metrics(sport, computed_at);
+
+-- ──────────────────────────────────────────
+-- GRANGER RESULTS: book leadership analysis
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS granger_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sport TEXT NOT NULL,
+    market_type TEXT NOT NULL,
+    book_a TEXT NOT NULL,
+    book_b TEXT NOT NULL,
+    f_statistic REAL,
+    p_value REAL,
+    optimal_lag INTEGER,
+    is_significant BOOLEAN,
+    direction TEXT,
+    n_observations INTEGER,
+    computed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_granger_sport
+    ON granger_results(sport, market_type, computed_at);
+
+-- ──────────────────────────────────────────
 -- MARKET MICROSTRUCTURE: per-snapshot market quality metrics
 -- ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS market_microstructure (

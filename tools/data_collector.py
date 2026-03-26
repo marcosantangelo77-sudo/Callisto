@@ -181,6 +181,17 @@ class DataCollector:
                     ),
                 )
                 games_stored += 1
+                # Publish game completed event
+                try:
+                    from tools.event_bus import get_event_bus, EVENT_GAME_COMPLETED
+                    await get_event_bus().publish(EVENT_GAME_COMPLETED, {
+                        "sport": sport, "event_id": event_id,
+                        "game_date": game_date_fmt,
+                        "home_team": home_team, "away_team": away_team,
+                        "home_score": home_score, "away_score": away_score,
+                    })
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning(f"Failed to store game {event_id}: {e}")
 
