@@ -31,6 +31,8 @@ from tools.odds_api import (
     calculate_implied_probability,
     get_credit_status,
 )
+from tools.devig import power_devig
+from tools.math_utils import american_to_decimal
 from tools.edge_scanner import full_edge_scan, detect_sharp_money
 from tools.parlay_scanner import find_correlated_parlay_edges, analyze_live_overreaction
 from tools import telegram
@@ -789,28 +791,60 @@ class LineMonitor:
                     )
                     continue
 
-            # Consensus implied probability = average across all bookmakers
-            implied_probs = [
-                calculate_implied_probability(line["price"])
-                for line in all_lines
-            ]
+            # ── Devigged consensus: power-devig each book's two-outcome
+            # market, then average the target-side fair probs ──
+            #
+            # The naive approach (averaging raw implied probs) counts the
+            # vig as edge — power devig removes it first.
+            moved_book = movement["bookmaker"]
+            devigged_fair_probs = []
+            for bm in game.get("bookmakers", []):
+                if bm.get("title", bm.get("key", "")) == moved_book:
+                    continue  # exclude the book that moved
+                for mkt in bm.get("markets", []):
+                    if mkt["key"] != market:
+                        continue
+                    outcomes = mkt.get("outcomes", [])
+                    if len(outcomes) < 2:
+                        continue
+                    # Find the target team's outcome and build the pair
+                    target_idx = None
+                    for i, oc in enumerate(outcomes):
+                        if target_team.lower() in oc.get("name", "").lower():
+                            target_idx = i
+                            break
+                    if target_idx is None:
+                        continue
+                    # Convert to decimal odds for devig
+                    try:
+                        decimal_odds = [
+                            american_to_decimal(oc["price"]) for oc in outcomes
+                        ]
+                        if any(d <= 1.0 for d in decimal_odds):
+                            continue
+                        fair_probs, _k = power_devig(decimal_odds)
+                        devigged_fair_probs.append(fair_probs[target_idx])
+                    except (ValueError, ZeroDivisionError):
+                        continue
 
-            # Implied range sanity: >25% range is data contamination
-            implied_range = max(implied_probs) - min(implied_probs)
-            if implied_range > 0.25:
+            if len(devigged_fair_probs) < 2:
+                continue  # need at least 2 books for reliable consensus
+
+            # Implied range sanity on devigged probs
+            fair_range = max(devigged_fair_probs) - min(devigged_fair_probs)
+            if fair_range > 0.25:
                 logger.warning(
-                    f"Edge eval: implausible implied range {implied_range:.1%} "
+                    f"Edge eval: implausible devigged range {fair_range:.1%} "
                     f"for {target_team} {market}, skipping"
                 )
                 continue
 
-            consensus_prob = sum(implied_probs) / len(implied_probs)
+            consensus_prob = sum(devigged_fair_probs) / len(devigged_fair_probs)
 
-            # The moved line's implied probability
+            # The moved line's implied probability (raw — this is what the book offers)
             moved_implied = calculate_implied_probability(new_price)
 
-            # If the moved line implies LOWER probability than consensus,
-            # there may be value (market overreacted against this team)
+            # Edge = devigged fair prob - book's implied prob
             edge = consensus_prob - moved_implied
 
             # Edge cap: real market edges top out ~15%. Anything above 20%
@@ -849,7 +883,8 @@ class LineMonitor:
                     logger.info(
                         f"+EV OPPORTUNITY: {target_team} {market} @ {new_price} "
                         f"(edge={edge:.1%}, EV=${ev_result['expected_value']}, "
-                        f"Kelly={ev_result['kelly_fraction']:.1%})"
+                        f"Kelly={ev_result['kelly_fraction']:.1%}, "
+                        f"devig_books={len(devigged_fair_probs)})"
                     )
                     # Autonomous loop will pick this up and analyze via AGP
             break
