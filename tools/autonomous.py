@@ -1240,6 +1240,25 @@ class ResearchLoop:
                 # from embedding operations don't always get freed promptly
                 gc.collect()
 
+                # Proactive DB prune — prop_snapshots grows 15K rows/hr
+                try:
+                    import aiosqlite
+                    _prune_db = self.db_path
+                    _prune_cutoff = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+                    async with aiosqlite.connect(_prune_db) as _pdb:
+                        await _pdb.execute("PRAGMA busy_timeout = 5000")
+                        r = await (await _pdb.execute(
+                            "DELETE FROM prop_snapshots WHERE snapshot_time < ?",
+                            (_prune_cutoff,)
+                        )).fetchone()
+                        await _pdb.execute(
+                            "DELETE FROM deferred_work_queue WHERE status = 'done' AND created_at < ?",
+                            (_prune_cutoff,)
+                        )
+                        await _pdb.commit()
+                except Exception:
+                    pass  # Non-critical — self_repair will catch it
+
                 logger.info(
                     f"Research cycle #{self._cycles} complete — "
                     f"sleeping {RESEARCH_CYCLE_INTERVAL}s"
@@ -2292,6 +2311,21 @@ class ResearchLoop:
                         )
                     except Exception as e:
                         logger.warning(f"Failed to revert {h['hypothesis_id']} to draft: {e}")
+                    continue
+
+                # Handle duplicate backtests — same events as another hypothesis
+                if result.get("error") == "duplicate_backtest":
+                    logger.warning(
+                        f"Research: {h['hypothesis_id']} ({h.get('name', '?')}) "
+                        f"is a DUPLICATE backtest of {result.get('duplicate_of', '?')}. "
+                        f"Moving back to draft — needs unique filtering to be testable."
+                    )
+                    try:
+                        await self.hypothesis_manager.update_status(
+                            h["hypothesis_id"], "draft", "auto:duplicate_backtest"
+                        )
+                    except Exception:
+                        pass
                     continue
 
                 # Handle spring training — don't penalize, just skip until season starts

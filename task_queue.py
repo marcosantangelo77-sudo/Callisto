@@ -59,6 +59,27 @@ class TaskQueue:
         await self._db.execute("PRAGMA busy_timeout = 120000")
         await self._db.executescript(TASK_SCHEMA_SQL)
         await self._db.commit()
+        await self._recover_stuck_tasks()
+
+    async def _recover_stuck_tasks(self) -> None:
+        """On startup, fail any tasks stuck in PROCESSING — the previous
+        process died before completing them."""
+        import logging
+        logger = logging.getLogger("callisto.task_queue")
+        try:
+            cursor = await self._db.execute(
+                """UPDATE task_queue
+                   SET status = 'FAILED',
+                       error = 'Recovered on restart: stuck in PROCESSING',
+                       completed_at = ?
+                   WHERE status = 'PROCESSING'""",
+                (datetime.now(timezone.utc).isoformat(),),
+            )
+            await self._db.commit()
+            if cursor.rowcount > 0:
+                logger.warning(f"Recovered {cursor.rowcount} stuck task(s)")
+        except Exception as e:
+            logger.debug(f"Stuck task recovery: {e}")
 
     async def close(self) -> None:
         if self._db:

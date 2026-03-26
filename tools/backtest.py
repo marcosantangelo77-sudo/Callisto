@@ -12,6 +12,7 @@ The engine dispatches to existing sim functions (player_prop_sim, nba_game_sim, 
 based on the hypothesis's model_config. No new simulation code — reuse everything.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -337,6 +338,66 @@ class BacktestEngine:
                 f"backtest starts {start_date} "
                 f"(gap: {temporal_check.get('gap_days_actual', '?')} days)"
             )
+
+        # ── DUPLICATE BACKTEST DETECTION ──
+        # Multiple hypotheses with different names but same sport/market/filters
+        # produce identical event sets. Detect and skip duplicates to save cycles.
+        fp_parts = json.dumps(
+            {"sport": sport, "market": market_type, "start": start_date,
+             "end": end_date, "filters": filters, "target": target_book,
+             "threshold": edge_threshold, "devig": devig_method, "min_books": min_books},
+            sort_keys=True,
+        )
+        fingerprint = hashlib.md5(fp_parts.encode()).hexdigest()[:16]
+
+        existing = await self._db.execute_fetchall(
+            """SELECT br.hypothesis_id, br.run_id, br.total_events, br.signals_generated,
+                      br.hit_rate, br.avg_edge, br.is_significant, h.name
+               FROM backtest_runs br
+               JOIN hypotheses h ON h.hypothesis_id = br.hypothesis_id
+               WHERE br.run_config LIKE '%' || ? || '%'
+                 AND br.hypothesis_id != ?
+                 AND br.date_range_start = ? AND br.date_range_end = ?
+                 AND br.total_events > 0
+               LIMIT 1""",
+            (sport, hypothesis_id, start_date, end_date),
+        )
+        if not existing:
+            # Faster check: look for exact fingerprint in run_config
+            existing = await self._db.execute_fetchall(
+                """SELECT br.hypothesis_id, br.run_id, br.total_events, br.signals_generated,
+                          br.hit_rate, br.avg_edge, br.is_significant, h.name
+                   FROM backtest_runs br
+                   JOIN hypotheses h ON h.hypothesis_id = br.hypothesis_id
+                   WHERE json_extract(br.run_config, '$.backtest_fingerprint') = ?
+                     AND br.hypothesis_id != ?
+                     AND br.total_events > 0
+                   LIMIT 1""",
+                (fingerprint, hypothesis_id),
+            )
+        if existing:
+            dup = existing[0]
+            logger.warning(
+                f"Backtest {hypothesis_id} ({h_name}): DUPLICATE of {dup[7]} "
+                f"({dup[0]}) — same sport/market/dates/filters. "
+                f"Prior run had {dup[2]} events, {dup[3]} signals. Skipping."
+            )
+            return {
+                "hypothesis_id": hypothesis_id,
+                "hypothesis_name": h_name,
+                "error": "duplicate_backtest",
+                "detail": (
+                    f"Identical backtest already ran for hypothesis '{dup[7]}' "
+                    f"(run {dup[1]}): {dup[2]} events, {dup[3]} signals, "
+                    f"avg_edge={dup[5]}. Same sport/market/dates/filters."
+                ),
+                "duplicate_of": dup[0],
+                "duplicate_run": dup[1],
+                "fingerprint": fingerprint,
+            }
+
+        # Embed fingerprint in config for future detection
+        config["backtest_fingerprint"] = fingerprint
 
         run_id = str(uuid.uuid4())[:12]
         now = datetime.now(timezone.utc).isoformat()

@@ -37,6 +37,8 @@ _PRUNE_SAFE = {
     "odds_snapshots_v2": ("snapshot_time", 30),
     "integrity_checks": ("created_at", 30),
     "hermes_messages": ("timestamp", 90),
+    "prop_snapshots": ("snapshot_time", 2),        # 360K rows/day at 15-min intervals — keep 2 days
+    "deferred_work_queue": ("created_at", 7),     # Completed items accumulate — keep 1 week
 }
 
 HEARTBEAT_INTERVAL = 300  # Check every 5 minutes
