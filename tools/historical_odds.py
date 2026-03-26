@@ -31,7 +31,7 @@ class HistoricalOddsFetcher:
 
     async def initialize(self) -> None:
         self._db = await aiosqlite.connect(self.db_path)
-        await self._db.execute("PRAGMA busy_timeout = 10000")
+        await self._db.execute("PRAGMA busy_timeout = 30000")
         logger.info("Historical odds fetcher initialized")
 
     async def close(self) -> None:
