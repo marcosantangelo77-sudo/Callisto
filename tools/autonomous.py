@@ -1115,7 +1115,7 @@ class AutonomousLoop:
         return dict(self._parlay_scan_cache)
 
     def _cleanup_dedup(self) -> None:
-        """Remove old entries from the dedup cache."""
+        """Remove old entries from the dedup and injury analysis caches."""
         now = time.time()
         expired = [
             k for k, t in self._analyzed_edges.items()
@@ -1128,6 +1128,9 @@ class AutonomousLoop:
             sorted_keys = sorted(self._analyzed_edges, key=self._analyzed_edges.get)
             for k in sorted_keys[:len(sorted_keys) - 250]:
                 del self._analyzed_edges[k]
+        # Clear stale injury analysis cache (refreshed every 5 min anyway)
+        if len(self._injury_analysis_cache) > 100:
+            self._injury_analysis_cache.clear()
 
     def get_status(self) -> dict:
         """Return loop status."""
