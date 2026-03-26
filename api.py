@@ -977,7 +977,8 @@ async def update_hypothesis(hypothesis_id: str, req: dict):
         results["edge_threshold"] = req["edge_threshold"]
     if "model_config" in req:
         import json as _json
-        existing = _json.loads(h.get("model_config", "{}") or "{}")
+        raw = h.get("model_config", "{}")
+        existing = _json.loads(raw) if isinstance(raw, str) else (raw or {})
         existing.update(req["model_config"])
         await hypothesis_manager._db.execute(
             "UPDATE hypotheses SET model_config = ?, updated_at = CURRENT_TIMESTAMP "
