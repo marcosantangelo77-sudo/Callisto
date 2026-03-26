@@ -483,7 +483,9 @@ class HypothesisManager:
             "hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi_pct, "
             "sharpe, max_drawdown, p_value, is_significant) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (hypothesis_id, stage, now, resolved, resolved, wins, losses, pushes,
+            (hypothesis_id, stage, now, resolved,
+             sum(1 for e in events if e.get("signal_generated")),
+             wins, losses, pushes,
              hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi,
              sr, mdd, p_binomial, is_significant),
         )
