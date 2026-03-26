@@ -711,7 +711,7 @@ class BacktestEngine:
         "defensive_efficiency", "adjusted_defensive_efficiency",
         "tempo", "pace", "offensive_efficiency",
         "overtime_history", "prior_game_overtime",
-        "schedule_context",   # sandwich, trap game, letdown, look-ahead — no game-level filter
+        # schedule_context (sandwich/trap/letdown) — NOW FILTERABLE via _game_matches_context_filter
         "tournament_round",   # Sweet 16, Elite 8, etc. — no round detection from dates alone
         # ── No data source ──
         "weather", "temperature", "wind", "wind_speed", "wind_direction",
@@ -1382,9 +1382,9 @@ class BacktestEngine:
             if not game_context.get("is_revenge"):
                 return False
 
-        # ── Playoff standing / clinched / eliminated filter ──
+        # ── Playoff standing / clinched / eliminated / bubble filter ──
         if ("playoff_standing" in cf_set
-                or re.search(r"\bclinch|\beliminated\b|\btanking\b|\bplayoff.race\b|\bdesperate\b", text)):
+                or re.search(r"\bclinch|\beliminated\b|\btanking\b|\bplayoff.(?:race|bubble)\b|\bdesperate\b|\bbubble\b", text)):
             home_wp = game_context.get("home_win_pct", 0.5)
             away_wp = game_context.get("away_win_pct", 0.5)
 
@@ -1394,7 +1394,8 @@ class BacktestEngine:
             elif re.search(r"\beliminated\b|\btanking\b", text):
                 if home_wp > 0.40 and away_wp > 0.40:
                     return False
-            elif re.search(r"\bdesperate\b|\bmust.win\b|\bplayoff.race\b", text):
+            elif re.search(r"\bbubble\b|\bdesperate\b|\bmust.win\b|\bplayoff.race\b", text):
+                # Bubble/desperate = at least one team in the playoff fight (40-60% win pct)
                 if not (0.40 <= home_wp <= 0.60 or 0.40 <= away_wp <= 0.60):
                     return False
 
