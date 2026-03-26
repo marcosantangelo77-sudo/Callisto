@@ -629,6 +629,9 @@ class BacktestEngine:
         "pre_bye_scoring_trend_last_3",
         "playoff_standing",  # eliminated, tanking, clinched, play-in race
         "schedule_context",  # sandwich, letdown, trap game, look-ahead
+        "tournament_round",  # Sweet 16, Elite 8, Final Four, Round of 32/64
+        "seed_number",  # team seed, seed matchup, lower/higher seed
+        "postseason_stage",  # playoff round, series length, elimination game
     }
 
     # Keywords in thesis/name that imply game-level context filtering is needed.
@@ -745,6 +748,29 @@ class BacktestEngine:
         # Lineup / starter identity
         r"\bstarting.pitcher\b": "pitcher_identity",
         r"\b(?:sp|ace)\b.*\bpitcher\b": "pitcher_identity",
+        # Tournament round / stage (NCAA, playoffs)
+        r"\bsweet.16\b": "tournament_round",
+        r"\belite.8\b": "tournament_round",
+        r"\bfinal.four\b": "tournament_round",
+        r"\bround.of.\d+\b": "tournament_round",
+        r"\btournament\b": "tournament_round",
+        r"\bmarch.madness\b": "tournament_round",
+        r"\bncaa.*round\b": "tournament_round",
+        r"\bsurviv\w*\b.*seed": "tournament_round",
+        # Seed matchups
+        r"\b\d+.seed\b": "seed_number",
+        r"\blower.seed\b": "seed_number",
+        r"\bhigher.seed\b": "seed_number",
+        r"\bseed.matchup\b": "seed_number",
+        r"\bseed.*vs\b": "seed_number",
+        r"\bcinderella\b": "seed_number",
+        # Postseason / playoff stage
+        r"\bplayoff.round\b": "postseason_stage",
+        r"\bfirst.round.*playoff": "postseason_stage",
+        r"\bsecond.round.*playoff": "postseason_stage",
+        r"\belimination.game\b": "postseason_stage",
+        r"\bgame.[567]\b": "postseason_stage",
+        r"\bseries.length\b": "postseason_stage",
     }
 
     @staticmethod
