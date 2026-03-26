@@ -26,6 +26,7 @@ from tools.odds_api import (
     calculate_ev,
     find_best_line,
 )
+from tools.market_microstructure import compute_market_metrics
 
 logger = logging.getLogger("callisto.edge_scanner")
 
@@ -153,6 +154,10 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads") -> list[di
                         })
 
             if price_spread >= 10 or implied_range >= 0.03:
+                # Compute market microstructure metrics
+                book_name_list = [l["bookmaker"] for l in all_lines]
+                micro = compute_market_metrics(implied_probs, book_name_list, SHARP_TITLES)
+
                 edges.append({
                     "game": f"{away} @ {home}",
                     "game_id": game.get("id", ""),
@@ -175,6 +180,8 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads") -> list[di
                     "num_bookmakers": len(all_lines),
                     "soft_book_edges": soft_edges,
                     "book_count": len(all_lines),
+                    "hhi": micro["hhi_overall"],
+                    "entropy": micro["entropy_overall"],
                 })
 
     # Sort by implied range descending — biggest disagreements first

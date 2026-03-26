@@ -73,6 +73,8 @@ def score_edge(
     cross_method_confirmed: bool = False,
     is_live: bool = False,
     hours_to_game: Optional[float] = None,
+    market_hhi: Optional[float] = None,
+    market_entropy: Optional[float] = None,
 ) -> EdgeConfidence:
     """
     Score a detected edge using AGP confidence methodology.
@@ -193,8 +195,30 @@ def score_edge(
             reasons.append("24+ hours out — line may still move")
     factors["time_to_game"] = round(time_adj, 3)
 
+    # Step 9: Market concentration (HHI)
+    hhi_adj = 0.0
+    if market_hhi is not None:
+        if market_hhi < 1500:  # Competitive — books agree, divergence is meaningful
+            hhi_adj = 0.05
+            reasons.append(f"Competitive market (HHI={market_hhi:.0f}) — divergence is signal")
+        elif market_hhi > 4000:  # Concentrated — fewer books, easier to be noise
+            hhi_adj = -0.05
+            reasons.append(f"Concentrated market (HHI={market_hhi:.0f}) — edge may be noise")
+    factors["market_hhi"] = round(hhi_adj, 3)
+
+    # Step 10: Market entropy
+    entropy_adj = 0.0
+    if market_entropy is not None:
+        if market_entropy > 2.0:  # High disagreement — genuine opportunity
+            entropy_adj = 0.05
+            reasons.append(f"High book disagreement (entropy={market_entropy:.2f}) — opportunity window")
+        elif market_entropy < 0.5:  # Total agreement — edge is closing or noise
+            entropy_adj = -0.03
+            reasons.append(f"Books in strong agreement (entropy={market_entropy:.2f}) — edge may be stale")
+    factors["market_entropy"] = round(entropy_adj, 3)
+
     # Compute raw score
-    raw = base + book_adj + sharp_adj + market_adj + method_adj + live_adj + time_adj
+    raw = base + book_adj + sharp_adj + market_adj + method_adj + live_adj + time_adj + hhi_adj + entropy_adj
     # Clamp to [0, ceiling]
     score = round(max(0.0, min(raw, ceiling)), 3)
     factors["raw_total"] = round(raw, 3)

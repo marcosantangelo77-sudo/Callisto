@@ -437,6 +437,27 @@ CREATE TABLE IF NOT EXISTS embeddings (
 CREATE INDEX IF NOT EXISTS idx_embeddings_collection ON embeddings(collection);
 
 -- ──────────────────────────────────────────
+-- MARKET MICROSTRUCTURE: per-snapshot market quality metrics
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS market_microstructure (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sport TEXT NOT NULL,
+    game_id TEXT,
+    market_type TEXT NOT NULL,
+    timestamp DATETIME NOT NULL,
+    hhi_overall REAL,
+    hhi_sharp REAL,
+    entropy_overall REAL,
+    entropy_sharp REAL,
+    num_books INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(sport, game_id, market_type, timestamp)
+);
+
+CREATE INDEX IF NOT EXISTS idx_microstructure_sport_time
+    ON market_microstructure(sport, timestamp);
+
+-- ──────────────────────────────────────────
 -- GAME CONTEXTS: structured game data for hypothesis generation
 -- ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS game_contexts (
