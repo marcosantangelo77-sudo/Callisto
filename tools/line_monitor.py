@@ -723,7 +723,88 @@ class LineMonitor:
             # Measures information flow — how much the market "learned" between snapshots.
             await self._compute_and_store_kl(sport, old_snapshot, new_snapshot)
 
+        # ── CLV bridge: capture closing lines for games about to start ──
+        # If a game starts within the next snapshot interval, this is the
+        # last snapshot we'll get before tip-off — treat it as the closing line.
+        await self._capture_closing_lines(sport, new_snapshot)
+
         self._snapshots[sport] = new_snapshot
+
+    async def _capture_closing_lines(self, sport: str, snapshot: dict) -> None:
+        """Push closing lines to CLV tracker for games about to start.
+
+        For each game starting within the next snapshot interval + buffer,
+        extract the consensus/sharp closing line and record it. This bridges
+        the line_monitor → CLV tracker gap that was previously dead code.
+        """
+        try:
+            # Import CLV tracker from the global API state
+            from api import clv_tracker as _clv
+            if _clv is None:
+                return
+
+            now = datetime.now(timezone.utc)
+            closing_window_seconds = SNAPSHOT_INTERVAL + 300  # interval + 5min buffer
+
+            games = snapshot.get("games", [])
+            closing_count = 0
+
+            for game in games:
+                commence_time_str = game.get("commence_time", "")
+                if not commence_time_str:
+                    continue
+
+                try:
+                    commence = datetime.fromisoformat(
+                        commence_time_str.replace("Z", "+00:00")
+                    )
+                except (ValueError, TypeError):
+                    continue
+
+                seconds_until_start = (commence - now).total_seconds()
+
+                # Game starts within closing window and hasn't already started
+                if 0 < seconds_until_start <= closing_window_seconds:
+                    event_id = game.get("id", "")
+                    home = game.get("home_team", "")
+                    away = game.get("away_team", "")
+
+                    # Extract odds from all bookmakers for each market
+                    for bm in game.get("bookmakers", []):
+                        book_name = bm.get("title", bm.get("key", ""))
+                        for market_data in bm.get("markets", []):
+                            market_key = market_data.get("key", "")
+                            for outcome in market_data.get("outcomes", []):
+                                team = outcome.get("name", "")
+                                price = outcome.get("price")
+                                point = outcome.get("point")
+
+                                if price is None:
+                                    continue
+
+                                try:
+                                    await _clv.record_closing_line(
+                                        event_id=event_id,
+                                        market=market_key,
+                                        team=team,
+                                        closing_odds=int(price),
+                                        closing_point=float(point) if point is not None else None,
+                                        source=book_name,
+                                        sport=sport,
+                                    )
+                                    closing_count += 1
+                                except Exception as e:
+                                    logger.debug(f"CLV closing line record failed: {e}")
+
+            if closing_count > 0:
+                logger.info(
+                    f"CLV: captured {closing_count} closing lines for {sport} "
+                    f"(games starting within {closing_window_seconds}s)"
+                )
+        except ImportError:
+            pass  # CLV tracker not available
+        except Exception as e:
+            logger.warning(f"CLV closing line capture failed for {sport}: {e}")
 
     async def _record_movement(self, sport: str, movement: dict) -> None:
         """Record a line movement to the database."""
@@ -1024,14 +1105,44 @@ class LineMonitor:
         cols = [d[0] for d in cursor.description]
         return [dict(zip(cols, row)) for row in rows]
 
-    def get_status(self) -> dict:
-        """Return monitor status."""
+    async def get_status(self) -> dict:
+        """Return monitor status with DB-backed counts."""
+        db_snapshots = 0
+        db_movements = 0
+        db_closing_lines = 0
+        latest_snapshot_at = None
+        try:
+            if self._db:
+                row = await (await self._db.execute(
+                    "SELECT COUNT(*), MAX(timestamp) FROM odds_snapshots"
+                )).fetchone()
+                if row:
+                    db_snapshots = row[0] or 0
+                    latest_snapshot_at = row[1]
+                row2 = await (await self._db.execute(
+                    "SELECT COUNT(*) FROM line_movements"
+                )).fetchone()
+                db_movements = row2[0] if row2 else 0
+                try:
+                    row3 = await (await self._db.execute(
+                        "SELECT COUNT(*) FROM closing_lines"
+                    )).fetchone()
+                    db_closing_lines = row3[0] if row3 else 0
+                except Exception:
+                    pass  # Table may not exist yet
+        except Exception:
+            pass
+
         return {
             "running": self._running,
             "monitored_sports": MONITORED_SPORTS,
             "snapshot_interval_seconds": SNAPSHOT_INTERVAL,
             "cached_snapshots": list(self._snapshots.keys()),
-            "recent_alerts": len(self._alerts),
+            "db_snapshots_total": db_snapshots,
+            "db_movements_total": db_movements,
+            "db_closing_lines": db_closing_lines,
+            "latest_snapshot_at": latest_snapshot_at,
+            "recent_alerts_in_memory": len(self._alerts),
             "credits": get_credit_status(),
         }
 

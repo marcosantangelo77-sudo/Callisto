@@ -415,7 +415,7 @@ class TelegramListener:
         parts = ["<b>System Status</b>\n"]
 
         if self.line_monitor:
-            st = self.line_monitor.get_status()
+            st = await self.line_monitor.get_status()
             parts.append(f"Monitor: {'ON' if st['running'] else 'OFF'}")
             parts.append(f"Sports: {', '.join(st.get('monitored_sports', []))}")
             credits = st.get("credits", {})

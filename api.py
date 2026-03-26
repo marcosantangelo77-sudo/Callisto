@@ -261,7 +261,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Callisto API started on port {CALLISTO_PORT}")
 
     # Notify on Telegram
-    sports = line_monitor.get_status().get("monitored_sports", [])
+    sports = (await line_monitor.get_status()).get("monitored_sports", [])
     await telegram.alert_system(
         f"API started on port {CALLISTO_PORT}\n"
         f"Monitoring: {', '.join(sports)}\n"
@@ -714,7 +714,7 @@ async def dk_props(sport: str):
 @app.get("/odds/status")
 async def odds_status():
     """Get line monitor status and credit info."""
-    return line_monitor.get_status() if line_monitor else {"error": "Monitor not initialized"}
+    return (await line_monitor.get_status()) if line_monitor else {"error": "Monitor not initialized"}
 
 
 @app.get("/odds/learned-correlations")
@@ -2218,7 +2218,7 @@ async def full_system_status():
     status["autonomous_loop"] = autonomous.get_status() if autonomous else None
     status["research_loop"] = research_loop.get_status() if research_loop else None
     status["claude_code"] = claude_stats()
-    status["line_monitor"] = line_monitor.get_status() if line_monitor else None
+    status["line_monitor"] = (await line_monitor.get_status()) if line_monitor else None
 
     # Add hypothesis summary — ground-truth from DB, not in-memory counters
     if hypothesis_manager:
