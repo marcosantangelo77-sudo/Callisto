@@ -242,7 +242,10 @@ class SystemHealth:
                 results[name] = result
                 self._last_check[name] = result
 
-                if result.get("status") == "ok":
+                status = result.get("status", "ok")
+                if status in ("ok", "warning"):
+                    # "warning" = informational (e.g. memory leak suspected
+                    # but RSS still under limit). Don't trip the breaker.
                     breaker.record_success()
                 else:
                     error_msg = result.get("error", result.get("message", "unknown"))
