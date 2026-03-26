@@ -1114,9 +1114,16 @@ class ResearchLoop:
                     break
 
                 # Phase 1: Backtest pending hypotheses (FIRST — highest priority)
-                # Moved before data collection so DB lock contention from
-                # ESPN downloads doesn't starve the backtest pipeline.
-                await self._phase_backtest()
+                # Pause line_monitor during backtests to prevent DB lock deadlock.
+                # Both systems write to SQLite; concurrent writes deadlock even
+                # with 120s busy_timeout when snapshot data is large.
+                if hasattr(self, 'line_monitor') and self.line_monitor:
+                    self.line_monitor._paused = True
+                try:
+                    await self._phase_backtest()
+                finally:
+                    if hasattr(self, 'line_monitor') and self.line_monitor:
+                        self.line_monitor._paused = False
 
                 if not self._running:
                     break

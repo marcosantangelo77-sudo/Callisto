@@ -79,6 +79,7 @@ class LineMonitor:
         self._db: Optional[aiosqlite.Connection] = None
         self._task: Optional[asyncio.Task] = None
         self._running = False
+        self._paused = False  # Set True to pause snapshot writes (during backtests)
         self._snapshots: dict[str, dict] = {}  # sport -> last snapshot (only latest per sport)
         self._alerts: list[dict] = []  # Recent movement alerts (capped at 100)
         self._latest_edge_reports: dict[str, dict] = {}  # sport -> latest edge scan (only latest per sport)
@@ -177,6 +178,10 @@ class LineMonitor:
         2. OddsPapi (250/month free tier)
         """
         while self._running:
+            # Yield to backtests when paused
+            if self._paused:
+                await asyncio.sleep(5)
+                continue
             try:
                 credits = get_credit_status()
                 use_fallback = False
