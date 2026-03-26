@@ -1030,38 +1030,15 @@ class BacktestEngine:
         available_books = {bm.get("key", "").lower() for bm in game.get("bookmakers", [])}
         bookmaker_count = len(available_books)
 
-        # Cross-book edge detection requires the target book to be present
-        # in the data AND at least one other book to compare against.
-        # If we only have "consensus" (single-book old data), there's no
-        # cross-book edge to find — skip these games.
-        if target_book not in available_books:
-            if bookmaker_count == 1 and "consensus" in available_books:
-                # Single "consensus" book — no cross-book comparison possible.
-                # These events are noise without the target book's actual pricing.
-                return 0, 0
-            # Target not present but we have multiple other books — pick the
-            # closest retail book as target proxy (DK -> FanDuel -> BetMGM)
-            retail_fallbacks = ["fanduel", "betmgm", "caesars", "betrivers", "espnbet"]
-            effective_target = target_book
-            for fallback in retail_fallbacks:
-                if fallback in available_books:
-                    effective_target = fallback
-                    break
-            else:
-                # No retail book found — use whatever is available
-                effective_target = next(iter(available_books), target_book)
-        else:
-            effective_target = target_book
-
-        # Need at least 1 non-target book for cross-book comparison
-        non_target_books = available_books - {effective_target}
-        if not non_target_books:
+        # Multi-book edge detection: need at least 3 books total.
+        # Single "consensus" book means no cross-book comparison possible.
+        if bookmaker_count < 3:
             return 0, 0
 
-        # Require at least 2 non-target books for meaningful edge detection.
-        # With only 1 non-target book, consensus_devig produces fair_prob ≈
-        # book_implied → edge ≈ 0 always (0% signal rate in production data).
-        effective_min_books = max(2, min(min_books, len(non_target_books)))
+        # target_book is now just a hint — _process_game_lines evaluates
+        # ALL soft books against the consensus. No single-book dependency.
+        effective_target = target_book
+        effective_min_books = max(2, min(min_books, bookmaker_count - 1))
 
         return await self._process_game_lines(
             run_id, hypothesis_id, game, game_date, snapshot_time,
@@ -1147,21 +1124,13 @@ class BacktestEngine:
 
             # Find books that have both sides
             common_books = set(side_a_books.keys()) & set(side_b_books.keys())
-            # +1 because target book will be excluded from consensus later
-            if len(common_books) < min_books + 1:
+            if len(common_books) < 3:  # Need at least 3 books for consensus + target
                 continue
 
-            # Check target book has both sides
-            if target_book not in common_books:
-                continue
-
-            # Devig each book and compute fair values
-            # CRITICAL: exclude target book from consensus to avoid self-reference bias
-            fair_a_values = []  # (fair_prob_a, book_key)
-            fair_b_values = []  # (fair_prob_b, book_key)
+            # Devig ALL books to get fair values
+            all_fair_a = {}  # book_key -> fair_prob_a
+            all_fair_b = {}  # book_key -> fair_prob_b
             for bk in common_books:
-                if bk == target_book:
-                    continue  # target book is what we compare AGAINST, not part of consensus
                 price_a = side_a_books[bk]["price"]
                 price_b = side_b_books[bk]["price"]
                 try:
@@ -1171,8 +1140,8 @@ class BacktestEngine:
                         fair, _ = power_devig([dec_a, dec_b])
                     else:
                         fair = multiplicative_devig([dec_a, dec_b])
-                    fair_a_values.append((fair[0], bk))
-                    fair_b_values.append((fair[1], bk))
+                    all_fair_a[bk] = fair[0]
+                    all_fair_b[bk] = fair[1]
                 except (ValueError, ZeroDivisionError) as e:
                     logger.warning(
                         f"Devig failed for book={bk}, market={mkt_key}, "
@@ -1180,137 +1149,134 @@ class BacktestEngine:
                     )
                     continue
 
-            non_target_count = len(fair_a_values)
-            if non_target_count < min_books:
+            if len(all_fair_a) < 3:
                 continue
 
-            # --- Cross-book edge detection ---
-            # Two fair value estimates:
-            #   1. consensus = average devigged fair prob across all non-target books
-            #   2. best_line = sharpest (highest fair prob for each side) from any single book
+            # --- Multi-book edge detection ---
+            # For EACH book as potential target, compute consensus from all
+            # other books and measure the edge. This finds the best mispricing
+            # across ALL books, not just DraftKings.
             #
-            # The best_line approach finds real cross-book edges:
-            #   If Pinnacle devigs to 55% on Team A but DK prices Team A at 50%,
-            #   that's a 5% edge. The consensus approach dilutes this with softer books.
-            #
-            # Strategy: use best_line when we have 3+ non-target books (reliable sharp signal),
-            # fall back to consensus when fewer books are available.
+            # Sharp books (Pinnacle, Circa, etc.) are excluded as targets —
+            # they set the true line. Only soft/retail books are tested.
+            SHARP_BOOKS = {
+                "pinnacle", "lowvig", "lowvig.ag", "circa",
+                "bookmaker.eu", "betonline", "betonline.ag",
+                "betcris", "betfair_exchange", "sbobet",
+            }
 
-            consensus_a = sum(v[0] for v in fair_a_values) / non_target_count
-            consensus_b = sum(v[0] for v in fair_b_values) / non_target_count
+            for eval_target in common_books:
+                # Only evaluate retail/soft books as targets
+                if eval_target in SHARP_BOOKS:
+                    continue
+                if eval_target not in all_fair_a:
+                    continue
 
-            # Filter outlier books before computing best-line.
-            # The Odds API occasionally returns swapped sides for a book
-            # (e.g., favorite priced as dog). A single swapped book poisons
-            # max()-based best-line with fake 70%+ edges. Fix: exclude any
-            # book whose devigged fair prob deviates >15pp from consensus.
-            OUTLIER_THRESHOLD = 0.15  # 15 percentage points
-            clean_a = [(v, bk) for v, bk in fair_a_values
-                        if abs(v - consensus_a) <= OUTLIER_THRESHOLD]
-            clean_b = [(v, bk) for v, bk in fair_b_values
-                        if abs(v - consensus_b) <= OUTLIER_THRESHOLD]
-            # Fall back to all values if filtering is too aggressive
-            if not clean_a:
-                clean_a = fair_a_values
-            if not clean_b:
-                clean_b = fair_b_values
+                # Build consensus from all books EXCEPT this target
+                others_a = [(v, bk) for bk, v in all_fair_a.items() if bk != eval_target]
+                others_b = [(v, bk) for bk, v in all_fair_b.items() if bk != eval_target]
 
-            # Find the sharpest line for each side (highest devigged fair prob)
-            best_a_val, best_a_book = max(clean_a, key=lambda x: x[0])
-            best_b_val, best_b_book = max(clean_b, key=lambda x: x[0])
+                non_target_count = len(others_a)
+                if non_target_count < min_books:
+                    continue
 
-            # Use cross-book best line when we have enough books for a reliable signal
-            use_crossbook = non_target_count >= 3
-            if use_crossbook:
-                # Best-line is the primary fair value — this is where edges live
-                fair_a = best_a_val
-                fair_b = best_b_val
-                edge_method = "cross_book_best_line"
-            else:
-                # With few books, consensus is more reliable
-                fair_a = consensus_a
-                fair_b = consensus_b
-                edge_method = "consensus_devig"
+                consensus_a = sum(v for v, _ in others_a) / non_target_count
+                consensus_b = sum(v for v, _ in others_b) / non_target_count
 
-            # Also track all contributing books for transparency
-            contributing_books_a = [bk for _, bk in fair_a_values]
-            contributing_books_b = [bk for _, bk in fair_b_values]
+                # Filter outliers before computing best-line
+                OUTLIER_THRESHOLD = 0.15
+                clean_a = [(v, bk) for v, bk in others_a
+                            if abs(v - consensus_a) <= OUTLIER_THRESHOLD]
+                clean_b = [(v, bk) for v, bk in others_b
+                            if abs(v - consensus_b) <= OUTLIER_THRESHOLD]
+                if not clean_a:
+                    clean_a = others_a
+                if not clean_b:
+                    clean_b = others_b
 
-            # Evaluate both sides against target book
-            for side_name, fair_val, consensus_val, best_val, best_book, target_books, contrib_books in [
-                (side_a_name, fair_a, consensus_a, best_a_val, best_a_book, side_a_books, contributing_books_a),
-                (side_b_name, fair_b, consensus_b, best_b_val, best_b_book, side_b_books, contributing_books_b),
-            ]:
-                # ── Hypothesis-aware filtering ──
-                # Get the signed point for this side (for underdog/favorite detection)
-                side_signed_point = signed_points.get((mkt_key, point, side_name), point)
-                if not self._matches_hypothesis_conditions(
-                    side_name=side_name,
-                    market_type=mkt_key,
-                    point=side_signed_point,
-                    home_team=home,
-                    away_team=away,
-                    filters=filters or {},
-                ):
-                    continue  # Skip — doesn't match hypothesis conditions
+                best_a_val, best_a_book = max(clean_a, key=lambda x: x[0])
+                best_b_val, best_b_book = max(clean_b, key=lambda x: x[0])
 
-                target_price = target_books[target_book]["price"]
-                target_implied = american_to_implied(target_price)
-                ev = ev_binary(fair_val, american_to_decimal(target_price))
-                kelly = kelly_binary(fair_val, american_to_decimal(target_price))
-                edge = fair_val - target_implied  # Probability edge (not EV)
+                use_crossbook = non_target_count >= 3
+                if use_crossbook:
+                    fair_a = best_a_val
+                    fair_b = best_b_val
+                    edge_method = "cross_book_best_line"
+                else:
+                    fair_a = consensus_a
+                    fair_b = consensus_b
+                    edge_method = "consensus_devig"
 
-                # ── Hard cap: no real market edge exceeds 15% ──
-                # Anything larger is a data artifact (swapped sides, stale line,
-                # mismatched markets).  The outlier filter catches most cases but
-                # this is the last line of defence.
-                MAX_EDGE_MAGNITUDE = 0.15
-                if abs(edge) > MAX_EDGE_MAGNITUDE:
-                    logger.debug(
-                        f"Edge {edge:.4f} exceeds magnitude cap for "
-                        f"{side_name} @ {target_book} — clamping"
+                contributing_books_a = [bk for _, bk in others_a]
+                contributing_books_b = [bk for _, bk in others_b]
+
+                # Evaluate both sides against this target book
+                for side_name, fair_val, consensus_val, best_val, best_book, side_books, contrib_books in [
+                    (side_a_name, fair_a, consensus_a, best_a_val, best_a_book, side_a_books, contributing_books_a),
+                    (side_b_name, fair_b, consensus_b, best_b_val, best_b_book, side_b_books, contributing_books_b),
+                ]:
+                    side_signed_point = signed_points.get((mkt_key, point, side_name), point)
+                    if not self._matches_hypothesis_conditions(
+                        side_name=side_name,
+                        market_type=mkt_key,
+                        point=side_signed_point,
+                        home_team=home,
+                        away_team=away,
+                        filters=filters or {},
+                    ):
+                        continue
+
+                    if eval_target not in side_books:
+                        continue
+                    target_price = side_books[eval_target]["price"]
+                    target_implied = american_to_implied(target_price)
+                    ev = ev_binary(fair_val, american_to_decimal(target_price))
+                    kelly = kelly_binary(fair_val, american_to_decimal(target_price))
+                    edge = fair_val - target_implied
+
+                    MAX_EDGE_MAGNITUDE = 0.15
+                    if abs(edge) > MAX_EDGE_MAGNITUDE:
+                        edge = MAX_EDGE_MAGNITUDE if edge > 0 else -MAX_EDGE_MAGNITUDE
+
+                    is_signal = edge >= edge_threshold
+
+                    events += 1
+                    if is_signal:
+                        signals += 1
+
+                    team = side_name
+                    event_id = game.get("id") or f"{game_date}|{home}|{away}"
+                    event_sport = game.get("sport_key") or h_sport
+
+                    await self._db.execute(
+                        "INSERT INTO backtest_events "
+                        "(run_id, event_id, hypothesis_id, sport, player, market, "
+                        "line, side, book, book_odds_american, book_implied_prob, "
+                        "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
+                        "signal_generated, game_date, snapshot_time) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            run_id, event_id, hypothesis_id, event_sport,
+                            None, mkt_key, point, team, eval_target,
+                            target_price, round(target_implied, 6),
+                            round(fair_val, 6),
+                            json.dumps({
+                                "edge_method": edge_method,
+                                "books_used": non_target_count,
+                                "target_excluded": True,
+                                "devig_method": devig_method,
+                                "target_book": eval_target,
+                                "best_line_book": best_book,
+                                "best_line_fair_prob": round(best_val, 6),
+                                "consensus_fair_prob": round(consensus_val, 6),
+                                "contributing_books": contrib_books,
+                                "home_team": home,
+                                "away_team": away,
+                            }),
+                            round(edge, 6), round(ev, 6), round(kelly, 6),
+                            is_signal, game_date, snapshot_time,
+                        ),
                     )
-                    edge = MAX_EDGE_MAGNITUDE if edge > 0 else -MAX_EDGE_MAGNITUDE
-
-                is_signal = edge >= edge_threshold
-
-                events += 1
-                if is_signal:
-                    signals += 1
-
-                team = side_name
-                # Build a matchable event_id from game identity
-                event_id = game.get("id") or f"{game_date}|{home}|{away}"
-                event_sport = game.get("sport_key") or h_sport
-
-                await self._db.execute(
-                    "INSERT INTO backtest_events "
-                    "(run_id, event_id, hypothesis_id, sport, player, market, "
-                    "line, side, book, book_odds_american, book_implied_prob, "
-                    "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
-                    "signal_generated, game_date, snapshot_time) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        run_id, event_id, hypothesis_id, event_sport,
-                        None, mkt_key, point, team, target_book,
-                        target_price, round(target_implied, 6),
-                        round(fair_val, 6),
-                        json.dumps({
-                            "edge_method": edge_method,
-                            "books_used": non_target_count,
-                            "target_excluded": True,
-                            "devig_method": devig_method,
-                            "best_line_book": best_book,
-                            "best_line_fair_prob": round(best_val, 6),
-                            "consensus_fair_prob": round(consensus_val, 6),
-                            "contributing_books": contrib_books,
-                            "home_team": home,
-                            "away_team": away,
-                        }),
-                        round(edge, 6), round(ev, 6), round(kelly, 6),
-                        is_signal, game_date, snapshot_time,
-                    ),
-                )
 
         await self._db.commit()
         return events, signals
