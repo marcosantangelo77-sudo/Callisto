@@ -1427,10 +1427,12 @@ class ResearchLoop:
                     break
 
                 # Phase 6: Paper trade active hypotheses
+                # 300s timeout — paper trading needs live odds fetches (DK scraper +
+                # devig), and 120s was causing 100% timeout rate (0 paper trades ever)
                 try:
-                    await asyncio.wait_for(self._phase_paper_trade(), timeout=120)
+                    await asyncio.wait_for(self._phase_paper_trade(), timeout=300)
                 except asyncio.TimeoutError:
-                    logger.warning("Phase paper_trade timed out after 120s — skipping")
+                    logger.warning("Phase paper_trade timed out after 300s — skipping")
                 except Exception as e:
                     logger.warning(f"Phase paper_trade failed (non-fatal): {e}")
 
@@ -3470,12 +3472,27 @@ class ResearchLoop:
                             logger.warning(f"Prop scan failed for {event_id}: {e}", exc_info=True)
                     continue
 
-                # For game-level markets: use DK scraper (free), Odds API as fallback,
-                # line_monitor cached snapshots as last resort
+                # For game-level markets: line_monitor cache (instant, free) first,
+                # then DK scraper (free but slow), then Odds API (costs credits)
                 if sport not in odds_cache:
-                    from tools.dk_scraper import scrape_dk_odds
-                    live_odds = await scrape_dk_odds(sport)
+                    live_odds = {}
 
+                    # Try line_monitor cache first — instant, no network call
+                    if hasattr(self, 'line_monitor') and self.line_monitor:
+                        snap = self.line_monitor._snapshots.get(sport, {})
+                        if snap and not snap.get("error") and snap.get("games"):
+                            live_odds = snap
+                            logger.info(
+                                f"Paper trade: using line_monitor cache for {sport} "
+                                f"({len(snap.get('games', []))} games)"
+                            )
+
+                    # Fallback: DK scraper (free but slow — was causing 120s timeouts)
+                    if not live_odds.get("games"):
+                        from tools.dk_scraper import scrape_dk_odds
+                        live_odds = await scrape_dk_odds(sport)
+
+                    # Last resort: Odds API (costs credits)
                     if live_odds.get("error") or not live_odds.get("games"):
                         from tools.odds_api import get_odds
                         live_odds = await get_odds(
@@ -3484,21 +3501,10 @@ class ResearchLoop:
                             markets="h2h,spreads,totals",
                         )
 
-                    # Last resort: use line monitor's cached snapshot
-                    if live_odds.get("error") or not live_odds.get("games"):
-                        if hasattr(self, 'line_monitor') and self.line_monitor:
-                            snap = self.line_monitor._snapshots.get(sport, {})
-                            if snap and not snap.get("error") and snap.get("games"):
-                                live_odds = snap
-                                logger.info(
-                                    f"Paper trade: using line_monitor cached snapshot for {sport} "
-                                    f"({len(snap.get('games', []))} games)"
-                                )
-
                     if live_odds.get("error") or not live_odds.get("games"):
                         logger.warning(
                             f"Paper trade: no odds available for {sport} — "
-                            f"DK scraper, Odds API, and line_monitor all failed"
+                            f"line_monitor, DK scraper, and Odds API all failed"
                         )
                     else:
                         odds_cache[sport] = live_odds
