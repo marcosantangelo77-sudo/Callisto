@@ -680,12 +680,12 @@ class ResearchLoop:
     async def _migrate_edge_thresholds(self) -> None:
         """Lower edge_thresholds that exceed real market edge range.
 
-        Real market edges in our data top out at ~2.5% with most at 0.5-1.5%.
-        Two-pass migration:
+        Real market edges in our data top out at ~0.83% with most at 0.3-0.8%.
+        Three-pass migration:
           Pass 1: thresholds >= 2.5% → 1.5% (legacy fix)
           Pass 2: thresholds >= 1.5% → 1.0% (93% zero-signal fix)
-        Thresholds at 1.5%+ still suppress most signals given 2-3 book
-        consensus devig produces compressed edge distributions.
+          Pass 3: thresholds >= 0.8% → 0.5% (max observed edge is 0.83%)
+        Without pass 3, 2,845+ hypotheses at 1.0% can never fire a signal.
         """
         db = self.hypothesis_manager._db
         if db is None:
@@ -709,7 +709,7 @@ class ResearchLoop:
                 f"from ≥2.5% to 1.5%"
             )
 
-        # Pass 2: lower 1.5-2.5% to 1.0% — most real edges are 0.5-1.5%
+        # Pass 2: lower 1.5-2.5% to 1.0%
         cursor = await db.execute(
             "SELECT COUNT(*) FROM hypotheses "
             "WHERE edge_threshold >= 0.015 AND edge_threshold < 0.025 "
@@ -729,12 +729,31 @@ class ResearchLoop:
                 f"from 1.5-2.5% to 1.0%"
             )
 
-        total = count_high + count_mid
+        # Pass 3: lower >= 0.8% to 0.5% — max observed edge is 0.83%,
+        # so 1.0% and 1.2% thresholds are unreachable
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM hypotheses "
+            "WHERE edge_threshold >= 0.008 AND status IN ('draft', 'backtesting')"
+        )
+        row = await cursor.fetchone()
+        count_low = row[0] if row else 0
+
+        if count_low > 0:
+            await db.execute(
+                "UPDATE hypotheses SET edge_threshold = 0.005 "
+                "WHERE edge_threshold >= 0.008 AND status IN ('draft', 'backtesting')"
+            )
+            logger.info(
+                f"Edge threshold migration pass 3: lowered {count_low} hypotheses "
+                f"from ≥0.8% to 0.5% (max observed edge is 0.83%)"
+            )
+
+        total = count_high + count_mid + count_low
         if total > 0:
             await db.commit()
             logger.info(
                 f"Edge threshold migration complete: {total} hypotheses updated "
-                f"(pass1={count_high}, pass2={count_mid})"
+                f"(pass1={count_high}, pass2={count_mid}, pass3={count_low})"
             )
         else:
             logger.info("Edge threshold migration: no hypotheses need lowering")
