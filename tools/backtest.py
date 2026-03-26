@@ -1106,7 +1106,10 @@ class BacktestEngine:
             # in backtest metadata as "unfiltered_totals_side".
 
         if not filters:
-            return True  # No filters = backward compatible, process everything
+            # No line-based filters parsed — process all lines for this game.
+            # This is expected for generic cross-book edge detection hypotheses
+            # that don't specify home/away, dog/fav, or spread range criteria.
+            return True
 
         # 2. Spread range filter
         spread_range = filters.get("spread_range")
