@@ -298,13 +298,16 @@ async def local_fallback_hypothesis_gen(
     Returns list of hypothesis dicts ready for create_hypothesis().
     """
     prompt = (
-        "You are a sports betting research system. Generate 2 novel, testable "
-        "hypotheses across ANY sport based on situational factors that sportsbooks may underweight.\n\n"
+        "You are a sports betting research system. Generate 2 UNCONVENTIONAL hypotheses "
+        "that exploit dimensions Vegas models lack columns for: team identity/cohesion, "
+        "roster sociology, ref biases, scheme geometry, SGP correlation mispricing, "
+        "media narrative effects, calendar quirks. Do NOT generate rest/B2B/weather/home "
+        "underdog hypotheses — those are already priced correctly.\n\n"
         f"Current pipeline:\n{pipeline_state[:500]}\n\n"
         f"Existing hypothesis names (avoid duplicates): {json.dumps(existing_names[:20])}\n\n"
         "Respond ONLY with JSON:\n"
         '{"hypotheses": [{"name": "unique_snake_case", "thesis": "testable statement", '
-        '"sport": "basketball_nba", "market_type": "spreads", "edge_threshold": 0.03}]}'
+        '"sport": "basketball_nba", "market_type": "spreads", "edge_threshold": 0.015}]}'
     )
 
     response = await _call_local_model(prompt, max_tokens=400)
