@@ -2728,7 +2728,7 @@ class ResearchLoop:
             "baseball_mlb": "MLB",
         }
 
-        active_sports = list(self.line_monitor._snapshots.keys()) if self.line_monitor else []
+        active_sports = list(self.line_monitor._snapshots.keys()) if hasattr(self, 'line_monitor') and self.line_monitor else []
         if not active_sports:
             active_sports = ["basketball_nba"]
 
