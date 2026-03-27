@@ -1967,9 +1967,9 @@ class ResearchLoop:
 
                 # Phase 5: Evaluate and promote/reject
                 try:
-                    await asyncio.wait_for(self._phase_evaluate(), timeout=120)
+                    await asyncio.wait_for(self._phase_evaluate(), timeout=600)
                 except asyncio.TimeoutError:
-                    logger.warning("Phase evaluate timed out after 120s — skipping")
+                    logger.warning("Phase evaluate timed out after 600s — skipping")
                 except Exception as e:
                     logger.warning(f"Phase evaluate failed (non-fatal): {e}")
 
@@ -3945,6 +3945,42 @@ class ResearchLoop:
             logger.warning(f"Backtest resolution failed: {e}")
 
         backtesting = await self.hypothesis_manager.list_hypotheses(status="backtesting")
+
+        # ── Batch-limit: evaluate top 10 by signal count per cycle ──
+        # With 59 backtesting hypotheses, evaluating all exceeds timeout.
+        # Prioritize hypotheses with the most backtest signals (most data).
+        MAX_EVALUATE_PER_CYCLE = 10
+        if len(backtesting) > MAX_EVALUATE_PER_CYCLE:
+            try:
+                db = self.hypothesis_manager._db
+                cursor = await db.execute(
+                    "SELECT hypothesis_id, "
+                    "SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) as signals "
+                    "FROM backtest_events "
+                    "WHERE hypothesis_id IN ({}) "
+                    "GROUP BY hypothesis_id "
+                    "ORDER BY signals DESC "
+                    "LIMIT ?".format(
+                        ",".join("?" for _ in backtesting)
+                    ),
+                    [h["hypothesis_id"] for h in backtesting] + [MAX_EVALUATE_PER_CYCLE],
+                )
+                top_ids = {row[0] for row in await cursor.fetchall()}
+                # Always include hypotheses with no backtest events (need initial eval)
+                no_data_ids = {
+                    h["hypothesis_id"] for h in backtesting
+                    if h["hypothesis_id"] not in top_ids
+                }
+                # Limit no-data to 5 per cycle
+                no_data_sample = set(list(no_data_ids)[:5])
+                priority_ids = top_ids | no_data_sample
+                backtesting = [h for h in backtesting if h["hypothesis_id"] in priority_ids]
+                logger.info(
+                    f"Research: evaluating {len(backtesting)} hypotheses "
+                    f"(top {MAX_EVALUATE_PER_CYCLE} by signals + {len(no_data_sample)} new)"
+                )
+            except Exception as e:
+                logger.warning(f"Batch-limit query failed, evaluating all: {e}")
 
         for h in backtesting:
             try:
