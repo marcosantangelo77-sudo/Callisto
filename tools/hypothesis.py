@@ -683,10 +683,18 @@ class HypothesisManager:
         # Auto-rejection check — only reject based on signal-level data.
         # If we fell back to all-events (used_all_events=True), the p-value
         # reflects "random bet outcomes" not "edge thesis is wrong."
+        #
+        # Two rejection paths:
+        # 1. Original: p > 0.50 with 15+ signals = actively disproven
+        # 2. New: p > 0.15 with 30+ signals = no edge after large sample
+        #    (prevents zombie hypotheses with 50/50 W/L from consuming budget)
         used_all_events = report.get("used_all_events", False)
         should_reject = (
-            p > AUTO_REJECT_P and n >= AUTO_REJECT_MIN_N
-            and not used_all_events
+            not used_all_events
+            and (
+                (p > AUTO_REJECT_P and n >= AUTO_REJECT_MIN_N)
+                or (p > 0.15 and n >= 30)
+            )
         )
 
         next_stage = STAGE_ORDER[STAGE_ORDER.index(status) + 1] if ready else None

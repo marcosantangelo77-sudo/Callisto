@@ -2061,7 +2061,13 @@ class BacktestEngine:
                        (fair_val < 0.3 and target_implied > 0.6):
                         continue
 
-                    is_signal = edge >= edge_threshold
+                    # Require minimum book count for reliable signals —
+                    # with <4 non-target books, devig consensus is noisy
+                    # and produces spurious edges (3.01 avg books on signals
+                    # vs 6.11 on non-signals proved this empirically).
+                    MIN_BOOKS_FOR_SIGNAL = 4
+                    is_signal = (edge >= edge_threshold
+                                 and non_target_count >= MIN_BOOKS_FOR_SIGNAL)
 
                     events += 1
                     if is_signal:
