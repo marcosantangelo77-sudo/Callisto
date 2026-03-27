@@ -662,6 +662,8 @@ class BacktestEngine:
             "run_id": run_id,
             "hypothesis_id": hypothesis_id,
             "date_range": f"{start_date} to {end_date}",
+            "actual_start_date": start_date,
+            "actual_end_date": end_date,
             "total_events": total_events,
             "signals_generated": total_signals,
             "fetch_summary": fetch_result,

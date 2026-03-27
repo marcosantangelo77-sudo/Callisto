@@ -3855,13 +3855,17 @@ class ResearchLoop:
                 signals = result.get("signals_generated", 0)
 
                 # Update model_config with actual backtest range for audit trail
+                # Use actual_start_date from backtest result (may be auto-adjusted
+                # for temporal isolation) instead of the original start_date
+                actual_start = result.get("actual_start_date", start_date)
+                actual_end = result.get("actual_end_date", end_date)
                 if has_temporal:
-                    model_config["backtest_period_start"] = start_date
-                    model_config["backtest_period_end"] = end_date
+                    model_config["backtest_period_start"] = actual_start
+                    model_config["backtest_period_end"] = actual_end
                     model_config["temporal_isolation"] = True
                 else:
-                    model_config["backtest_period_start"] = start_date
-                    model_config["backtest_period_end"] = end_date
+                    model_config["backtest_period_start"] = actual_start
+                    model_config["backtest_period_end"] = actual_end
                     model_config["temporal_isolation"] = False
                     model_config["temporal_isolation_note"] = "legacy_hypothesis_conservative_default"
 
