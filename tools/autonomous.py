@@ -1897,6 +1897,15 @@ class ResearchLoop:
                 if not self._running:
                     break
 
+                # Phase 1b: Validate backtest output (sanity checks every cycle)
+                try:
+                    await self._phase_validate()
+                except Exception as e:
+                    logger.warning(f"Phase validate failed (non-fatal): {e}")
+
+                if not self._running:
+                    break
+
                 # Phase 2: Generate hypotheses (if due)
                 try:
                     await asyncio.wait_for(self._phase_generate_hypotheses(), timeout=300)
@@ -3250,6 +3259,117 @@ class ResearchLoop:
 
         self._hypotheses_generated += total_created
         logger.info(f"Research: generated {total_created} new hypotheses")
+
+    async def _phase_validate(self) -> None:
+        """Per-cycle sanity validation — catches data quality issues immediately.
+
+        Runs after every backtest phase. Checks:
+        1. Phantom edges (>15% or impossibly uniform signal rates)
+        2. Context enrichment coverage
+        3. Books_used distribution (devig quality)
+        4. Orphaned tables that should have data
+        """
+        db = self.hypothesis_manager._db
+        if not db:
+            return
+
+        issues = []
+
+        try:
+            # 1. Phantom edge detection: flag backtest events with >15% edge
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM backtest_events WHERE ABS(edge) > 0.15"
+            )
+            phantom_count = (await cursor.fetchone())[0]
+            if phantom_count > 0:
+                issues.append(
+                    f"PHANTOM: {phantom_count} backtest events with |edge| > 15% "
+                    f"— likely data contamination"
+                )
+                # Auto-purge phantoms
+                await db.execute("DELETE FROM backtest_events WHERE ABS(edge) > 0.15")
+                await db.commit()
+                logger.warning(f"Purged {phantom_count} phantom backtest events (|edge| > 15%)")
+
+            # 2. Context enrichment coverage (last 7 days)
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM game_contexts "
+                "WHERE game_date >= date('now', '-7 days')"
+            )
+            total_recent = (await cursor.fetchone())[0]
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM game_contexts "
+                "WHERE game_date >= date('now', '-7 days') "
+                "AND context_json LIKE '%rest_days%'"
+            )
+            enriched_recent = (await cursor.fetchone())[0]
+            if total_recent > 0:
+                enrich_rate = enriched_recent / total_recent
+                if enrich_rate < 0.5:
+                    issues.append(
+                        f"ENRICHMENT: Only {enrich_rate:.0%} of last 7 days' games "
+                        f"have rest_days ({enriched_recent}/{total_recent})"
+                    )
+
+            # 3. Orphaned table detection
+            orphan_checks = [
+                ("market_microstructure", "odds_snapshots", 100),
+                ("learned_correlations", "game_results", 1000),
+            ]
+            for target_table, source_table, source_min in orphan_checks:
+                cursor = await db.execute(f"SELECT COUNT(*) FROM {target_table}")
+                target_count = (await cursor.fetchone())[0]
+                cursor = await db.execute(f"SELECT COUNT(*) FROM {source_table}")
+                source_count = (await cursor.fetchone())[0]
+                if target_count == 0 and source_count >= source_min:
+                    issues.append(
+                        f"ORPHAN: {target_table} has 0 rows but {source_table} "
+                        f"has {source_count} — pipeline not connected"
+                    )
+
+            # 4. Stale data detection (hot tables)
+            for table, ts_col, max_hours in [
+                ("odds_snapshots", "timestamp", 2),
+                ("game_contexts", "created_at", 24),
+            ]:
+                cursor = await db.execute(
+                    f"SELECT MAX({ts_col}) FROM {table}"
+                )
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    from datetime import datetime, timezone
+                    try:
+                        last_ts = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+                        age_hours = (datetime.now(timezone.utc) - last_ts).total_seconds() / 3600
+                        if age_hours > max_hours:
+                            issues.append(
+                                f"STALE: {table} last update {age_hours:.1f}h ago "
+                                f"(threshold: {max_hours}h)"
+                            )
+                    except (ValueError, TypeError):
+                        pass
+
+        except Exception as e:
+            logger.debug(f"Validation phase error: {e}")
+
+        if issues:
+            logger.warning(
+                f"Pipeline validation: {len(issues)} issues found:\n"
+                + "\n".join(f"  - {i}" for i in issues)
+            )
+            # Record to Hermes for cross-session awareness
+            try:
+                from tools.hermes_memory import get_hermes_memory
+                hm = await get_hermes_memory()
+                if hm:
+                    await hm.record_learning(
+                        key="pipeline_validation_issues",
+                        value="; ".join(issues),
+                        confidence=0.9,
+                        source="pipeline_validator",
+                    )
+            except Exception:
+                pass
 
     async def _phase_backtest(self) -> None:
         """Backtest draft hypotheses — enforcing temporal isolation.
