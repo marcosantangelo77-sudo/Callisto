@@ -2250,7 +2250,11 @@ class BacktestEngine:
                 if abs(edge) > MAX_EDGE_MAGNITUDE:
                     edge = MAX_EDGE_MAGNITUDE if edge > 0 else -MAX_EDGE_MAGNITUDE
 
-                is_signal = edge >= edge_threshold
+                # Require minimum book count for reliable signals —
+                # same gate as _process_game_lines to prevent 1-2 book phantom edges
+                MIN_BOOKS_FOR_SIGNAL = 4
+                is_signal = (edge >= edge_threshold
+                             and non_target_count >= MIN_BOOKS_FOR_SIGNAL)
 
                 events += 1
                 if is_signal:
