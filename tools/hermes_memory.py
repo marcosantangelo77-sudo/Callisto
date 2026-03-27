@@ -226,6 +226,45 @@ class HermesMemory:
                 logger.warning(f"Failed to record learning '{l.get('key')}': {e}")
         return stored
 
+    async def get_actionable_learnings(self, limit: int = 10, min_confidence: float = 0.5) -> list[dict]:
+        """
+        Get recent, high-confidence learnings for injection into Claude prompts.
+
+        Returns learnings that represent actionable intelligence:
+        - Pipeline issues that need attention
+        - Patterns discovered from data
+        - Bugs or misconfigurations detected
+
+        These are injected into deep_work prompts so Claude builds on
+        prior discoveries instead of rediscovering the same issues.
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
+                await self._ensure_tables(db)
+                cursor = await db.execute(
+                    "SELECT key, value, confidence, occurrences, source, learned_at "
+                    "FROM hermes_learnings "
+                    "WHERE confidence >= ? "
+                    "ORDER BY learned_at DESC LIMIT ?",
+                    (min_confidence, limit),
+                )
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        "key": r[0],
+                        "value": r[1],
+                        "confidence": r[2],
+                        "occurrences": r[3],
+                        "source": r[4],
+                        "learned_at": r[5],
+                    }
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.debug(f"Failed to get actionable learnings: {e}")
+            return []
+
     # ──────────────────────────────────────────────────
     # NOTIFY: Cross-session message queue
     # ──────────────────────────────────────────────────

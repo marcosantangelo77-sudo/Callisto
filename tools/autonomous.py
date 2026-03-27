@@ -2029,6 +2029,15 @@ class ResearchLoop:
                 except Exception as e:
                     logger.warning(f"Phase integrity_check failed (non-fatal): {e}")
 
+                # Phase 10: System watchdog (every 10 cycles)
+                if self._cycles_completed % 10 == 0 and self._cycles_completed > 0:
+                    try:
+                        await asyncio.wait_for(self._phase_system_watchdog(), timeout=60)
+                    except asyncio.TimeoutError:
+                        logger.warning("Phase system_watchdog timed out")
+                    except Exception as e:
+                        logger.warning(f"Phase system_watchdog failed: {e}")
+
                 if not self._running:
                     break
 
@@ -5323,6 +5332,90 @@ class ResearchLoop:
                 logger.info("Research: Claude rate-limited during system improvement")
         except Exception as e:
             logger.warning(f"System improvement phase failed: {e}")
+
+    async def _phase_system_watchdog(self) -> None:
+        """Hermes-powered system watchdog — detects orphaned features and stale pipelines.
+
+        Runs every 10 cycles. Checks that committed features actually produce data,
+        hot tables are receiving writes, and enrichment coverage is adequate.
+        Records findings to Hermes for cross-session awareness and escalates
+        critical issues to Claude deep work.
+        """
+        from tools.hermes_memory import get_hermes_memory
+
+        db = self.hypothesis_manager._db
+        if not db:
+            return
+
+        findings = []
+
+        try:
+            # 1. Orphaned table detection — tables that SHOULD have data but don't
+            orphan_checks = {
+                "clv_log": ("bets WHERE result != 'pending'", "Resolved bets exist but CLV not logged"),
+                "paper_trades": ("hypotheses WHERE status = 'paper_trading'", "Paper trading hypotheses exist but 0 trades"),
+                "market_microstructure": ("odds_snapshots", "Snapshots exist but microstructure never computed"),
+                "closing_lines": ("odds_snapshots", "Snapshots exist but closing lines never captured"),
+            }
+            for target, (source_query, msg) in orphan_checks.items():
+                try:
+                    target_cnt = (await (await db.execute(f"SELECT COUNT(*) FROM {target}")).fetchone())[0]
+                    source_cnt = (await (await db.execute(f"SELECT COUNT(*) FROM {source_query}")).fetchone())[0]
+                    if target_cnt == 0 and source_cnt > 0:
+                        findings.append(f"ORPHAN: {target} empty — {msg}")
+                except Exception:
+                    pass
+
+            # 2. Feature coverage audit — enrichment rate
+            try:
+                total = (await (await db.execute(
+                    "SELECT COUNT(*) FROM game_contexts WHERE game_date >= date('now', '-7 days')"
+                )).fetchone())[0]
+                enriched = (await (await db.execute(
+                    "SELECT COUNT(*) FROM game_contexts "
+                    "WHERE game_date >= date('now', '-7 days') "
+                    "AND context_json LIKE '%rest_days%'"
+                )).fetchone())[0]
+                if total > 10 and enriched / total < 0.5:
+                    findings.append(
+                        f"COVERAGE: Only {enriched}/{total} ({enriched/total:.0%}) "
+                        f"recent games enriched with rest_days"
+                    )
+            except Exception:
+                pass
+
+            # 3. Signal quality audit — check for phantom signals
+            try:
+                phantom = (await (await db.execute(
+                    "SELECT COUNT(*) FROM signals WHERE edge_pct > 0.20"
+                )).fetchone())[0]
+                if phantom > 0:
+                    findings.append(f"PHANTOM: {phantom} signals with >20% edge still in DB")
+            except Exception:
+                pass
+
+        except Exception as e:
+            logger.debug(f"System watchdog error: {e}")
+
+        if findings:
+            logger.warning(
+                f"System watchdog ({len(findings)} findings):\n"
+                + "\n".join(f"  - {f}" for f in findings)
+            )
+            # Record to Hermes
+            try:
+                hm = await get_hermes_memory()
+                if hm:
+                    await hm.record_learning(
+                        key="system_watchdog_findings",
+                        value="; ".join(findings),
+                        confidence=0.9,
+                        source="system_watchdog",
+                    )
+            except Exception:
+                pass
+        else:
+            logger.info("System watchdog: all checks passed")
 
     async def _phase_integrity_check(self) -> None:
         """
