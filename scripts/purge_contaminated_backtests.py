@@ -55,7 +55,13 @@ async def main():
 
         # 1. Purge all backtest events
         await db.execute("DELETE FROM backtest_events")
-        print(f"\n  [1/5] Deleted {total_events} contaminated backtest events")
+        print(f"\n  [1/6] Deleted {total_events} contaminated backtest events")
+
+        # 1b. Purge orphaned hypothesis_stats (referential integrity)
+        cursor = await db.execute("SELECT COUNT(*) FROM hypothesis_stats")
+        stats_count = (await cursor.fetchone())[0]
+        await db.execute("DELETE FROM hypothesis_stats")
+        print(f"  [2/6] Deleted {stats_count} orphaned hypothesis_stats rows")
 
         # 2. Reset backtesting → draft
         bt_count = status_counts.get("backtesting", 0)
@@ -64,7 +70,7 @@ async def main():
             "WHERE status = 'backtesting'",
             (datetime.now(timezone.utc).isoformat(),),
         )
-        print(f"  [2/5] Reset {bt_count} backtesting hypotheses -> draft")
+        print(f"  [3/6] Reset {bt_count} backtesting hypotheses -> draft")
 
         # 3. Reset rejected → draft
         rej_count = status_counts.get("rejected", 0)
@@ -73,16 +79,16 @@ async def main():
             "WHERE status = 'rejected'",
             (datetime.now(timezone.utc).isoformat(),),
         )
-        print(f"  [3/5] Reset {rej_count} rejected hypotheses -> draft")
+        print(f"  [4/6] Reset {rej_count} rejected hypotheses -> draft")
 
         # 4. Clear backtest_runs
         try:
             cursor = await db.execute("SELECT COUNT(*) FROM backtest_runs")
             runs_count = (await cursor.fetchone())[0]
             await db.execute("DELETE FROM backtest_runs")
-            print(f"  [4/5] Cleared {runs_count} backtest_runs")
+            print(f"  [5/6] Cleared {runs_count} backtest_runs")
         except Exception:
-            print(f"  [4/5] backtest_runs table not found (skipped)")
+            print(f"  [5/6] backtest_runs table not found (skipped)")
 
         # 5. Clear signals that came from backtests
         try:
@@ -91,9 +97,9 @@ async def main():
             )
             sig_count = (await cursor.fetchone())[0]
             await db.execute("DELETE FROM signals WHERE source LIKE '%backtest%'")
-            print(f"  [5/5] Cleared {sig_count} backtest-derived signals")
+            print(f"  [6/6] Cleared {sig_count} backtest-derived signals")
         except Exception:
-            print(f"  [5/5] No backtest signals to clear")
+            print(f"  [6/6] No backtest signals to clear")
 
         await db.commit()
 

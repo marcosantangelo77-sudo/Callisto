@@ -1309,7 +1309,9 @@ class ResearchLoop:
         self._rejections = 0
 
         # Self-diagnostics — track already-escalated issues to avoid spam
+        # Capped at 500 entries; oldest keys evicted when full.
         self._diagnostic_issues: set[str] = set()
+        self._DIAGNOSTIC_ISSUES_MAX = 500
 
         # ── Progress tracking (Ralph loop: detect spinning) ──
         self._progress_window: list[dict] = []  # last N cycle snapshots
@@ -2460,6 +2462,13 @@ class ResearchLoop:
         for i in issues:
             if i["severity"] != "CRITICAL":
                 self._diagnostic_issues.add(i["key"])
+
+        # Evict oldest entries if set exceeds cap (prevents unbounded growth)
+        if len(self._diagnostic_issues) > self._DIAGNOSTIC_ISSUES_MAX:
+            # Sets are unordered; drop arbitrary entries to get back under limit
+            excess = len(self._diagnostic_issues) - self._DIAGNOSTIC_ISSUES_MAX
+            for _ in range(excess):
+                self._diagnostic_issues.pop()
 
         if not issues:
             logger.info("DIAG: all pipeline health checks passed")

@@ -390,15 +390,27 @@ class SystemHealth:
             ]
 
             # Leak detection: linear regression on samples
+            # Exclude first 5 minutes of samples — startup memory allocation
+            # (loading models, SQLite, embeddings) skews growth rate enormously.
+            # A 33-minute window with startup included can report 400+ MB/hr
+            # when the true steady-state rate is <50 MB/hr.
             leak_detected = False
             growth_rate = 0.0
+            STARTUP_GRACE_SECONDS = 300  # 5 minutes
             if len(self._memory_samples) >= 10:
-                first_time, first_mem = self._memory_samples[0]
-                last_time, last_mem = self._memory_samples[-1]
-                elapsed_hours = (last_time - first_time) / 3600
-                if elapsed_hours > 0.1:
-                    growth_rate = (last_mem - first_mem) / elapsed_hours
-                    leak_detected = growth_rate > MEMORY_GROWTH_MB_PER_HOUR
+                # Find first sample after startup grace period
+                process_start = self._memory_samples[0][0]
+                stable_samples = [
+                    (t, m) for t, m in self._memory_samples
+                    if t - process_start >= STARTUP_GRACE_SECONDS
+                ]
+                if len(stable_samples) >= 5:
+                    first_time, first_mem = stable_samples[0]
+                    last_time, last_mem = stable_samples[-1]
+                    elapsed_hours = (last_time - first_time) / 3600
+                    if elapsed_hours > 0.1:
+                        growth_rate = (last_mem - first_mem) / elapsed_hours
+                        leak_detected = growth_rate > MEMORY_GROWTH_MB_PER_HOUR
 
             status = "ok"
             if rss_mb > MAX_MEMORY_MB:

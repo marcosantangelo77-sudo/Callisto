@@ -1775,8 +1775,11 @@ class BacktestEngine:
             r"\bsandwich\b", r"\btrap.game\b", r"\bletdown\b",
             r"\brevenge\b", r"\bformer.team\b",
             r"\bclinch", r"\beliminated\b", r"\btanking\b", r"\bplayoff.(?:race|bubble)\b",
-            r"\bdesperate\b", r"\bmust.win\b",
+            r"\bbubble\b", r"\bdesperate\b", r"\bmust.win\b",
             r"\bextra.rest\b", r"\brest.mismatch\b",
+            r"\bgoalie\b", r"\bstarter\b", r"\bbackup\b",
+            r"\bblowout\b", r"\bstreak\b", r"\bbounce\b",
+            r"\bhome.stand\b", r"\bwinning.streak\b", r"\blosing.streak\b",
         ]
         return any(re.search(p, text) for p in schedule_patterns)
 
