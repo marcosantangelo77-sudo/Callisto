@@ -597,6 +597,15 @@ CREATE TABLE IF NOT EXISTS game_results (
 CREATE INDEX IF NOT EXISTS idx_game_results_lookup
     ON game_results(sport, game_date, home_team, away_team);
 
+CREATE VIEW IF NOT EXISTS box_scores AS
+SELECT sport, game_date, home_team AS team_name,
+       home_score AS points, away_score AS opponent_points
+FROM game_results WHERE home_score IS NOT NULL
+UNION ALL
+SELECT sport, game_date, away_team AS team_name,
+       away_score AS points, home_score AS opponent_points
+FROM game_results WHERE away_score IS NOT NULL;
+
 -- ──────────────────────────────────────────
 -- REGIME TAGGING: rule-change era metadata
 -- ──────────────────────────────────────────
