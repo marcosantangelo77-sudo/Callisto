@@ -63,7 +63,7 @@ SNAPSHOT_INTERVAL = int(os.getenv("ODDS_SNAPSHOT_INTERVAL", "900"))
 # Sports to monitor — configurable via env, comma-separated
 MONITORED_SPORTS = os.getenv(
     "ODDS_MONITORED_SPORTS",
-    "basketball_ncaab,basketball_nba,americanfootball_nfl,golf_pga,baseball_mlb",
+    "basketball_nba,icehockey_nhl,americanfootball_nfl,baseball_mlb,basketball_ncaab,basketball_ncaaw,soccer_mls,golf_pga",
 ).split(",")
 
 # Movement thresholds — what counts as "significant"
@@ -681,6 +681,34 @@ class LineMonitor:
         total_edges = edge_report.get("total_edges", 0)
         if total_edges > 0:
             logger.info(f"Edge scan {sport}: {total_edges} edges found")
+
+        # Store market microstructure metrics from edge scan
+        # This populates the market_microstructure table that was previously always empty
+        try:
+            for market_key in ["cross_book_h2h", "cross_book_spreads", "cross_book_totals"]:
+                edges = edge_report.get(market_key, [])
+                for edge in edges:
+                    hhi_val = edge.get("hhi")
+                    entropy_val = edge.get("entropy")
+                    if hhi_val is not None or entropy_val is not None:
+                        await self._db.execute(
+                            "INSERT OR REPLACE INTO market_microstructure "
+                            "(sport, game_id, market_type, timestamp, hhi_overall, "
+                            "entropy_overall, num_books) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                sport,
+                                edge.get("game_id", ""),
+                                market_key.replace("cross_book_", ""),
+                                now,
+                                hhi_val,
+                                entropy_val,
+                                edge.get("num_bookmakers", 0),
+                            ),
+                        )
+            await self._db.commit()
+        except Exception as e:
+            logger.debug(f"Market microstructure store failed: {e}")
 
         # NOTE: Raw edges are NOT sent to Telegram here.
         # The autonomous loop analyzes candidates via full AGP sessions

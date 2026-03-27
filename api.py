@@ -249,6 +249,24 @@ async def lifespan(app: FastAPI):
     )
     await telegram_listener.start()
 
+    # Game scheduler — fires events at T-60min and T-15min before games
+    try:
+        from tools.game_scheduler import GameScheduler
+        from tools.event_bus import get_event_bus
+        game_scheduler = GameScheduler(event_bus=get_event_bus())
+        await game_scheduler.start()
+        logger.info(f"Game scheduler started — {len(game_scheduler._games)} upcoming games")
+    except Exception as e:
+        logger.warning(f"Game scheduler failed to start: {e}")
+
+    # Event bus audit drain — persist important events to SQLite
+    try:
+        bus = get_event_bus()
+        await bus.start_audit_drain()
+        logger.info("Event bus audit drain started")
+    except Exception as e:
+        logger.warning(f"Event bus audit drain failed: {e}")
+
     # Odds WebSocket — real-time odds streaming from Odds-API.io Pro
     try:
         from tools.odds_ws import start_odds_stream
