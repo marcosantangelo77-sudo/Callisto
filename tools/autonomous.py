@@ -1838,6 +1838,13 @@ class ResearchLoop:
                 self._cycles += 1
                 logger.info(f"Research cycle #{self._cycles} starting")
 
+                # ── Pause line_monitor for ENTIRE cycle to prevent SQLite lock cascade.
+                # All phases do DB writes; concurrent line_monitor snapshots cause
+                # deadlocks even with 120s busy_timeout. Snapshots catch up between cycles.
+                if hasattr(self, 'line_monitor') and self.line_monitor:
+                    self.line_monitor._paused = True
+                    logger.debug("line_monitor paused for research cycle")
+
                 # ── Queue drain: if Claude just became available, burn through deferred work ──
                 try:
                     await asyncio.wait_for(self._drain_deferred_queue(), timeout=120)
@@ -1880,20 +1887,12 @@ class ResearchLoop:
                     break
 
                 # Phase 1: Backtest pending hypotheses (FIRST — highest priority)
-                # Pause line_monitor during backtests to prevent DB lock deadlock.
-                # Both systems write to SQLite; concurrent writes deadlock even
-                # with 120s busy_timeout when snapshot data is large.
-                if hasattr(self, 'line_monitor') and self.line_monitor:
-                    self.line_monitor._paused = True
                 try:
                     await asyncio.wait_for(self._phase_backtest(), timeout=600)
                 except asyncio.TimeoutError:
                     logger.warning("Phase backtest timed out after 600s — skipping")
                 except Exception as e:
                     logger.warning(f"Phase backtest failed (non-fatal): {e}")
-                finally:
-                    if hasattr(self, 'line_monitor') and self.line_monitor:
-                        self.line_monitor._paused = False
 
                 if not self._running:
                     break
@@ -2084,6 +2083,11 @@ class ResearchLoop:
             except Exception as e:
                 logger.error(f"Research loop error: {e}", exc_info=True)
                 await asyncio.sleep(120)
+            finally:
+                # ── Always unpause line_monitor — runs on normal exit, break, and exception ──
+                if hasattr(self, 'line_monitor') and self.line_monitor:
+                    self.line_monitor._paused = False
+                    logger.debug("line_monitor unpaused after research cycle")
 
     async def _phase_self_repair(self) -> None:
         """
