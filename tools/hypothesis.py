@@ -425,6 +425,9 @@ class HypothesisManager:
         evs = [e["ev_pct"] for e in events if e.get("ev_pct") is not None]
         avg_edge = sum(edges) / len(edges) if edges else 0
         avg_ev = sum(evs) / len(evs) if evs else 0
+        positive_edge_rate = (
+            sum(1 for e in edges if e > 0) / len(edges) if edges else 0
+        )
 
         # Statistical tests
         p_binomial = binomial_pvalue(wins, decided, expected_rate)
@@ -519,6 +522,7 @@ class HypothesisManager:
                 "avg_edge": round(avg_edge, 4),
                 "avg_ev": round(avg_ev, 4),
                 "roi_pct": round(roi, 2),
+                "positive_edge_rate": round(positive_edge_rate, 4),
             },
             "clv": {
                 "avg_clv": round(avg_clv, 4),
@@ -944,6 +948,23 @@ class HypothesisManager:
             # Must match PROMOTION_GATES["backtesting→paper_trading"]["min_signals"]
             n = len(events)
             min_for_promotion = PROMOTION_GATES["backtesting→paper_trading"]["min_signals"]
+
+            # Track evaluate_cycles for ALL hypotheses (not just 0-signal ones)
+            model_config = h.get("model_config", {})
+            if isinstance(model_config, str):
+                import json as _json
+                try:
+                    model_config = _json.loads(model_config)
+                except (json.JSONDecodeError, TypeError):
+                    model_config = {}
+            eval_cycles = model_config.get("evaluate_cycles", 0) + 1
+            model_config["evaluate_cycles"] = eval_cycles
+            await self._db.execute(
+                "UPDATE hypotheses SET model_config = ? WHERE hypothesis_id = ?",
+                (json.dumps(model_config), hypothesis_id),
+            )
+            await self._db.commit()
+
             if n < min_for_promotion:
                 return {
                     "action": "held",
