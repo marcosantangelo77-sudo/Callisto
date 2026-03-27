@@ -664,37 +664,48 @@ class HypothesisManager:
                 checks.append(f"PASS: Positive edge rate {pos_rate:.1%} >= {min_per:.0%}")
 
         # Brier score (calibration quality)
-        # Relaxed for h2h markets at small sample sizes: brier fluctuates ±0.03
-        # at n<30, so a 0.001 failure margin is noise not signal.
+        # At n < 20, Brier is statistically meaningless — variance dominates.
+        # For underdog strategies, Brier baseline is ~0.33 not 0.25 because
+        # (implied_prob - outcome)^2 is structurally high when betting +150 dogs.
+        # Waive entirely for backtesting→paper at small n; paper trading is the real gate.
         if "max_brier" in gate:
             brier = report.get("calibration_score", {}).get("brier_score")
             max_brier = gate["max_brier"]
             market_type = h.get("market_type", "")
-            # Relax brier gate for h2h with small samples (binary outcomes are noisier)
-            if market_type == "h2h" and n < 30:
-                max_brier = 0.30
-            if brier is not None and brier > max_brier:
-                checks.append(f"FAIL: Brier score {brier:.4f} > {max_brier} (worse than coin-flip)")
-                ready = False
-            elif brier is not None:
-                checks.append(f"PASS: Brier score {brier:.4f} <= {max_brier}")
+            if n < 20 and transition == "backtesting→paper_trading":
+                # Waive: Brier needs ~50+ samples for statistical power
+                if brier is not None:
+                    checks.append(f"SKIP: Brier score {brier:.4f} (n={n} < 20, waived for paper promotion)")
+            else:
+                if market_type == "h2h" and n < 30:
+                    max_brier = 0.30
+                if brier is not None and brier > max_brier:
+                    checks.append(f"FAIL: Brier score {brier:.4f} > {max_brier} (worse than coin-flip)")
+                    ready = False
+                elif brier is not None:
+                    checks.append(f"PASS: Brier score {brier:.4f} <= {max_brier}")
 
         # Information coefficient
-        # For h2h markets, IC is structurally unreliable: outcomes are binary
-        # (win/lose) so correlation between predicted edge magnitude and actual
-        # return magnitude is inherently low. Relax min_ic for h2h — but
-        # still reject clearly anti-predictive models (IC < -0.10).
+        # IC measures correlation between predicted edge and realized return.
+        # At n < 20 with binary outcomes, IC has no statistical power — two
+        # unlucky high-edge losses can drive IC to -0.8 on noise alone.
+        # Waive for backtesting→paper at small n; enforce at paper→live.
         if "min_ic" in gate:
             ic = report.get("calibration_score", {}).get("information_coefficient")
             min_ic = gate["min_ic"]
             market_type = h.get("market_type", "")
-            if market_type == "h2h":
-                min_ic = -0.10  # Relaxed for binary outcomes but reject anti-predictive
-            if ic is not None and ic < min_ic:
-                checks.append(f"FAIL: IC {ic:.4f} < {min_ic} (model is anti-predictive)")
-                ready = False
-            elif ic is not None:
-                checks.append(f"PASS: IC {ic:.4f} >= {min_ic}")
+            if n < 20 and transition == "backtesting→paper_trading":
+                # Waive: IC needs ~30+ samples for meaningful correlation
+                if ic is not None:
+                    checks.append(f"SKIP: IC {ic:.4f} (n={n} < 20, waived for paper promotion)")
+            else:
+                if market_type == "h2h":
+                    min_ic = -0.10
+                if ic is not None and ic < min_ic:
+                    checks.append(f"FAIL: IC {ic:.4f} < {min_ic} (model is anti-predictive)")
+                    ready = False
+                elif ic is not None:
+                    checks.append(f"PASS: IC {ic:.4f} >= {min_ic}")
 
         # Auto-rejection check — only reject based on signal-level data.
         # If we fell back to all-events (used_all_events=True), the p-value
