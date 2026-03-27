@@ -3617,15 +3617,19 @@ class ResearchLoop:
                         f"[{start_date} .. {end_date}] (trained up to {training_end})"
                     )
                 else:
-                    # Legacy hypothesis without temporal metadata — conservative default
-                    logger.warning(
-                        f"Research: hypothesis {h['hypothesis_id']} has NO temporal metadata. "
-                        f"Defaulting to last {DEFAULT_TRAINING_WINDOW_DAYS} days only (conservative)."
-                    )
+                    # Legacy hypothesis without temporal metadata — backfill it
+                    # to enforce temporal isolation (prevents circular testing).
+                    today_d = datetime.now(timezone.utc).date()
+                    training_cutoff = today_d - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
+                    model_config["training_period_start"] = "2023-01-01"
+                    model_config["training_period_end"] = str(training_cutoff)
+                    model_config["forward_test_start"] = str(training_cutoff + timedelta(days=1))
+                    start_date = str(training_cutoff + timedelta(days=BACKTEST_GAP_DAYS))
                     end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                    start_date = str(
-                        datetime.now(timezone.utc).date()
-                        - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
+                    has_temporal = True  # Now it does
+                    logger.info(
+                        f"Research: backfilled temporal metadata for {h['hypothesis_id']} — "
+                        f"training ends {training_cutoff}, backtest [{start_date} .. {end_date}]"
                     )
 
                 # Never backtest against today — games haven't finished
