@@ -1342,8 +1342,14 @@ class BacktestEngine:
 
     async def _build_schedule_context(
         self, sport: str, start_date: str, end_date: str,
+        live_games: list[tuple[str, str, str]] | None = None,
     ) -> dict:
         """Pre-compute schedule context for all games in a date range.
+
+        Args:
+            live_games: Optional list of (game_date, home_team, away_team) for
+                upcoming games not yet in game_results (e.g. today's live odds).
+                Context will be computed for these using historical team data.
 
         Returns dict keyed by (game_date, home_team, away_team) with context:
             home_days_rest / away_days_rest: int
@@ -1482,6 +1488,88 @@ class BacktestEngine:
                 ctx[f"{prefix}_win_pct"] = wins / total if total > 0 else 0.5
 
             context[(gd, home, away)] = ctx
+
+        # ── Augment with live/upcoming games not yet in game_results ──
+        # Paper trading needs context for today's games, which haven't been
+        # played yet and so aren't in game_results.  Compute their schedule
+        # factors from the same team_games history.
+        if live_games:
+            added = 0
+            for lg_date, lg_home, lg_away in live_games:
+                key = (lg_date, lg_home, lg_away)
+                if key in context:
+                    continue  # already computed from game_results
+                ctx = {}
+                for team, prefix, is_home_side in [
+                    (lg_home, "home", True),
+                    (lg_away, "away", False),
+                ]:
+                    tg = team_games.get(team, [])
+                    # Find most recent game before lg_date
+                    prev = [g for g in tg if g[0] < lg_date]
+                    if prev:
+                        last = prev[-1]
+                        d1 = dt.strptime(lg_date, "%Y-%m-%d")
+                        d0 = dt.strptime(last[0], "%Y-%m-%d")
+                        days_rest = (d1 - d0).days
+                        prev_margin = last[3]
+                    else:
+                        days_rest = 99
+                        prev_margin = 0.0
+                    ctx[f"{prefix}_days_rest"] = days_rest
+                    ctx[f"{prefix}_b2b"] = (days_rest == 1)
+                    ctx[f"{prefix}_prev_margin"] = prev_margin
+
+                    # Road streak
+                    road_streak = 0
+                    for g in reversed(prev):
+                        if not g[2]:  # away game
+                            road_streak += 1
+                        else:
+                            break
+                    ctx[f"{prefix}_road_streak"] = road_streak
+
+                    # Games in last 4 days
+                    game_dt_live = dt.strptime(lg_date, "%Y-%m-%d")
+                    four_days_ago = (game_dt_live - timedelta(days=4)).strftime("%Y-%m-%d")
+                    games_in_4 = sum(1 for g in tg if four_days_ago < g[0] <= lg_date)
+                    ctx[f"{prefix}_games_in_4"] = max(games_in_4, 1)
+
+                    # Win pct from all prior games
+                    wins = sum(1 for g in tg if g[0] < lg_date and g[4] == team)
+                    losses = sum(1 for g in tg if g[0] < lg_date and g[4] and g[4] != team)
+                    ctx[f"{prefix}_wins"] = wins
+                    ctx[f"{prefix}_losses"] = losses
+                    total = wins + losses
+                    ctx[f"{prefix}_win_pct"] = wins / total if total > 0 else 0.5
+
+                # Revenge game
+                home_prev = [g for g in team_games.get(lg_home, []) if g[0] < lg_date]
+                ctx["is_revenge"] = any(
+                    g[1] == lg_away and g[0] >= buffer_start_str for g in home_prev
+                )
+
+                # Sandwich game
+                for team, prefix in [(lg_home, "home"), (lg_away, "away")]:
+                    tg = team_games.get(team, [])
+                    game_dt_live = dt.strptime(lg_date, "%Y-%m-%d")
+                    has_prev_close = any(
+                        0 < (game_dt_live - dt.strptime(g[0], "%Y-%m-%d")).days <= 2
+                        for g in tg if g[0] < lg_date
+                    )
+                    has_next_close = any(
+                        0 < (dt.strptime(g[0], "%Y-%m-%d") - game_dt_live).days <= 2
+                        for g in tg if g[0] > lg_date
+                    )
+                    ctx[f"{prefix}_sandwich"] = has_prev_close and has_next_close
+
+                context[key] = ctx
+                added += 1
+            if added:
+                logger.info(
+                    f"Schedule context: augmented with {added} live games "
+                    f"(total now {len(context)})"
+                )
 
         logger.info(
             f"Schedule context: computed for {len(context)} games "
@@ -3017,8 +3105,18 @@ class BacktestEngine:
             # A 1-day window causes all teams to get defaults (b2b=False,
             # days_rest=99) which then fail context filters → 0 trades.
             context_start = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+            # Pass today's live games so context is computed for upcoming
+            # games not yet in game_results (the previous code only had
+            # context for completed games → today's games always got {} →
+            # fail-closed filter rejected them all → 0 paper trades).
+            live_game_tuples = [
+                (today, g.get("home_team", ""), g.get("away_team", ""))
+                for g in games
+                if g.get("home_team") and g.get("away_team")
+            ]
             schedule_context = await self._build_schedule_context(
                 sport, context_start, today,
+                live_games=live_game_tuples,
             )
             if schedule_context:
                 logger.info(
