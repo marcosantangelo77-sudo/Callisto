@@ -127,7 +127,10 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
 #   - 96.1% Math 500, 77.4% MMLU-Pro, native thinking mode
 #   - Better than both predecessors in less VRAM
 #
-# Pending: Apriel-1.6-15B-Thinker (79% StructEval, best structured output)
+# Apriel-1.6-15B-Thinker: installed but reasoning prefix makes it
+# incompatible with JSON-first pipeline. think=False doesn't suppress
+# its chain-of-thought. Use for reasoning-heavy tasks only, not dispatch.
+# Qwen3-14B is the structured output champion — clean JSON first try.
 MODEL_LADDER: dict[str, list[dict]] = {
     "reasoning": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
