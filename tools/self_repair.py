@@ -710,14 +710,22 @@ class SelfRepairEngine:
                 if handler:
                     result = await handler(finding)
                 else:
-                    # Unknown pattern — record to Hermes as a learning for next review
+                    # Unknown pattern — record to Hermes with a UNIQUE key
+                    # to prevent the same finding from inflating occurrences.
+                    # Previous bug: x396 occurrences of "unknown" because the
+                    # same stalling issue was re-recorded every cycle under a
+                    # single key, drowning out real discoveries.
+                    import hashlib
+                    finding_hash = hashlib.md5(
+                        f"{strategy}:{desc[:100]}".encode()
+                    ).hexdigest()[:8]
                     result = {"fixed": False, "action": "recorded_for_review",
                               "detail": f"[{severity}] {desc[:200]}"}
                     try:
                         from tools.hermes_memory import get_hermes_memory
                         hermes = get_hermes_memory()
                         await hermes.record_learning(
-                            key="claude_finding_unhandled",
+                            key=f"claude_finding_{strategy or 'unknown'}_{finding_hash}",
                             value=f"[{severity}] {desc[:500]}",
                             confidence=0.5,
                             source="deep_work_finding",
