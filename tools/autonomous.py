@@ -2163,6 +2163,12 @@ class ResearchLoop:
                 except Exception:
                     pass  # Non-critical — self_repair will catch it
 
+                # Force GC to reclaim large transient allocations from backtest/resolve
+                # phases. CPython's pymalloc holds freed blocks; gc.collect() nudges
+                # the allocator to release pages back to the OS.
+                import gc
+                gc.collect()
+
                 logger.info(
                     f"Research cycle #{self._cycles} complete — "
                     f"sleeping {RESEARCH_CYCLE_INTERVAL}s"

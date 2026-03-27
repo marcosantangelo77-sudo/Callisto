@@ -29,6 +29,7 @@ API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # Rate limiting — don't spam
 _last_sent: dict[str, float] = {}  # key -> timestamp
+_LAST_SENT_MAX = 200  # Cap throttle cache to prevent unbounded growth
 MIN_INTERVAL_SECONDS = 900  # Same edge throttled to 15 min minimum
 
 
@@ -64,6 +65,11 @@ async def send_alert(
             logger.debug(f"Throttled alert: {throttle_key}")
             return False
         _last_sent[throttle_key] = now
+        # Evict stale throttle keys to prevent unbounded growth
+        if len(_last_sent) > _LAST_SENT_MAX:
+            stale = sorted(_last_sent, key=_last_sent.get)[:len(_last_sent) - _LAST_SENT_MAX // 2]
+            for k in stale:
+                del _last_sent[k]
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:

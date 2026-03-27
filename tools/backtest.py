@@ -2753,13 +2753,24 @@ class BacktestEngine:
 
         # Build a lookup of game results indexed by (sport, date) -> list of games
         # Primary: game_results table. Fallback: game_contexts table (has scores too).
+        # MEMORY FIX: Only load game_results for the date range of unresolved events
+        # (±1 day for timezone offsets). Previously loaded ALL rows (14K+), causing
+        # ~50 MB allocation per call that CPython's pymalloc never returns to OS.
         from collections import defaultdict
         games_by_date = defaultdict(list)
         seen = set()
 
+        unresolved_dates = [row[6] for row in unresolved if row[6]]  # game_date col
+        if unresolved_dates:
+            min_date = min(unresolved_dates)
+            max_date = max(unresolved_dates)
+        else:
+            min_date = max_date = "2020-01-01"
+
         result_cursor = await self._db.execute(
             "SELECT sport, game_date, home_team, away_team, home_score, away_score "
-            "FROM game_results",
+            "FROM game_results WHERE game_date >= date(?, '-1 day') AND game_date <= date(?, '+1 day')",
+            (min_date, max_date),
         )
         result_rows = await result_cursor.fetchall()
         for r_sport, r_date, r_home, r_away, r_hscore, r_ascore in result_rows:
@@ -2771,7 +2782,9 @@ class BacktestEngine:
         # Fallback: game_contexts also stores scores from ESPN
         ctx_cursor = await self._db.execute(
             "SELECT sport, game_date, home_team, away_team, home_score, away_score "
-            "FROM game_contexts WHERE home_score IS NOT NULL AND away_score IS NOT NULL",
+            "FROM game_contexts WHERE home_score IS NOT NULL AND away_score IS NOT NULL "
+            "AND game_date >= date(?, '-1 day') AND game_date <= date(?, '+1 day')",
+            (min_date, max_date),
         )
         ctx_rows = await ctx_cursor.fetchall()
         ctx_added = 0
