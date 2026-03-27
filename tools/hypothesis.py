@@ -662,7 +662,7 @@ class HypothesisManager:
 
         # Brier score (calibration quality)
         if "max_brier" in gate:
-            brier = report.get("calibration", {}).get("brier_score")
+            brier = report.get("calibration_score", {}).get("brier_score")
             max_brier = gate["max_brier"]
             if brier is not None and brier > max_brier:
                 checks.append(f"FAIL: Brier score {brier:.4f} > {max_brier} (worse than coin-flip)")
@@ -672,7 +672,7 @@ class HypothesisManager:
 
         # Information coefficient (paper→live gate)
         if "min_ic" in gate:
-            ic = report.get("calibration", {}).get("information_coefficient")
+            ic = report.get("calibration_score", {}).get("information_coefficient")
             min_ic = gate["min_ic"]
             if ic is not None and ic < min_ic:
                 checks.append(f"FAIL: IC {ic:.4f} < {min_ic} (model is anti-predictive)")
