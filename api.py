@@ -447,7 +447,7 @@ async def get_kl_metrics(sport: Optional[str] = None, limit: int = 50):
     import aiosqlite
     db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
     async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout = 5000")
+        await db.execute("PRAGMA busy_timeout = 60000")
         if sport:
             cursor = await db.execute(
                 "SELECT sport, event_id, market_type, kl_divergence, js_divergence, "

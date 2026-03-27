@@ -631,13 +631,15 @@ class LineMonitor:
         credits_remaining = new_snapshot.get("credits", {}).get("remaining")
         source = new_snapshot.get("source", "odds_api")
 
-        # Store snapshot
-        await self._db.execute(
-            "INSERT INTO odds_snapshots (sport, timestamp, snapshot_json, game_count, credits_remaining) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (sport, now, json.dumps(new_snapshot), game_count, credits_remaining),
-        )
-        await self._db.commit()
+        # Store snapshot — acquire write lock to prevent contention with autonomous loop
+        from tools.db_utils import get_write_lock, commit_with_retry
+        async with get_write_lock():
+            await self._db.execute(
+                "INSERT INTO odds_snapshots (sport, timestamp, snapshot_json, game_count, credits_remaining) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (sport, now, json.dumps(new_snapshot), game_count, credits_remaining),
+            )
+            await commit_with_retry(self._db, operation="snapshot_store")
 
         logger.info(f"Snapshot {sport} ({source}): {game_count} games, credits={credits_remaining}")
 
