@@ -1,14 +1,16 @@
-"""Deep Work Cycle #10 cleanup — batch-reject duplicate/losing hypotheses.
+"""Deep Work Cycle #10+3 cleanup — batch-reject ALL tainted hypotheses.
 
 Run this when the DB is not locked (API stopped or between backtest runs):
   python scripts/deep_work_10_cleanup.py
 
-Findings:
-- 12 NBA spread hypotheses tested IDENTICAL 149 games (game_filters=NULL)
-- 3 NBA road-fav hypotheses tested IDENTICAL 59 games
+Findings (updated DW#3):
+- 17 NBA spread hypotheses tested IDENTICAL 149-event set (context filter fail-open)
+- 2 NBA totals hypotheses tested IDENTICAL 143-event set with 0 signals
+- 3 NBA road-fav hypotheses tested IDENTICAL 59-event set
 - 1 NHL hypothesis actively losing (19W-25L, 43.2%)
 - 2 hypotheses with circular testing (backtest overlaps training)
-- 1 hypothesis reset to draft for re-testing with proper filters
+- Context filter fixed in 85e97f8 + 5bb0d6a — all pre-fix backtests are invalid
+- Hypotheses lack game_filters in model_config, so even re-backtest would fail-close
 """
 import sqlite3
 import json
@@ -18,7 +20,7 @@ import os
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "memory", "callisto.db")
 
 REJECT_IDS = [
-    # 12 NBA spread hypotheses sharing 149-event set (no game_filters)
+    # 12 NBA spread hypotheses sharing 149-event set (no game_filters, original list)
     "4c74e1e2-e5c",  # Cross-book consensus divergence on spreads
     "5a522189-399",  # nba_blown_lead_hangover_spread_fade
     "e74bc1e0-1fb",  # nba_closing_line_reversal_steam_fade
@@ -30,6 +32,15 @@ REJECT_IDS = [
     "dfd0d7f6-120",  # nba_loss_streak_home_return_ats
     "6f64ad56-f06",  # nba_pacific_early_tip_spread_fade
     "68ea4fa5-8e5",  # nba_sharp_reversal_closing_line_cover
+    # 5 MORE from 149-event set (discovered DW#3)
+    "5ade02de-29a",  # nba_altitude_home_second_half_spread
+    "2527ecc7-535",  # nba_home_court_late_season_fade_ats
+    "0f1f00ac-10c",  # nba_home_stand_game4_plus_spread_fade
+    "e94cb3a9-6d7",  # nba_lookahead_spot_before_marquee_spread_fade
+    "194ad002-757",  # nba_post_blowout_loss_home_bounce_spread
+    # 2 NBA totals sharing 143-event set, 0 signals
+    "4f20f8e0-72d",  # nba_altitude_visitor_fatigue_total_over
+    "1927aea7-aa5",  # nba_close_game_cluster_fatigue_under
     # 3 NBA road-fav sharing 59-event set
     "2d71b8c8-21a",  # nba_road_favorite_mid_spread_fade
     "2e194e83-c81",  # nba_winning_streak_road_favorite_fade
