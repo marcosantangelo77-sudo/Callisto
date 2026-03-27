@@ -545,8 +545,12 @@ class HypothesisManager:
             "recommendation": rec,
         }
 
-        # Store in hypothesis_stats
+        # Store in hypothesis_stats (upsert: one row per hypothesis+stage)
         now = datetime.now(timezone.utc).isoformat()
+        await self._db.execute(
+            "DELETE FROM hypothesis_stats WHERE hypothesis_id = ? AND stage = ?",
+            (hypothesis_id, stage),
+        )
         await self._db.execute(
             "INSERT INTO hypothesis_stats "
             "(hypothesis_id, stage, computed_at, total_n, signals_n, win, loss, push_, "
