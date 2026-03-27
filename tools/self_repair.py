@@ -42,7 +42,7 @@ _PRUNE_SAFE = {
 }
 
 HEARTBEAT_INTERVAL = 300  # Check every 5 minutes
-LOOP_STALL_THRESHOLD = 600  # If no cycle in 10 min, loop is stalled
+LOOP_STALL_THRESHOLD = 2400  # 40 min — cycles have 18 phases with up to 600s timeouts each
 
 
 class Heartbeat:

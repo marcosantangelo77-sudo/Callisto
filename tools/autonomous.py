@@ -2117,7 +2117,7 @@ class ResearchLoop:
                 # Proactive DB prune — prop_snapshots grows 15K rows/hr
                 try:
                     import aiosqlite
-                    _prune_db = self.db_path
+                    _prune_db = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
                     _prune_cutoff = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
                     async with aiosqlite.connect(_prune_db) as _pdb:
                         await _pdb.execute("PRAGMA busy_timeout = 60000")
