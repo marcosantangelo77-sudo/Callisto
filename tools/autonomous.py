@@ -4079,10 +4079,10 @@ class ResearchLoop:
 
         backtesting = await self.hypothesis_manager.list_hypotheses(status="backtesting")
 
-        # ── Batch-limit: evaluate top 10 by signal count per cycle ──
-        # With 59 backtesting hypotheses, evaluating all exceeds timeout.
-        # Prioritize hypotheses with the most backtest signals (most data).
-        MAX_EVALUATE_PER_CYCLE = 10
+        # ── Batch-limit: evaluate top N by signal count per cycle ──
+        # With 60s/hyp timeout and 600s phase timeout, ~30 fits safely.
+        # Most evals complete in <5s; only edge-case hypotheses hit 60s.
+        MAX_EVALUATE_PER_CYCLE = 30
         if len(backtesting) > MAX_EVALUATE_PER_CYCLE:
             try:
                 db = self.hypothesis_manager._db
