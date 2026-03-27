@@ -4683,12 +4683,43 @@ class ResearchLoop:
         now = _time.time()
         # No cooldown check — deep work should always fire if Claude is available
         if not claude_available():
-            # Local fallback: basic rule-based deep work
+            # Local model deep work via model ladder (Qwen3-14B primary)
+            # Much better than rule-based: structured diagnosis, JSON output
+            try:
+                from inference import escalate_with_ladder
+                # Build a condensed pipeline summary for the local model
+                db = self.data_collector._db
+                bt_total = 0
+                bt_signals = 0
+                try:
+                    cursor = await db.execute("SELECT COUNT(*), SUM(CASE WHEN signals_generated > 0 THEN 1 ELSE 0 END) FROM backtest_runs")
+                    row = await cursor.fetchone()
+                    bt_total, bt_signals = row[0] or 0, row[1] or 0
+                except Exception:
+                    pass
+
+                local_prompt = (
+                    f"You are diagnosing a sports betting research pipeline.\n"
+                    f"Backtest runs: {bt_total}, with signals: {bt_signals}\n"
+                    f"Signal rate: {bt_signals*100//max(bt_total,1)}%\n"
+                    f"Respond ONLY with JSON:\n"
+                    f'{{"pipeline_issues": ["specific problem"], "reject_ids": [], "actions": ["specific fix"]}}'
+                )
+                result = await escalate_with_ladder(
+                    local_prompt, task_type="deep_work", timeout=90,
+                )
+                if result.get("content") and result.get("model_used") != "none":
+                    logger.info(
+                        f"Research: local deep work via {result['model_used']} "
+                        f"({len(result['content'])} chars)"
+                    )
+            except Exception as e:
+                logger.debug(f"Local model deep work failed: {e}")
+
+            # Also run rule-based fallback for guaranteed maintenance
             try:
                 from tools.work_queue import local_fallback_deep_work
-                db = self.data_collector._db
                 actions = await local_fallback_deep_work(db)
-
                 rejected = 0
                 for hid in actions.get("reject_ids", []):
                     try:
@@ -4700,14 +4731,10 @@ class ResearchLoop:
                     except Exception:
                         pass
                 if rejected:
-                    logger.info(f"Research: local fallback deep work rejected {rejected} hypotheses")
-                for issue in actions.get("pipeline_issues", []):
-                    logger.info(f"Research: local fallback identified — {issue}")
+                    logger.info(f"Research: local fallback rejected {rejected} hypotheses")
             except Exception as e:
-                logger.debug(f"Local fallback deep work failed: {e}")
+                logger.debug(f"Rule-based fallback failed: {e}")
 
-            # NOTE: prompt is deferred below AFTER it's built (need metrics first)
-            # We'll set a flag and enqueue at the end
             _defer_deep_work = True
         else:
             _defer_deep_work = False
