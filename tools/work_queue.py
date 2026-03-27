@@ -50,8 +50,10 @@ async def _call_local_model(prompt: str, model: str = None, max_tokens: int = 50
 
     # Use fallback ladder: try models in quality order
     fallback_models = [
-        "nemotron-cascade-2:latest",  # Best reasoning (30B MoE, 3B active)
-        "deepseek-r1:14b",            # Strong reasoning fallback
+        "qwen3:14b",                  # Best local all-rounder (9GB, matches 32B quality)
+        "gpt-oss:20b",                # Fast reasoning (140 tok/s)
+        "deepseek-r1:14b",            # Deep chain-of-thought
+        "nemotron-cascade-2:latest",  # MoE fallback (30B, 3B active)
         LOCAL_MODEL,                   # Fast classification fallback (qwen3.5:4b)
     ]
     import httpx

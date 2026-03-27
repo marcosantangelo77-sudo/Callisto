@@ -3315,11 +3315,11 @@ class ResearchLoop:
                     logger.warning(f"Template generation failed for {sport}: {e}")
 
         # ── DATA-DRIVEN PATTERN DISCOVERY ──
-        # Use temporal_analysis to discover statistical anomalies in historical
-        # data and generate hypotheses from them. This is the third source
-        # (after Claude, before templates) and the only one that's purely
-        # data-driven rather than LLM-generated or template-based.
-        if not used_claude and total_created == 0:
+        # Pure computation — no LLM needed. Discovers statistical anomalies
+        # from historical data using temporal splits. Runs EVERY cycle
+        # regardless of Claude availability because data-driven hypotheses
+        # are grounded in actual patterns, not LLM-plausible theses.
+        if total_created < 3:  # Always try unless we already have enough
             try:
                 from tools.temporal_analysis import generate_hypotheses_from_analysis
                 import asyncio
