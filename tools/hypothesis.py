@@ -43,18 +43,22 @@ DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 # Paper→live gate is the real quality filter (CLV, drawdown, 14-day duration).
 PROMOTION_GATES = {
     "backtesting→paper_trading": {
-        "min_signals": 5,          # lowered from 30 — 1% signal rate needs ~500 events for 5
-        "max_p_value": 0.10,       # relax for backtest→paper; tighten at live gate
-        "min_clv_rate": 0.0,       # CLV not available in historical backtests
-        "min_sharpe": 0.0,         # don't gate on Sharpe for first promotion
+        "min_signals": 5,              # 1% signal rate needs ~500 events for 5
+        "max_p_value": 0.10,           # relax for backtest→paper; tighten at live gate
+        "min_clv_rate": 0.0,           # CLV not available in historical backtests
+        "min_sharpe": 0.0,             # don't gate on Sharpe for first promotion
+        "min_positive_edge_rate": 0.40, # at least 40% of events must show positive edge
+        "max_brier": 0.28,             # worse than coin-flip baseline (0.25) = reject
     },
     "paper_trading→live": {
-        "min_signals": 20,         # lowered from 50 — real filter is CLV + drawdown
+        "min_signals": 20,             # real filter is CLV + drawdown
         "max_p_value": 0.05,
-        "min_clv_rate": 0.50,
+        "min_clv_rate": 0.50,          # must beat closing line 50%+ of the time
         "max_drawdown": 0.30,
         "min_days": 14,
-        "min_sortino": 0.5,        # downside-risk gate — better than Sharpe for betting
+        "min_sortino": 0.5,            # downside-risk gate
+        "min_ic": 0.0,                 # information coefficient must be non-negative
+        "max_brier": 0.28,             # calibration quality gate
     },
 }
 
@@ -641,6 +645,36 @@ class HypothesisManager:
                 ready = False
             else:
                 checks.append(f"PASS: Sortino {sortino_val:.2f} >= {min_sortino}")
+
+        # Positive edge rate (backtest gate)
+        if "min_positive_edge_rate" in gate:
+            pos_rate = report.get("edge_metrics", {}).get("positive_edge_rate", 0)
+            min_per = gate["min_positive_edge_rate"]
+            if pos_rate < min_per:
+                checks.append(f"FAIL: Positive edge rate {pos_rate:.1%} < {min_per:.0%}")
+                ready = False
+            else:
+                checks.append(f"PASS: Positive edge rate {pos_rate:.1%} >= {min_per:.0%}")
+
+        # Brier score (calibration quality)
+        if "max_brier" in gate:
+            brier = report.get("calibration", {}).get("brier_score")
+            max_brier = gate["max_brier"]
+            if brier is not None and brier > max_brier:
+                checks.append(f"FAIL: Brier score {brier:.4f} > {max_brier} (worse than coin-flip)")
+                ready = False
+            elif brier is not None:
+                checks.append(f"PASS: Brier score {brier:.4f} <= {max_brier}")
+
+        # Information coefficient (paper→live gate)
+        if "min_ic" in gate:
+            ic = report.get("calibration", {}).get("information_coefficient")
+            min_ic = gate["min_ic"]
+            if ic is not None and ic < min_ic:
+                checks.append(f"FAIL: IC {ic:.4f} < {min_ic} (model is anti-predictive)")
+                ready = False
+            elif ic is not None:
+                checks.append(f"PASS: IC {ic:.4f} >= {min_ic}")
 
         # Auto-rejection check — only reject based on signal-level data.
         # If we fell back to all-events (used_all_events=True), the p-value
