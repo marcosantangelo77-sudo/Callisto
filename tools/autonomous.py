@@ -4670,28 +4670,38 @@ class ResearchLoop:
         # ── Auto-reject anti-predictive paper_trading hypotheses ──
         # IC < -0.10 means the model is inversely correlated with outcomes.
         # Don't waste paper trading cycles on these.
+        # BUT: at n<20 IC is statistically meaningless (variance ~1/sqrt(n-3)),
+        # so waive the gate for small samples — same logic as promotion gate.
         clean_paper = []
         for h in paper:
             try:
                 db = self.data_collector._db
                 cursor = await db.execute(
-                    "SELECT information_coefficient FROM hypothesis_stats "
+                    "SELECT information_coefficient, signals_n FROM hypothesis_stats "
                     "WHERE hypothesis_id = ?",
                     (h["hypothesis_id"],),
                 )
                 row = await cursor.fetchone()
                 ic = row[0] if row else None
+                n_signals = row[1] if row else 0
             except Exception:
                 ic = None
-            if ic is not None and ic < -0.10:
+                n_signals = 0
+            if ic is not None and ic < -0.10 and n_signals >= 20:
                 logger.warning(
-                    f"Paper trade: rejecting {h['name']} (IC={ic:.3f}, anti-predictive)"
+                    f"Paper trade: rejecting {h['name']} (IC={ic:.3f}, n={n_signals}, anti-predictive)"
                 )
                 await self.hypothesis_manager.update_status(
                     h["hypothesis_id"], "rejected",
-                    f"auto:anti_predictive_paper_trading — IC={ic:.3f} < -0.10"
+                    f"auto:anti_predictive_paper_trading — IC={ic:.3f} < -0.10 (n={n_signals})"
                 )
                 self._rejections += 1
+            elif ic is not None and ic < -0.10 and n_signals < 20:
+                logger.info(
+                    f"Paper trade: waiving anti-predictive gate for {h['name']} "
+                    f"(IC={ic:.3f}, n={n_signals}<20, statistically unreliable)"
+                )
+                clean_paper.append(h)
             else:
                 clean_paper.append(h)
         paper = clean_paper
