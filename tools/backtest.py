@@ -381,8 +381,7 @@ class BacktestEngine:
              "end": end_date, "filters": filters, "target": target_book,
              "threshold": edge_threshold, "devig": devig_method, "min_books": min_books,
              "context_factors": context_factors_sorted,
-             "uses_context": uses_context,
-             "name": h_name},
+             "uses_context": uses_context},
             sort_keys=True,
         )
         fingerprint = hashlib.md5(fp_parts.encode()).hexdigest()[:16]
@@ -1499,7 +1498,7 @@ class BacktestEngine:
         cf_set = {f.lower().replace(" ", "_") for f in context_factors}
 
         if not game_context:
-            return True  # No context data — don't filter
+            return False  # Context filtering expected but no data — fail closed
 
         # ── STRUCTURED GAME FILTERS (from model_config — highest priority) ──
         # These are machine-readable specs generated alongside the hypothesis,
@@ -2066,8 +2065,17 @@ class BacktestEngine:
                     # and produces spurious edges (3.01 avg books on signals
                     # vs 6.11 on non-signals proved this empirically).
                     MIN_BOOKS_FOR_SIGNAL = 4
+                    # Heavy favorite filter (h2h only): signals on lines
+                    # with >80% fair probability are noise-dominated.
+                    # At -400 odds, a 2% edge yields $0.50 EV per $100
+                    # risked, and one loss erases 4 wins. Devig consensus
+                    # is also least reliable at probability extremes.
+                    MAX_FAIR_PROB_FOR_SIGNAL = 0.80
+                    heavy_fav = (mkt_key == "h2h"
+                                 and fair_val > MAX_FAIR_PROB_FOR_SIGNAL)
                     is_signal = (edge >= edge_threshold
-                                 and non_target_count >= MIN_BOOKS_FOR_SIGNAL)
+                                 and non_target_count >= MIN_BOOKS_FOR_SIGNAL
+                                 and not heavy_fav)
 
                     events += 1
                     if is_signal:
@@ -2253,8 +2261,13 @@ class BacktestEngine:
                 # Require minimum book count for reliable signals —
                 # same gate as _process_game_lines to prevent 1-2 book phantom edges
                 MIN_BOOKS_FOR_SIGNAL = 4
+                # Heavy favorite filter: same as _process_game_lines
+                MAX_FAIR_PROB_FOR_SIGNAL = 0.80
+                heavy_fav = (mkt_key == "h2h"
+                             and fair_val > MAX_FAIR_PROB_FOR_SIGNAL)
                 is_signal = (edge >= edge_threshold
-                             and non_target_count >= MIN_BOOKS_FOR_SIGNAL)
+                             and non_target_count >= MIN_BOOKS_FOR_SIGNAL
+                             and not heavy_fav)
 
                 events += 1
                 if is_signal:
