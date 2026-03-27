@@ -2166,7 +2166,7 @@ class BacktestEngine:
         # Batch INSERT all rows in one transaction — dramatically reduces lock contention
         if _pending_rows:
             await self._db.executemany(
-                "INSERT INTO backtest_events "
+                "INSERT OR IGNORE INTO backtest_events "
                 "(run_id, event_id, hypothesis_id, sport, player, market, "
                 "line, side, book, book_odds_american, book_implied_prob, "
                 "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
@@ -2352,7 +2352,7 @@ class BacktestEngine:
         # Batch INSERT all rows in one transaction
         if _pending_rows:
             await self._db.executemany(
-                "INSERT INTO backtest_events "
+                "INSERT OR IGNORE INTO backtest_events "
                 "(run_id, event_id, hypothesis_id, sport, player, market, "
                 "line, side, book, book_odds_american, book_implied_prob, "
                 "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
