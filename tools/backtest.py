@@ -1631,17 +1631,22 @@ class BacktestEngine:
             return True
 
         # ── LEGACY REGEX FALLBACKS (for hypotheses without structured filters) ──
+        # Track whether ANY filter pattern matched.  If none match, the
+        # hypothesis text is too vague to derive filters from → fail closed.
+        _any_filter_matched = False
 
         # ── Back-to-back filter ──
         if ("back_to_back" in cf_set or "is_b2b_second_night" in cf_set
                 or "back_to_back_second_night" in cf_set
                 or re.search(r"\bb2b\b|\bback.to.back\b", text)):
+            _any_filter_matched = True
             if not game_context.get("home_b2b") and not game_context.get("away_b2b"):
                 return False
 
         # ── Days rest filter ──
         if ("days_rest" in cf_set or "days_since_last_game" in cf_set
                 or re.search(r"\bshort.rest\b|\brest.mismatch\b", text)):
+            _any_filter_matched = True
             home_rest = game_context.get("home_days_rest", 99)
             away_rest = game_context.get("away_days_rest", 99)
             if home_rest > 2 and away_rest > 2:
@@ -1649,6 +1654,7 @@ class BacktestEngine:
 
         # ── Extra rest filter ──
         if "extra_rest_days" in cf_set or re.search(r"\bextra.rest\b", text):
+            _any_filter_matched = True
             home_rest = game_context.get("home_days_rest", 1)
             away_rest = game_context.get("away_days_rest", 1)
             if home_rest < 3 and away_rest < 3:
@@ -1657,6 +1663,7 @@ class BacktestEngine:
         # ── Road trip filter ──
         if ("consecutive_road_games" in cf_set or "road_trip_game_number" in cf_set
                 or re.search(r"\broad.trip\b|\b\d\+?\s*(?:road|away)\b|\bconsecutive.(?:road|away)\b", text)):
+            _any_filter_matched = True
             threshold = 3
             m = re.search(r"(\d)\+?\s*(?:road|away)", text)
             if m:
@@ -1669,6 +1676,7 @@ class BacktestEngine:
         # ── Schedule density (3in4, 4in5) filter ──
         if ("schedule_density" in cf_set or "games_in_last_4_days" in cf_set
                 or re.search(r"\b3.?in.?4\b|\b4.?in.?5\b|\bschedule.compress\b|\bschedule.density\b", text)):
+            _any_filter_matched = True
             home_g4 = game_context.get("home_games_in_4", 1)
             away_g4 = game_context.get("away_games_in_4", 1)
             if home_g4 < 3 and away_g4 < 3:
@@ -1677,18 +1685,21 @@ class BacktestEngine:
         # ── Sandwich game filter ──
         if ("schedule_context" in cf_set
                 or re.search(r"\bsandwich\b|\btrap.game\b|\bletdown\b", text)):
+            _any_filter_matched = True
             if not game_context.get("home_sandwich") and not game_context.get("away_sandwich"):
                 return False
 
         # ── Revenge game filter ──
         if ("revenge_game_flag" in cf_set or "is_revenge_game" in cf_set
                 or re.search(r"\brevenge\b|\bformer.team\b", text)):
+            _any_filter_matched = True
             if not game_context.get("is_revenge"):
                 return False
 
         # ── Playoff standing / clinched / eliminated / bubble filter ──
         if ("playoff_standing" in cf_set
                 or re.search(r"\bclinch|\beliminated\b|\btanking\b|\bplayoff.(?:race|bubble)\b|\bdesperate\b|\bbubble\b", text)):
+            _any_filter_matched = True
             home_wp = game_context.get("home_win_pct", 0.5)
             away_wp = game_context.get("away_win_pct", 0.5)
 
@@ -1710,6 +1721,7 @@ class BacktestEngine:
 
         # ── Both teams short rest filter ──
         if "both_teams_short_rest" in cf_set:
+            _any_filter_matched = True
             home_rest = game_context.get("home_days_rest", 99)
             away_rest = game_context.get("away_days_rest", 99)
             if home_rest > 1 or away_rest > 1:
@@ -1718,6 +1730,7 @@ class BacktestEngine:
         # ── Rest mismatch filter ──
         if ("rest_mismatch" in cf_set
                 or re.search(r"\brest.(?:mismatch|differential|advantage|edge)\b|\bfresh.vs.tired\b", text)):
+            _any_filter_matched = True
             home_rest = game_context.get("home_days_rest", 1)
             away_rest = game_context.get("away_days_rest", 1)
             # Extract mismatch threshold from text (e.g., "2+ day rest mismatch")
@@ -1729,6 +1742,7 @@ class BacktestEngine:
         # ── Bad loss / blowout loss filter (using prev_margin) ──
         if (re.search(r"\bbad.loss\b|\bblowout.loss\b|\bblown.(?:out|lead)\b|\bbounce.back\b"
                        r"|\bhangover\b|\bafter.(?:bad|ugly|blowout)", text)):
+            _any_filter_matched = True
             hpm = game_context.get("home_prev_margin", 0)
             apm = game_context.get("away_prev_margin", 0)
             # At least one team lost their previous game badly (margin < -10)
@@ -1737,6 +1751,7 @@ class BacktestEngine:
 
         # ── Winning streak / dominant win filter (using prev_margin) ──
         if re.search(r"\bwinning.streak\b|\bblowout.win\b|\bdomin\w+.win\b|\bmomentum\b", text):
+            _any_filter_matched = True
             hpm = game_context.get("home_prev_margin", 0)
             apm = game_context.get("away_prev_margin", 0)
             # At least one team won their previous game convincingly (margin > 10)
@@ -1745,6 +1760,7 @@ class BacktestEngine:
 
         # ── Losing team / struggling team filter ──
         if re.search(r"\blosing.streak\b|\bstruggling\b|\bslumping\b|\bskid\b", text):
+            _any_filter_matched = True
             hwp = game_context.get("home_win_pct", 0.5)
             awp = game_context.get("away_win_pct", 0.5)
             hpm = game_context.get("home_prev_margin", 0)
@@ -1752,6 +1768,12 @@ class BacktestEngine:
             # At least one team is losing AND lost their previous game
             if not ((hwp < 0.45 and hpm < 0) or (awp < 0.45 and apm < 0)):
                 return False
+
+        if not _any_filter_matched:
+            # No regex pattern matched the hypothesis text — we can't verify the
+            # hypothesis condition for this game.  Fail closed to prevent all
+            # games leaking through unfiltered (the "149 identical events" bug).
+            return False
 
         return True
 
