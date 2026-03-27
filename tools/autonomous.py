@@ -2166,7 +2166,6 @@ class ResearchLoop:
                 # Force GC to reclaim large transient allocations from backtest/resolve
                 # phases. CPython's pymalloc holds freed blocks; gc.collect() nudges
                 # the allocator to release pages back to the OS.
-                import gc
                 gc.collect()
 
                 logger.info(
