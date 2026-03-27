@@ -1,0 +1,4 @@
+{
+  "query": "Deep Work Cycle 5 Pipeline Audit Results — CRITICAL FIXES APPLIED (commit fd7226d): 1) Hard gate in auto_promote required 20 signal events but PROMOTION_GATES requires 5. Best hypothesis had 8 signals and was stuck. Fixed. 2) resolve_from_game_results only checked game_results table, missing 1087 game_contexts entries with ESPN scores. 61.5% unresolved. Fixed with fallback. 3) 100% rejection rate is symptom of above bugs. New hypotheses: mlb_opening_day_home_dog_ml, ncaaw_tournament_seed_upset_spread, mlb_early_season_bullpen_totals_over, pga_masters_course_history_outright. All with 1.2-2.0% edge thresholds.",
+  "priority": 1
+}

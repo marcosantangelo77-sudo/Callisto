@@ -11,21 +11,13 @@
     ],
     "method": "Devig sharp books for true probability, compare to retail for mispricing",
     "primary_edge": "Profit boosts + player props",
-    "date": "2026-03-26"
+    "date": "2026-03-27"
   },
   "bankroll": {
-    "balance": 1000.0,
-    "as_of": "2026-03-22T22:23:39.089738+00:00"
+    "balance": 992.22,
+    "as_of": "2026-03-27T00:47:49.506159+00:00"
   },
   "active_bets": [
-    {
-      "id": 3,
-      "team": "Texas Tech Red Raiders",
-      "market": "spreads",
-      "book": "DraftKings",
-      "odds": 105,
-      "stake": 30.0
-    },
     {
       "id": 2,
       "team": "UConn Huskies",
@@ -33,20 +25,13 @@
       "book": "DraftKings",
       "odds": -185,
       "stake": 30.0
-    },
-    {
-      "id": 1,
-      "team": "Tennessee Volunteers",
-      "market": "h2h",
-      "book": "DraftKings",
-      "odds": -135,
-      "stake": 30.0
     }
   ],
   "sentinel_flags": [],
   "performance": {
-    "record": "0W-0L",
-    "pending": 3,
-    "pnl": 0
+    "record": "1W-1L",
+    "pending": 1,
+    "pnl": -7.78,
+    "win_rate": 50.0
   }
 }

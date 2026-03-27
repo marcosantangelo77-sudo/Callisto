@@ -1,0 +1,62 @@
+Jrue Holiday teams: ['Portland Trail Blazers']
+  ('2026-03-25', 'Portland Trail Blazers', 'points', 13.0)
+  ('2026-03-25', 'Portland Trail Blazers', 'rebounds', 5.0)
+  ('2026-03-25', 'Portland Trail Blazers', 'assists', 8.0)
+  ('2026-03-25', 'Portland Trail Blazers', 'steals', 1.0)
+  ('2026-03-25', 'Portland Trail Blazers', 'blocks', 0.0)
+  ('2026-03-25', 'Portland Trail Blazers', 'turnovers', 3.0)
+  ('2026-03-25', 'Portland Trail Blazers', 'points_rebounds_assists', 26.0)
+  ('2026-03-23', 'Portland Trail Blazers', 'points', 11.0)
+  ('2026-03-23', 'Portland Trail Blazers', 'rebounds', 7.0)
+  ('2026-03-23', 'Portland Trail Blazers', 'assists', 4.0)
+Kristaps Porzingis teams: ['Golden State Warriors']
+  ('2026-03-25', 'Golden State Warriors', 'points', 17.0)
+  ('2026-03-25', 'Golden State Warriors', 'rebounds', 5.0)
+  ('2026-03-25', 'Golden State Warriors', 'assists', 2.0)
+  ('2026-03-25', 'Golden State Warriors', 'steals', 0.0)
+  ('2026-03-25', 'Golden State Warriors', 'blocks', 0.0)
+  ('2026-03-25', 'Golden State Warriors', 'turnovers', 6.0)
+  ('2026-03-25', 'Golden State Warriors', 'points_rebounds_assists', 24.0)
+  ('2026-03-23', 'Golden State Warriors', 'points', 22.0)
+  ('2026-03-23', 'Golden State Warriors', 'rebounds', 7.0)
+  ('2026-03-23', 'Golden State Warriors', 'assists', 5.0)
+Al Horford teams: ['Golden State Warriors']
+  ('2026-03-13', 'Golden State Warriors', 'points', 3.0)
+  ('2026-03-13', 'Golden State Warriors', 'rebounds', 1.0)
+  ('2026-03-13', 'Golden State Warriors', 'assists', 0.0)
+  ('2026-03-13', 'Golden State Warriors', 'steals', 0.0)
+  ('2026-03-13', 'Golden State Warriors', 'blocks', 0.0)
+  ('2026-03-13', 'Golden State Warriors', 'turnovers', 1.0)
+  ('2026-03-13', 'Golden State Warriors', 'points_rebounds_assists', 4.0)
+  ('2026-03-10', 'Golden State Warriors', 'points', 13.0)
+  ('2026-03-10', 'Golden State Warriors', 'rebounds', 9.0)
+  ('2026-03-10', 'Golden State Warriors', 'assists', 5.0)
+
+=== NEEMIAS QUETA PER-GAME ===
+date          tatum   pts   reb   ast   stl   blk   tov   min
+2026-02-24       NO  14.0  13.0   3.0   0.0   2.0   0.0  27.0
+2026-02-25       NO  10.0   4.0   1.0   0.0   1.0   2.0  28.0
+2026-02-27       NO   8.0   2.0   1.0   2.0   1.0   1.0  15.0
+2026-03-01       NO  27.0  17.0   2.0   1.0   3.0   0.0  27.0
+2026-03-04       NO   2.0   2.0   0.0   0.0   1.0   2.0  16.0
+2026-03-06      YES  16.0  15.0   0.0   1.0   1.0   1.0  26.0
+2026-03-08      YES   4.0  11.0   1.0   0.0   0.0   0.0  36.0
+2026-03-10      YES   5.0   4.0   1.0   0.0   1.0   0.0  19.0
+2026-03-12       NO   4.0  10.0   0.0   1.0   2.0   1.0  27.0
+2026-03-14      YES  24.0  10.0   3.0   1.0   2.0   2.0  31.0
+2026-03-16      YES   5.0   3.0   6.0   1.0   1.0   1.0  33.0
+2026-03-18      YES   8.0   7.0   3.0   1.0   0.0   0.0  28.0
+2026-03-20      YES  12.0  11.0   1.0   0.0   0.0   2.0  18.0
+2026-03-22      YES   4.0  10.0   1.0   2.0   0.0   0.0  27.0
+2026-03-25      YES  13.0   5.0   2.0   0.0   2.0   0.0  30.0
+
+=== DALANO BANTON PER-GAME ===
+date          tatum   pts   reb   ast   stl   blk   tov   min
+2026-02-24       NO   0.0   0.0   0.0   0.0   0.0   0.0   4.0
+2026-02-25       NO   0.0   0.0   1.0   0.0   1.0   0.0   6.0
+2026-02-27       NO   4.0   0.0   1.0   0.0   0.0   1.0   6.0
+Traceback (most recent call last):
+  File "C:\Users\marco\OneDrive\Desktop\Callisto\tmp_tatum_analysis.py", line 79, in <module>
+    print(f'{gd:<12} {tag:>6} {pts:>5} {reb:>5} {ast:>5} {stl:>5} {blk:>5} {tov:>5} {mins:>5}')
+                                                                                    ^^^^^^^^^
+TypeError: unsupported format string passed to NoneType.__format__
