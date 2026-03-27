@@ -1347,6 +1347,18 @@ class ResearchLoop:
                     )
             except Exception as e:
                 logger.debug(f"Reactive correlation update failed: {e}")
+
+            # Compute per-game KL divergence (information flow measurement)
+            try:
+                from tools.kl_divergence import compute_game_kl, store_kl_metrics
+                event_id = event_data.get("event_id", "")
+                if event_id:
+                    db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+                    kl_result = await compute_game_kl(db_path, event_id, sport)
+                    if kl_result:
+                        await store_kl_metrics(db_path, [kl_result])
+            except Exception as e:
+                logger.debug(f"KL divergence computation failed: {e}")
         except Exception as e:
             logger.debug(f"Reactive collection failed for {sport} {game_date}: {e}")
 
@@ -2111,9 +2123,18 @@ class ResearchLoop:
         """
         Self-repair phase — detect issues, fix them autonomously, verify,
         and record to Hermes. Runs every 5 cycles to avoid overhead.
+        Also runs cache rotation to maintain operational hygiene.
         """
         if self._cycles % 5 != 1:
             return  # Only run every 5 cycles (cycle 1, 6, 11, ...)
+
+        # Cache rotation — rebuild hot cache, archive stale data
+        try:
+            from tools.cache_manager import CacheManager
+            cm = CacheManager()
+            await cm.rotate_caches()
+        except Exception as e:
+            logger.debug(f"Cache rotation failed (non-fatal): {e}")
 
         try:
             from tools.self_repair import get_repair_engine
