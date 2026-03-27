@@ -2042,7 +2042,7 @@ class ResearchLoop:
                     logger.warning(f"Phase integrity_check failed (non-fatal): {e}")
 
                 # Phase 10: System watchdog (every 10 cycles)
-                if self._cycles_completed % 10 == 0 and self._cycles_completed > 0:
+                if self._cycles % 10 == 0 and self._cycles > 0:
                     try:
                         await asyncio.wait_for(self._phase_system_watchdog(), timeout=60)
                     except asyncio.TimeoutError:
@@ -3464,6 +3464,19 @@ class ResearchLoop:
                         value="; ".join(issues),
                         confidence=0.9,
                         source="pipeline_validator",
+                    )
+            except Exception:
+                pass
+
+            # Record sentinel flags for anomaly tracking
+            try:
+                from tools.cache_manager import record_sentinel_flag
+                for issue in issues:
+                    severity = "critical" if "PHANTOM" in issue else "warning"
+                    await record_sentinel_flag(
+                        flag_type="pipeline_validation",
+                        description=issue,
+                        severity=severity,
                     )
             except Exception:
                 pass
