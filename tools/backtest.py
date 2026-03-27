@@ -1658,7 +1658,7 @@ class BacktestEngine:
 
         # ── Days rest filter ──
         if ("days_rest" in cf_set or "days_since_last_game" in cf_set
-                or re.search(r"\bshort.rest\b|\brest.mismatch\b", text)):
+                or re.search(r"\bshort.rest\b|\brest.mismatch\b|\bdays?.rest\b", text)):
             _any_filter_matched = True
             home_rest = game_context.get("home_days_rest", 99)
             away_rest = game_context.get("away_days_rest", 99)
@@ -1711,7 +1711,7 @@ class BacktestEngine:
 
         # ── Playoff standing / clinched / eliminated / bubble filter ──
         if ("playoff_standing" in cf_set
-                or re.search(r"\bclinch|\beliminated\b|\btanking\b|\bplayoff.(?:race|bubble)\b|\bdesperate\b|\bbubble\b", text)):
+                or re.search(r"\bclinch|\beliminated\b|\btanking\b|\bplayoff.(?:race|bubble)\b|\bdesperate\b|\bbubble\b|\bmust.win\b", text)):
             _any_filter_matched = True
             home_wp = game_context.get("home_win_pct", 0.5)
             away_wp = game_context.get("away_win_pct", 0.5)
@@ -1752,8 +1752,8 @@ class BacktestEngine:
             if abs(home_rest - away_rest) < threshold:
                 return False
 
-        # ── Bad loss / blowout loss filter (using prev_margin) ──
-        if (re.search(r"\bbad.loss\b|\bblowout.loss\b|\bblown.(?:out|lead)\b|\bbounce.back\b"
+        # ── Bad loss / blowout / bounce filter (using prev_margin) ──
+        if (re.search(r"\bbad.loss\b|\bblowout(?!.win)\b|\bblown.(?:out|lead)\b|\bbounce\b"
                        r"|\bhangover\b|\bafter.(?:bad|ugly|blowout)", text)):
             _any_filter_matched = True
             hpm = game_context.get("home_prev_margin", 0)
@@ -1780,6 +1780,25 @@ class BacktestEngine:
             apm = game_context.get("away_prev_margin", 0)
             # At least one team is losing AND lost their previous game
             if not ((hwp < 0.45 and hpm < 0) or (awp < 0.45 and apm < 0)):
+                return False
+
+        # ── Generic streak filter (bare "streak" without winning/losing qualifier) ──
+        if not _any_filter_matched and re.search(r"\bstreak\b", text):
+            _any_filter_matched = True
+            hwp = game_context.get("home_win_pct", 0.5)
+            awp = game_context.get("away_win_pct", 0.5)
+            # At least one team has a notably non-average record (on a streak)
+            if not (hwp >= 0.58 or hwp <= 0.42 or awp >= 0.58 or awp <= 0.42):
+                return False
+
+        # ── Home stand filter ──
+        if not _any_filter_matched and re.search(r"\bhome.stand\b", text):
+            _any_filter_matched = True
+            # Home stand = home team not on road trip + playing frequently
+            home_road = game_context.get("home_road_streak", 0)
+            home_g4 = game_context.get("home_games_in_4", 1)
+            # Home team must have 0 consecutive road games and 2+ games in 4 days
+            if home_road > 0 or home_g4 < 2:
                 return False
 
         if not _any_filter_matched:
@@ -1812,7 +1831,6 @@ class BacktestEngine:
             r"\bclinch", r"\beliminated\b", r"\btanking\b", r"\bplayoff.(?:race|bubble)\b",
             r"\bbubble\b", r"\bdesperate\b", r"\bmust.win\b",
             r"\bextra.rest\b", r"\brest.mismatch\b",
-            r"\bgoalie\b", r"\bstarter\b", r"\bbackup\b",
             r"\bblowout\b", r"\bstreak\b", r"\bbounce\b",
             r"\bhome.stand\b", r"\bwinning.streak\b", r"\blosing.streak\b",
         ]

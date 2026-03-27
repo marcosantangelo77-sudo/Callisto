@@ -3916,6 +3916,32 @@ class ResearchLoop:
                         f"({start_date} to {end_date}) — no historical odds data for {sport}?"
                     )
                 else:
+                    # ── Gate: reject hypotheses that need context filtering but lack game_filters ──
+                    # Without structured game_filters, these hypotheses test ALL games for the sport,
+                    # producing identical event sets (the "149 identical events" bug).
+                    _mc = h.get("model_config", {})
+                    if isinstance(_mc, str):
+                        try:
+                            _mc = json.loads(_mc)
+                        except (json.JSONDecodeError, TypeError):
+                            _mc = {}
+                    _has_gf = bool(_mc.get("game_filters"))
+                    _needs_cf = BacktestEngine._needs_context_filter(
+                        h.get("name", ""), h.get("thesis", ""), _mc
+                    )
+                    if _needs_cf and not _has_gf:
+                        await self.hypothesis_manager.update_status(
+                            h["hypothesis_id"], "rejected",
+                            "auto:missing_game_filters — name implies contextual conditions "
+                            "but no structured game_filters defined. Recreate with game_filters."
+                        )
+                        self._rejections += 1
+                        logger.info(
+                            f"Research: GATE REJECT {h['hypothesis_id']} ({h.get('name', '?')}) — "
+                            f"needs context filter but has no game_filters"
+                        )
+                        continue
+
                     # ── CRITICAL: Move hypothesis from draft → backtesting ──
                     # Without this, _phase_evaluate() never sees these hypotheses
                     # (it queries status='backtesting' only). This was the root cause
