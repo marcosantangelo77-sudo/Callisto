@@ -741,12 +741,26 @@ class LineMonitor:
                         pass
 
             # Detect sharp money (one book moved, others didn't)
-            # Data logged for analysis but NO Telegram alerts — too noisy
             sharp_signals = detect_sharp_money(old_snapshot, new_snapshot)
             if sharp_signals:
-                logger.info(f"SHARP MONEY: {sport} — {len(sharp_signals)} signals (logged, no alert)")
+                logger.info(f"SHARP MONEY: {sport} — {len(sharp_signals)} signals")
                 for sig in sharp_signals:
                     self._alerts.append({"sport": sport, "type": "sharp_money", **sig})
+                    # Alert on high-confidence sharp moves only (3+ stale books)
+                    stale = sig.get("stale_books", [])
+                    moved = sig.get("moved_books", [])
+                    if len(stale) >= 3 and moved:
+                        try:
+                            from tools.telegram import alert_sharp_move
+                            await alert_sharp_move(
+                                game=sig.get("game", ""),
+                                team=sig.get("team", ""),
+                                market=sig.get("market", ""),
+                                moved_books=moved,
+                                stale_books=stale,
+                            )
+                        except Exception:
+                            pass
                 # Cap alerts to prevent unbounded growth
                 if len(self._alerts) > 100:
                     self._alerts = self._alerts[-100:]

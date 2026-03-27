@@ -2567,6 +2567,33 @@ class ResearchLoop:
                 except Exception as e:
                     logger.debug(f"Learned correlation update failed for {sport}: {e}")
 
+                # TCI enrichment for women's basketball (identity/cohesion thesis)
+                if sport in ("basketball_ncaaw", "basketball_wnba"):
+                    try:
+                        from tools.tci_scraper import build_tci_for_tournament
+                        tci_data = await build_tci_for_tournament(sport=sport)
+                        if tci_data:
+                            db = self.data_collector._db
+                            for team_name, tci in tci_data.items():
+                                await db.execute(
+                                    "INSERT OR REPLACE INTO tci_scores "
+                                    "(team, sport, tci_score, task_cohesion, social_cohesion, "
+                                    "experience_ratio, coaching_stability, computed_at) "
+                                    "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+                                    (
+                                        team_name, sport,
+                                        tci.get("tci_score", 0),
+                                        tci.get("task_cohesion", 0),
+                                        tci.get("social_cohesion", 0),
+                                        tci.get("experience_ratio", 0),
+                                        tci.get("coaching_stability", 0),
+                                    ),
+                                )
+                            await db.commit()
+                            logger.info(f"TCI: enriched {len(tci_data)} teams for {sport}")
+                    except Exception as e:
+                        logger.debug(f"TCI enrichment failed for {sport}: {e}")
+
                 self._data_collections += 1
             except Exception as e:
                 logger.warning(f"Data collection failed for {sport}: {e}")
@@ -3265,6 +3292,46 @@ class ResearchLoop:
                     total_created += len(created)
                 except Exception as e:
                     logger.warning(f"Template generation failed for {sport}: {e}")
+
+        # ── DATA-DRIVEN PATTERN DISCOVERY ──
+        # Use temporal_analysis to discover statistical anomalies in historical
+        # data and generate hypotheses from them. This is the third source
+        # (after Claude, before templates) and the only one that's purely
+        # data-driven rather than LLM-generated or template-based.
+        if not used_claude and total_created == 0:
+            try:
+                from tools.temporal_analysis import generate_hypotheses_from_analysis
+                import asyncio
+
+                pattern_hypotheses = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    generate_hypotheses_from_analysis,
+                    os.getenv("CALLISTO_DB_PATH", "memory/callisto.db"),
+                    None,  # all sports
+                    training_period_end,
+                    20,  # min_sample
+                    3.0,  # min_edge %
+                    0.10,  # max p-value
+                )
+                for h_def in pattern_hypotheses[:5]:  # cap at 5 per cycle
+                    try:
+                        await self.hypothesis_manager.create_hypothesis(
+                            name=h_def["name"],
+                            thesis=h_def["thesis"],
+                            sport=h_def["sport"],
+                            market_type=h_def["market_type"],
+                            model_config=h_def.get("model_config", {}),
+                        )
+                        total_created += 1
+                    except Exception as e:
+                        logger.debug(f"Pattern hypothesis creation failed: {e}")
+                if pattern_hypotheses:
+                    logger.info(
+                        f"Research: data-driven pattern discovery generated "
+                        f"{min(len(pattern_hypotheses), 5)} hypotheses"
+                    )
+            except Exception as e:
+                logger.debug(f"Pattern discovery failed (non-fatal): {e}")
 
         self._hypotheses_generated += total_created
         logger.info(f"Research: generated {total_created} new hypotheses")
