@@ -119,7 +119,7 @@ class _LRUCache:
     def __len__(self):
         return len(self._cache)
 
-_regime_cache: _LRUCache = _LRUCache(maxsize=5000)
+_regime_cache: _LRUCache = _LRUCache(maxsize=500)
 
 
 def get_regime_for_team(sport: str, team_name: str) -> Optional[dict]:
