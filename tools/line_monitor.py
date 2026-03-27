@@ -683,32 +683,36 @@ class LineMonitor:
             logger.info(f"Edge scan {sport}: {total_edges} edges found")
 
         # Store market microstructure metrics from edge scan
-        # This populates the market_microstructure table that was previously always empty
         try:
-            for market_key in ["cross_book_h2h", "cross_book_spreads", "cross_book_totals"]:
-                edges = edge_report.get(market_key, [])
-                for edge in edges:
-                    hhi_val = edge.get("hhi")
-                    entropy_val = edge.get("entropy")
-                    if hhi_val is not None or entropy_val is not None:
-                        await self._db.execute(
-                            "INSERT OR REPLACE INTO market_microstructure "
-                            "(sport, game_id, market_type, timestamp, hhi_overall, "
-                            "entropy_overall, num_books) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            (
-                                sport,
-                                edge.get("game_id", ""),
-                                market_key.replace("cross_book_", ""),
-                                now,
-                                hhi_val,
-                                entropy_val,
-                                edge.get("num_bookmakers", 0),
-                            ),
-                        )
-            await self._db.commit()
+            stored = 0
+            async with get_write_lock():
+                for market_key in ["cross_book_h2h", "cross_book_spreads", "cross_book_totals"]:
+                    edges = edge_report.get(market_key, [])
+                    for edge in edges:
+                        hhi_val = edge.get("hhi")
+                        entropy_val = edge.get("entropy")
+                        if hhi_val is not None or entropy_val is not None:
+                            await self._db.execute(
+                                "INSERT OR REPLACE INTO market_microstructure "
+                                "(sport, game_id, market_type, timestamp, hhi_overall, "
+                                "entropy_overall, num_books) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                (
+                                    sport,
+                                    edge.get("game_id", ""),
+                                    market_key.replace("cross_book_", ""),
+                                    now,
+                                    hhi_val,
+                                    entropy_val,
+                                    edge.get("num_bookmakers", 0),
+                                ),
+                            )
+                            stored += 1
+                if stored > 0:
+                    await commit_with_retry(self._db, operation="microstructure_store")
+                    logger.info(f"Stored {stored} microstructure metrics for {sport}")
         except Exception as e:
-            logger.debug(f"Market microstructure store failed: {e}")
+            logger.warning(f"Market microstructure store failed: {e}")
 
         # NOTE: Raw edges are NOT sent to Telegram here.
         # The autonomous loop analyzes candidates via full AGP sessions
