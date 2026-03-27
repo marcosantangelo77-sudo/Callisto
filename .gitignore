@@ -14,3 +14,14 @@ logs/
 # Temp data dumps
 _*.json
 live_odds_dump.json
+
+# Temp scripts and debug files
+tmp_*
+check_odds.py
+audit_output.txt
+*_tmp.json
+*.sqlite
+
+# Numeric-only files (accidental stdout captures)
+[0-9]
+[0-9].[0-9]*
