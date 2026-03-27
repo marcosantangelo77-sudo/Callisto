@@ -486,10 +486,16 @@ class BacktestEngine:
             schedule_context = await self._build_schedule_context(
                 sport, start_date, end_date,
             )
-            logger.info(
-                f"Backtest {hypothesis_id}: context filter ENABLED — "
-                f"{len(schedule_context)} games have schedule context"
-            )
+            if schedule_context:
+                logger.info(
+                    f"Backtest {hypothesis_id}: context filter ENABLED — "
+                    f"{len(schedule_context)} games have schedule context"
+                )
+            else:
+                logger.warning(
+                    f"Backtest {hypothesis_id}: context filter ENABLED but "
+                    f"schedule_context is EMPTY — all games will be rejected (fail-closed)"
+                )
 
         for date_str in dates_in_range:
             snapshot = await self.historical_fetcher.fetch_historical_odds(
@@ -521,7 +527,12 @@ class BacktestEngine:
                 # ── Game-level context filter ──
                 # Apply schedule-derived filters BEFORE processing lines.
                 # This is where b2b, road_trip, clinched, sandwich, etc. take effect.
-                if use_context_filter and schedule_context:
+                if use_context_filter:
+                    if not schedule_context:
+                        # No schedule data available — fail CLOSED.
+                        # Cannot verify context conditions, so skip all games.
+                        context_filtered += 1
+                        continue
                     home = game.get("home_team", "")
                     away = game.get("away_team", "")
                     game_ctx = schedule_context.get((date_str, home, away), {})
