@@ -3013,8 +3013,38 @@ class ResearchLoop:
                     f'"thesis": "Clear testable statement", '
                     f'"sport": "<sport_key>", '
                     f'"market_type": "spreads|totals|h2h|player_props", '
-                    f'"edge_threshold": 0.015}}\n'
+                    f'"edge_threshold": 0.015, '
+                    f'"game_filters": {{"STRUCTURED filters on game context — see AVAILABLE FILTERS below"}}, '
+                    f'"line_filters": {{"STRUCTURED filters on bet lines — see AVAILABLE FILTERS below"}}'
+                    f'}}\n'
                     f'], "pipeline_warning": "optional — flag if data quality makes testing pointless"}}\n\n'
+                    f"AVAILABLE GAME FILTERS (applied per-game BEFORE edge calculation):\n"
+                    f"  These filter which GAMES are tested. Use ONLY keys listed here:\n"
+                    f"  - require_b2b: true — at least one team on back-to-back\n"
+                    f"  - min_rest_mismatch: N — abs(home_rest - away_rest) >= N days\n"
+                    f"  - max_rest_days: N — at least one team with rest <= N days\n"
+                    f"  - min_games_in_4: N — at least one team played N+ games in 4 days\n"
+                    f"  - require_road_streak: N — at least one team on N+ consecutive road games\n"
+                    f"  - require_sandwich: true — at least one team in sandwich game spot\n"
+                    f"  - require_revenge: true — rematch within 30 days\n"
+                    f"  - min_win_pct: 0.65 — at least one team above this win%\n"
+                    f"  - max_win_pct: 0.35 — at least one team below this win%\n"
+                    f"  - win_pct_range: [0.43, 0.57] — at least one team in this range (bubble)\n"
+                    f"  - max_prev_margin: -10 — at least one team lost prev game by 10+ pts\n"
+                    f"  - min_prev_margin: 15 — at least one team won prev game by 15+ pts\n"
+                    f"  - side: 'home'|'away' — apply conditions to THIS side specifically\n"
+                    f"  If your hypothesis doesn't need game filtering, use {{}}\n\n"
+                    f"AVAILABLE LINE FILTERS (applied per-line DURING edge calculation):\n"
+                    f"  These filter which BET LINES are evaluated within matching games:\n"
+                    f"  - home_away: 'home'|'away' — only evaluate this team's line\n"
+                    f"  - dog_fav: 'underdog'|'favorite' — only evaluate this role\n"
+                    f"  - side: 'Over'|'Under' — for totals, only evaluate this side\n"
+                    f"  - spread_range: [3, 7] — only test spreads in this point range\n"
+                    f"  - spread_min: 3 — only test spreads >= this value\n"
+                    f"  If your hypothesis doesn't need line filtering, use {{}}\n\n"
+                    f"CRITICAL: Every hypothesis MUST include game_filters and line_filters.\n"
+                    f"If a hypothesis can't be expressed with these filters, it CANNOT be tested.\n"
+                    f"Do NOT generate untestable hypotheses.\n\n"
                     f"RULES:\n"
                     f"- Generate 3-5 hypotheses per call\n"
                     f"- Spread across multiple sports — do NOT cluster on one sport\n"
@@ -3070,6 +3100,11 @@ class ResearchLoop:
                                     "training_period_end": training_period_end,
                                     "forward_test_start": forward_test_start,
                                 }
+                                # Pass structured filters from Claude to model_config
+                                if nh.get("game_filters"):
+                                    h_config["game_filters"] = nh["game_filters"]
+                                if nh.get("line_filters"):
+                                    h_config["line_filters"] = nh["line_filters"]
                                 # Enrich with regime data if available for this sport
                                 if _regime_cache:
                                     sport_regimes = {

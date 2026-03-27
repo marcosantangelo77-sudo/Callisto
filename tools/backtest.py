@@ -979,6 +979,30 @@ class BacktestEngine:
         thesis_lower = thesis.lower() if thesis else ""
         h_id_lower = hypothesis_id.lower() if hypothesis_id else ""
 
+        # 0. STRUCTURED LINE FILTERS from model_config (highest priority)
+        # These are machine-readable specs generated alongside the hypothesis.
+        # When present, use them directly and skip all regex parsing.
+        lf = config.get("line_filters") or {}
+        if lf:
+            if lf.get("home_away") in ("home", "away"):
+                filters["home_away_filter"] = lf["home_away"]
+            if lf.get("dog_fav") in ("underdog", "favorite"):
+                filters["dog_fav_filter"] = lf["dog_fav"]
+            if lf.get("side") in ("Over", "Under"):
+                filters["side_filter"] = lf["side"]
+            if lf.get("spread_range") and isinstance(lf["spread_range"], (list, tuple)):
+                lo, hi = float(lf["spread_range"][0]), float(lf["spread_range"][1])
+                if lo > hi:
+                    lo, hi = hi, lo
+                filters["spread_range"] = (lo, hi)
+            if lf.get("spread_min") is not None:
+                filters["spread_min"] = float(lf["spread_min"])
+            if filters:
+                logger.info(
+                    f"Line filters from structured spec for {hypothesis_id}: {filters}"
+                )
+                return filters  # Structured filters are authoritative
+
         # 1. Side filter from model_config (most reliable — explicitly set)
         side_filter = config.get("side_filter")
         if side_filter:
@@ -1475,6 +1499,138 @@ class BacktestEngine:
         if not game_context:
             return True  # No context data — don't filter
 
+        # ── STRUCTURED GAME FILTERS (from model_config — highest priority) ──
+        # These are machine-readable specs generated alongside the hypothesis,
+        # not reverse-engineered from natural language.  When present they are
+        # authoritative; the regex fallbacks below only fire for legacy
+        # hypotheses that lack structured filters.
+        gf = config.get("game_filters") or {}
+        if gf:
+            # Helper: get a value for the specified side or either side
+            gf_side = gf.get("side")  # "home", "away", or None (either)
+
+            def _val(field_prefix):
+                """Return the context value for the filter-specified side,
+                or the more extreme value if no side is specified."""
+                h = game_context.get(f"home_{field_prefix}")
+                a = game_context.get(f"away_{field_prefix}")
+                if gf_side == "home":
+                    return h
+                elif gf_side == "away":
+                    return a
+                return h, a  # caller decides how to use both
+
+            if gf.get("require_b2b"):
+                if gf_side:
+                    if not game_context.get(f"{gf_side}_b2b"):
+                        return False
+                else:
+                    if not game_context.get("home_b2b") and not game_context.get("away_b2b"):
+                        return False
+
+            if "min_rest_mismatch" in gf:
+                hr = game_context.get("home_days_rest", 1)
+                ar = game_context.get("away_days_rest", 1)
+                if abs(hr - ar) < gf["min_rest_mismatch"]:
+                    return False
+
+            if "max_rest_days" in gf:
+                hr = game_context.get("home_days_rest", 99)
+                ar = game_context.get("away_days_rest", 99)
+                if gf_side:
+                    target = game_context.get(f"{gf_side}_days_rest", 99)
+                    if target > gf["max_rest_days"]:
+                        return False
+                else:
+                    if hr > gf["max_rest_days"] and ar > gf["max_rest_days"]:
+                        return False
+
+            if "min_games_in_4" in gf:
+                hg = game_context.get("home_games_in_4", 1)
+                ag = game_context.get("away_games_in_4", 1)
+                if gf_side:
+                    target = game_context.get(f"{gf_side}_games_in_4", 1)
+                    if target < gf["min_games_in_4"]:
+                        return False
+                else:
+                    if hg < gf["min_games_in_4"] and ag < gf["min_games_in_4"]:
+                        return False
+
+            if "require_road_streak" in gf:
+                threshold = gf["require_road_streak"]
+                hs = game_context.get("home_road_streak", 0)
+                aws = game_context.get("away_road_streak", 0)
+                if hs < threshold and aws < threshold:
+                    return False
+
+            if gf.get("require_sandwich"):
+                if not game_context.get("home_sandwich") and not game_context.get("away_sandwich"):
+                    return False
+
+            if gf.get("require_revenge"):
+                if not game_context.get("is_revenge"):
+                    return False
+
+            if "min_win_pct" in gf:
+                hwp = game_context.get("home_win_pct", 0.5)
+                awp = game_context.get("away_win_pct", 0.5)
+                if gf_side:
+                    target = game_context.get(f"{gf_side}_win_pct", 0.5)
+                    if target < gf["min_win_pct"]:
+                        return False
+                else:
+                    if hwp < gf["min_win_pct"] and awp < gf["min_win_pct"]:
+                        return False
+
+            if "max_win_pct" in gf:
+                hwp = game_context.get("home_win_pct", 0.5)
+                awp = game_context.get("away_win_pct", 0.5)
+                if gf_side:
+                    target = game_context.get(f"{gf_side}_win_pct", 0.5)
+                    if target > gf["max_win_pct"]:
+                        return False
+                else:
+                    if hwp > gf["max_win_pct"] and awp > gf["max_win_pct"]:
+                        return False
+
+            if "win_pct_range" in gf:
+                lo, hi = gf["win_pct_range"]
+                hwp = game_context.get("home_win_pct", 0.5)
+                awp = game_context.get("away_win_pct", 0.5)
+                if not (lo <= hwp <= hi or lo <= awp <= hi):
+                    return False
+
+            if "max_prev_margin" in gf:
+                # max_prev_margin is NEGATIVE — "lost by at least X"
+                threshold = gf["max_prev_margin"]
+                hpm = game_context.get("home_prev_margin", 0)
+                apm = game_context.get("away_prev_margin", 0)
+                if gf_side:
+                    target = game_context.get(f"{gf_side}_prev_margin", 0)
+                    if target > threshold:  # margin > -10 means didn't lose badly enough
+                        return False
+                else:
+                    if hpm > threshold and apm > threshold:
+                        return False
+
+            if "min_prev_margin" in gf:
+                # min_prev_margin is POSITIVE — "won by at least X"
+                threshold = gf["min_prev_margin"]
+                hpm = game_context.get("home_prev_margin", 0)
+                apm = game_context.get("away_prev_margin", 0)
+                if gf_side:
+                    target = game_context.get(f"{gf_side}_prev_margin", 0)
+                    if target < threshold:
+                        return False
+                else:
+                    if hpm < threshold and apm < threshold:
+                        return False
+
+            # Structured filters are authoritative — skip regex fallbacks
+            return True
+
+        # ── LEGACY REGEX FALLBACKS (for hypotheses without structured filters) ──
+
         # ── Back-to-back filter ──
         if ("back_to_back" in cf_set or "is_b2b_second_night" in cf_set
                 or "back_to_back_second_night" in cf_set
@@ -1556,6 +1712,44 @@ class BacktestEngine:
             home_rest = game_context.get("home_days_rest", 99)
             away_rest = game_context.get("away_days_rest", 99)
             if home_rest > 1 or away_rest > 1:
+                return False
+
+        # ── Rest mismatch filter ──
+        if ("rest_mismatch" in cf_set
+                or re.search(r"\brest.(?:mismatch|differential|advantage|edge)\b|\bfresh.vs.tired\b", text)):
+            home_rest = game_context.get("home_days_rest", 1)
+            away_rest = game_context.get("away_days_rest", 1)
+            # Extract mismatch threshold from text (e.g., "2+ day rest mismatch")
+            mm = re.search(r"(\d)\+?\s*(?:day)?\s*rest", text)
+            threshold = int(mm.group(1)) if mm else 2
+            if abs(home_rest - away_rest) < threshold:
+                return False
+
+        # ── Bad loss / blowout loss filter (using prev_margin) ──
+        if (re.search(r"\bbad.loss\b|\bblowout.loss\b|\bblown.(?:out|lead)\b|\bbounce.back\b"
+                       r"|\bhangover\b|\bafter.(?:bad|ugly|blowout)", text)):
+            hpm = game_context.get("home_prev_margin", 0)
+            apm = game_context.get("away_prev_margin", 0)
+            # At least one team lost their previous game badly (margin < -10)
+            if hpm > -10 and apm > -10:
+                return False
+
+        # ── Winning streak / dominant win filter (using prev_margin) ──
+        if re.search(r"\bwinning.streak\b|\bblowout.win\b|\bdomin\w+.win\b|\bmomentum\b", text):
+            hpm = game_context.get("home_prev_margin", 0)
+            apm = game_context.get("away_prev_margin", 0)
+            # At least one team won their previous game convincingly (margin > 10)
+            if hpm < 10 and apm < 10:
+                return False
+
+        # ── Losing team / struggling team filter ──
+        if re.search(r"\blosing.streak\b|\bstruggling\b|\bslumping\b|\bskid\b", text):
+            hwp = game_context.get("home_win_pct", 0.5)
+            awp = game_context.get("away_win_pct", 0.5)
+            hpm = game_context.get("home_prev_margin", 0)
+            apm = game_context.get("away_prev_margin", 0)
+            # At least one team is losing AND lost their previous game
+            if not ((hwp < 0.45 and hpm < 0) or (awp < 0.45 and apm < 0)):
                 return False
 
         return True
