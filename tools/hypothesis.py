@@ -49,6 +49,7 @@ PROMOTION_GATES = {
         "min_sharpe": 0.0,             # don't gate on Sharpe for first promotion
         "min_positive_edge_rate": 0.40, # at least 40% of events must show positive edge
         "max_brier": 0.28,             # worse than coin-flip baseline (0.25) = reject
+        "min_ic": -0.05,              # block anti-predictive models (IC < -0.05 = inversely correlated)
     },
     "paper_trading→live": {
         "min_signals": 20,             # real filter is CLV + drawdown

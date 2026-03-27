@@ -90,7 +90,36 @@ EDGE_DEDUP_WINDOW = 1800  # 30 minutes
 
 # Module-level regime cache — shared between AutonomousLoop and ResearchLoop.
 # ResearchLoop populates it; AutonomousLoop reads it for edge enrichment.
-_regime_cache: dict[str, dict] = {}
+# LRU-capped to prevent unbounded memory growth (~385 MB/hr leak source).
+class _LRUCache:
+    """Simple LRU dict with max size. Evicts oldest on overflow."""
+    def __init__(self, maxsize: int = 5000):
+        from collections import OrderedDict
+        self._cache: OrderedDict = OrderedDict()
+        self.maxsize = maxsize
+    def get(self, key, default=None):
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        return default
+    def __setitem__(self, key, value):
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        elif len(self._cache) >= self.maxsize:
+            self._cache.popitem(last=False)
+        self._cache[key] = value
+    def __contains__(self, key):
+        return key in self._cache
+    def __bool__(self):
+        return bool(self._cache)
+    def items(self):
+        return self._cache.items()
+    def values(self):
+        return self._cache.values()
+    def __len__(self):
+        return len(self._cache)
+
+_regime_cache: _LRUCache = _LRUCache(maxsize=5000)
 
 
 def get_regime_for_team(sport: str, team_name: str) -> Optional[dict]:

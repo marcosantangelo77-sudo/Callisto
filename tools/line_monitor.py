@@ -84,9 +84,11 @@ class LineMonitor:
         self._running = False
         self._paused = False  # Set True to pause snapshot writes (during backtests)
         self._snapshots: dict[str, dict] = {}  # sport -> last snapshot (only latest per sport)
-        self._alerts: list[dict] = []  # Recent movement alerts (capped at 100)
+        from collections import deque
+        self._alerts: deque = deque(maxlen=100)  # Hard-capped at 100 (was unbounded list)
         self._latest_edge_reports: dict[str, dict] = {}  # sport -> latest edge scan (only latest per sport)
-        self._kl_cache: dict[str, dict] = {}  # "sport:event_id:market" -> KL metrics
+        self._kl_cache: dict[str, dict] = {}  # "sport:event_id:market" -> KL metrics (capped in _put_kl)
+        self._KL_CACHE_MAX = 10000  # Evict oldest when exceeded
         # Self-healing: track consecutive all-source failures per sport.
         # Alert via Telegram only after 3+ consecutive failures.
         self._consecutive_failures: dict[str, int] = {}  # sport -> count
@@ -938,8 +940,16 @@ class LineMonitor:
                     }
                     metrics_batch.append(metric)
 
-                    # Cache in memory for edge_confidence lookups
+                    # Cache in memory for edge_confidence lookups (capped to prevent leak)
                     cache_key = f"{sport}:{event_id}:{market_type}"
+                    if len(self._kl_cache) >= self._KL_CACHE_MAX:
+                        # Evict ~20% oldest entries
+                        evict_n = self._KL_CACHE_MAX // 5
+                        for _ in range(evict_n):
+                            try:
+                                self._kl_cache.pop(next(iter(self._kl_cache)))
+                            except (StopIteration, KeyError):
+                                break
                     self._kl_cache[cache_key] = metric
 
             if metrics_batch:
