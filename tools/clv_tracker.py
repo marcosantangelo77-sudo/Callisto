@@ -212,6 +212,9 @@ class CLVTracker:
         """
         Resolve a bet as won/lost/push.
 
+        Computes CLV metrics and logs to clv_log table — the permanent record
+        of whether our signals beat the closing line.
+
         Args:
             bet_id: The bet ID
             result: 'won', 'lost', 'push'
@@ -241,7 +244,6 @@ class CLVTracker:
             change = 0
 
         if change != 0:
-            # Get current balance
             bal_cursor = await self._db.execute(
                 "SELECT balance FROM bankroll ORDER BY timestamp DESC LIMIT 1"
             )
@@ -255,6 +257,10 @@ class CLVTracker:
                 (now, current_balance + change, change, bet_id,
                  f"Bet #{bet_id} {result}: {bet['game_description']}"),
             )
+
+        # ── CLV LOG ──
+        # This is THE permanent record. Every resolved bet gets a clv_log entry.
+        await self._log_clv(bet, result, payout, change)
 
         await self._db.commit()
 
@@ -273,6 +279,126 @@ class CLVTracker:
         )
 
         return {"bet_id": bet_id, "result": result, "payout": payout, "change": change}
+
+    async def _log_clv(
+        self,
+        bet: dict,
+        result: str,
+        payout: Optional[float],
+        change: float,
+    ) -> None:
+        """
+        Write CLV metrics to the clv_log table.
+
+        This is called on every bet resolution. The clv_log is the permanent,
+        append-only record of signal quality. If we consistently show positive
+        CLV, the edge is real regardless of short-term variance.
+        """
+        bet_id = bet.get("id")
+        placement_odds = bet.get("placement_odds")
+        closing_odds = bet.get("closing_odds")
+        closing_implied = bet.get("closing_implied_prob")
+        stake = bet.get("stake", 100)
+
+        # Convert placement odds to decimal
+        if placement_odds and abs(placement_odds) > 0:
+            if placement_odds > 0:
+                our_decimal = 1 + placement_odds / 100
+            else:
+                our_decimal = 1 + 100 / abs(placement_odds)
+        else:
+            our_decimal = None
+
+        # Compute Pinnacle closing fair probability
+        # Use the closing line from the bets table (set by record_closing_line)
+        # or look up from closing_lines table
+        pinnacle_fair_prob = closing_implied
+        pinnacle_fair_decimal = None
+
+        if pinnacle_fair_prob and pinnacle_fair_prob > 0:
+            pinnacle_fair_decimal = 1 / pinnacle_fair_prob
+
+        # CLV in cents: positive = we got a better number
+        clv_cents = None
+        if closing_odds is not None and placement_odds is not None:
+            clv_cents = placement_odds - closing_odds
+        elif closing_implied is not None and our_decimal:
+            # Compute from implied: our edge vs closing
+            placement_implied = bet.get("placement_implied_prob", 0)
+            if placement_implied:
+                clv_cents = round((closing_implied - placement_implied) * 10000, 1)
+
+        # Actual PnL
+        actual_pnl = change
+
+        # Determine if closing line is reliable (from sharp source)
+        close_reliable = closing_odds is not None and bet.get("closing_source") in (
+            "pinnacle", "lowvig", "circa", "betfair_exchange"
+        )
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        try:
+            await self._db.execute(
+                "INSERT OR REPLACE INTO clv_log "
+                "(bet_id, event, outcome, point, book, our_odds_decimal, "
+                "pinnacle_close_fair_prob, pinnacle_close_fair_decimal, "
+                "clv_cents, actual_result, actual_pnl, close_reliable, logged_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(bet_id),
+                    bet.get("event_id", ""),
+                    bet.get("team", ""),
+                    bet.get("placement_point"),
+                    bet.get("bookmaker", ""),
+                    our_decimal,
+                    pinnacle_fair_prob,
+                    pinnacle_fair_decimal,
+                    clv_cents,
+                    result,
+                    actual_pnl,
+                    close_reliable,
+                    now,
+                ),
+            )
+            logger.info(
+                f"CLV logged: bet #{bet_id}, clv_cents={clv_cents}, "
+                f"result={result}, pnl={actual_pnl}, reliable={close_reliable}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log CLV for bet #{bet_id}: {e}")
+
+    async def backfill_clv_log(self) -> int:
+        """
+        Backfill clv_log for all resolved bets that don't have entries.
+
+        Call this once to populate clv_log from existing bets data.
+        Safe to call multiple times (INSERT OR REPLACE).
+        """
+        cursor = await self._db.execute(
+            "SELECT * FROM bets WHERE result IN ('won', 'lost', 'push')"
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+
+        count = 0
+        for row in rows:
+            bet = dict(zip(cols, row))
+            result = bet["result"]
+            payout = bet.get("payout")
+            stake = bet.get("stake", 100)
+            if result == "won" and payout:
+                change = payout - stake
+            elif result == "lost":
+                change = -stake
+            else:
+                change = 0
+            await self._log_clv(bet, result, payout, change)
+            count += 1
+
+        await self._db.commit()
+        logger.info(f"Backfilled CLV log for {count} resolved bets")
+        return count
 
     async def get_clv_report(self, sport: Optional[str] = None, days: int = 30) -> dict:
         """
