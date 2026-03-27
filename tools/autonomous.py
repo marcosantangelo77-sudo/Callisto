@@ -1181,6 +1181,15 @@ class AutonomousLoop:
         for s in stale_psych:
             self._psychology_cache.pop(s, None)
             self._psychology_ts.pop(s, None)
+        # Injury cache: clear stale ESPN injury reports > 30 min old.
+        # Without this, _injury_cache grows unbounded (no eviction existed).
+        stale_injury = [
+            s for s, t in self._injury_ts.items()
+            if now - t > 1800
+        ]
+        for s in stale_injury:
+            self._injury_cache.pop(s, None)
+            self._injury_ts.pop(s, None)
 
     def get_status(self) -> dict:
         """Return loop status."""
@@ -4193,7 +4202,19 @@ class ResearchLoop:
                         )
                     continue
 
-                result = await self.hypothesis_manager.auto_promote(h["hypothesis_id"])
+                # Per-hypothesis timeout: prevent a single slow auto_promote
+                # from consuming the entire 600s phase budget.
+                try:
+                    result = await asyncio.wait_for(
+                        self.hypothesis_manager.auto_promote(h["hypothesis_id"]),
+                        timeout=60,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Evaluation TIMEOUT (60s) for {h['hypothesis_id']} "
+                        f"({h.get('name', '?')})"
+                    )
+                    continue
                 action = result.get("action", "held")
 
                 if action == "promoted":

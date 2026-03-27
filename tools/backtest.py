@@ -2999,9 +2999,13 @@ class BacktestEngine:
         schedule_context = {}
         context_filtered = 0
         if use_context_filter and sport:
-            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+            # Use 30-day lookback so _build_schedule_context can compute
+            # days_rest, b2b, road_streak etc. from prior game_results.
+            # A 1-day window causes all teams to get defaults (b2b=False,
+            # days_rest=99) which then fail context filters → 0 trades.
+            context_start = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
             schedule_context = await self._build_schedule_context(
-                sport, yesterday, today,
+                sport, context_start, today,
             )
             if schedule_context:
                 logger.info(
