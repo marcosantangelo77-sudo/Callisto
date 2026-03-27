@@ -156,13 +156,13 @@ class AutonomousLoop:
         self._session_count = 0
         self._alert_count = 0
         self._loop_cycle = 0  # cycle counter for periodic parlay scans
-        self._parlay_scan_cache: dict[str, dict] = {}  # sport -> latest parlay scan results
+        self._parlay_scan_cache: dict[str, dict] = {}  # sport -> latest parlay scan results (keyed by sport, max ~10 entries)
         self._parlay_scan_ts: dict[str, float] = {}    # sport -> last scan timestamp
-        self._psychology_cache: dict[str, dict] = {}  # sport -> latest psychology signals
+        self._psychology_cache: dict[str, dict] = {}  # sport -> latest psychology signals (keyed by sport, max ~10 entries)
         self._psychology_ts: dict[str, float] = {}    # sport -> last run timestamp
         self._injury_cache: dict[str, dict] = {}      # sport -> injury report from ESPN
         self._injury_ts: dict[str, float] = {}         # sport -> last fetch timestamp
-        self._injury_analysis_cache: dict[str, dict] = {}  # "sport:game" -> injury analysis results
+        self._injury_analysis_cache: dict[str, dict] = {}  # "sport:game" -> injury analysis results (capped at 50)
 
     async def start(self) -> None:
         """Start the autonomous reasoning loop."""
@@ -1157,9 +1157,30 @@ class AutonomousLoop:
             sorted_keys = sorted(self._analyzed_edges, key=self._analyzed_edges.get)
             for k in sorted_keys[:len(sorted_keys) - 250]:
                 del self._analyzed_edges[k]
-        # Clear stale injury analysis cache (refreshed every 5 min anyway)
-        if len(self._injury_analysis_cache) > 100:
-            self._injury_analysis_cache.clear()
+        # ── Cap ALL in-memory caches to prevent unbounded growth (200 MB/hr leak) ──
+        # Injury analysis: LRU-evict oldest entries instead of bulk clear
+        if len(self._injury_analysis_cache) > 50:
+            # Keep only the 25 most recent entries (approximation: evict half)
+            keys = list(self._injury_analysis_cache.keys())
+            for k in keys[:len(keys) - 25]:
+                del self._injury_analysis_cache[k]
+        # Parlay scan: keyed by sport so bounded by sport count (~10) — but
+        # clear stale results older than 30 min to free nested data structures
+        stale_parlay = [
+            s for s, t in self._parlay_scan_ts.items()
+            if now - t > 1800
+        ]
+        for s in stale_parlay:
+            self._parlay_scan_cache.pop(s, None)
+            self._parlay_scan_ts.pop(s, None)
+        # Psychology: same pattern — clear stale entries > 30 min old
+        stale_psych = [
+            s for s, t in self._psychology_ts.items()
+            if now - t > 1800
+        ]
+        for s in stale_psych:
+            self._psychology_cache.pop(s, None)
+            self._psychology_ts.pop(s, None)
 
     def get_status(self) -> dict:
         """Return loop status."""
@@ -3737,6 +3758,35 @@ class ResearchLoop:
                     except (json.JSONDecodeError, TypeError):
                         model_config = {}
 
+                # Pre-check: fix stale contaminated temporal metadata from
+                # before BACKTEST_GAP_DAYS was corrected (1→7). Recompute
+                # backtest_period_start rather than rejecting fixable drafts.
+                overlap_err = self._check_temporal_overlap(model_config)
+                if overlap_err:
+                    te = model_config.get("training_period_end", "")
+                    if te:
+                        try:
+                            te_date = datetime.strptime(te, "%Y-%m-%d").date()
+                            correct_start = str(te_date + timedelta(days=BACKTEST_GAP_DAYS))
+                            model_config["backtest_period_start"] = correct_start
+                            db = self.data_collector._db
+                            await db.execute(
+                                "UPDATE hypotheses SET model_config = ? WHERE hypothesis_id = ?",
+                                (json.dumps(model_config), h["hypothesis_id"]),
+                            )
+                            await db.commit()
+                            logger.info(
+                                f"Research: fixed stale temporal metadata for "
+                                f"{h['hypothesis_id']} — backtest_period_start → {correct_start}"
+                            )
+                        except Exception:
+                            await self.hypothesis_manager.update_status(
+                                h["hypothesis_id"], "rejected",
+                                f"auto:temporal_overlap — {overlap_err}"
+                            )
+                            self._rejections += 1
+                            continue
+
                 has_temporal = (
                     "training_period_end" in model_config
                     and model_config["training_period_end"]
@@ -4586,6 +4636,38 @@ class ResearchLoop:
         from datetime import datetime, timezone
 
         paper = await self.hypothesis_manager.list_hypotheses(status="paper_trading")
+
+        if not paper:
+            return
+
+        # ── Auto-reject anti-predictive paper_trading hypotheses ──
+        # IC < -0.10 means the model is inversely correlated with outcomes.
+        # Don't waste paper trading cycles on these.
+        clean_paper = []
+        for h in paper:
+            try:
+                db = self.data_collector._db
+                cursor = await db.execute(
+                    "SELECT information_coefficient FROM hypothesis_stats "
+                    "WHERE hypothesis_id = ?",
+                    (h["hypothesis_id"],),
+                )
+                row = await cursor.fetchone()
+                ic = row[0] if row else None
+            except Exception:
+                ic = None
+            if ic is not None and ic < -0.10:
+                logger.warning(
+                    f"Paper trade: rejecting {h['name']} (IC={ic:.3f}, anti-predictive)"
+                )
+                await self.hypothesis_manager.update_status(
+                    h["hypothesis_id"], "rejected",
+                    f"auto:anti_predictive_paper_trading — IC={ic:.3f} < -0.10"
+                )
+                self._rejections += 1
+            else:
+                clean_paper.append(h)
+        paper = clean_paper
 
         if not paper:
             return

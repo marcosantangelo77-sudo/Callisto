@@ -2989,9 +2989,46 @@ class BacktestEngine:
         # Parse hypothesis-specific filters (same as main backtest path)
         thesis = h.get("thesis", "")
         h_name = h.get("name", "")
+        sport = h.get("sport", "")
         filters = self._parse_hypothesis_filters(thesis, config, h_name)
 
+        # ── Build schedule context for game-level filtering (matches backtest path) ──
+        # Without this, context-based hypotheses (b2b, road_trip, rest, etc.)
+        # will NEVER produce signals because _game_matches_context_filter fails closed.
+        use_context_filter = self._needs_context_filter(h_name, thesis, config)
+        schedule_context = {}
+        context_filtered = 0
+        if use_context_filter and sport:
+            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+            schedule_context = await self._build_schedule_context(
+                sport, yesterday, today,
+            )
+            if schedule_context:
+                logger.info(
+                    f"Paper trade {hypothesis_id}: context filter ENABLED — "
+                    f"{len(schedule_context)} games have schedule context"
+                )
+            else:
+                logger.warning(
+                    f"Paper trade {hypothesis_id}: context filter ENABLED but "
+                    f"schedule_context is EMPTY — all games will be rejected (fail-closed)"
+                )
+
         for game in games:
+            # ── Game-level context filter (same as backtest path) ──
+            if use_context_filter:
+                if not schedule_context:
+                    context_filtered += 1
+                    continue
+                home = game.get("home_team", "")
+                away = game.get("away_team", "")
+                game_ctx = schedule_context.get((today, home, away), {})
+                if not self._game_matches_context_filter(
+                    game_ctx, h_name, thesis, config,
+                ):
+                    context_filtered += 1
+                    continue
+
             # Use same processing logic as backtest
             if h["market_type"].startswith("player_"):
                 events, _ = await self._process_game_props(
@@ -3021,9 +3058,15 @@ class BacktestEngine:
                     devig_method=devig_method,
                     min_books=min_books,
                     config=config,
-                    h_sport=h.get("sport", ""),
+                    h_sport=sport,
                     filters=filters,
                 )
+
+        if context_filtered:
+            logger.info(
+                f"Paper trade {hypothesis_id}: {context_filtered} games "
+                f"filtered by context, {len(games) - context_filtered} processed"
+            )
 
         # Retrieve signals that were just generated with run_id="paper"
         cursor = await self._db.execute(

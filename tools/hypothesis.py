@@ -682,13 +682,14 @@ class HypothesisManager:
         # Information coefficient
         # For h2h markets, IC is structurally unreliable: outcomes are binary
         # (win/lose) so correlation between predicted edge magnitude and actual
-        # return magnitude is inherently low. Relax min_ic for h2h.
+        # return magnitude is inherently low. Relax min_ic for h2h — but
+        # still reject clearly anti-predictive models (IC < -0.10).
         if "min_ic" in gate:
             ic = report.get("calibration_score", {}).get("information_coefficient")
             min_ic = gate["min_ic"]
             market_type = h.get("market_type", "")
             if market_type == "h2h":
-                min_ic = -0.20  # Binary outcomes invalidate IC precision
+                min_ic = -0.10  # Relaxed for binary outcomes but reject anti-predictive
             if ic is not None and ic < min_ic:
                 checks.append(f"FAIL: IC {ic:.4f} < {min_ic} (model is anti-predictive)")
                 ready = False
