@@ -317,13 +317,21 @@ class DataCollector:
             if venue_meta:
                 context.update(venue_meta)
 
-            # Store game context
+            # Store game context — use INSERT OR REPLACE to ensure enriched
+            # data overwrites older sparse entries. The UNIQUE(sport, event_id)
+            # constraint means re-collecting a game updates its context with
+            # officials, rest_days, broadcasts, etc. that may have been missing
+            # from earlier collections (due to DB locks or pre-enrichment code).
             try:
                 await self._db.execute(
-                    "INSERT OR IGNORE INTO game_contexts "
+                    "INSERT INTO game_contexts "
                     "(sport, event_id, game_date, home_team, away_team, "
                     "home_score, away_score, context_json) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(sport, event_id) DO UPDATE SET "
+                    "context_json = excluded.context_json, "
+                    "home_score = excluded.home_score, "
+                    "away_score = excluded.away_score",
                     (
                         sport, event_id, game_date_fmt,
                         home_team, away_team,
