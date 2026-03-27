@@ -653,13 +653,15 @@ class LineMonitor:
         except Exception:
             pass  # Event bus not critical
 
-        # Also cache in historical_odds_cache format for backtesting.
-        # Every live snapshot with multiple books becomes backtest-grade data.
-        # This is how the system accumulates real multi-book odds over time.
+        # ALWAYS cache in historical_odds_cache for backtesting.
+        # Every live snapshot becomes backtest-grade data. Even single-book
+        # snapshots are worth archiving — they provide game context data
+        # and can be cross-referenced with other snapshots from the same date.
+        # This is the primary mechanism for building historical depth.
         book_count = 0
         for g in new_snapshot.get("games", []):
             book_count = max(book_count, len(g.get("bookmakers", [])))
-        if book_count >= 2 and game_count > 0:
+        if game_count > 0:
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             try:
                 await self._db.execute(
