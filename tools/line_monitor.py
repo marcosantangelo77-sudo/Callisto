@@ -97,7 +97,7 @@ class LineMonitor:
     async def initialize(self) -> None:
         """Create tables for odds snapshots and alerts."""
         self._db = await aiosqlite.connect(self.db_path)
-        await self._db.execute("PRAGMA busy_timeout = 60000")
+        await self._db.execute("PRAGMA busy_timeout = 300000")  # 5 min — autonomous loop bypasses write lock
         await self._db.executescript("""
             CREATE TABLE IF NOT EXISTS odds_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -376,24 +376,18 @@ class LineMonitor:
         3. If Odds API data is stale, scrapers overwrite it
         """
         try:
-            # Use h2h,spreads,totals = 3 credits per sport
-            new_snapshot = await get_odds(
-                sport=sport,
-                regions="us",
-                markets="h2h,spreads,totals",
-                odds_format="american",
-            )
+            # Primary: Odds-API.io Pro (15 books, 30K req/hr)
+            # the-odds-api.com is out of credits — skip it entirely.
+            new_snapshot = await odds_api_io_get_odds(sport)
 
-            if new_snapshot.get("error"):
-                logger.warning(f"Snapshot error for {sport}: {new_snapshot['error']} — trying fallbacks")
+            if new_snapshot.get("error") or not new_snapshot.get("games"):
+                logger.warning(f"Snapshot error for {sport}: {new_snapshot.get('error', 'no games')} — trying fallbacks")
                 await self._snapshot_sport_fallback(sport)
                 return
 
             # Enrich with fresh scraper data from all free sources (always)
             new_snapshot = await self._enrich_with_dk(sport, new_snapshot)
             new_snapshot = await self._enrich_with_fd(sport, new_snapshot)
-            # BetMGM enrichment disabled — redundant with odds-api.io Pro
-            # new_snapshot = await self._enrich_with_mgm(sport, new_snapshot)
 
             await self._process_snapshot(sport, new_snapshot)
 
@@ -633,15 +627,18 @@ class LineMonitor:
         credits_remaining = new_snapshot.get("credits", {}).get("remaining")
         source = new_snapshot.get("source", "odds_api")
 
-        # Store snapshot — acquire write lock to prevent contention with autonomous loop
-        from tools.db_utils import get_write_lock, commit_with_retry
-        async with get_write_lock():
-            await self._db.execute(
-                "INSERT INTO odds_snapshots (sport, timestamp, snapshot_json, game_count, credits_remaining) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (sport, now, json.dumps(new_snapshot), game_count, credits_remaining),
-            )
-            await commit_with_retry(self._db, operation="snapshot_store")
+        # Store snapshot — use retry on both execute and commit since autonomous
+        # loop does NOT acquire the write lock, so SQLite-level contention can occur.
+        from tools.db_utils import execute_with_retry, commit_with_retry
+        await execute_with_retry(
+            self._db,
+            "INSERT INTO odds_snapshots (sport, timestamp, snapshot_json, game_count, credits_remaining) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (sport, now, json.dumps(new_snapshot), game_count, credits_remaining),
+            max_retries=10,
+            operation="snapshot_insert",
+        )
+        await commit_with_retry(self._db, max_retries=10, operation="snapshot_store")
 
         logger.info(f"Snapshot {sport} ({source}): {game_count} games, credits={credits_remaining}")
 
