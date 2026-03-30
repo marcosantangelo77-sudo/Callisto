@@ -376,12 +376,21 @@ class BacktestEngine:
         # identical and context_factors is empty.
         context_factors_sorted = sorted(config.get("context_factors", []))
         uses_context = self._needs_context_filter(h_name, thesis, config)
+        # Include game_filters and line_filters in fingerprint so hypotheses
+        # with different game-level conditions get unique fingerprints.
+        # Without these, hypotheses differing only in game_filters (b2b, rest,
+        # homestand, altitude, etc.) collide and are incorrectly skipped.
+        game_filters = config.get("game_filters")
+        line_filters = config.get("line_filters")
         fp_parts = json.dumps(
             {"sport": sport, "market": market_type, "start": start_date,
              "end": end_date, "filters": filters, "target": target_book,
              "threshold": edge_threshold, "devig": devig_method, "min_books": min_books,
              "context_factors": context_factors_sorted,
-             "uses_context": uses_context},
+             "uses_context": uses_context,
+             "game_filters": game_filters,
+             "line_filters": line_filters,
+             "hypothesis_name": h_name},
             sort_keys=True,
         )
         fingerprint = hashlib.md5(fp_parts.encode()).hexdigest()[:16]
@@ -1902,8 +1911,13 @@ class BacktestEngine:
         """Quick check: does this hypothesis need game-level context filtering?
 
         Returns True if the hypothesis references any schedule-derivable context
-        factor in its name, thesis, or context_factors config.
+        factor in its name, thesis, or context_factors config, OR has structured
+        game_filters that require schedule context to evaluate.
         """
+        # Structured game_filters are authoritative — always require context
+        if config.get("game_filters"):
+            return True
+
         context_factors = config.get("context_factors", [])
         cf_set = {f.lower().replace(" ", "_") for f in context_factors}
         if cf_set & BacktestEngine.FILTERABLE_CONTEXT_FACTORS:
@@ -1920,7 +1934,9 @@ class BacktestEngine:
             r"\bbubble\b", r"\bdesperate\b", r"\bmust.win\b",
             r"\bextra.rest\b", r"\brest.mismatch\b",
             r"\bblowout\b", r"\bstreak\b", r"\bbounce\b",
-            r"\bhome.stand\b", r"\bwinning.streak\b", r"\blosing.streak\b",
+            r"\bhomestand\b", r"\bhome.stand\b", r"\bwinning.streak\b", r"\blosing.streak\b",
+            r"\bnarrative\b", r"\bwin.pct\b", r"\bwin.rate\b",
+            r"\bdominant\b", r"\bfavorite\b", r"\bunderdog\b",
         ]
         return any(re.search(p, text) for p in schedule_patterns)
 
@@ -2103,7 +2119,11 @@ class BacktestEngine:
                     )
                     continue
 
-            if len(all_fair_a) < 3:
+            # Need at least min_books devigged books for a reliable consensus.
+            # Hardcoded 3 blocked paper trading + thin markets (NCAAW, NHL)
+            # where only 2-3 books carry the line.
+            required_devigged = max(2, min_books)
+            if len(all_fair_a) < required_devigged:
                 continue
 
             # --- Multi-book edge detection ---
