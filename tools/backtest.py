@@ -1776,6 +1776,13 @@ class BacktestEngine:
             # Structured filters are authoritative — skip regex fallbacks
             return True
 
+        # ── GUARD: No structured filters AND no context_factors ──
+        # _needs_context_filter() may have triggered from broad keywords in
+        # hypothesis name. Without explicit context_factors, regex fallback
+        # produces identical filtering across different hypotheses.
+        if not cf_set:
+            return True
+
         # ── LEGACY REGEX FALLBACKS (for hypotheses without structured filters) ──
         # Track whether ANY filter pattern matched.  If none match, the
         # hypothesis text is too vague to derive filters from → fail closed.
@@ -2019,15 +2026,13 @@ class BacktestEngine:
             r"\bb2b\b", r"\bback.to.back\b", r"\bdays?.rest\b", r"\bshort.rest\b",
             r"\broad.trip\b", r"\bconsecutive.(?:road|away)\b",
             r"\b3.?in.?4\b", r"\b4.?in.?5\b", r"\bschedule.(?:compress|density)\b",
-            r"\bsandwich\b", r"\btrap.game\b", r"\bletdown\b",
+            r"\bsandwich\b", r"\btrap.game\b",
             r"\brevenge\b", r"\bformer.team\b",
             r"\bclinch", r"\beliminated\b", r"\btanking\b", r"\bplayoff.(?:race|bubble)\b",
-            r"\bbubble\b", r"\bdesperate\b", r"\bmust.win\b",
+            r"\bdesperate\b", r"\bmust.win\b",
             r"\bextra.rest\b", r"\brest.mismatch\b",
-            r"\bblowout\b", r"\bstreak\b", r"\bbounce\b",
             r"\bhomestand\b", r"\bhome.stand\b", r"\bwinning.streak\b", r"\blosing.streak\b",
-            r"\bnarrative\b", r"\bwin.pct\b", r"\bwin.rate\b",
-            r"\bdominant\b", r"\bfavorite\b", r"\bunderdog\b",
+            r"\bwin.pct\b", r"\bwin.rate\b",
             # Venue/environment context
             r"\baltitud", r"\belev\w+", r"\bdenver\b", r"\bmile.high\b",
             # Time/timezone context
