@@ -1717,16 +1717,23 @@ class ResearchLoop:
         if db is None:
             return
 
-        # Find hypotheses rejected for "0 signals" that actually have signals in events
+        # Find hypotheses rejected for "0 signals" that actually have signals in events.
+        # Two-step approach to avoid slow correlated subquery on 3000+ rejected hyps.
         cursor = await db.execute(
-            "SELECT h.hypothesis_id, h.name, "
-            "  (SELECT COUNT(*) FROM backtest_events be "
-            "   WHERE be.hypothesis_id = h.hypothesis_id AND be.signal_generated = 1) as actual_signals "
-            "FROM hypotheses h "
-            "WHERE h.status = 'rejected' "
-            "AND h.promoted_by LIKE '%0 signals%' "
-            "HAVING actual_signals > 0"
+            "SELECT hypothesis_id, name, promoted_by FROM hypotheses "
+            "WHERE status = 'rejected' AND promoted_by LIKE '%0 signals%'"
         )
+        candidates = await cursor.fetchall()
+        rows = []
+        for hid, name, reason in candidates:
+            sig_row = await (await db.execute(
+                "SELECT COUNT(*) FROM backtest_events "
+                "WHERE hypothesis_id = ? AND signal_generated = 1",
+                (hid,),
+            )).fetchone()
+            actual_signals = sig_row[0] if sig_row else 0
+            if actual_signals > 0:
+                rows.append((hid, name, actual_signals))
         rows = await cursor.fetchall()
 
         count = 0
