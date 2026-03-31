@@ -3431,7 +3431,57 @@ class ResearchLoop:
                 except Exception as e:
                     logger.warning(f"Failed to enqueue deferred hypothesis gen: {e}")
 
-                # Try local model fallback for quick hypothesis ideas
+                # Try local model via escalation ladder (Apriel > Qwen3 > DeepSeek)
+                try:
+                    from inference import escalate_with_ladder
+                    all_hypos_l = await self.hypothesis_manager.list_hypotheses()
+                    existing_l = [h["name"] for h in all_hypos_l][:30]
+                    ladder_prompt = (
+                        f"Generate 3 testable sports betting hypotheses.\n"
+                        f"Sports: {RESEARCH_SPORTS}\n"
+                        f"Market types: h2h, spreads, totals, player_points, player_strikeouts\n"
+                        f"EXISTING (avoid duplicates): {json.dumps(existing_l)}\n\n"
+                        f"RESPOND WITH JSON ONLY:\n"
+                        f'{{"hypotheses": [{{"name": "sport_descriptive_name", '
+                        f'"thesis": "Testable claim", "sport": "basketball_nba", '
+                        f'"market_type": "spreads", "edge_threshold": 0.003}}]}}'
+                    )
+                    ladder_result = await escalate_with_ladder(
+                        ladder_prompt, task_type="hypothesis_gen", timeout=120,
+                    )
+                    ladder_content = ladder_result.get("content", "")
+                    if ladder_content:
+                        from inference import _parse_json_response
+                        parsed = _parse_json_response(ladder_content)
+                        if parsed and isinstance(parsed, dict):
+                            for nh in parsed.get("hypotheses", []):
+                                try:
+                                    await self.hypothesis_manager.create_hypothesis(
+                                        name=nh.get("name", f"ladder_gen_{self._cycles}"),
+                                        thesis=nh.get("thesis", ""),
+                                        sport=nh.get("sport", "basketball_nba"),
+                                        market_type=nh.get("market_type", "spreads"),
+                                        edge_threshold=nh.get("edge_threshold", 0.003),
+                                        model_config={
+                                            "source": f"ladder_{ladder_result.get('model_used', 'unknown')}",
+                                            "cycle": self._cycles,
+                                            "training_period_start": training_period_start,
+                                            "training_period_end": training_period_end,
+                                            "forward_test_start": forward_test_start,
+                                        },
+                                    )
+                                    total_created += 1
+                                    self._hypotheses_generated += 1
+                                except Exception as e:
+                                    logger.debug(f"Ladder hypothesis creation failed: {e}")
+                            logger.info(
+                                f"Research: ladder model ({ladder_result.get('model_used')}) "
+                                f"generated {total_created} hypotheses"
+                            )
+                except Exception as e:
+                    logger.warning(f"Ladder hypothesis generation failed: {e}")
+
+                # Also try template-based local fallback for quick hypothesis ideas
                 try:
                     from tools.work_queue import local_fallback_hypothesis_gen
                     pipeline_state = (

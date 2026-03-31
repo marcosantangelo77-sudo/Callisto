@@ -116,7 +116,8 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
 #   "frontier" = PRIMARY capable (Claude Code)
 #   "high"     = SECONDARY max (strong local models)
 #   "medium"   = SIGNAL max (fast local models)
-# Installed models (March 2026, RTX 4070 Ti Super 16GB):
+# Installed models (March 2026, RTX 5060 Ti 16GB):
+#   Apriel-1.6-15B-Thinker    ~10GB (88% AIME, strongest reasoning local)
 #   nemotron-cascade-2:latest  24GB (MoE 30B, 3B active, partial CPU offload)
 #   gpt-oss:20b / manager      13GB (fits VRAM, 140 tok/s, matches o3-mini)
 #   qwen3:14b                   9GB (matches 32B quality, thinking mode toggle)
@@ -127,13 +128,17 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
 #   - 96.1% Math 500, 77.4% MMLU-Pro, native thinking mode
 #   - Better than both predecessors in less VRAM
 #
-# Apriel-1.6-15B-Thinker: installed but reasoning prefix makes it
-# incompatible with JSON-first pipeline. think=False doesn't suppress
-# its chain-of-thought. Use for reasoning-heavy tasks only, not dispatch.
-# Qwen3-14B is the structured output champion — clean JSON first try.
+# Apriel-1.6-15B-Thinker: 88% AIME, 63.5% BFCL tool use. Produces
+# chain-of-thought reasoning before JSON. _parse_json_response handles
+# this by extracting the first JSON object from the response body.
+# Stronger than GPT-OSS and Qwen3 on reasoning. Use for deep_work,
+# hypothesis_gen, and reasoning tasks — NOT classification (too verbose).
+# Qwen3-14B remains best for fast structured output — clean JSON first try.
+APRIEL_MODEL = "hf.co/ServiceNow-AI/Apriel-1.6-15b-Thinker-GGUF:Q4_K_M"
 MODEL_LADDER: dict[str, list[dict]] = {
     "reasoning": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": APRIEL_MODEL, "quality": "high", "timeout": 120},           # 88% AIME, strongest local reasoning
         {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},          # 140 tok/s, best throughput
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Matches 32B, thinking mode
         {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},     # Deep CoT
@@ -148,12 +153,14 @@ MODEL_LADDER: dict[str, list[dict]] = {
     ],
     "code_generation": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": APRIEL_MODEL, "quality": "high", "timeout": 120},           # 81% LiveCodeBench
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Good code + JSON
         {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},
         {"model": "nemotron-cascade-2:latest", "quality": "high", "timeout": 90},
     ],
     "hypothesis_gen": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": APRIEL_MODEL, "quality": "high", "timeout": 120},           # Best local for creative hypotheses
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Best local JSON + thinking
         {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},
         {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},
@@ -161,6 +168,7 @@ MODEL_LADDER: dict[str, list[dict]] = {
     ],
     "deep_work": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": APRIEL_MODEL, "quality": "high", "timeout": 150},           # Strongest local for deep analysis
         {"model": "qwen3:14b", "quality": "high", "timeout": 120},           # Best local for diagnosis
         {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},
         {"model": "gpt-oss:20b", "quality": "high", "timeout": 90},
