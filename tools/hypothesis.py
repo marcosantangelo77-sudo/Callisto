@@ -1078,6 +1078,11 @@ class HypothesisManager:
             )
             await commit_with_retry(self._db, operation="hypothesis evaluate_hypothesis eval_cycles_2")
 
+            # Always recompute stats when we have signal events — fixes
+            # staleness after threshold adjustment creates signals retroactively
+            # (evaluate_significance only ran in the 0-signal fallback path before).
+            await self.evaluate_significance(hypothesis_id, "backtest")
+
             if n < min_for_promotion:
                 return {
                     "action": "held",
