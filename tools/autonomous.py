@@ -2922,18 +2922,18 @@ class ResearchLoop:
         if now - self._last_hypothesis_gen < HYPOTHESIS_GEN_INTERVAL:
             return
 
-        # Throttle generation when spinning — drafts are free to store and
-        # having a diverse pool is good (more ready when data accumulates).
-        # But if the loop is spinning (0 progress), shift Claude budget from
-        # generation to diagnosis/interpretation instead.
-        if self._spinning_detected:
+        # When spinning, generate hypotheses biased toward TESTABLE patterns.
+        # Previously this disabled generation entirely, creating a permanent
+        # deadlock: all existing drafts exhausted → 0 testable → spinning →
+        # generation disabled → no new testable drafts → spinning forever.
+        spinning_mode = self._spinning_detected
+        if spinning_mode:
             logger.info(
-                "Research: throttling hypothesis generation — loop is spinning. "
-                "Shifting Claude budget to diagnosis and interpretation."
+                "Research: generating hypotheses in SPINNING RECOVERY mode — "
+                "biasing toward pure line-based patterns (no context factors)"
             )
-            return
-
-        logger.info("Research: generating hypotheses (Claude-primary)")
+        else:
+            logger.info("Research: generating hypotheses (Claude-primary)")
         self._last_hypothesis_gen = now
 
         total_created = 0
@@ -3090,8 +3090,25 @@ class ResearchLoop:
                 except Exception as e:
                     logger.debug(f"Correlation context generation failed: {e}")
 
+                spinning_preamble = ""
+                if spinning_mode:
+                    spinning_preamble = (
+                        "** SPINNING RECOVERY MODE **\n"
+                        "The research loop has been spinning with 0 progress. "
+                        "ALL existing 2000+ drafts are untestable — they require context "
+                        "factors (weather, pitcher, travel, venue, etc.) that can't be filtered.\n"
+                        "You MUST generate hypotheses that are PURELY LINE-BASED — "
+                        "using ONLY game_filters and line_filters from the AVAILABLE FILTERS list below.\n"
+                        "DO NOT reference weather, pitchers, venue type, travel, altitude, "
+                        "bullpen, spring training, roster changes, or any factor not in the filters list.\n"
+                        "Focus on: schedule spots (B2B, rest mismatch, road streaks), "
+                        "win% ranges, spread ranges, underdog/favorite dynamics, "
+                        "and cross-book consensus divergence.\n\n"
+                    )
+
                 prompt = (
                     f"CALLISTO HYPOTHESIS GENERATION — Cycle #{self._cycles}\n\n"
+                    f"{spinning_preamble}"
                     f"You are a skeptical quantitative researcher. Your default stance: "
                     f"most hypotheses are noise. Your job is to find the rare ones that aren't.\n\n"
                     f"BEFORE GENERATING: scrutinize the pipeline state below. If something "
