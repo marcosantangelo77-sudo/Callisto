@@ -58,7 +58,7 @@ class AgentConfig:
     supports_native_tools: bool = False  # True = pass tools= to Ollama API
 
 
-# VRAM budget: RTX 4070 Ti Super 16GB
+# VRAM budget: RTX 5060 Ti 16GB
 # Context sizes and batch tuned per-agent role to maximize tp/s and minimize VRAM spill.
 # num_ctx/num_batch/num_predict set in Modelfiles — only override temperature here.
 # Flash attention enabled at Ollama server level (OLLAMA_FLASH_ATTENTION=1).

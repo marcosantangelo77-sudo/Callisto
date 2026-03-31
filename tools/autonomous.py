@@ -1376,15 +1376,18 @@ class ResearchLoop:
             logger.debug(f"Event bus subscription failed (non-critical): {e}")
         # One-time backfill of temporal metadata on legacy hypotheses
         await self._backfill_temporal_metadata()
-        # One-time: lower edge_thresholds that are too high (real edges cap at ~2.5%)
-        await self._migrate_edge_thresholds()
-        # Retroactively update signal_generated on existing backtest events
-        # to match lowered thresholds — unblocks stalled promotions
-        await self._retroactive_signal_update()
         # One-time: requeue hypotheses falsely rejected by high-threshold bug
         await self._requeue_threshold_rejections()
         # One-time: requeue player prop hypotheses now that prop backtesting is available
         await self._requeue_prop_rejections()
+        # Edge thresholds: run AFTER requeues so newly-requeued hypotheses get
+        # their thresholds lowered too (previously ran before requeues, missing them)
+        await self._migrate_edge_thresholds()
+        # Retroactively update signal_generated on existing backtest events
+        # to match lowered thresholds — unblocks stalled promotions
+        await self._retroactive_signal_update()
+        # Reject any anti-predictive hypotheses still stuck in active states
+        await self._reject_anti_predictive()
         self._task = asyncio.create_task(self._loop())
         logger.info("Research loop started — autonomous hypothesis machine online")
 
@@ -1699,6 +1702,41 @@ class ResearchLoop:
                 f"Prop rejection requeue: moved {count} player prop hypotheses "
                 f"from rejected → draft (prop_snapshots backtesting now available)"
             )
+
+    async def _reject_anti_predictive(self) -> None:
+        """Reject any hypothesis in backtesting/paper_trading with IC < -0.10.
+
+        Anti-predictive hypotheses (strongly negative information coefficient)
+        are worse than random — they actively lose money. Reject immediately
+        rather than waiting for the evaluate phase to catch them.
+        """
+        db = self.hypothesis_manager._db
+        if db is None:
+            return
+
+        cursor = await db.execute(
+            "SELECT h.hypothesis_id, h.name, h.status, hs.information_coefficient, hs.brier_score "
+            "FROM hypotheses h "
+            "JOIN hypothesis_stats hs ON h.hypothesis_id = hs.hypothesis_id "
+            "WHERE h.status IN ('backtesting', 'paper_trading') "
+            "AND hs.information_coefficient < -0.10"
+        )
+        rows = await cursor.fetchall()
+
+        count = 0
+        for hid, name, status, ic, brier in rows:
+            await self.hypothesis_manager.update_status(
+                hid, "rejected",
+                f"auto:anti_predictive — IC={ic:.3f}, brier={brier:.3f}. "
+                f"Strongly anti-predictive, worse than random."
+            )
+            count += 1
+            logger.info(
+                f"Rejected anti-predictive {hid} ({name}): IC={ic:.3f}, brier={brier:.3f}"
+            )
+
+        if count:
+            logger.info(f"Anti-predictive sweep: rejected {count} hypotheses")
 
     async def stop(self) -> None:
         """Stop the research loop."""

@@ -41,7 +41,7 @@ DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 INITIAL_BACKOFF = 120       # 2 min after first rate limit (recover fast)
 MAX_BACKOFF = 3600          # 1 hour max backoff
 BACKOFF_MULTIPLIER = 1.5    # Gentler ramp — we want to stay aggressive
-MAX_CALLS_PER_HOUR = 15     # 30% weekly budget / 4.5 days = 3x cut from 45. Bump to 30 during 2x (2pm ET)
+MAX_CALLS_PER_HOUR = 45     # Claude Max subscription — let rate limit detection handle the real ceiling
 RATE_LIMIT_PATTERNS = [
     "rate limit",
     "rate_limit",
