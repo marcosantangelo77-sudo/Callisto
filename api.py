@@ -159,8 +159,8 @@ async def lifespan(app: FastAPI):
     global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task
 
     # Start memory profiling early — before any allocations
-    tracemalloc.start(25)  # 25-frame depth for full stack traces
-    logger.info("tracemalloc started with 25-frame depth")
+    tracemalloc.start(3)  # 3-frame depth — enough for useful traces, 8x less overhead
+    logger.info("tracemalloc started with 3-frame depth")
 
     # Startup — ensure DB schema is up to date
     await ensure_schema()

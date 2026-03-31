@@ -761,6 +761,35 @@ class HypothesisManager:
                         f"AUTO-REJECT: IC {_ic:.4f} < {AUTO_REJECT_IC_STRONG} with "
                         f"{n} signals (strongly anti-predictive)"
                     )
+                else:
+                    # Zombie detection: IC below promotion gate with enough signals
+                    # to be evaluated means this hypothesis can NEVER promote.
+                    # The promotion gate requires min_ic=-0.05; if IC is below that
+                    # with min_signals (5) worth of data, it's permanently stuck.
+                    promo_gate = PROMOTION_GATES.get("backtesting→paper_trading", {})
+                    gate_ic = promo_gate.get("min_ic", -0.05)
+                    gate_n = promo_gate.get("min_signals", 5)
+                    if _ic < gate_ic and n >= gate_n:
+                        should_reject = True
+                        checks.append(
+                            f"AUTO-REJECT: IC {_ic:.4f} < promotion gate {gate_ic} with "
+                            f"{n} signals — can never promote (zombie)"
+                        )
+
+        # Brier zombie detection: brier above promotion gate with enough signals
+        # means hypothesis is poorly calibrated and can never promote.
+        if not should_reject and not used_all_events and status == "backtesting":
+            _brier = report.get("calibration_score", {}).get("brier_score")
+            if _brier is not None:
+                promo_gate = PROMOTION_GATES.get("backtesting→paper_trading", {})
+                gate_brier = promo_gate.get("max_brier", 0.28)
+                gate_n = promo_gate.get("min_signals", 5)
+                if _brier > gate_brier and n >= gate_n:
+                    should_reject = True
+                    checks.append(
+                        f"AUTO-REJECT: Brier {_brier:.4f} > promotion gate {gate_brier} with "
+                        f"{n} signals — can never promote (zombie)"
+                    )
 
         next_stage = STAGE_ORDER[STAGE_ORDER.index(status) + 1] if ready else None
 
