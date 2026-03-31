@@ -4377,13 +4377,25 @@ class ResearchLoop:
         its backtest period does NOT overlap its training period. This
         prevents circular testing from ever reaching paper trading or live.
         """
-        # First, resolve any unresolved backtest events from game_results
+        # First, resolve unresolved backtest events from game_results.
+        # MEMORY FIX: resolve per-sport for active hypotheses only, not the
+        # entire 38K+ backtest_events table. The unbounded query was loading
+        # all rows every 60s → 1643 MB/hr leak (CPython pymalloc never frees).
         try:
-            resolution = await self.backtest_engine.resolve_from_game_results()
-            if resolution.get("resolved", 0) > 0:
+            active_sports = set()
+            cursor = await self.backtest_engine._db.execute(
+                "SELECT DISTINCT sport FROM hypotheses WHERE status = 'backtesting'"
+            )
+            for row in await cursor.fetchall():
+                active_sports.add(row[0])
+            total_resolved = 0
+            for sport in active_sports:
+                resolution = await self.backtest_engine.resolve_from_game_results(sport=sport)
+                total_resolved += resolution.get("resolved", 0)
+            if total_resolved > 0:
                 logger.info(
-                    f"Research: resolved {resolution['resolved']} backtest events "
-                    f"from game_results"
+                    f"Research: resolved {total_resolved} backtest events "
+                    f"from game_results ({len(active_sports)} sports)"
                 )
         except Exception as e:
             logger.warning(f"Backtest resolution failed: {e}")

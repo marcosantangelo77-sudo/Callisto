@@ -1780,8 +1780,10 @@ class BacktestEngine:
         # _needs_context_filter() may have triggered from broad keywords in
         # hypothesis name. Without explicit context_factors, regex fallback
         # produces identical filtering across different hypotheses.
+        # FAIL CLOSED: if we can't differentiate this hypothesis's events
+        # from the generic pool, reject the game rather than accept all.
         if not cf_set:
-            return True
+            return False
 
         # ── LEGACY REGEX FALLBACKS (for hypotheses without structured filters) ──
         # Track whether ANY filter pattern matched.  If none match, the
@@ -3135,9 +3137,12 @@ class BacktestEngine:
                 (sport,),
             )
         else:
+            # Safety LIMIT: never load the entire table (38K+ rows).
+            # Callers should pass sport or run_id for targeted resolution.
             cursor = await self._db.execute(
                 "SELECT id, event_id, sport, market, side, line, game_date, model_factors "
-                "FROM backtest_events WHERE actual_result IS NULL",
+                "FROM backtest_events WHERE actual_result IS NULL "
+                "ORDER BY game_date DESC LIMIT 500",
             )
 
         unresolved = await cursor.fetchall()
