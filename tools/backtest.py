@@ -12,6 +12,7 @@ The engine dispatches to existing sim functions (player_prop_sim, nba_game_sim, 
 based on the hypothesis's model_config. No new simulation code — reuse everything.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -2308,16 +2309,28 @@ class BacktestEngine:
 
         # Batch INSERT all rows in one transaction — dramatically reduces lock contention
         if _pending_rows:
-            await self._db.executemany(
-                "INSERT OR IGNORE INTO backtest_events "
-                "(run_id, event_id, hypothesis_id, sport, player, market, "
-                "line, side, book, book_odds_american, book_implied_prob, "
-                "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
-                "signal_generated, game_date, snapshot_time) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                _pending_rows,
-            )
-            await self._db.commit()
+            import random as _rnd
+            for _attempt in range(5):
+                try:
+                    await self._db.executemany(
+                        "INSERT OR IGNORE INTO backtest_events "
+                        "(run_id, event_id, hypothesis_id, sport, player, market, "
+                        "line, side, book, book_odds_american, book_implied_prob, "
+                        "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
+                        "signal_generated, game_date, snapshot_time) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        _pending_rows,
+                    )
+                    break
+                except Exception as _e:
+                    if "locked" in str(_e).lower() and _attempt < 4:
+                        _wait = min(0.5 * (2 ** _attempt), 8) + _rnd.uniform(0, 0.5)
+                        logger.warning(f"DB locked on backtest executemany (attempt {_attempt+1}/5), retrying in {_wait:.1f}s")
+                        await asyncio.sleep(_wait)
+                    else:
+                        raise
+            from tools.db_utils import commit_with_retry
+            await commit_with_retry(self._db, operation="backtest batch_insert")
         return events, signals
 
     async def _process_game_props(
@@ -2494,16 +2507,28 @@ class BacktestEngine:
 
         # Batch INSERT all rows in one transaction
         if _pending_rows:
-            await self._db.executemany(
-                "INSERT OR IGNORE INTO backtest_events "
-                "(run_id, event_id, hypothesis_id, sport, player, market, "
-                "line, side, book, book_odds_american, book_implied_prob, "
-                "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
-                "signal_generated, game_date, snapshot_time) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                _pending_rows,
-            )
-            await self._db.commit()
+            import random as _rnd
+            for _attempt in range(5):
+                try:
+                    await self._db.executemany(
+                        "INSERT OR IGNORE INTO backtest_events "
+                        "(run_id, event_id, hypothesis_id, sport, player, market, "
+                        "line, side, book, book_odds_american, book_implied_prob, "
+                        "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
+                        "signal_generated, game_date, snapshot_time) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        _pending_rows,
+                    )
+                    break
+                except Exception as _e:
+                    if "locked" in str(_e).lower() and _attempt < 4:
+                        _wait = min(0.5 * (2 ** _attempt), 8) + _rnd.uniform(0, 0.5)
+                        logger.warning(f"DB locked on backtest props executemany (attempt {_attempt+1}/5), retrying in {_wait:.1f}s")
+                        await asyncio.sleep(_wait)
+                    else:
+                        raise
+            from tools.db_utils import commit_with_retry
+            await commit_with_retry(self._db, operation="backtest props_batch_insert")
         return events, signals
 
     async def _process_prop_snapshots(
@@ -2637,16 +2662,28 @@ class BacktestEngine:
 
         # Batch INSERT
         if _pending_rows:
-            await self._db.executemany(
-                "INSERT OR IGNORE INTO backtest_events "
-                "(run_id, event_id, hypothesis_id, sport, player, market, "
-                "line, side, book, book_odds_american, book_implied_prob, "
-                "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
-                "signal_generated, game_date, snapshot_time) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                _pending_rows,
-            )
-            await self._db.commit()
+            import random as _rnd
+            for _attempt in range(5):
+                try:
+                    await self._db.executemany(
+                        "INSERT OR IGNORE INTO backtest_events "
+                        "(run_id, event_id, hypothesis_id, sport, player, market, "
+                        "line, side, book, book_odds_american, book_implied_prob, "
+                        "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
+                        "signal_generated, game_date, snapshot_time) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        _pending_rows,
+                    )
+                    break
+                except Exception as _e:
+                    if "locked" in str(_e).lower() and _attempt < 4:
+                        _wait = min(0.5 * (2 ** _attempt), 8) + _rnd.uniform(0, 0.5)
+                        logger.warning(f"DB locked on backtest prop_snapshots executemany (attempt {_attempt+1}/5), retrying in {_wait:.1f}s")
+                        await asyncio.sleep(_wait)
+                    else:
+                        raise
+            from tools.db_utils import commit_with_retry
+            await commit_with_retry(self._db, operation="backtest prop_snapshots_batch_insert")
         return events, signals
 
     async def resolve_with_scores(

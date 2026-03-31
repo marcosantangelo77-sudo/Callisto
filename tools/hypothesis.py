@@ -341,12 +341,15 @@ class HypothesisManager:
     ) -> dict:
         """Move a hypothesis to a new status."""
         now = datetime.now(timezone.utc).isoformat()
-        await self._db.execute(
+        from tools.db_utils import execute_with_retry, commit_with_retry
+        await execute_with_retry(
+            self._db,
             "UPDATE hypotheses SET status = ?, updated_at = ?, "
             "promoted_at = ?, promoted_by = ? WHERE hypothesis_id = ?",
             (new_status, now, now, promoted_by, hypothesis_id),
+            operation="hypothesis update_status",
         )
-        await self._db.commit()
+        await commit_with_retry(self._db, operation="hypothesis update_status")
         logger.info(f"Hypothesis {hypothesis_id} → {new_status} (by {promoted_by})")
         return {"hypothesis_id": hypothesis_id, "new_status": new_status}
 
@@ -547,11 +550,15 @@ class HypothesisManager:
 
         # Store in hypothesis_stats (upsert: one row per hypothesis+stage)
         now = datetime.now(timezone.utc).isoformat()
-        await self._db.execute(
+        from tools.db_utils import execute_with_retry, commit_with_retry
+        await execute_with_retry(
+            self._db,
             "DELETE FROM hypothesis_stats WHERE hypothesis_id = ? AND stage = ?",
             (hypothesis_id, stage),
+            operation="hypothesis evaluate_significance delete",
         )
-        await self._db.execute(
+        await execute_with_retry(
+            self._db,
             "INSERT INTO hypothesis_stats "
             "(hypothesis_id, stage, computed_at, total_n, signals_n, win, loss, push_, "
             "hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi_pct, "
@@ -564,8 +571,9 @@ class HypothesisManager:
              hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi,
              sr, mdd, p_binomial, is_significant,
              sortino, brier, ic),
+            operation="hypothesis evaluate_significance insert",
         )
-        await self._db.commit()
+        await commit_with_retry(self._db, operation="hypothesis evaluate_significance")
 
         return report
 
@@ -801,11 +809,14 @@ class HypothesisManager:
                         model_config = {}
                 eval_cycles = model_config.get("evaluate_cycles", 0) + 1
                 model_config["evaluate_cycles"] = eval_cycles
-                await self._db.execute(
+                from tools.db_utils import execute_with_retry, commit_with_retry
+                await execute_with_retry(
+                    self._db,
                     "UPDATE hypotheses SET model_config = ? WHERE hypothesis_id = ?",
                     (json.dumps(model_config), hypothesis_id),
+                    operation="hypothesis evaluate_hypothesis eval_cycles",
                 )
-                await self._db.commit()
+                await commit_with_retry(self._db, operation="hypothesis evaluate_hypothesis eval_cycles")
 
                 # Before rejecting, check if the edge threshold is too high.
                 # If events exist but 0 signals, the threshold may be suppressing
@@ -817,24 +828,29 @@ class HypothesisManager:
                         new_threshold = edge_diag["recommended_threshold"]
                         model_config["edge_threshold"] = new_threshold
                         model_config["evaluate_cycles"] = 0  # Reset cycle count
-                        await self._db.execute(
+                        from tools.db_utils import execute_with_retry, commit_with_retry
+                        await execute_with_retry(
+                            self._db,
                             "UPDATE hypotheses SET edge_threshold = ?, model_config = ? "
                             "WHERE hypothesis_id = ?",
                             (new_threshold, json.dumps(model_config), hypothesis_id),
+                            operation="hypothesis auto_lower_threshold",
                         )
-                        await self._db.commit()
+                        await commit_with_retry(self._db, operation="hypothesis auto_lower_threshold")
 
                         # Retroactively update signal_generated on existing events
                         # so evaluate_significance can see them without re-backtesting
                         # NOTE: must use `edge` column (probability edge), NOT `ev_pct` (expected value)
                         # — consistent with backtest.py:1161 where is_signal = edge >= edge_threshold
-                        cursor = await self._db.execute(
+                        cursor = await execute_with_retry(
+                            self._db,
                             "UPDATE backtest_events "
                             "SET signal_generated = CASE WHEN edge >= ? THEN 1 ELSE 0 END "
                             "WHERE hypothesis_id = ?",
                             (new_threshold, hypothesis_id),
+                            operation="hypothesis retroactive_signal_update",
                         )
-                        await self._db.commit()
+                        await commit_with_retry(self._db, operation="hypothesis retroactive_signal_update")
                         retroactive_count = cursor.rowcount
                         # Count how many are now signals
                         sig_cursor = await (await self._db.execute(
@@ -999,11 +1015,14 @@ class HypothesisManager:
                     model_config = {}
             eval_cycles = model_config.get("evaluate_cycles", 0) + 1
             model_config["evaluate_cycles"] = eval_cycles
-            await self._db.execute(
+            from tools.db_utils import execute_with_retry, commit_with_retry
+            await execute_with_retry(
+                self._db,
                 "UPDATE hypotheses SET model_config = ? WHERE hypothesis_id = ?",
                 (json.dumps(model_config), hypothesis_id),
+                operation="hypothesis evaluate_hypothesis eval_cycles_2",
             )
-            await self._db.commit()
+            await commit_with_retry(self._db, operation="hypothesis evaluate_hypothesis eval_cycles_2")
 
             if n < min_for_promotion:
                 return {

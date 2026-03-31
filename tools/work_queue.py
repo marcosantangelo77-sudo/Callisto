@@ -107,7 +107,8 @@ class DeferredWorkQueue:
                     executed_at TEXT
                 )
             """)
-            await db.commit()
+            from tools.db_utils import commit_with_retry
+            await commit_with_retry(db, operation="work_queue schema")
         self._initialized = True
 
     async def enqueue(self, work_type: str, prompt: str, priority: int = 5) -> None:
@@ -119,20 +120,25 @@ class DeferredWorkQueue:
             row = await (await db.execute(
                 "SELECT COUNT(*) FROM deferred_work_queue WHERE status = 'pending'"
             )).fetchone()
+            from tools.db_utils import execute_with_retry, commit_with_retry
             if row and row[0] >= 50:
                 # Delete lowest priority (highest number) pending item
-                await db.execute(
+                await execute_with_retry(
+                    db,
                     "DELETE FROM deferred_work_queue WHERE id = ("
                     "  SELECT id FROM deferred_work_queue WHERE status = 'pending' "
                     "  ORDER BY priority DESC, created_at ASC LIMIT 1"
-                    ")"
+                    ")",
+                    operation="work_queue enqueue_trim",
                 )
-            await db.execute(
+            await execute_with_retry(
+                db,
                 "INSERT INTO deferred_work_queue (work_type, prompt, priority, created_at) "
                 "VALUES (?, ?, ?, ?)",
                 (work_type, prompt, priority, datetime.now(timezone.utc).isoformat()),
+                operation="work_queue enqueue",
             )
-            await db.commit()
+            await commit_with_retry(db, operation="work_queue enqueue")
         logger.info(f"Work queued: type={work_type}, priority={priority}")
 
     async def drain(self, max_items: int = 5) -> list[dict]:
@@ -157,35 +163,45 @@ class DeferredWorkQueue:
                     "priority": row[3],
                     "created_at": row[4],
                 })
-                await db.execute(
+                from tools.db_utils import execute_with_retry, commit_with_retry
+                await execute_with_retry(
+                    db,
                     "UPDATE deferred_work_queue SET status = 'draining' WHERE id = ?",
                     (row[0],),
+                    operation="work_queue drain",
                 )
             if items:
-                await db.commit()
+                from tools.db_utils import commit_with_retry
+                await commit_with_retry(db, operation="work_queue drain")
         return items
 
     async def mark_done(self, item_id: int, result: str = "") -> None:
         """Mark a drained item as completed."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("PRAGMA busy_timeout = 60000")
-            await db.execute(
+            from tools.db_utils import execute_with_retry, commit_with_retry
+            await execute_with_retry(
+                db,
                 "UPDATE deferred_work_queue SET status = 'done', result = ?, "
                 "executed_at = ? WHERE id = ?",
                 (result[:2000], datetime.now(timezone.utc).isoformat(), item_id),
+                operation="work_queue mark_done",
             )
-            await db.commit()
+            await commit_with_retry(db, operation="work_queue mark_done")
 
     async def mark_failed(self, item_id: int, error: str = "") -> None:
         """Mark a drained item as failed — it goes back to pending for retry."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("PRAGMA busy_timeout = 60000")
-            await db.execute(
+            from tools.db_utils import execute_with_retry, commit_with_retry
+            await execute_with_retry(
+                db,
                 "UPDATE deferred_work_queue SET status = 'pending', "
                 "result = ? WHERE id = ?",
                 (f"failed: {error[:500]}", item_id),
+                operation="work_queue mark_failed",
             )
-            await db.commit()
+            await commit_with_retry(db, operation="work_queue mark_failed")
 
     async def size(self) -> int:
         """Return count of pending items."""

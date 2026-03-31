@@ -140,7 +140,9 @@ class CLVTracker:
             )
             kelly = ev_result.get("kelly_fraction", 0)
 
-        cursor = await self._db.execute(
+        from tools.db_utils import execute_with_retry, commit_with_retry
+        cursor = await execute_with_retry(
+            self._db,
             "INSERT INTO bets "
             "(placed_at, sport, event_id, game_description, bet_type, team, market, "
             "bookmaker, placement_odds, placement_point, placement_implied_prob, "
@@ -151,8 +153,10 @@ class CLVTracker:
                 bookmaker, placement_odds, placement_point, round(implied, 4),
                 stake, edge_estimate, round(kelly, 4), notes, tags,
             ),
+            max_retries=10,
+            operation="clv_tracker record_bet",
         )
-        await self._db.commit()
+        await commit_with_retry(self._db, max_retries=10, operation="clv_tracker record_bet")
         bet_id = cursor.lastrowid
 
         logger.info(
@@ -175,17 +179,22 @@ class CLVTracker:
         now = datetime.now(timezone.utc).isoformat()
         implied = calculate_implied_probability(closing_odds)
 
-        await self._db.execute(
+        from tools.db_utils import execute_with_retry, commit_with_retry
+        await execute_with_retry(
+            self._db,
             "INSERT INTO closing_lines "
             "(event_id, sport, captured_at, source, market, team, "
             "closing_odds, closing_point, closing_implied) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (event_id, sport, now, source, market, team,
              closing_odds, closing_point, round(implied, 4)),
+            max_retries=10,
+            operation="clv_tracker record_closing_line insert",
         )
 
         # Update any pending bets for this event
-        await self._db.execute(
+        await execute_with_retry(
+            self._db,
             "UPDATE bets SET "
             "closing_odds = ?, closing_point = ?, closing_implied_prob = ?, "
             "closing_source = ?, "
@@ -195,8 +204,10 @@ class CLVTracker:
             (closing_odds, closing_point, round(implied, 4), source,
              closing_odds, round(implied, 4),
              event_id, market, team),
+            max_retries=10,
+            operation="clv_tracker record_closing_line update",
         )
-        await self._db.commit()
+        await commit_with_retry(self._db, max_retries=10, operation="clv_tracker record_closing_line")
 
         logger.info(
             f"Closing line recorded: {team} {market} @ {closing_odds} "
@@ -230,9 +241,13 @@ class CLVTracker:
         cols = [d[0] for d in cursor.description]
         bet = dict(zip(cols, row))
 
-        await self._db.execute(
+        from tools.db_utils import execute_with_retry, commit_with_retry
+        await execute_with_retry(
+            self._db,
             "UPDATE bets SET result = ?, payout = ? WHERE id = ?",
             (result, payout, bet_id),
+            max_retries=10,
+            operation="clv_tracker resolve_bet update",
         )
 
         # Update bankroll
@@ -251,18 +266,21 @@ class CLVTracker:
             current_balance = bal_row[0] if bal_row else 0
 
             now = datetime.now(timezone.utc).isoformat()
-            await self._db.execute(
+            await execute_with_retry(
+                self._db,
                 "INSERT INTO bankroll (timestamp, balance, change, bet_id, description) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (now, current_balance + change, change, bet_id,
                  f"Bet #{bet_id} {result}: {bet['game_description']}"),
+                max_retries=10,
+                operation="clv_tracker resolve_bet bankroll",
             )
 
         # ── CLV LOG ──
         # This is THE permanent record. Every resolved bet gets a clv_log entry.
         await self._log_clv(bet, result, payout, change)
 
-        await self._db.commit()
+        await commit_with_retry(self._db, max_retries=10, operation="clv_tracker resolve_bet")
 
         logger.info(f"Bet #{bet_id} resolved: {result}, change={change}")
 
@@ -339,7 +357,9 @@ class CLVTracker:
         now = datetime.now(timezone.utc).isoformat()
 
         try:
-            await self._db.execute(
+            from tools.db_utils import execute_with_retry
+            await execute_with_retry(
+                self._db,
                 "INSERT OR REPLACE INTO clv_log "
                 "(bet_id, event, outcome, point, book, our_odds_decimal, "
                 "pinnacle_close_fair_prob, pinnacle_close_fair_decimal, "
@@ -360,6 +380,8 @@ class CLVTracker:
                     close_reliable,
                     now,
                 ),
+                max_retries=10,
+                operation="clv_tracker log_clv",
             )
             logger.info(
                 f"CLV logged: bet #{bet_id}, clv_cents={clv_cents}, "
@@ -396,7 +418,8 @@ class CLVTracker:
             await self._log_clv(bet, result, payout, change)
             count += 1
 
-        await self._db.commit()
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, max_retries=10, operation="clv_tracker backfill_clv_log")
         logger.info(f"Backfilled CLV log for {count} resolved bets")
         return count
 
@@ -496,12 +519,16 @@ class CLVTracker:
     async def set_initial_bankroll(self, balance: float) -> None:
         """Set initial bankroll balance."""
         now = datetime.now(timezone.utc).isoformat()
-        await self._db.execute(
+        from tools.db_utils import execute_with_retry, commit_with_retry
+        await execute_with_retry(
+            self._db,
             "INSERT INTO bankroll (timestamp, balance, change, description) "
             "VALUES (?, ?, ?, ?)",
             (now, balance, balance, "Initial bankroll"),
+            max_retries=10,
+            operation="clv_tracker set_initial_bankroll",
         )
-        await self._db.commit()
+        await commit_with_retry(self._db, max_retries=10, operation="clv_tracker set_initial_bankroll")
         logger.info(f"Initial bankroll set: ${balance}")
 
     async def forecast_clv(

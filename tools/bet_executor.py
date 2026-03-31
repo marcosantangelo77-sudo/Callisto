@@ -120,7 +120,8 @@ class BetExecutor:
                 details TEXT
             )
         """)
-        await self._db.commit()
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="executor schema")
         logger.info("Bet executor initialized")
 
     async def get_bankroll(self) -> float:
@@ -678,7 +679,9 @@ class BetExecutor:
         now = datetime.now(timezone.utc).isoformat()
         implied = 1.0 - fair_prob + edge  # back-derive implied from fair - edge
 
-        cursor = await self._db.execute(
+        from tools.db_utils import execute_with_retry, commit_with_retry
+        cursor = await execute_with_retry(
+            self._db,
             """INSERT INTO bets
             (placed_at, sport, event_id, game_description, bet_type,
              team, market, bookmaker, placement_odds, placement_point,
@@ -693,17 +696,22 @@ class BetExecutor:
                 f"Auto-executed by Callisto. hypothesis={hypothesis_id}",
                 f"auto,hypothesis:{hypothesis_id}",
             ),
+            max_retries=10,
+            operation="executor record_bet insert",
         )
         bet_id = cursor.lastrowid
 
         # Update bankroll (deduct stake)
         bankroll = await self.get_bankroll()
-        await self._db.execute(
+        await execute_with_retry(
+            self._db,
             "INSERT INTO bankroll (timestamp, balance, change, bet_id, description) VALUES (?, ?, ?, ?, ?)",
             (now, bankroll - stake, -stake, bet_id, f"Auto bet #{bet_id}: {team} {market}"),
+            max_retries=10,
+            operation="executor record_bet bankroll",
         )
 
-        await self._db.commit()
+        await commit_with_retry(self._db, max_retries=10, operation="executor record_bet")
         return bet_id
 
     async def _log_action(
@@ -711,7 +719,9 @@ class BetExecutor:
         hypothesis_id, bet_id=None, screenshot=None, reason=None,
     ):
         """Log executor action for audit trail."""
-        await self._db.execute(
+        from tools.db_utils import execute_with_retry, commit_with_retry
+        await execute_with_retry(
+            self._db,
             """INSERT INTO executor_log
             (timestamp, action, sport, team, market, side, odds, stake, edge,
              hypothesis_id, bet_id, screenshot_path, status, error)
@@ -723,8 +733,10 @@ class BetExecutor:
                 "success" if action == "BET_PLACED" else "failed",
                 reason,
             ),
+            max_retries=10,
+            operation="executor log_action",
         )
-        await self._db.commit()
+        await commit_with_retry(self._db, max_retries=10, operation="executor log_action")
 
     def enable(self):
         """Enable the executor (allow bet placement)."""

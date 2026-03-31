@@ -376,7 +376,8 @@ class DataCollector:
             except Exception as e:
                 logger.warning(f"Failed to store game_result {event_id}: {e}")
 
-        await self._db.commit()
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector collect_scores")
         logger.info(f"Collected {games_stored} games for {sport} on {date}")
 
         return {
@@ -477,7 +478,8 @@ class DataCollector:
                         )
                         total_players += stored
 
-        await self._db.commit()
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector collect_box_scores")
         logger.info(
             f"Collected stats for {total_players} player-stat entries "
             f"for {sport} on {date}"
@@ -876,7 +878,8 @@ class DataCollector:
             )
             resolved += 1
 
-        await self._db.commit()
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector resolve_paper_trades")
         logger.info(f"Resolved {resolved}/{len(trades)} paper trades for {sport} on {game_date}")
 
         return {
@@ -1100,7 +1103,8 @@ class DataCollector:
             )
             resolved += 1
 
-        await self._db.commit()
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector resolve_game_paper_trades")
         logger.info(
             f"Resolved {resolved}/{len(trades)} game-level paper trades "
             f"for {sport} on {game_date} ({unmatched} unmatched)"
@@ -1246,7 +1250,8 @@ class DataCollector:
                     f"{len(momentum_swings)} momentum swings"
                 )
 
-        await self._db.commit()
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector collect_play_by_play")
         logger.info(
             f"Play-by-play: enriched {games_enriched} {sport} games on {game_date_fmt}"
         )
@@ -1406,7 +1411,8 @@ class DataCollector:
             except Exception as e:
                 logger.warning(f"Statcast batch insert failed: {e}")
 
-        await self._db.commit()
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector collect_statcast")
         logger.info(
             f"Statcast: {total_pitches} pitches from {len(pitcher_stats)} pitchers, "
             f"stored {stored} stat entries ({start_date} to {end_date})"
@@ -1453,11 +1459,14 @@ class DataCollector:
 
     async def mark_embedded(self, context_id: int) -> None:
         """Mark a game context as embedded."""
-        await self._db.execute(
+        from tools.db_utils import execute_with_retry, commit_with_retry
+        await execute_with_retry(
+            self._db,
             "UPDATE game_contexts SET embedded = TRUE WHERE id = ?",
             (context_id,),
+            operation="data_collector mark_embedded",
         )
-        await self._db.commit()
+        await commit_with_retry(self._db, operation="data_collector mark_embedded")
 
     async def get_collection_stats(self) -> dict:
         """Return data collection statistics."""
