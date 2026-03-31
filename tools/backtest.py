@@ -1968,49 +1968,26 @@ class BacktestEngine:
             if not (hwp >= 0.58 or hwp <= 0.42 or awp >= 0.58 or awp <= 0.42):
                 return False
 
-        # ── Altitude / venue elevation filter ──
-        # We don't have altitude in game_context, so pass all games through.
-        # The hypothesis thesis should specify team names (Denver, Colorado, etc.)
-        # which get filtered by the market-level devig — not game selection.
-        if not _any_filter_matched and re.search(
-            r"\baltitud|\belev\w+|\bdenver\b|\bmile.high\b|\bcoors\b", text
-        ):
-            _any_filter_matched = True
-            # No game-level filter possible — altitude is venue-specific,
-            # not available in schedule context.  Let all games through.
-
-        # ── Timezone / early-late tip filter ──
-        # Game start times and timezone crossings aren't in schedule context.
-        # Pass all games through — the edge detection handles tip-time via odds timing.
-        if not _any_filter_matched and re.search(
-            r"\bpacific\b|\beastern\b|\bcentral\b|\btime.?zone\b|\bearly.tip\b|\blate.tip\b",
-            text,
-        ):
-            _any_filter_matched = True
-
-        # ── Closing line / line movement filter ──
-        # These are market-dynamics patterns, not game-selection patterns.
-        # The devig process evaluates closing line value — no game filtering needed.
-        if not _any_filter_matched and re.search(
-            r"\bclosing.line\b|\bline.?value\b|\bclv\b|\bline.?move\b", text
-        ):
-            _any_filter_matched = True
-
-        # ── Sharp money / steam / reversal filter ──
-        # Market-level signals — the edge detection handles these through
-        # cross-book comparison, not game selection.
-        if not _any_filter_matched and re.search(
-            r"\bsharp\b|\bsteam\b|\breversal\b|\brlm\b", text
-        ):
-            _any_filter_matched = True
-
-        # ── Half-specific filter ──
-        # These describe market segments (1H, 2H), not game selection criteria.
-        # The market_type field handles half selection — pass all games through.
-        if not _any_filter_matched and re.search(
-            r"\bsecond.half\b|\bfirst.half\b|\bhalf.time\b", text
-        ):
-            _any_filter_matched = True
+        # ── Non-game-filterable conditions (fail-closed) ──
+        # These patterns describe market-level or venue-level conditions that
+        # cannot be evaluated from schedule context. Previously these set
+        # _any_filter_matched=True and passed ALL games through, causing the
+        # "164 identical events" bug (DW#230). Now they return False so
+        # hypotheses with these conditions get 0 events and are rejected for
+        # insufficient data. The gate in autonomous.py _phase_evaluate() also
+        # prevents new hypotheses with these conditions from entering backtesting
+        # without structured game_filters.
+        _unfilterable_patterns = [
+            r"\baltitud|\belev\w+|\bdenver\b|\bmile.high\b|\bcoors\b",        # venue
+            r"\bpacific\b|\beastern\b|\bcentral\b|\btime.?zone\b|\bearly.tip\b|\blate.tip\b",  # timezone
+            r"\bclosing.line\b|\bline.?value\b|\bclv\b|\bline.?move\b",       # market dynamics
+            r"\bsharp\b|\bsteam\b|\breversal\b|\brlm\b",                      # market signals
+            r"\bsecond.half\b|\bfirst.half\b|\bhalf.time\b",                  # market segment
+        ]
+        for pat in _unfilterable_patterns:
+            if not _any_filter_matched and re.search(pat, text):
+                # Can't filter at game level — fail closed to prevent identical event sets
+                return False
 
         if not _any_filter_matched:
             # No regex pattern matched the hypothesis text — we can't verify the
