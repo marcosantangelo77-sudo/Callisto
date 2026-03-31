@@ -4224,6 +4224,18 @@ class ResearchLoop:
         except Exception as e:
             logger.warning(f"Backtest resolution failed: {e}")
 
+        # Recompute backtest_runs stats from backtest_events. This fixes the
+        # stale stats problem: retroactive signal updates and game resolution
+        # change backtest_events AFTER the run completes, but backtest_runs
+        # keeps the original stats. The promotion gate checks backtest_runs,
+        # so stale data blocks promotion of winning hypotheses.
+        try:
+            updated = await self.backtest_engine.recalculate_all_active_runs()
+            if updated > 0:
+                logger.info(f"Research: recomputed stats for {updated} backtest runs")
+        except Exception as e:
+            logger.warning(f"Backtest stats recompute failed: {e}")
+
         backtesting = await self.hypothesis_manager.list_hypotheses(status="backtesting")
 
         # ── Batch-limit: evaluate top N by signal count per cycle ──

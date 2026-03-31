@@ -3293,6 +3293,35 @@ class BacktestEngine:
         )
         return True
 
+    async def recalculate_all_active_runs(self) -> int:
+        """Recompute stats for ALL runs belonging to active (backtesting) hypotheses.
+
+        This fixes the stale backtest_runs problem: when retroactive signal updates
+        or game result resolution change backtest_events AFTER the original run,
+        backtest_runs stats become outdated. The promotion gate checks these stats,
+        so stale data blocks promotion of winning hypotheses.
+
+        Returns number of runs updated.
+        """
+        cursor = await self._db.execute(
+            "SELECT DISTINCT br.run_id FROM backtest_runs br "
+            "JOIN hypotheses h ON br.hypothesis_id = h.hypothesis_id "
+            "WHERE h.status = 'backtesting'"
+        )
+        run_ids = [row[0] for row in await cursor.fetchall()]
+
+        updated = 0
+        for run_id in run_ids:
+            try:
+                if await self.recalculate_run_stats(run_id):
+                    updated += 1
+            except Exception as e:
+                logger.warning(f"Failed to recalculate run {run_id}: {e}")
+
+        if updated:
+            logger.info(f"Recalculated stats for {updated}/{len(run_ids)} active backtest runs")
+        return updated
+
     async def generate_paper_trade_signal(
         self,
         hypothesis_id: str,
