@@ -4814,7 +4814,7 @@ class ResearchLoop:
             f"You are a statistician reviewing backtest results. Your bias is toward "
             f"skepticism: most patterns are noise, and you must prove otherwise.\n\n"
             + (f"KNOWN ERROR PATTERNS (avoid repeating these mistakes):\n{error_patterns}\n\n" if error_patterns else "")
-            f"Before evaluating any hypothesis, ask: was this a FAIR test?\n"
+            + f"Before evaluating any hypothesis, ask: was this a FAIR test?\n"
             f"- If events=15 and signals=0, that is NOT enough data to reject — hold it.\n"
             f"- If avg_edge is computed from 1 book, the entire edge is an artifact.\n"
             f"- If all hypotheses show similar event counts, the backtest filter is broken.\n\n"
