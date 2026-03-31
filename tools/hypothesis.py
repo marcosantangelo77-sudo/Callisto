@@ -72,6 +72,12 @@ AUTO_REJECT_P = 0.50               # Reject only when signal data actively dispr
 AUTO_REJECT_MIN_N = 15             # Need 15 resolved signals (not events) to reject
 AUTO_REJECT_STRONG_P = 0.70        # Strong disproof needs fewer samples
 AUTO_REJECT_STRONG_MIN_N = 10      # 10 signals sufficient when p > 0.70
+# Anti-predictive rejection: IC strongly negative means model predicts WRONG direction.
+# At n >= 15 signals, IC < -0.15 is statistically meaningful (not noise).
+AUTO_REJECT_IC = -0.15             # IC below this = actively anti-predictive
+AUTO_REJECT_IC_MIN_N = 15          # Need 15 signals for IC to be meaningful
+AUTO_REJECT_IC_STRONG = -0.25      # Very strong anti-prediction needs fewer samples
+AUTO_REJECT_IC_STRONG_MIN_N = 10   # 10 signals sufficient when IC < -0.25
 
 STAGE_ORDER = ["draft", "backtesting", "paper_trading", "live", "retired"]
 
@@ -736,6 +742,25 @@ class HypothesisManager:
                 or (p > 0.15 and n >= 30)
             )
         )
+
+        # Anti-predictive IC rejection: model predicts the WRONG direction.
+        # These hypotheses can never promote (IC gate blocks them) but without
+        # explicit rejection they sit in backtesting forever as zombies.
+        if not should_reject and not used_all_events:
+            _ic = report.get("calibration_score", {}).get("information_coefficient")
+            if _ic is not None:
+                if (_ic < AUTO_REJECT_IC and n >= AUTO_REJECT_IC_MIN_N):
+                    should_reject = True
+                    checks.append(
+                        f"AUTO-REJECT: IC {_ic:.4f} < {AUTO_REJECT_IC} with "
+                        f"{n} signals (anti-predictive)"
+                    )
+                elif (_ic < AUTO_REJECT_IC_STRONG and n >= AUTO_REJECT_IC_STRONG_MIN_N):
+                    should_reject = True
+                    checks.append(
+                        f"AUTO-REJECT: IC {_ic:.4f} < {AUTO_REJECT_IC_STRONG} with "
+                        f"{n} signals (strongly anti-predictive)"
+                    )
 
         next_stage = STAGE_ORDER[STAGE_ORDER.index(status) + 1] if ready else None
 
