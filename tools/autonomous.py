@@ -4526,6 +4526,17 @@ class ResearchLoop:
                         f"Research: hypothesis {h['hypothesis_id']} REJECTED — "
                         f"data disproves thesis"
                     )
+                else:
+                    # Log gate checks for "held" hypotheses so we can diagnose
+                    # why promotion isn't happening.
+                    checks = result.get("checks", [])
+                    reason = result.get("reason", "")
+                    if checks or reason:
+                        logger.info(
+                            f"Research: {h.get('name', h['hypothesis_id'])} HELD — "
+                            f"reason={reason[:120] if reason else 'N/A'}, "
+                            f"gates={checks}"
+                        )
             except Exception as e:
                 logger.warning(
                     f"Evaluation failed for {h['hypothesis_id']}: {e}"
