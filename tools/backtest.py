@@ -2007,6 +2007,16 @@ class BacktestEngine:
             r"\bhomestand\b", r"\bhome.stand\b", r"\bwinning.streak\b", r"\blosing.streak\b",
             r"\bnarrative\b", r"\bwin.pct\b", r"\bwin.rate\b",
             r"\bdominant\b", r"\bfavorite\b", r"\bunderdog\b",
+            # Venue/environment context
+            r"\baltitud", r"\belev\w+", r"\bdenver\b", r"\bmile.high\b",
+            # Time/timezone context
+            r"\bpacific\b", r"\beastern\b", r"\bcentral\b", r"\btime.?zone\b", r"\bearly.tip\b", r"\blate.tip\b",
+            # Line movement / closing line context
+            r"\bclosing.line\b", r"\bline.?value\b", r"\bclv\b", r"\bline.?move\b",
+            # Sharp money / steam context
+            r"\bsharp\b", r"\bsteam\b", r"\breversal\b", r"\brlm\b",
+            # Half-specific context
+            r"\bsecond.half\b", r"\bfirst.half\b", r"\bhalf.time\b",
         ]
         return any(re.search(p, text) for p in schedule_patterns)
 
