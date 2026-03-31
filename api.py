@@ -2636,9 +2636,10 @@ async def admin_sql(request: Request):
     if not normalized.startswith("SELECT") and not normalized.startswith("PRAGMA"):
         return {"error": "Only SELECT and PRAGMA statements allowed"}
 
-    # Block dangerous patterns
+    # Block dangerous patterns (word-boundary to avoid false positives like CREATED_AT)
+    import re as _re
     for forbidden in ("DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH"):
-        if forbidden in normalized:
+        if _re.search(rf'\b{forbidden}\b', normalized):
             return {"error": f"Forbidden keyword: {forbidden}"}
 
     try:
