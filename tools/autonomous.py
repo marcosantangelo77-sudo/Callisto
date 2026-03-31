@@ -1782,15 +1782,20 @@ class ResearchLoop:
 
         count = 0
         for hid, name, status, ic, brier in rows:
-            await self.hypothesis_manager.update_status(
-                hid, "rejected",
-                f"auto:anti_predictive — IC={ic:.3f}, brier={brier:.3f}. "
-                f"Strongly anti-predictive, worse than random."
-            )
-            count += 1
-            logger.info(
-                f"Rejected anti-predictive {hid} ({name}): IC={ic:.3f}, brier={brier:.3f}"
-            )
+            try:
+                brier_str = f"{brier:.3f}" if brier is not None else "N/A"
+                ic_str = f"{ic:.3f}" if ic is not None else "N/A"
+                await self.hypothesis_manager.update_status(
+                    hid, "rejected",
+                    f"auto:anti_predictive — IC={ic_str}, brier={brier_str}. "
+                    f"Strongly anti-predictive, worse than random."
+                )
+                count += 1
+                logger.info(
+                    f"Rejected anti-predictive {hid} ({name}): IC={ic_str}, brier={brier_str}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to reject anti-predictive {hid} ({name}): {e}")
 
         if count:
             logger.info(f"Anti-predictive sweep: rejected {count} hypotheses")
@@ -4661,6 +4666,13 @@ class ResearchLoop:
                 )
         except Exception as e:
             logger.warning(f"Untestable draft sweep failed: {e}")
+
+        # Anti-predictive sweep: reject hypotheses with strongly negative IC
+        # (runs each cycle, not just at startup, to catch newly anti-predictive ones)
+        try:
+            await self._reject_anti_predictive()
+        except Exception as e:
+            logger.warning(f"Anti-predictive sweep failed: {e}")
 
         # Also evaluate paper trading hypotheses — require BOTH backtest
         # significance AND paper trading data on temporally isolated data
