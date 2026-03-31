@@ -1360,6 +1360,10 @@ class ResearchLoop:
         self._downtime_tracker = get_downtime_tracker()
         self._was_claude_available = True  # track transitions
 
+        # Mode control
+        self._paused = False
+        self._local_only = False  # When True, skip all Claude Code calls
+
     async def start(self) -> None:
         """Start the research loop."""
         if self._running:
@@ -1809,6 +1813,32 @@ class ResearchLoop:
             f"{self._promotions} promoted, {self._rejections} rejected"
         )
 
+    async def pause(self) -> dict:
+        """Pause the research loop (keeps running but skips all phases)."""
+        self._paused = True
+        logger.info("Research loop PAUSED")
+        return {"status": "paused", "cycles_completed": self._cycles}
+
+    async def resume(self) -> dict:
+        """Resume the research loop."""
+        self._paused = False
+        logger.info("Research loop RESUMED")
+        return {"status": "running", "cycles_completed": self._cycles}
+
+    def set_local_only(self, enabled: bool) -> dict:
+        """Toggle local-only mode (no Claude Code calls)."""
+        self._local_only = enabled
+        mode = "local_only" if enabled else "full"
+        logger.info(f"Research loop mode: {mode}")
+        return {"mode": mode, "local_only": enabled}
+
+    def _claude_ok(self) -> bool:
+        """Check if Claude Code calls are allowed."""
+        if self._local_only:
+            return False
+        from tools.claude_code import is_available as claude_available
+        return claude_available()
+
     async def _drain_deferred_queue(self) -> None:
         """If Claude is available and we have queued work, drain it first.
 
@@ -1818,7 +1848,7 @@ class ResearchLoop:
         """
         from tools.claude_code import is_available as claude_available, claude_code_query
 
-        claude_up = claude_available()
+        claude_up = claude_available() and not self._local_only
 
         # Track Claude availability transitions
         if claude_up and not self._was_claude_available:
@@ -2071,6 +2101,12 @@ class ResearchLoop:
             try:
                 self._cycles += 1
                 logger.info(f"Research cycle #{self._cycles} starting")
+
+                # Pause check — sleep and skip cycle
+                if self._paused:
+                    logger.info(f"Research cycle #{self._cycles} skipped (PAUSED)")
+                    await asyncio.sleep(RESEARCH_CYCLE_INTERVAL)
+                    continue
 
                 # ── Pause line_monitor for ENTIRE cycle to prevent SQLite lock cascade.
                 # All phases do DB writes; concurrent line_monitor snapshots cause
@@ -2623,9 +2659,9 @@ class ResearchLoop:
             if i["severity"] == "CRITICAL" and i["key"] not in self._diagnostic_issues
         ]
         if new_critical:
-            from tools.claude_code import is_available as claude_available, claude_code_query
+            from tools.claude_code import claude_code_query
 
-            if claude_available():
+            if self._claude_ok():
                 # Load error patterns for institutional memory
                 _error_patterns = ""
                 try:
@@ -3161,10 +3197,10 @@ class ResearchLoop:
         )
 
         # ── PRIMARY: Claude Code hypothesis generation ──
-        from tools.claude_code import is_available as claude_available, claude_code_query
+        from tools.claude_code import claude_code_query
 
         if (now - self._last_claude_call > CLAUDE_ESCALATION_COOLDOWN
-                and claude_available()):
+                and self._claude_ok()):
             try:
                 # Gather context for Claude
                 all_hypos = await self.hypothesis_manager.list_hypotheses()
@@ -4775,7 +4811,7 @@ class ResearchLoop:
         When Claude is unavailable: defers the prompt to the work queue AND
         runs a local rules-based interpretation as fallback.
         """
-        from tools.claude_code import is_available as claude_available, claude_code_query
+        from tools.claude_code import claude_code_query
 
         now = time.time()
         if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
@@ -4891,7 +4927,7 @@ class ResearchLoop:
             f"- If data quality is poor, say so and recommend holding rather than rejecting\n"
         )
 
-        if not claude_available():
+        if not self._claude_ok():
             # Defer to queue for when Claude returns
             await self._work_queue.enqueue("interpret_backtests", prompt, priority=2)
             self._downtime_tracker.item_queued()
@@ -5254,12 +5290,12 @@ class ResearchLoop:
         runs local model fallback for basic maintenance (reject zero-signal
         hypotheses, gather pipeline metrics).
         """
-        from tools.claude_code import is_available as claude_available, claude_code_query
+        from tools.claude_code import claude_code_query
         import time as _time
 
         now = _time.time()
         # No cooldown check — deep work should always fire if Claude is available
-        if not claude_available():
+        if not self._claude_ok():
             # Local model deep work via model ladder (Qwen3-14B primary)
             # Much better than rule-based: structured diagnosis, JSON output
             try:
@@ -5873,7 +5909,7 @@ class ResearchLoop:
         if self._cycles % SYSTEM_IMPROVEMENT_INTERVAL != 0:
             return
 
-        from tools.claude_code import is_available as claude_available, claude_code_query
+        from tools.claude_code import claude_code_query
 
         now = time.time()
         if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
@@ -5984,7 +6020,7 @@ class ResearchLoop:
             f"- Do NOT repeat recent suggestions\n"
         )
 
-        if not claude_available():
+        if not self._claude_ok():
             # Defer system improvement to queue for when Claude returns
             await self._work_queue.enqueue("system_improvement", prompt, priority=4)
             self._downtime_tracker.item_queued()
@@ -6267,7 +6303,7 @@ class ResearchLoop:
         Queries the DB for concrete evidence of what's failing, then
         escalates to Claude with actionable diagnostics — not vague prompts.
         """
-        from tools.claude_code import is_available as claude_available, claude_code_query
+        from tools.claude_code import claude_code_query
 
         diag = {}
         try:
@@ -6338,7 +6374,7 @@ class ResearchLoop:
             )
 
         # Escalate to Claude with hard data, not theory
-        if claude_available():
+        if self._claude_ok():
             prompt = (
                 f"CALLISTO SPINNING DIAGNOSIS — EMERGENCY\n\n"
                 f"The research loop has run {self._consecutive_no_progress * 10}+ cycles "
@@ -6380,6 +6416,9 @@ class ResearchLoop:
 
         return {
             "running": self._running,
+            "paused": self._paused,
+            "local_only": self._local_only,
+            "mode": "paused" if self._paused else ("local_only" if self._local_only else "full"),
             "cycles_completed": self._cycles,
             "data_collections": self._data_collections,
             "hypotheses_generated": self._hypotheses_generated,

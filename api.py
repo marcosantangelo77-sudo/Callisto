@@ -2030,6 +2030,30 @@ async def research_status():
     return research_loop.get_status()
 
 
+@app.post("/research/pause")
+async def research_pause():
+    """Pause the research loop."""
+    if not research_loop:
+        raise HTTPException(status_code=503, detail="Research loop not initialized")
+    return await research_loop.pause()
+
+
+@app.post("/research/resume")
+async def research_resume():
+    """Resume the research loop."""
+    if not research_loop:
+        raise HTTPException(status_code=503, detail="Research loop not initialized")
+    return await research_loop.resume()
+
+
+@app.post("/research/local-only")
+async def research_local_only(enabled: bool = True):
+    """Toggle local-only mode (no Claude Code calls)."""
+    if not research_loop:
+        raise HTTPException(status_code=503, detail="Research loop not initialized")
+    return research_loop.set_local_only(enabled)
+
+
 @app.post("/research/collect")
 async def research_collect(sport: str = "basketball_nba", date: Optional[str] = None):
     """Manually trigger data collection for a sport."""
