@@ -2386,6 +2386,22 @@ class ResearchLoop:
                                 f"DB prune: deleted {_pruned_count} backtest_events "
                                 f"from rejected hypotheses"
                             )
+                        # WAL checkpoint — prevents unbounded WAL growth (was 1.4GB).
+                        # Persistent connections block wal_autocheckpoint; this fresh
+                        # connection after commit can checkpoint freed pages.
+                        try:
+                            wal_result = await (await _pdb.execute(
+                                "PRAGMA wal_checkpoint(TRUNCATE)"
+                            )).fetchone()
+                            if wal_result:
+                                busy, log, ckpt = wal_result
+                                if log > 0:
+                                    logger.info(
+                                        f"WAL checkpoint: {ckpt}/{log} pages "
+                                        f"(busy={busy})"
+                                    )
+                        except Exception as wal_e:
+                            logger.debug(f"WAL checkpoint: {wal_e}")
                 except Exception:
                     pass  # Non-critical — self_repair will catch it
 

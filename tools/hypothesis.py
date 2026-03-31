@@ -973,14 +973,19 @@ class HypothesisManager:
                                 ),
                             }
 
-                        # Check run-level stats before rejecting — the run may
-                        # have real resolved data even if 0 signals at threshold.
+                        # Check run-level stats before rejecting — only hold if
+                        # run stats show genuine promise (hit_rate > 55% with
+                        # enough resolved events). Previously this held ANY
+                        # hypothesis with a backtest_run entry, blocking rejection.
                         run_stats = await self._get_best_run_stats(hypothesis_id)
-                        if run_stats and run_stats.get("hit_rate") is not None:
+                        if (run_stats
+                                and run_stats.get("hit_rate") is not None
+                                and run_stats["hit_rate"] > 0.55
+                                and (run_stats.get("wins", 0) or 0) + (run_stats.get("losses", 0) or 0) >= 10):
                             return {
                                 "action": "held",
                                 "reason": (
-                                    f"0 signals at threshold but run-level data exists: "
+                                    f"0 signals at threshold but run-level data shows promise: "
                                     f"{run_stats['wins']}W/{run_stats['losses']}L "
                                     f"(hit_rate={run_stats['hit_rate']:.1%}). "
                                     f"Consider threshold adjustment."

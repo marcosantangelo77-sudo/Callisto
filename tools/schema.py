@@ -27,6 +27,7 @@ async def open_db(db_path: str = None) -> aiosqlite.Connection:
     await db.execute("PRAGMA journal_mode = WAL")      # WAL mode for concurrent reads during writes
     await db.execute("PRAGMA synchronous = NORMAL")    # Safe with WAL, reduces fsync overhead
     await db.execute("PRAGMA wal_autocheckpoint = 1000")  # Checkpoint after 1000 pages (~4MB) — prevents WAL bloat
+    await db.execute("PRAGMA journal_size_limit = 67108864")  # 64MB WAL cap — SQLite tries harder to checkpoint
     return db
 
 logger = logging.getLogger("callisto.schema")
