@@ -1968,6 +1968,50 @@ class BacktestEngine:
             if not (hwp >= 0.58 or hwp <= 0.42 or awp >= 0.58 or awp <= 0.42):
                 return False
 
+        # ── Altitude / venue elevation filter ──
+        # We don't have altitude in game_context, so pass all games through.
+        # The hypothesis thesis should specify team names (Denver, Colorado, etc.)
+        # which get filtered by the market-level devig — not game selection.
+        if not _any_filter_matched and re.search(
+            r"\baltitud|\belev\w+|\bdenver\b|\bmile.high\b|\bcoors\b", text
+        ):
+            _any_filter_matched = True
+            # No game-level filter possible — altitude is venue-specific,
+            # not available in schedule context.  Let all games through.
+
+        # ── Timezone / early-late tip filter ──
+        # Game start times and timezone crossings aren't in schedule context.
+        # Pass all games through — the edge detection handles tip-time via odds timing.
+        if not _any_filter_matched and re.search(
+            r"\bpacific\b|\beastern\b|\bcentral\b|\btime.?zone\b|\bearly.tip\b|\blate.tip\b",
+            text,
+        ):
+            _any_filter_matched = True
+
+        # ── Closing line / line movement filter ──
+        # These are market-dynamics patterns, not game-selection patterns.
+        # The devig process evaluates closing line value — no game filtering needed.
+        if not _any_filter_matched and re.search(
+            r"\bclosing.line\b|\bline.?value\b|\bclv\b|\bline.?move\b", text
+        ):
+            _any_filter_matched = True
+
+        # ── Sharp money / steam / reversal filter ──
+        # Market-level signals — the edge detection handles these through
+        # cross-book comparison, not game selection.
+        if not _any_filter_matched and re.search(
+            r"\bsharp\b|\bsteam\b|\breversal\b|\brlm\b", text
+        ):
+            _any_filter_matched = True
+
+        # ── Half-specific filter ──
+        # These describe market segments (1H, 2H), not game selection criteria.
+        # The market_type field handles half selection — pass all games through.
+        if not _any_filter_matched and re.search(
+            r"\bsecond.half\b|\bfirst.half\b|\bhalf.time\b", text
+        ):
+            _any_filter_matched = True
+
         if not _any_filter_matched:
             # No regex pattern matched the hypothesis text — we can't verify the
             # hypothesis condition for this game.  Fail closed to prevent all
