@@ -4297,6 +4297,49 @@ class ResearchLoop:
         except Exception as e:
             logger.warning(f"Draft auto-rejection failed: {e}")
 
+        # ── Untestable draft sweep ──
+        # Drafts with ctx_coverage < 0.5 are skipped during backtesting selection
+        # (lines 3655-3676) but never rejected — they accumulate forever and
+        # trigger spinning detection. Bulk-reject drafts older than 48h that
+        # are provably untestable with available data.
+        try:
+            from tools.backtest import BacktestEngine
+            db = self.hypothesis_manager._db
+            cursor = await db.execute(
+                "SELECT hypothesis_id, name, thesis, model_config, created_at "
+                "FROM hypotheses WHERE status = 'draft' "
+                "AND created_at < datetime('now', '-48 hours')"
+            )
+            old_drafts = await cursor.fetchall()
+            untestable_rejected = 0
+            for row in old_drafts:
+                hid, hname, thesis, mc_raw, created = row
+                try:
+                    mc = json.loads(mc_raw) if isinstance(mc_raw, str) else (mc_raw or {})
+                except (json.JSONDecodeError, TypeError):
+                    mc = {}
+                ctx_cov = BacktestEngine.compute_context_coverage(mc)
+                # Also check inferred context needs
+                if ctx_cov >= 0.5 and not mc.get("context_factors"):
+                    inferred = BacktestEngine._infer_context_needs(thesis or "", hname or "")
+                    if inferred:
+                        ctx_cov = 0.0
+                if ctx_cov < 0.5:
+                    await self.hypothesis_manager.update_status(
+                        hid, "rejected",
+                        f"auto:untestable_draft — ctx_coverage={ctx_cov:.0%}, "
+                        f"stuck in draft >48h. Untestable with available context data."
+                    )
+                    untestable_rejected += 1
+            if untestable_rejected:
+                self._rejections += untestable_rejected
+                logger.info(
+                    f"Research: auto-rejected {untestable_rejected} untestable drafts "
+                    f"(ctx_coverage < 0.5, >48h old)"
+                )
+        except Exception as e:
+            logger.warning(f"Untestable draft sweep failed: {e}")
+
         # Also evaluate paper trading hypotheses — require BOTH backtest
         # significance AND paper trading data on temporally isolated data
         paper = await self.hypothesis_manager.list_hypotheses(status="paper_trading")

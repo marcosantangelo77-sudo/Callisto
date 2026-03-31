@@ -663,13 +663,21 @@ class LineMonitor:
         if game_count > 0:
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             try:
-                await self._db.execute(
+                from tools.db_utils import execute_with_retry, commit_with_retry
+                await execute_with_retry(
+                    self._db,
                     "INSERT OR REPLACE INTO historical_odds_cache "
                     "(sport, snapshot_date, event_id, market_type, response_json, credits_cost, fetched_at) "
                     "VALUES (?, ?, NULL, 'h2h,spreads,totals', ?, 0, ?)",
                     (sport, today, json.dumps(new_snapshot), now),
+                    max_retries=10,
+                    operation=f"historical_odds_cache insert {sport}",
                 )
-                await self._db.commit()
+                await commit_with_retry(
+                    self._db,
+                    max_retries=10,
+                    operation=f"historical_odds_cache commit {sport}",
+                )
                 logger.info(f"Cached multi-book snapshot for backtest: {sport} {today} ({book_count} books)")
             except Exception as e:
                 logger.warning(f"Failed to cache snapshot for backtest: {e}")
@@ -860,8 +868,10 @@ class LineMonitor:
 
     async def _record_movement(self, sport: str, movement: dict) -> None:
         """Record a line movement to the database."""
+        from tools.db_utils import execute_with_retry, commit_with_retry
         now = datetime.now(timezone.utc).isoformat()
-        await self._db.execute(
+        await execute_with_retry(
+            self._db,
             "INSERT INTO line_movements "
             "(sport, detected_at, team, market, bookmaker, old_price, new_price, "
             "price_movement, old_point, new_point, point_movement, direction) "
@@ -873,8 +883,10 @@ class LineMonitor:
                 movement.get("new_point"), movement.get("point_movement", 0),
                 movement["direction"],
             ),
+            max_retries=5,
+            operation=f"line_movement insert {sport}",
         )
-        await self._db.commit()
+        await commit_with_retry(self._db, max_retries=5, operation=f"line_movement commit {sport}")
 
         self._alerts.append({
             "sport": sport,
@@ -1102,8 +1114,10 @@ class LineMonitor:
                 )
 
                 if ev_result["is_positive_ev"]:
+                    from tools.db_utils import execute_with_retry, commit_with_retry
                     now = datetime.now(timezone.utc).isoformat()
-                    await self._db.execute(
+                    await execute_with_retry(
+                        self._db,
                         "INSERT INTO ev_opportunities "
                         "(detected_at, sport, game_id, team, market, bookmaker, "
                         "american_odds, implied_probability, estimated_true_prob, "
@@ -1116,8 +1130,10 @@ class LineMonitor:
                             round(edge, 4), ev_result["expected_value"],
                             ev_result["kelly_fraction"],
                         ),
+                        max_retries=5,
+                        operation=f"ev_opportunity insert {sport}",
                     )
-                    await self._db.commit()
+                    await commit_with_retry(self._db, max_retries=5, operation=f"ev_opportunity commit {sport}")
 
                     logger.info(
                         f"+EV OPPORTUNITY: {target_team} {market} @ {new_price} "
