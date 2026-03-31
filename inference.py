@@ -117,6 +117,7 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
 #   "high"     = SECONDARY max (strong local models)
 #   "medium"   = SIGNAL max (fast local models)
 # Installed models (March 2026, RTX 5060 Ti 16GB):
+#   devstral-small-2           15GB (24B, agentic coding, SWE-bench leader)
 #   Apriel-1.6-15B-Thinker    ~10GB (88% AIME, strongest reasoning local)
 #   nemotron-cascade-2:latest  24GB (MoE 30B, 3B active, partial CPU offload)
 #   gpt-oss:20b / manager      13GB (fits VRAM, 140 tok/s, matches o3-mini)
@@ -124,9 +125,10 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
 #   deepseek-r1:14b             9GB (chain-of-thought reasoning)
 #   qwen3.5:4b                3.4GB (ultra-fast classification)
 #
-# Qwen3-14B replaces both Qwen2.5-14B and Mistral-Small-24B:
-#   - 96.1% Math 500, 77.4% MMLU-Pro, native thinking mode
-#   - Better than both predecessors in less VRAM
+# Devstral Small 2 24B: Purpose-built agentic coding model from Mistral.
+#   - Best-in-class tool use at 16GB VRAM (SWE-bench, BFCL leader)
+#   - Native function calling, no reasoning field quirks
+#   - Same VRAM as mistral-small:24b but dramatically better at structured tasks
 #
 # Apriel-1.6-15B-Thinker: 88% AIME, 63.5% BFCL tool use. Produces
 # chain-of-thought reasoning before JSON. _parse_json_response handles
@@ -134,10 +136,12 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
 # Stronger than GPT-OSS and Qwen3 on reasoning. Use for deep_work,
 # hypothesis_gen, and reasoning tasks — NOT classification (too verbose).
 # Qwen3-14B remains best for fast structured output — clean JSON first try.
+DEVSTRAL_MODEL = "devstral-small-2"
 APRIEL_MODEL = "hf.co/ServiceNow-AI/Apriel-1.6-15b-Thinker-GGUF:Q4_K_M"
 MODEL_LADDER: dict[str, list[dict]] = {
     "reasoning": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 120},         # Best local tool use, agentic coding
         {"model": APRIEL_MODEL, "quality": "high", "timeout": 120},           # 88% AIME, strongest local reasoning
         {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},          # 140 tok/s, best throughput
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Matches 32B, thinking mode
@@ -153,6 +157,7 @@ MODEL_LADDER: dict[str, list[dict]] = {
     ],
     "code_generation": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 120},         # Purpose-built for code, SWE-bench leader
         {"model": APRIEL_MODEL, "quality": "high", "timeout": 120},           # 81% LiveCodeBench
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Good code + JSON
         {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},
@@ -160,6 +165,7 @@ MODEL_LADDER: dict[str, list[dict]] = {
     ],
     "hypothesis_gen": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 120},         # Strong structured output + tool use
         {"model": APRIEL_MODEL, "quality": "high", "timeout": 120},           # Best local for creative hypotheses
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Best local JSON + thinking
         {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},
@@ -168,7 +174,8 @@ MODEL_LADDER: dict[str, list[dict]] = {
     ],
     "deep_work": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
-        {"model": APRIEL_MODEL, "quality": "high", "timeout": 150},           # Strongest local for deep analysis
+        {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 150},         # Best local for agentic deep analysis
+        {"model": APRIEL_MODEL, "quality": "high", "timeout": 150},           # Strongest local for deep reasoning
         {"model": "qwen3:14b", "quality": "high", "timeout": 120},           # Best local for diagnosis
         {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},
         {"model": "gpt-oss:20b", "quality": "high", "timeout": 90},
