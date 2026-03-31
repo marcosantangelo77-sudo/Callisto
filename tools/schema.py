@@ -805,6 +805,8 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         # Set PRAGMAs before schema creation — these persist for the connection
         await db.execute("PRAGMA busy_timeout = 120000")
         await db.execute("PRAGMA journal_mode = WAL")
+        await db.execute("PRAGMA wal_autocheckpoint = 1000")
+        await db.execute("PRAGMA journal_size_limit = 67108864")
         await db.execute("PRAGMA synchronous = NORMAL")  # Safe with WAL, reduces fsync
         await db.commit()
         # Run schema statements individually instead of executescript() to avoid

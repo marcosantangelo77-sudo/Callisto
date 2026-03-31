@@ -69,6 +69,7 @@ research_loop: Optional[ResearchLoop] = None
 system_health: Optional[SystemHealth] = None
 learned_correlation_store: Optional[LearnedCorrelationStore] = None
 worker_task: Optional[asyncio.Task] = None
+wal_checkpoint_task: Optional[asyncio.Task] = None
 
 
 def _is_internal_query(query: str) -> bool:
@@ -120,6 +121,41 @@ async def _maybe_auto_followup(parent_task_id: int, result: dict) -> None:
         logger.warning(f"Auto-followup check failed (non-fatal): {e}")
 
 
+async def wal_checkpoint_loop():
+    """Periodic WAL checkpoint — prevents WAL file from growing unbounded.
+
+    PASSIVE mode doesn't block readers or writers, it just checkpoints
+    pages that aren't needed by any active reader. Runs every 5 minutes.
+    """
+    while True:
+        try:
+            await asyncio.sleep(300)  # 5 minutes
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 5000")
+                cursor = await db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                row = await cursor.fetchone()
+                if row:
+                    busy, log_pages, checkpointed = row
+                    wal_size_mb = (log_pages * 4096) / (1024 * 1024)
+                    logger.info(
+                        f"WAL checkpoint: busy={busy}, log={log_pages} pages "
+                        f"({wal_size_mb:.1f} MB), checkpointed={checkpointed}"
+                    )
+                    # If PASSIVE couldn't checkpoint enough, try TRUNCATE
+                    if log_pages > 5000 and checkpointed < log_pages // 2:
+                        cursor2 = await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        row2 = await cursor2.fetchone()
+                        if row2:
+                            logger.info(
+                                f"WAL TRUNCATE checkpoint: busy={row2[0]}, "
+                                f"log={row2[1]}, checkpointed={row2[2]}"
+                            )
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"WAL checkpoint failed (non-fatal): {e}")
+
+
 async def task_worker():
     """Background worker: polls task queue and runs AGP sessions."""
     while True:
@@ -156,7 +192,7 @@ async def task_worker():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle manager."""
-    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task
+    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task
 
     # Start memory profiling early — before any allocations
     tracemalloc.start(3)  # 3-frame depth — enough for useful traces, 8x less overhead
@@ -276,7 +312,8 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Odds WebSocket failed to start: {e}")
 
     worker_task = asyncio.create_task(task_worker())
-    logger.info(f"Callisto API started on port {CALLISTO_PORT}")
+    wal_checkpoint_task = asyncio.create_task(wal_checkpoint_loop())
+    logger.info(f"Callisto API started on port {CALLISTO_PORT} (WAL checkpoint every 5m)")
 
     # Notify on Telegram
     sports = (await line_monitor.get_status()).get("monitored_sports", [])
@@ -304,6 +341,12 @@ async def lifespan(app: FastAPI):
     if research_loop:
         await research_loop.stop()
     await autonomous.stop()
+    if wal_checkpoint_task:
+        wal_checkpoint_task.cancel()
+        try:
+            await wal_checkpoint_task
+        except asyncio.CancelledError:
+            pass
     if worker_task:
         worker_task.cancel()
         try:

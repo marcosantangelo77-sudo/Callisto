@@ -57,6 +57,8 @@ class TaskQueue:
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA wal_autocheckpoint = 1000")
+        await self._db.execute("PRAGMA journal_size_limit = 67108864")
         await self._db.execute("PRAGMA busy_timeout = 120000")
         await self._db.executescript(TASK_SCHEMA_SQL)
         await self._db.commit()

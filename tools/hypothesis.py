@@ -221,6 +221,8 @@ class HypothesisManager:
     async def initialize(self) -> None:
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA journal_mode = WAL")
+        await self._db.execute("PRAGMA wal_autocheckpoint = 1000")
+        await self._db.execute("PRAGMA journal_size_limit = 67108864")
         await self._db.execute("PRAGMA busy_timeout = 120000")
         logger.info("Hypothesis manager initialized")
 
