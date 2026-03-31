@@ -1734,7 +1734,10 @@ class ResearchLoop:
             actual_signals = sig_row[0] if sig_row else 0
             if actual_signals > 0:
                 rows.append((hid, name, actual_signals))
-        rows = await cursor.fetchall()
+
+        if not rows:
+            logger.info(f"Stale signal requeue: checked {len(candidates)} candidates, none had actual signals")
+            return
 
         count = 0
         for hid, name, actual_signals in rows:
