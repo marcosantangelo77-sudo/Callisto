@@ -201,6 +201,10 @@ async def lifespan(app: FastAPI):
     # Startup — ensure DB schema is up to date
     await ensure_schema()
 
+    # Preload priority models into VRAM (devstral-small-2 takes 28s cold, <1s warm)
+    from inference import warmup_models
+    await warmup_models()
+
     # Learned correlations — Bayesian blend of hardcoded priors + empirical data
     learned_correlation_store = LearnedCorrelationStore()
     await learned_correlation_store.initialize()

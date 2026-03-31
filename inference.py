@@ -65,7 +65,7 @@ class AgentConfig:
 # Thinking suppressed on all agents — raw tp/s, no wasted tokens.
 #
 # Model lineup (March 2026):
-#   Architect: Nemotron Cascade 2 30B-A3B (MoE, 3B active) — outperforms Qwen3.5 on all benchmarks
+#   Architect: Devstral Small 2 24B — SWE-bench leader, native tool use, fits 16GB VRAM
 #   Manager:   GPT-OSS 20B (MXFP4) — fast, reliable adversarial review
 #   Sentinel:  Qwen3.5 4B — ultra-fast classification, 3GB vs 9GB DeepSeek-R1
 #
@@ -74,10 +74,11 @@ class AgentConfig:
 # to the most capable available model for that specific capability.
 AGENT_CONFIGS: dict[str, AgentConfig] = {
     "architect": AgentConfig(
-        model="nemotron-cascade-2:latest",
+        model="devstral-small-2",
         capabilities=["reasoning", "synthesis", "code_generation", "tool_use"],
         default_options={"temperature": 0.1},
         think=False,
+        supports_native_tools=True,  # Devstral: SWE-bench leader, native function calling
         system_prompt=(
             "You are The Architect — the primary reasoning agent in the Callisto system. "
             "You handle complex analysis, code generation, and architecture decisions. "
@@ -146,7 +147,6 @@ MODEL_LADDER: dict[str, list[dict]] = {
         {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},          # 140 tok/s, best throughput
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Matches 32B, thinking mode
         {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},     # Deep CoT
-        {"model": "nemotron-cascade-2:latest", "quality": "high", "timeout": 90},
         {"model": "qwen3.5:4b", "quality": "medium", "timeout": 60},
     ],
     "classification": [
@@ -161,7 +161,6 @@ MODEL_LADDER: dict[str, list[dict]] = {
         {"model": APRIEL_MODEL, "quality": "high", "timeout": 120},           # 81% LiveCodeBench
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Good code + JSON
         {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},
-        {"model": "nemotron-cascade-2:latest", "quality": "high", "timeout": 90},
     ],
     "hypothesis_gen": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
@@ -170,7 +169,6 @@ MODEL_LADDER: dict[str, list[dict]] = {
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Best local JSON + thinking
         {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},
         {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},
-        {"model": "nemotron-cascade-2:latest", "quality": "high", "timeout": 90},
     ],
     "deep_work": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
@@ -184,6 +182,36 @@ MODEL_LADDER: dict[str, list[dict]] = {
 
 # Cached OllamaInference instances (one per model, reused)
 _inference_cache: dict[str, "OllamaInference"] = {}
+
+# Models to preload into VRAM at startup (keep_alive=24h).
+# Devstral (15GB) = architect + primary fallback. qwen3.5:4b (3.4GB) = sentinel.
+# Total ~18.4GB > 16GB VRAM, but qwen3.5 is tiny enough to reload in <2s when needed.
+# Key insight: keep devstral ALWAYS loaded to avoid 30-110s cold loads.
+PRELOAD_MODELS = ["devstral-small-2"]
+
+
+async def warmup_models():
+    """Preload priority models into VRAM with keep_alive to prevent thrashing."""
+    import httpx
+    async with httpx.AsyncClient(timeout=120) as client:
+        for model in PRELOAD_MODELS:
+            try:
+                # Send a minimal request with keep_alive to pin the model in VRAM
+                resp = await client.post(
+                    f"{OLLAMA_HOST}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": "ping"}],
+                        "options": {"num_predict": 1},
+                        "keep_alive": "24h",
+                    },
+                )
+                if resp.status_code == 200:
+                    logger.info(f"Warmup: {model} loaded into VRAM (keep_alive=24h)")
+                else:
+                    logger.warning(f"Warmup: {model} returned {resp.status_code}")
+            except Exception as e:
+                logger.warning(f"Warmup: {model} failed: {e}")
 
 
 def _get_inference(model: str) -> "OllamaInference":
