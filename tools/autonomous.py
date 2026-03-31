@@ -1383,6 +1383,8 @@ class ResearchLoop:
         await self._retroactive_signal_update()
         # One-time: requeue hypotheses falsely rejected by high-threshold bug
         await self._requeue_threshold_rejections()
+        # One-time: requeue player prop hypotheses now that prop backtesting is available
+        await self._requeue_prop_rejections()
         self._task = asyncio.create_task(self._loop())
         logger.info("Research loop started — autonomous hypothesis machine online")
 
@@ -1538,7 +1540,28 @@ class ResearchLoop:
                 f"from ≥0.8% to 0.5% (max observed edge is 0.83%)"
             )
 
-        total = count_high + count_mid + count_low
+        # Pass 4: final sweep — lower any remaining threshold > 0.003 to 0.003
+        # The 0.005 threshold from pass 3 still filters out edges in the 0.3-0.5%
+        # range which are common and profitable at scale. 0.3% is the minimum
+        # detectable edge that is consistently above noise.
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM hypotheses "
+            "WHERE edge_threshold > 0.003 AND status IN ('draft', 'backtesting')"
+        )
+        row = await cursor.fetchone()
+        count_final = row[0] if row else 0
+
+        if count_final > 0:
+            await db.execute(
+                "UPDATE hypotheses SET edge_threshold = 0.003 "
+                "WHERE edge_threshold > 0.003 AND status IN ('draft', 'backtesting')"
+            )
+            logger.info(
+                f"Edge threshold migration pass 4: lowered {count_final} hypotheses "
+                f"to 0.3% (final sweep — captures 0.3-0.5% edges)"
+            )
+
+        total = count_high + count_mid + count_low + count_final
         if total > 0:
             await db.commit()
             logger.info(
@@ -1639,6 +1662,43 @@ class ResearchLoop:
             f"Threshold rejection requeue: moved {count} hypotheses from rejected → backtesting "
             f"(were victims of edge_threshold ≥ 3% bug, now set to 1.5%)"
         )
+
+    async def _requeue_prop_rejections(self) -> None:
+        """Requeue player prop hypotheses rejected before prop backtesting was available.
+
+        These were rejected with 'auto:untestable_no_prop_backtest' because
+        historical_odds_cache lacked prop data. Now prop_snapshots is wired
+        into BacktestEngine, so they can be properly tested.
+        """
+        db = self.hypothesis_manager._db
+        if db is None:
+            return
+
+        cursor = await db.execute(
+            "SELECT hypothesis_id FROM hypotheses "
+            "WHERE status = 'rejected' "
+            "AND promoted_by LIKE '%untestable_no_prop_backtest%'"
+        )
+        rows = await cursor.fetchall()
+
+        if not rows:
+            return
+
+        count = 0
+        for (hypothesis_id,) in rows:
+            await db.execute(
+                "UPDATE hypotheses SET status = 'draft', edge_threshold = 0.003 "
+                "WHERE hypothesis_id = ?",
+                (hypothesis_id,),
+            )
+            count += 1
+
+        if count > 0:
+            await db.commit()
+            logger.info(
+                f"Prop rejection requeue: moved {count} player prop hypotheses "
+                f"from rejected → draft (prop_snapshots backtesting now available)"
+            )
 
     async def stop(self) -> None:
         """Stop the research loop."""
@@ -3718,26 +3778,9 @@ class ResearchLoop:
             sport = h.get("sport", "")
             market = h.get("market_type", "")
 
-            # Player prop hypotheses can't be backtested — historical_odds_cache
-            # contains game-level lines only (h2h/spreads/totals), not player props.
-            # prop_snapshots has data but isn't wired to backtest engine yet.
-            # Reject as untestable instead of parking in backtesting with 0 events.
-            if market.startswith("player_"):
-                try:
-                    await self.hypothesis_manager.update_status(
-                        h["hypothesis_id"], "rejected",
-                        "auto:untestable_no_prop_backtest — historical_odds_cache "
-                        "lacks player prop data. Will re-enable when prop backtest "
-                        "pipeline is implemented."
-                    )
-                    self._rejections += 1
-                    logger.info(
-                        f"Research: rejected {h['hypothesis_id']} ({market}) "
-                        f"— no prop backtesting pipeline available"
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to reject prop hypothesis {h['hypothesis_id']}: {e}")
-                continue
+            # Player prop hypotheses now backtested via prop_snapshots table.
+            # The backtest engine fetches multi-book prop data and applies
+            # consensus devig with MIN_BOOKS=2 (thinner markets than game-level).
 
             # Skip hypotheses where most context conditions are unfilterable.
             # These produce identical event sets across different hypotheses

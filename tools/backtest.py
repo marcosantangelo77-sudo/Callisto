@@ -452,12 +452,24 @@ class BacktestEngine:
         logger.info(f"Backtest {run_id}: fetching {sport} odds {start_date} to {end_date}")
 
         # Determine which markets to fetch based on hypothesis type
-        if market_type.startswith("player_"):
-            # For player props, we need the main odds for game-level context
-            # and then per-event prop odds
-            fetch_markets = "h2h,spreads,totals"
+        is_prop_hypothesis = market_type.startswith("player_")
+
+        if is_prop_hypothesis:
+            # Player props: fetch from prop_snapshots table (multi-book prop data)
+            # instead of historical_odds_cache (game-level only).
+            fetch_markets = "h2h,spreads,totals"  # Still need game-level for context
+            prop_lines = await self.historical_fetcher.fetch_prop_snapshots(
+                sport=sport,
+                start_date=start_date,
+                end_date=end_date,
+                market_type=market_type,
+            )
+            logger.info(
+                f"Backtest {run_id}: fetched {len(prop_lines)} prop lines from prop_snapshots"
+            )
         else:
             fetch_markets = "h2h,spreads,totals"
+            prop_lines = []
 
         fetch_result = await self.historical_fetcher.bulk_fetch_date_range(
             sport=sport,
@@ -574,6 +586,29 @@ class BacktestEngine:
             logger.info(
                 f"Backtest {run_id}: context filter removed {context_filtered} games "
                 f"that didn't match schedule requirements"
+            )
+
+        # ── Player prop backtesting from prop_snapshots ──
+        # Process prop lines fetched from prop_snapshots table (separate from
+        # game-level odds). Each prop_line has multi-book data for a specific
+        # player/market/line combination.
+        if is_prop_hypothesis and prop_lines:
+            events_from_props, signals_from_props = await self._process_prop_snapshots(
+                run_id=run_id,
+                hypothesis_id=hypothesis_id,
+                prop_lines=prop_lines,
+                target_book=target_book,
+                edge_threshold=edge_threshold,
+                devig_method=devig_method,
+                config=config,
+                h_sport=sport,
+                filters=filters,
+            )
+            total_events += events_from_props
+            total_signals += signals_from_props
+            logger.info(
+                f"Backtest {run_id}: prop snapshots produced "
+                f"{events_from_props} events, {signals_from_props} signals"
             )
 
         # ── Compound filter fallback ──
@@ -2458,6 +2493,149 @@ class BacktestEngine:
                 ))
 
         # Batch INSERT all rows in one transaction
+        if _pending_rows:
+            await self._db.executemany(
+                "INSERT OR IGNORE INTO backtest_events "
+                "(run_id, event_id, hypothesis_id, sport, player, market, "
+                "line, side, book, book_odds_american, book_implied_prob, "
+                "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
+                "signal_generated, game_date, snapshot_time) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                _pending_rows,
+            )
+            await self._db.commit()
+        return events, signals
+
+    async def _process_prop_snapshots(
+        self,
+        run_id: str,
+        hypothesis_id: str,
+        prop_lines: list[dict],
+        target_book: str,
+        edge_threshold: float,
+        devig_method: str,
+        config: dict,
+        h_sport: str,
+        filters: dict = None,
+    ) -> tuple[int, int]:
+        """Process prop_snapshots data for player prop backtesting.
+
+        Each prop_line is a dict with multi-book data for one player/market/line.
+        We devig the non-target books to get fair probability, then compute
+        edge vs target book.
+
+        Returns (total_events, total_signals).
+        """
+        from tools.math_utils import american_to_implied, american_to_decimal
+        from tools.devig import devig_american
+        from tools.ev import ev_binary
+        from tools.sizing import kelly_binary
+
+        events = 0
+        signals = 0
+        _pending_rows = []
+
+        # Relaxed book requirement for props — prop markets are thinner
+        MIN_BOOKS_FOR_PROP_SIGNAL = 2
+
+        for prop in prop_lines:
+            player = prop["player"]
+            market = prop["market"]
+            line = prop["line"]
+            event_id = prop["event_id"]
+            game_date = prop["game_date"]
+            books_data = prop["books"]
+
+            # Side filter from hypothesis
+            side_filter = None
+            if filters and "side_filter" in filters:
+                side_filter = filters["side_filter"].lower()
+
+            # Group books by side
+            over_books = [b for b in books_data if b["side"].lower() == "over"]
+            under_books = [b for b in books_data if b["side"].lower() == "under"]
+
+            # Need at least Over + Under from different books for devig
+            if not over_books or not under_books:
+                continue
+
+            # Find target book entries
+            target_over = [b for b in over_books if b["book"].lower() == target_book]
+            target_under = [b for b in under_books if b["book"].lower() == target_book]
+
+            # Non-target books for consensus
+            non_target_over = [b for b in over_books if b["book"].lower() != target_book]
+            non_target_under = [b for b in under_books if b["book"].lower() != target_book]
+            non_target_count = len(set(b["book"] for b in non_target_over + non_target_under))
+
+            # Skip if no target book data
+            if not target_over and not target_under:
+                continue
+
+            # Devig non-target books for fair probability
+            fair_overs = []
+            for bo in non_target_over:
+                # Find matching under from same book
+                matching_under = [bu for bu in non_target_under if bu["book"] == bo["book"]]
+                if matching_under:
+                    try:
+                        result = devig_american(bo["price_american"], matching_under[0]["price_american"])
+                        fair_overs.append((result["fair_prob_1"], bo["book"]))
+                    except Exception:
+                        continue
+
+            if not fair_overs:
+                continue
+
+            consensus_over = sum(f for f, _ in fair_overs) / len(fair_overs)
+            consensus_under = 1.0 - consensus_over
+
+            for side, consensus_fair, target_entries in [
+                ("Over", consensus_over, target_over),
+                ("Under", consensus_under, target_under),
+            ]:
+                if side_filter and side.lower() != side_filter:
+                    continue
+                if not target_entries:
+                    continue
+
+                target_price = target_entries[0]["price_american"]
+                target_implied = american_to_implied(target_price)
+                edge = consensus_fair - target_implied
+                ev = ev_binary(consensus_fair, american_to_decimal(target_price))
+                kelly = kelly_binary(consensus_fair, american_to_decimal(target_price))
+
+                # Hard cap on edge magnitude
+                MAX_EDGE_MAGNITUDE = 0.15
+                if abs(edge) > MAX_EDGE_MAGNITUDE:
+                    edge = MAX_EDGE_MAGNITUDE if edge > 0 else -MAX_EDGE_MAGNITUDE
+
+                is_signal = (edge >= edge_threshold
+                             and non_target_count >= MIN_BOOKS_FOR_PROP_SIGNAL)
+
+                events += 1
+                if is_signal:
+                    signals += 1
+
+                _pending_rows.append((
+                    run_id, event_id, hypothesis_id, h_sport,
+                    player, market, line, side, target_book,
+                    target_price, round(target_implied, 6),
+                    round(consensus_fair, 6),
+                    json.dumps({
+                        "edge_method": "consensus_devig",
+                        "books_used": non_target_count,
+                        "devig_method": devig_method,
+                        "target_book": target_book,
+                        "consensus_fair_prob": round(consensus_fair, 6),
+                        "contributing_books": [bk for _, bk in fair_overs],
+                        "data_source": "prop_snapshots",
+                    }),
+                    round(edge, 6), round(ev, 6), round(kelly, 6),
+                    is_signal, game_date, game_date,
+                ))
+
+        # Batch INSERT
         if _pending_rows:
             await self._db.executemany(
                 "INSERT OR IGNORE INTO backtest_events "

@@ -908,7 +908,9 @@ def _sport_title(sport_key: str) -> str:
 # ---------------------------------------------------------------------------
 
 # Cache for discovered golf category IDs (populated at runtime)
+# Capped at 100 entries to prevent unbounded memory growth during tournament runs.
 _golf_category_cache: dict[int, dict[str, int]] = {}
+_GOLF_CACHE_MAX = 100
 
 
 async def discover_golf_categories(eventgroup_id: int) -> dict[str, int]:
@@ -943,6 +945,9 @@ async def discover_golf_categories(eventgroup_id: int) -> dict[str, int]:
                     if sub_id and sub_name:
                         categories[f"{cat_name}/{sub_name}"] = sub_id
 
+        if len(_golf_category_cache) >= _GOLF_CACHE_MAX:
+            oldest = next(iter(_golf_category_cache))
+            del _golf_category_cache[oldest]
         _golf_category_cache[eventgroup_id] = categories
         logger.info(f"Discovered {len(categories)} golf categories for eventgroup {eventgroup_id}")
         return categories

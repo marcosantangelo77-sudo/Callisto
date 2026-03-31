@@ -48,6 +48,93 @@ class HistoricalOddsFetcher:
         if self._db:
             await self._db.close()
 
+    async def fetch_prop_snapshots(
+        self,
+        sport: str,
+        start_date: str,
+        end_date: str,
+        market_type: str = "",
+    ) -> list[dict]:
+        """Fetch player prop snapshots from prop_snapshots table for backtesting.
+
+        Returns list of dicts grouped by (event_id, player, market, line) with
+        multi-book data for consensus devig.
+
+        Each dict: {
+            "event_id": str, "player": str, "market": str, "line": float,
+            "home_team": str, "away_team": str, "game_date": str,
+            "books": [{"book": str, "side": str, "price_american": int}],
+        }
+        """
+        db = self._read_db or self._db
+        if db is None:
+            return []
+
+        # Build market filter
+        market_clause = ""
+        params: list = [sport, start_date, end_date]
+        if market_type:
+            market_clause = "AND market = ? "
+            params.append(market_type)
+
+        cursor = await db.execute(
+            "SELECT event_id, player, market, line, side, book, "
+            "price_american, home_team, away_team, DATE(snapshot_time) as game_date "
+            "FROM prop_snapshots "
+            "WHERE sport = ? AND DATE(snapshot_time) >= ? AND DATE(snapshot_time) <= ? "
+            f"{market_clause}"
+            "ORDER BY event_id, player, market, line, book, snapshot_time",
+            tuple(params),
+        )
+        rows = await cursor.fetchall()
+
+        # Group by (event_id, player, market, line) — take latest snapshot per book
+        from collections import defaultdict
+        groups: dict[tuple, dict] = {}
+        seen_book: dict[tuple, set] = defaultdict(set)
+
+        for row in rows:
+            eid, player, market, line, side, book, price, home, away, gdate = row
+            key = (eid or f"{gdate}|{home}|{away}", player, market, line)
+
+            if key not in groups:
+                groups[key] = {
+                    "event_id": key[0], "player": player, "market": market,
+                    "line": line, "home_team": home or "", "away_team": away or "",
+                    "game_date": gdate, "books": {},
+                }
+
+            # Keep latest snapshot per book per side (overwrite older)
+            book_side_key = (book, side)
+            groups[key]["books"][book_side_key] = {
+                "book": book, "side": side, "price_american": price,
+            }
+
+        # Flatten books dict to list
+        result = []
+        for g in groups.values():
+            g["books"] = list(g["books"].values())
+            if len(g["books"]) >= 2:  # Need at least 2 book entries for devig
+                result.append(g)
+
+        logger.info(
+            f"Prop snapshots: {sport} {start_date}→{end_date}: "
+            f"{len(rows)} raw rows → {len(result)} prop lines (≥2 books)"
+        )
+        return result
+
+    async def get_prop_dates(self, sport: str) -> list[str]:
+        """Get distinct dates with prop snapshot data for a sport."""
+        db = self._read_db or self._db
+        if db is None:
+            return []
+        cursor = await db.execute(
+            "SELECT DISTINCT DATE(snapshot_time) as d FROM prop_snapshots "
+            "WHERE sport = ? ORDER BY d",
+            (sport,),
+        )
+        return [row[0] for row in await cursor.fetchall()]
+
     async def fetch_historical_odds(
         self,
         sport: str,

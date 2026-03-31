@@ -129,7 +129,9 @@ COACHING_TENURE_FALLBACK = {
 }
 
 # ESPN team ID lookup will be populated dynamically
+# Capped at 500 entries to prevent unbounded memory growth.
 _team_cache: dict[str, dict] = {}
+_TEAM_CACHE_MAX = 500
 _client: Optional[httpx.AsyncClient] = None
 
 
@@ -401,6 +403,7 @@ def compute_tci(roster: dict, team_info: dict) -> dict:
 
 _espn_teams_cache: dict[str, tuple[list, float]] = {}  # key -> (teams, timestamp)
 _ESPN_CACHE_TTL = 3600  # 1 hour
+_ESPN_CACHE_MAX = 50    # hard cap — evict oldest on overflow
 
 
 async def _get_all_espn_teams(
@@ -417,6 +420,9 @@ async def _get_all_espn_teams(
     url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams?limit=400"
     data = await _espn_get(url)
     teams = data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+    if len(_espn_teams_cache) >= _ESPN_CACHE_MAX:
+        oldest_key = min(_espn_teams_cache, key=lambda k: _espn_teams_cache[k][1])
+        del _espn_teams_cache[oldest_key]
     _espn_teams_cache[cache_key] = (teams, time.time())
     return teams
 

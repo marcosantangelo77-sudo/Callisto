@@ -637,6 +637,17 @@ class SelfRepairEngine:
                         logger.debug(f"Prune {table}: {e}")
                 if pruned:
                     await db.commit()
+                # Always checkpoint WAL to prevent unbounded WAL growth.
+                # Without this, WAL can grow to 20GB+ and degrade performance.
+                try:
+                    result = await (await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")).fetchone()
+                    if result:
+                        busy, log, checkpointed = result
+                        if log > 0:
+                            logger.info(f"WAL checkpoint: {checkpointed}/{log} pages checkpointed (busy={busy})")
+                except Exception as e:
+                    logger.debug(f"WAL checkpoint: {e}")
+                if pruned:
                     try:
                         await db.execute("VACUUM")
                     except Exception:
