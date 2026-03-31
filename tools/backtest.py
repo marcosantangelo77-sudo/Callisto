@@ -3270,7 +3270,23 @@ class BacktestEngine:
         return [r[0] for r in await cursor.fetchall()]
 
     async def recalculate_run_stats(self, run_id: str) -> bool:
-        """Recalculate win/loss/hit_rate for a run from its SIGNALED events only."""
+        """Recalculate ALL run stats from backtest_events.
+
+        Updates signals_generated, total_events, win/loss/hit_rate, and edge
+        metrics. This is critical because retroactive signal updates and game
+        result resolution change backtest_events AFTER the run completes.
+        """
+        # Recount total events and signals from backtest_events (source of truth)
+        cursor = await self._db.execute(
+            "SELECT COUNT(*), SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) "
+            "FROM backtest_events WHERE run_id = ?",
+            (run_id,),
+        )
+        row = await cursor.fetchone()
+        total_events = row[0] or 0
+        signals_count = row[1] or 0
+
+        # Get win/loss from SIGNAL events only
         cursor = await self._db.execute(
             "SELECT actual_result, COUNT(*) FROM backtest_events "
             "WHERE run_id = ? AND actual_result IS NOT NULL "
@@ -3285,8 +3301,8 @@ class BacktestEngine:
         pushes = results.get("push", 0)
         total_decided = wins + losses
 
-        if total_decided == 0:
-            return False  # Nothing resolved yet
+        if total_decided == 0 and signals_count == 0:
+            return False  # Nothing to update
 
         # Count unresolved
         cursor = await self._db.execute(
@@ -3313,10 +3329,12 @@ class BacktestEngine:
 
         await self._db.execute(
             "UPDATE backtest_runs SET "
+            "total_events = ?, signals_generated = ?, "
             "actual_win = ?, actual_loss = ?, actual_push = ?, unresolved = ?, "
             "hit_rate = ?, avg_edge = ?, avg_ev = ?, avg_clv = ? "
             "WHERE run_id = ?",
-            (wins, losses, pushes, unresolved, hit_rate, avg_edge, avg_ev, avg_clv, run_id),
+            (total_events, signals_count, wins, losses, pushes, unresolved,
+             hit_rate, avg_edge, avg_ev, avg_clv, run_id),
         )
         await self._db.commit()
         logger.info(

@@ -1386,6 +1386,8 @@ class ResearchLoop:
         # Retroactively update signal_generated on existing backtest events
         # to match lowered thresholds — unblocks stalled promotions
         await self._retroactive_signal_update()
+        # Requeue hypotheses falsely rejected for '0 signals' due to stale stats
+        await self._requeue_stale_signal_rejections()
         # Reject any anti-predictive hypotheses still stuck in active states
         await self._reject_anti_predictive()
         self._task = asyncio.create_task(self._loop())
@@ -1702,6 +1704,47 @@ class ResearchLoop:
                 f"Prop rejection requeue: moved {count} player prop hypotheses "
                 f"from rejected → draft (prop_snapshots backtesting now available)"
             )
+
+    async def _requeue_stale_signal_rejections(self) -> None:
+        """Requeue hypotheses rejected with '0 signals' that actually have signals.
+
+        Race condition: retroactive signal update runs after backtest but before
+        evaluate. The evaluate phase sees stale signals_generated=0 in backtest_runs
+        and rejects, even though backtest_events now has signals. Fix: requeue these
+        to backtesting so they get a fresh evaluation with correct stats.
+        """
+        db = self.hypothesis_manager._db
+        if db is None:
+            return
+
+        # Find hypotheses rejected for "0 signals" that actually have signals in events
+        cursor = await db.execute(
+            "SELECT h.hypothesis_id, h.name, "
+            "  (SELECT COUNT(*) FROM backtest_events be "
+            "   WHERE be.hypothesis_id = h.hypothesis_id AND be.signal_generated = 1) as actual_signals "
+            "FROM hypotheses h "
+            "WHERE h.status = 'rejected' "
+            "AND h.promoted_by LIKE '%0 signals%' "
+            "HAVING actual_signals > 0"
+        )
+        rows = await cursor.fetchall()
+
+        count = 0
+        for hid, name, actual_signals in rows:
+            await self.hypothesis_manager.update_status(
+                hid, "backtesting",
+                f"auto:requeued_stale_signal_rejection — rejected with '0 signals' "
+                f"but backtest_events has {actual_signals} signals. Race condition fix."
+            )
+            count += 1
+            logger.info(
+                f"Requeued {hid} ({name}): rejected for '0 signals' but has "
+                f"{actual_signals} actual signals in backtest_events"
+            )
+
+        if count:
+            await db.commit()
+            logger.info(f"Stale signal rejection requeue: restored {count} hypotheses")
 
     async def _reject_anti_predictive(self) -> None:
         """Reject any hypothesis in backtesting/paper_trading with IC < -0.10.
