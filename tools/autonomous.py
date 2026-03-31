@@ -2305,22 +2305,46 @@ class ResearchLoop:
                 import linecache
                 linecache.clearcache()
 
-                # Proactive DB prune — prop_snapshots grows 15K rows/hr
+                # Proactive DB prune — prop_snapshots grows 15K rows/hr,
+                # backtest_events from rejected hypotheses bloat DB indefinitely
                 try:
                     import aiosqlite
                     _prune_db = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
                     _prune_cutoff = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
                     async with aiosqlite.connect(_prune_db) as _pdb:
                         await _pdb.execute("PRAGMA busy_timeout = 60000")
-                        r = await (await _pdb.execute(
+                        await _pdb.execute(
                             "DELETE FROM prop_snapshots WHERE snapshot_time < ?",
                             (_prune_cutoff,)
-                        )).fetchone()
+                        )
                         await _pdb.execute(
                             "DELETE FROM deferred_work_queue WHERE status = 'done' AND created_at < ?",
                             (_prune_cutoff,)
                         )
+                        # Prune backtest_events for rejected hypotheses (>2 days old)
+                        # With 3192 rejected hyps, this recovers massive DB space
+                        _pruned = await _pdb.execute(
+                            "DELETE FROM backtest_events WHERE hypothesis_id IN ("
+                            "  SELECT hypothesis_id FROM hypotheses "
+                            "  WHERE status = 'rejected' AND updated_at < ?"
+                            ")",
+                            (_prune_cutoff,)
+                        )
+                        _pruned_count = _pruned.rowcount
+                        # Also prune backtest_runs for rejected hypotheses
+                        await _pdb.execute(
+                            "DELETE FROM backtest_runs WHERE hypothesis_id IN ("
+                            "  SELECT hypothesis_id FROM hypotheses "
+                            "  WHERE status = 'rejected' AND updated_at < ?"
+                            ")",
+                            (_prune_cutoff,)
+                        )
                         await _pdb.commit()
+                        if _pruned_count > 0:
+                            logger.info(
+                                f"DB prune: deleted {_pruned_count} backtest_events "
+                                f"from rejected hypotheses"
+                            )
                 except Exception:
                     pass  # Non-critical — self_repair will catch it
 
@@ -4109,12 +4133,19 @@ class ResearchLoop:
                     )
                     continue
 
+                _bt_t0 = time.time()
                 result = await self.backtest_engine.run_backtest(
                     hypothesis_id=h["hypothesis_id"],
                     start_date=start_date,
                     end_date=end_date,
                     credit_budget=30,  # Enough for ~10 dates × 3 markets
                 )
+                _bt_elapsed = time.time() - _bt_t0
+                if _bt_elapsed > 30:
+                    logger.warning(
+                        f"Slow backtest: {h.get('name', h['hypothesis_id'])} "
+                        f"took {_bt_elapsed:.1f}s"
+                    )
 
                 # Handle untestable hypotheses — context filtering not available
                 if result.get("error") == "untestable":
@@ -4331,9 +4362,11 @@ class ResearchLoop:
         backtesting = await self.hypothesis_manager.list_hypotheses(status="backtesting")
 
         # ── Batch-limit: evaluate top N by signal count per cycle ──
-        # With 60s/hyp timeout and 600s phase timeout, ~30 fits safely.
-        # Most evals complete in <5s; only edge-case hypotheses hit 60s.
-        MAX_EVALUATE_PER_CYCLE = 30
+        # With 60s/hyp timeout and 600s phase timeout, 8 fits safely
+        # (8 × 60s = 480s worst-case, leaves 120s margin).
+        # Prior value of 30 caused 25% cycle stall rate when >10 hyps
+        # triggered retroactive edge_threshold DB writes simultaneously.
+        MAX_EVALUATE_PER_CYCLE = 8
         if len(backtesting) > MAX_EVALUATE_PER_CYCLE:
             try:
                 db = self.hypothesis_manager._db
@@ -4461,6 +4494,7 @@ class ResearchLoop:
 
                 # Per-hypothesis timeout: prevent a single slow auto_promote
                 # from consuming the entire 600s phase budget.
+                _eval_t0 = time.time()
                 try:
                     result = await asyncio.wait_for(
                         self.hypothesis_manager.auto_promote(h["hypothesis_id"]),
@@ -4472,6 +4506,12 @@ class ResearchLoop:
                         f"({h.get('name', '?')})"
                     )
                     continue
+                _eval_elapsed = time.time() - _eval_t0
+                if _eval_elapsed > 10:
+                    logger.warning(
+                        f"Slow eval: {h.get('name', h['hypothesis_id'])} "
+                        f"took {_eval_elapsed:.1f}s"
+                    )
                 action = result.get("action", "held")
 
                 if action == "promoted":
