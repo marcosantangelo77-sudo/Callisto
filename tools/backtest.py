@@ -1925,13 +1925,47 @@ class BacktestEngine:
                 return False
 
         # ── Home stand filter ──
-        if not _any_filter_matched and re.search(r"\bhome.stand\b", text):
+        if not _any_filter_matched and re.search(r"\bhome.?stand\b", text):
             _any_filter_matched = True
             # Home stand = home team not on road trip + playing frequently
             home_road = game_context.get("home_road_streak", 0)
             home_g4 = game_context.get("home_games_in_4", 1)
             # Home team must have 0 consecutive road games and 2+ games in 4 days
             if home_road > 0 or home_g4 < 2:
+                return False
+
+        # ── Favorite/underdog/dominant/narrative filters ──
+        # These patterns exist in _needs_context_filter but previously had no
+        # corresponding game-level filter, causing fail-closed (0 events).
+        # Use win_pct as proxy: favorites ~55%+, underdogs ~45%-, dominant ~60%+.
+        if not _any_filter_matched and re.search(r"\bfavorite\b", text):
+            _any_filter_matched = True
+            # At least one team must be a clear favorite (high win%)
+            hwp = game_context.get("home_win_pct", 0.5)
+            awp = game_context.get("away_win_pct", 0.5)
+            if hwp < 0.55 and awp < 0.55:
+                return False
+
+        if not _any_filter_matched and re.search(r"\bunderdog\b", text):
+            _any_filter_matched = True
+            hwp = game_context.get("home_win_pct", 0.5)
+            awp = game_context.get("away_win_pct", 0.5)
+            if hwp > 0.45 and awp > 0.45:
+                return False
+
+        if not _any_filter_matched and re.search(r"\bdominant\b", text):
+            _any_filter_matched = True
+            hwp = game_context.get("home_win_pct", 0.5)
+            awp = game_context.get("away_win_pct", 0.5)
+            if hwp < 0.60 and awp < 0.60:
+                return False
+
+        if not _any_filter_matched and re.search(r"\bnarrative\b", text):
+            _any_filter_matched = True
+            # Narrative games = high-profile matchups with extreme records
+            hwp = game_context.get("home_win_pct", 0.5)
+            awp = game_context.get("away_win_pct", 0.5)
+            if not (hwp >= 0.58 or hwp <= 0.42 or awp >= 0.58 or awp <= 0.42):
                 return False
 
         if not _any_filter_matched:

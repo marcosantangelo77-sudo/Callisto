@@ -1844,13 +1844,7 @@ class ResearchLoop:
                 created = 0
                 for nh in parsed.get("hypotheses", []):
                     try:
-                        await self.hypothesis_manager.create_hypothesis(
-                            name=nh.get("name", f"deferred_gen_{self._cycles}"),
-                            thesis=nh.get("thesis", ""),
-                            sport=nh.get("sport", "basketball_nba"),
-                            market_type=nh.get("market_type", "spreads"),
-                            edge_threshold=nh.get("edge_threshold", 0.015),
-                            model_config={
+                        _dq_config = {
                                 "source": "deferred_queue_claude",
                                 "cycle": self._cycles,
                                 "training_period_start": "2023-01-01",
@@ -1863,7 +1857,18 @@ class ResearchLoop:
                                     - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
                                     + timedelta(days=BACKTEST_GAP_DAYS)
                                 ),
-                            },
+                        }
+                        if nh.get("game_filters"):
+                            _dq_config["game_filters"] = nh["game_filters"]
+                        if nh.get("line_filters"):
+                            _dq_config["line_filters"] = nh["line_filters"]
+                        await self.hypothesis_manager.create_hypothesis(
+                            name=nh.get("name", f"deferred_gen_{self._cycles}"),
+                            thesis=nh.get("thesis", ""),
+                            sport=nh.get("sport", "basketball_nba"),
+                            market_type=nh.get("market_type", "spreads"),
+                            edge_threshold=nh.get("edge_threshold", 0.015),
+                            model_config=_dq_config,
                         )
                         created += 1
                     except Exception as e:
@@ -1887,13 +1892,7 @@ class ResearchLoop:
                 created = 0
                 for nh in parsed.get("new_hypotheses", []):
                     try:
-                        await self.hypothesis_manager.create_hypothesis(
-                            name=nh.get("name", "deferred_deep"),
-                            thesis=nh.get("thesis", ""),
-                            sport=nh.get("sport", "basketball_nba"),
-                            market_type=nh.get("market_type", "spreads"),
-                            edge_threshold=nh.get("edge_threshold", 0.015),
-                            model_config={
+                        _ddw_config = {
                                 "source": "deferred_deep_work",
                                 "cycle": self._cycles,
                                 "training_period_start": "2023-01-01",
@@ -1906,7 +1905,18 @@ class ResearchLoop:
                                     - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
                                     + timedelta(days=BACKTEST_GAP_DAYS)
                                 ),
-                            },
+                        }
+                        if nh.get("game_filters"):
+                            _ddw_config["game_filters"] = nh["game_filters"]
+                        if nh.get("line_filters"):
+                            _ddw_config["line_filters"] = nh["line_filters"]
+                        await self.hypothesis_manager.create_hypothesis(
+                            name=nh.get("name", "deferred_deep"),
+                            thesis=nh.get("thesis", ""),
+                            sport=nh.get("sport", "basketball_nba"),
+                            market_type=nh.get("market_type", "spreads"),
+                            edge_threshold=nh.get("edge_threshold", 0.015),
+                            model_config=_ddw_config,
                         )
                         created += 1
                     except Exception:
@@ -3421,9 +3431,14 @@ class ResearchLoop:
                         f"Vegas prices these. Find edges in dimensions models lack columns for: "
                         f"team identity/cohesion, roster sociology, ref biases, scheme geometry, "
                         f"SGP correlation mispricing, media narrative inflation, calendar quirks.\n\n"
+                        f"AVAILABLE game_filters: require_b2b, min_rest_mismatch, max_rest_days, "
+                        f"min_games_in_4, require_road_streak, require_sandwich, require_revenge, "
+                        f"min_win_pct, max_win_pct, win_pct_range, max_prev_margin, min_prev_margin, side\n"
+                        f"AVAILABLE line_filters: home_away, dog_fav, side, spread_range, spread_min\n\n"
                         f"EXISTING NAMES (avoid duplicates): {json.dumps(existing_names[:30])}\n\n"
                         f"RESPOND WITH JSON: {{\"hypotheses\": [{{\"name\": \"...\", \"thesis\": \"...\", "
-                        f"\"sport\": \"...\", \"market_type\": \"...\", \"edge_threshold\": 0.015}}]}}"
+                        f"\"sport\": \"...\", \"market_type\": \"...\", \"edge_threshold\": 0.015, "
+                        f"\"game_filters\": {{}}, \"line_filters\": {{}}}}]}}"
                     )
                     await self._work_queue.enqueue("hypothesis_gen", deferred_prompt, priority=2)
                     self._downtime_tracker.item_queued()
@@ -3441,10 +3456,15 @@ class ResearchLoop:
                         f"Sports: {RESEARCH_SPORTS}\n"
                         f"Market types: h2h, spreads, totals, player_points, player_strikeouts\n"
                         f"EXISTING (avoid duplicates): {json.dumps(existing_l)}\n\n"
+                        f"AVAILABLE game_filters: require_b2b, min_rest_mismatch, max_rest_days, "
+                        f"min_games_in_4, require_road_streak, require_sandwich, require_revenge, "
+                        f"min_win_pct, max_win_pct, win_pct_range, max_prev_margin, min_prev_margin, side\n"
+                        f"AVAILABLE line_filters: home_away, dog_fav, side, spread_range, spread_min\n\n"
                         f"RESPOND WITH JSON ONLY:\n"
                         f'{{"hypotheses": [{{"name": "sport_descriptive_name", '
                         f'"thesis": "Testable claim", "sport": "basketball_nba", '
-                        f'"market_type": "spreads", "edge_threshold": 0.003}}]}}'
+                        f'"market_type": "spreads", "edge_threshold": 0.003, '
+                        f'"game_filters": {{}}, "line_filters": {{}}}}]}}'
                     )
                     ladder_result = await escalate_with_ladder(
                         ladder_prompt, task_type="hypothesis_gen", timeout=120,
@@ -3456,19 +3476,24 @@ class ResearchLoop:
                         if parsed and isinstance(parsed, dict):
                             for nh in parsed.get("hypotheses", []):
                                 try:
+                                    _ladder_config = {
+                                            "source": f"ladder_{ladder_result.get('model_used', 'unknown')}",
+                                            "cycle": self._cycles,
+                                            "training_period_start": training_period_start,
+                                            "training_period_end": training_period_end,
+                                            "forward_test_start": forward_test_start,
+                                        }
+                                    if nh.get("game_filters"):
+                                        _ladder_config["game_filters"] = nh["game_filters"]
+                                    if nh.get("line_filters"):
+                                        _ladder_config["line_filters"] = nh["line_filters"]
                                     await self.hypothesis_manager.create_hypothesis(
                                         name=nh.get("name", f"ladder_gen_{self._cycles}"),
                                         thesis=nh.get("thesis", ""),
                                         sport=nh.get("sport", "basketball_nba"),
                                         market_type=nh.get("market_type", "spreads"),
                                         edge_threshold=nh.get("edge_threshold", 0.003),
-                                        model_config={
-                                            "source": f"ladder_{ladder_result.get('model_used', 'unknown')}",
-                                            "cycle": self._cycles,
-                                            "training_period_start": training_period_start,
-                                            "training_period_end": training_period_end,
-                                            "forward_test_start": forward_test_start,
-                                        },
+                                        model_config=_ladder_config,
                                     )
                                     total_created += 1
                                     self._hypotheses_generated += 1
@@ -3495,19 +3520,24 @@ class ResearchLoop:
                     )
                     for nh in local_hypos:
                         try:
+                            _local_config = {
+                                    "source": "local_fallback_gen",
+                                    "cycle": self._cycles,
+                                    "training_period_start": training_period_start,
+                                    "training_period_end": training_period_end,
+                                    "forward_test_start": forward_test_start,
+                                }
+                            if nh.get("game_filters"):
+                                _local_config["game_filters"] = nh["game_filters"]
+                            if nh.get("line_filters"):
+                                _local_config["line_filters"] = nh["line_filters"]
                             await self.hypothesis_manager.create_hypothesis(
                                 name=nh.get("name", f"local_gen_{self._cycles}"),
                                 thesis=nh.get("thesis", ""),
                                 sport=nh.get("sport", "basketball_nba"),
                                 market_type=nh.get("market_type", "spreads"),
                                 edge_threshold=nh.get("edge_threshold", 0.015),
-                                model_config={
-                                    "source": "local_fallback_gen",
-                                    "cycle": self._cycles,
-                                    "training_period_start": training_period_start,
-                                    "training_period_end": training_period_end,
-                                    "forward_test_start": forward_test_start,
-                                },
+                                model_config=_local_config,
                             )
                             total_created += 1
                         except Exception as e:
@@ -5386,13 +5416,7 @@ class ResearchLoop:
                     created = 0
                     for nh in actions.get("new_hypotheses", []):
                         try:
-                            await self.hypothesis_manager.create_hypothesis(
-                                name=nh.get("name", "claude_generated"),
-                                thesis=nh.get("thesis", ""),
-                                sport=nh.get("sport", "basketball_nba"),
-                                market_type=nh.get("market_type", "spreads"),
-                                edge_threshold=nh.get("edge_threshold", 0.015),
-                                model_config={
+                            _dw_config = {
                                     "source": "claude_deep_work",
                                     "cycle": self._cycles,
                                     "training_period_start": "2023-01-01",
@@ -5405,7 +5429,18 @@ class ResearchLoop:
                                         - timedelta(days=DEFAULT_TRAINING_WINDOW_DAYS)
                                         + timedelta(days=BACKTEST_GAP_DAYS)
                                     ),
-                                },
+                            }
+                            if nh.get("game_filters"):
+                                _dw_config["game_filters"] = nh["game_filters"]
+                            if nh.get("line_filters"):
+                                _dw_config["line_filters"] = nh["line_filters"]
+                            await self.hypothesis_manager.create_hypothesis(
+                                name=nh.get("name", "claude_generated"),
+                                thesis=nh.get("thesis", ""),
+                                sport=nh.get("sport", "basketball_nba"),
+                                market_type=nh.get("market_type", "spreads"),
+                                edge_threshold=nh.get("edge_threshold", 0.015),
+                                model_config=_dw_config,
                             )
                             created += 1
                         except Exception as e:
