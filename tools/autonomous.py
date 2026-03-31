@@ -2602,6 +2602,14 @@ class ResearchLoop:
             from tools.claude_code import is_available as claude_available, claude_code_query
 
             if claude_available():
+                # Load error patterns for institutional memory
+                _error_patterns = ""
+                try:
+                    with open("memory/error_patterns.md", "r") as f:
+                        _error_patterns = f.read()[:1500]
+                except Exception:
+                    pass
+
                 diag_report = (
                     "CALLISTO SELF-DIAGNOSTIC — CRITICAL ISSUES DETECTED\n\n"
                     + "\n".join(
@@ -2613,7 +2621,8 @@ class ResearchLoop:
                     f"- Backtests run: {self._backtests_run}\n"
                     f"- Promotions: {self._promotions}\n"
                     f"- Rejections: {self._rejections}\n\n"
-                    f"Analyze these diagnostics and suggest specific fixes. "
+                    + (f"KNOWN ERROR PATTERNS (do not repeat):\n{_error_patterns}\n\n" if _error_patterns else "")
+                    + f"Analyze these diagnostics and suggest specific fixes. "
                     f"Focus on: which data is missing, what to collect, "
                     f"and whether the pipeline should pause or adjust parameters."
                 )
@@ -4792,10 +4801,19 @@ class ResearchLoop:
 
             hypo_data.append(entry)
 
+        # Load error patterns for institutional memory
+        error_patterns = ""
+        try:
+            with open("memory/error_patterns.md", "r") as f:
+                error_patterns = f.read()[:1500]  # Cap at 1500 chars to save context
+        except Exception:
+            pass
+
         prompt = (
             f"CALLISTO BACKTEST INTERPRETATION — Cycle #{self._cycles}\n\n"
             f"You are a statistician reviewing backtest results. Your bias is toward "
             f"skepticism: most patterns are noise, and you must prove otherwise.\n\n"
+            + (f"KNOWN ERROR PATTERNS (avoid repeating these mistakes):\n{error_patterns}\n\n" if error_patterns else "")
             f"Before evaluating any hypothesis, ask: was this a FAIR test?\n"
             f"- If events=15 and signals=0, that is NOT enough data to reject — hold it.\n"
             f"- If avg_edge is computed from 1 book, the entire edge is an artifact.\n"
