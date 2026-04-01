@@ -3386,21 +3386,33 @@ class BacktestEngine:
         )
         return True
 
-    async def recalculate_all_active_runs(self) -> int:
-        """Recompute stats for ALL runs belonging to active (backtesting) hypotheses.
+    async def recalculate_all_active_runs(self, hypothesis_ids: list[str] | None = None) -> int:
+        """Recompute stats for runs belonging to active (backtesting) hypotheses.
 
         This fixes the stale backtest_runs problem: when retroactive signal updates
         or game result resolution change backtest_events AFTER the original run,
         backtest_runs stats become outdated. The promotion gate checks these stats,
         so stale data blocks promotion of winning hypotheses.
 
+        Args:
+            hypothesis_ids: If provided, only recalculate runs for these hypotheses.
+                           If None, recalculates ALL active runs (legacy behavior).
+
         Returns number of runs updated.
         """
-        cursor = await self._db.execute(
-            "SELECT DISTINCT br.run_id FROM backtest_runs br "
-            "JOIN hypotheses h ON br.hypothesis_id = h.hypothesis_id "
-            "WHERE h.status = 'backtesting'"
-        )
+        if hypothesis_ids:
+            placeholders = ",".join("?" for _ in hypothesis_ids)
+            cursor = await self._db.execute(
+                f"SELECT DISTINCT run_id FROM backtest_runs "
+                f"WHERE hypothesis_id IN ({placeholders})",
+                hypothesis_ids,
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT DISTINCT br.run_id FROM backtest_runs br "
+                "JOIN hypotheses h ON br.hypothesis_id = h.hypothesis_id "
+                "WHERE h.status = 'backtesting'"
+            )
         run_ids = [row[0] for row in await cursor.fetchall()]
 
         updated = 0

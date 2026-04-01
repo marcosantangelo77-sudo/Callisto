@@ -4416,25 +4416,13 @@ class ResearchLoop:
         except Exception as e:
             logger.warning(f"Backtest resolution failed: {e}")
 
-        # Recompute backtest_runs stats from backtest_events. This fixes the
-        # stale stats problem: retroactive signal updates and game resolution
-        # change backtest_events AFTER the run completes, but backtest_runs
-        # keeps the original stats. The promotion gate checks backtest_runs,
-        # so stale data blocks promotion of winning hypotheses.
-        try:
-            updated = await self.backtest_engine.recalculate_all_active_runs()
-            if updated > 0:
-                logger.info(f"Research: recomputed stats for {updated} backtest runs")
-        except Exception as e:
-            logger.warning(f"Backtest stats recompute failed: {e}")
-
         backtesting = await self.hypothesis_manager.list_hypotheses(status="backtesting")
 
         # ── Batch-limit: evaluate top N by signal count per cycle ──
+        # IMPORTANT: batch selection happens BEFORE stats recalculation so we
+        # only recalculate the hypotheses we're actually evaluating (not all 40+).
         # With 60s/hyp timeout and 600s phase timeout, 8 fits safely
         # (8 × 60s = 480s worst-case, leaves 120s margin).
-        # Prior value of 30 caused 25% cycle stall rate when >10 hyps
-        # triggered retroactive edge_threshold DB writes simultaneously.
         MAX_EVALUATE_PER_CYCLE = 8
         if len(backtesting) > MAX_EVALUATE_PER_CYCLE:
             try:
@@ -4467,6 +4455,23 @@ class ResearchLoop:
                 )
             except Exception as e:
                 logger.warning(f"Batch-limit query failed, evaluating all: {e}")
+
+        # Recompute backtest_runs stats from backtest_events — scoped to the
+        # batch being evaluated. This fixes the stale stats problem: retroactive
+        # signal updates and game resolution change backtest_events AFTER the run
+        # completes, but backtest_runs keeps the original stats. The promotion
+        # gate checks backtest_runs, so stale data blocks promotion.
+        # Previously recalculated ALL 40+ backtesting hypotheses every cycle,
+        # causing 10-15 min stalls. Now scoped to the 8-13 in the batch.
+        try:
+            batch_ids = [h["hypothesis_id"] for h in backtesting]
+            updated = await self.backtest_engine.recalculate_all_active_runs(
+                hypothesis_ids=batch_ids
+            )
+            if updated > 0:
+                logger.info(f"Research: recomputed stats for {updated} backtest runs (batch of {len(batch_ids)})")
+        except Exception as e:
+            logger.warning(f"Backtest stats recompute failed: {e}")
 
         for h in backtesting:
             try:
