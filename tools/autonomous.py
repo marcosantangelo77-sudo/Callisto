@@ -3264,19 +3264,24 @@ class ResearchLoop:
                     except Exception:
                         pass  # Fall back to unfiltered if query fails
 
+                # Gate on BOTH game count AND odds data availability
+                sports_with_odds = {s for s, dr in date_ranges.items() if dr.get("records", 0) > 0}
                 eligible_sports = [
                     s for s in RESEARCH_SPORTS
                     if game_counts_by_sport.get(s, 0) >= MIN_GAMES_FOR_HYPOTHESIS
+                    and s in sports_with_odds
                 ]
-                ineligible_sports = [
-                    f"{s} ({game_counts_by_sport.get(s, 0)} games)"
-                    for s in RESEARCH_SPORTS
-                    if game_counts_by_sport.get(s, 0) < MIN_GAMES_FOR_HYPOTHESIS
-                ]
+                ineligible_sports = []
+                for s in RESEARCH_SPORTS:
+                    gc = game_counts_by_sport.get(s, 0)
+                    if gc < MIN_GAMES_FOR_HYPOTHESIS:
+                        ineligible_sports.append(f"{s} ({gc} games)")
+                    elif s not in sports_with_odds:
+                        ineligible_sports.append(f"{s} ({gc} games, NO odds data)")
                 if ineligible_sports:
                     logger.info(
-                        f"Research: sports below {MIN_GAMES_FOR_HYPOTHESIS}-game minimum "
-                        f"(excluded from hypothesis gen): {ineligible_sports}"
+                        f"Research: sports excluded from hypothesis gen "
+                        f"(need >={MIN_GAMES_FOR_HYPOTHESIS} games AND odds data): {ineligible_sports}"
                     )
 
                 # Build regime analysis context — highlight teams with actionable signals
