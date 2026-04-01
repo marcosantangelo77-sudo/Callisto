@@ -2944,7 +2944,7 @@ class ResearchLoop:
                 logger.warning(f"Data collection failed for {sport}: {e}")
 
         # Statcast pitch-level data for MLB (free from Baseball Savant)
-        if "baseball_mlb" in ordered_sports:
+        if "baseball_mlb" in RESEARCH_SPORTS:
             try:
                 for dt in dates[:3]:  # Last 3 days only (Statcast is dense)
                     date_fmt = dt.strftime("%Y-%m-%d")

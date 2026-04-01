@@ -3471,7 +3471,7 @@ class BacktestEngine:
             f"Run {run_id}: recalculated — {wins}W/{losses}L/{pushes}P "
             f"({unresolved} unresolved), signals={signals_count} unique/{raw_signals} raw, "
             f"hr={hit_rate:.3f}, p={p_binomial:.4f}, "
-            f"brier={brier:.3f if brier else 'N/A'}, ic={ic:.3f if ic else 'N/A'}"
+            f"brier={f'{brier:.3f}' if brier is not None else 'N/A'}, ic={f'{ic:.3f}' if ic is not None else 'N/A'}"
             if hit_rate else
             f"Run {run_id}: recalculated — {wins}W/{losses}L/{pushes}P "
             f"({unresolved} unresolved), signals={signals_count} unique/{raw_signals} raw"
