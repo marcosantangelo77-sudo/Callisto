@@ -3339,20 +3339,110 @@ class BacktestEngine:
         avg_ev = row[1]
         avg_clv = row[2]
 
+        # ── Recalculate statistical metrics (p-value, Brier, IC, Sharpe, ROI) ──
+        # These were previously left stale, blocking promotion even when hit rates improved.
+        p_binomial = 1.0
+        p_ttest = 1.0
+        z_score = 0.0
+        sharpe = 0.0
+        sortino = None
+        brier = None
+        ic = None
+        roi_pct = 0.0
+
+        if total_decided > 0:
+            from scipy.stats import binomtest, ttest_1samp
+            import numpy as np
+
+            # Binomial test: wins vs expected 50%
+            result = binomtest(wins, total_decided, 0.5, alternative="greater")
+            p_binomial = result.pvalue
+
+            # Get per-signal returns for t-test, Sharpe, Sortino, ROI
+            cursor = await self._db.execute(
+                "SELECT book_odds_american, actual_result, model_fair_prob, edge "
+                "FROM backtest_events "
+                "WHERE run_id = ? AND signal_generated = 1 AND actual_result IN ('won', 'lost')",
+                (run_id,),
+            )
+            signal_events = await cursor.fetchall()
+
+            returns = []
+            brier_preds = []
+            brier_outcomes = []
+            predicted_edges = []
+            realized_edges = []
+
+            for odds_am, result_str, fair_prob, edge_val in signal_events:
+                if result_str == "won" and odds_am:
+                    try:
+                        from tools.math_utils import american_to_decimal
+                        dec = american_to_decimal(odds_am)
+                        returns.append(dec - 1.0)
+                        if edge_val is not None:
+                            predicted_edges.append(edge_val)
+                            realized_edges.append(dec - 1.0)
+                    except Exception:
+                        returns.append(1.0)
+                elif result_str == "lost":
+                    returns.append(-1.0)
+                    if edge_val is not None:
+                        predicted_edges.append(edge_val)
+                        realized_edges.append(-1.0)
+
+                if fair_prob is not None:
+                    brier_preds.append(fair_prob)
+                    brier_outcomes.append(1 if result_str == "won" else 0)
+
+            if len(returns) >= 2:
+                arr = np.array(returns)
+                t_stat, p_val = ttest_1samp(arr, 0)
+                p_ttest = p_val / 2 if t_stat > 0 else 1 - p_val / 2
+                z_score = t_stat
+                sharpe = float(arr.mean() / arr.std()) if arr.std() > 0 else 0.0
+                neg = arr[arr < 0]
+                if len(neg) > 0 and neg.std() > 0:
+                    sortino = float(arr.mean() / neg.std())
+
+            if returns:
+                roi_pct = sum(returns) / len(returns) * 100
+
+            # Brier score
+            if len(brier_preds) >= 2:
+                bp = np.array(brier_preds)
+                bo = np.array(brier_outcomes)
+                brier = float(np.mean((bp - bo) ** 2))
+
+            # Information coefficient (Pearson correlation)
+            if len(predicted_edges) >= 3:
+                pe = np.array(predicted_edges)
+                re = np.array(realized_edges)
+                if pe.std() > 0 and re.std() > 0:
+                    ic = float(np.corrcoef(pe, re)[0, 1])
+
         await self._db.execute(
             "UPDATE backtest_runs SET "
             "total_events = ?, signals_generated = ?, "
             "actual_win = ?, actual_loss = ?, actual_push = ?, unresolved = ?, "
-            "hit_rate = ?, avg_edge = ?, avg_ev = ?, avg_clv = ? "
+            "hit_rate = ?, avg_edge = ?, avg_ev = ?, avg_clv = ?, "
+            "p_value_binomial = ?, p_value_ttest = ?, z_score = ?, "
+            "sharpe_ratio = ?, sortino_ratio_val = ?, "
+            "brier_score = ?, information_coefficient = ?, roi_pct = ? "
             "WHERE run_id = ?",
             (total_events, signals_count, wins, losses, pushes, unresolved,
-             hit_rate, avg_edge, avg_ev, avg_clv, run_id),
+             hit_rate, avg_edge, avg_ev, avg_clv,
+             p_binomial, p_ttest, z_score,
+             sharpe, sortino,
+             brier, ic, roi_pct,
+             run_id),
         )
         await self._db.commit()
         logger.info(
-            f"Run {run_id}: recalculated stats — {wins}W/{losses}L/{pushes}P "
-            f"({unresolved} unresolved), hit_rate={hit_rate:.3f}" if hit_rate else
-            f"Run {run_id}: recalculated stats — {wins}W/{losses}L/{pushes}P "
+            f"Run {run_id}: recalculated — {wins}W/{losses}L/{pushes}P "
+            f"({unresolved} unresolved), hr={hit_rate:.3f}, p={p_binomial:.4f}, "
+            f"brier={brier:.3f if brier else 'N/A'}, ic={ic:.3f if ic else 'N/A'}"
+            if hit_rate else
+            f"Run {run_id}: recalculated — {wins}W/{losses}L/{pushes}P "
             f"({unresolved} unresolved)"
         )
         return True
