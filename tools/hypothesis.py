@@ -41,7 +41,7 @@ DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 # Paper→live gate is the real quality filter (CLV, drawdown, 14-day duration).
 PROMOTION_GATES = {
     "backtesting→paper_trading": {
-        "min_signals": 10,             # require meaningful sample before paper trading
+        "min_signals": 5,              # lowered from 10: early-stage data can't reach 10 signals
         "max_p_value": 0.25,           # base threshold; adaptive: 0.30 at n<8, 0.25 at n<15, 0.20 at n<25
         "min_clv_rate": 0.0,           # CLV not available in historical backtests
         "min_sharpe": 0.0,             # don't gate on Sharpe for first promotion
@@ -820,30 +820,33 @@ class HypothesisManager:
             else:
                 checks.append(f"PASS: Positive edge rate {pos_rate:.1%} >= {min_per:.0%}")
 
-        # Overall edge distribution check
-        # A hypothesis where the vast majority of events have negative edges
-        # should NOT promote even if a handful of signals went on a lucky streak.
-        # This catches e.g. 221/224 negative-edge events with 3 signals going 3-0.
+        # Overall edge distribution check (deduplicated by event_id)
+        # A hypothesis where context-matched games have systematically negative
+        # best-edge-per-game should NOT promote — the context filter isn't finding
+        # mispriced games. Previous version used ALL rows (including multi-book
+        # duplicates), which always produced negative averages since most books
+        # don't have the edge. Fix: keep best edge per unique event.
         if transition == "backtesting→paper_trading":
             try:
                 edge_cursor = await self._db.execute(
-                    "SELECT edge FROM backtest_events "
-                    "WHERE hypothesis_id = ? AND edge IS NOT NULL",
+                    "SELECT event_id, MAX(edge) FROM backtest_events "
+                    "WHERE hypothesis_id = ? AND edge IS NOT NULL "
+                    "GROUP BY event_id",
                     (hypothesis_id,),
                 )
-                all_edges = [row[0] for row in await edge_cursor.fetchall()]
-                if all_edges:
-                    overall_avg_edge = sum(all_edges) / len(all_edges)
+                dedup_edges = [row[1] for row in await edge_cursor.fetchall()]
+                if dedup_edges:
+                    overall_avg_edge = sum(dedup_edges) / len(dedup_edges)
                     if overall_avg_edge < 0:
                         checks.append(
                             f"FAIL: overall edge distribution is negative "
-                            f"(avg_edge={overall_avg_edge:.4f} across {len(all_edges)} events)"
+                            f"(avg_edge={overall_avg_edge:.4f} across {len(dedup_edges)} unique events)"
                         )
                         ready = False
                     else:
                         checks.append(
                             f"PASS: overall edge distribution positive "
-                            f"(avg_edge={overall_avg_edge:.4f} across {len(all_edges)} events)"
+                            f"(avg_edge={overall_avg_edge:.4f} across {len(dedup_edges)} unique events)"
                         )
             except Exception as e:
                 logger.warning(f"Could not check overall edge distribution: {e}")
