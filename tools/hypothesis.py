@@ -669,6 +669,26 @@ class HypothesisManager:
         # Store in hypothesis_stats (upsert: one row per hypothesis+stage)
         now = datetime.now(timezone.utc).isoformat()
         from tools.db_utils import execute_with_retry, commit_with_retry
+
+        # Query true total_n and signals_n from ALL backtest_events for this
+        # hypothesis — not just the signal-only subset used for evaluation.
+        # Previously total_n was set to `resolved` (wins+losses+pushes from
+        # signal events), making it identical to signals_n.
+        if stage == "backtest":
+            count_cursor = await self._db.execute(
+                "SELECT COUNT(*), "
+                "SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) "
+                "FROM backtest_events WHERE hypothesis_id = ?",
+                (hypothesis_id,),
+            )
+            count_row = await count_cursor.fetchone()
+            stats_total_n = count_row[0] or 0
+            stats_signals_n = count_row[1] or 0
+        else:
+            # For paper_trade stage, total_n = resolved signals evaluated above
+            stats_total_n = resolved
+            stats_signals_n = sum(1 for e in events if e.get("signal_generated"))
+
         await execute_with_retry(
             self._db,
             "DELETE FROM hypothesis_stats WHERE hypothesis_id = ? AND stage = ?",
@@ -683,8 +703,7 @@ class HypothesisManager:
             "sharpe, max_drawdown, p_value, is_significant, "
             "sortino, brier_score, information_coefficient) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (hypothesis_id, stage, now, resolved,
-             sum(1 for e in events if e.get("signal_generated")),
+            (hypothesis_id, stage, now, stats_total_n, stats_signals_n,
              wins, losses, pushes,
              hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi,
              sr, mdd, p_binomial, is_significant,
