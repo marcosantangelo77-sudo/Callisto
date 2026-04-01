@@ -33,12 +33,13 @@ _disabled_scrapers: dict[str, float] = {}  # name -> re-enable monotonic ts
 # Safe-to-prune tables: table -> (date_column, keep_days)
 _PRUNE_SAFE = {
     "backtest_events": ("created_at", 90),
-    "odds_snapshots": ("timestamp", 30),
-    "odds_snapshots_v2": ("snapshot_time", 30),
-    "integrity_checks": ("created_at", 30),
+    "odds_snapshots": ("timestamp", 7),            # was 30 days — 2,880 snapshots × 100KB = 288MB bloat
+    "odds_snapshots_v2": ("snapshot_time", 7),
+    "integrity_checks": ("created_at", 14),
     "hermes_messages": ("timestamp", 90),
     "prop_snapshots": ("snapshot_time", 2),        # 360K rows/day at 15-min intervals — keep 2 days
-    "deferred_work_queue": ("created_at", 7),     # Completed items accumulate — keep 1 week
+    "deferred_work_queue": ("created_at", 3),      # was 7 days — 504 pending items cause WAL bloat
+    "event_log": ("created_at", 7),                 # was unbounded — 16K+ rows growing indefinitely
 }
 
 HEARTBEAT_INTERVAL = 300  # Check every 5 minutes
