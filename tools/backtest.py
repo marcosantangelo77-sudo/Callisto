@@ -297,7 +297,8 @@ class BacktestEngine:
                 f"Effective coverage after merge: {context_coverage:.0%}."
             )
 
-        if context_coverage < 0.5:
+        structured = self.has_structured_filters(config)
+        if context_coverage < 0.5 and not structured:
             logger.warning(
                 f"Backtest {hypothesis_id}: context_coverage={context_coverage:.0%} — "
                 f"most game-selection conditions are unfilterable. Results will be "
@@ -327,6 +328,12 @@ class BacktestEngine:
                     "to model_config and populate the corresponding data."
                 ),
             }
+        elif context_coverage < 0.5 and structured:
+            logger.info(
+                f"Backtest {hypothesis_id}: context_coverage={context_coverage:.0%} but "
+                f"has structured line_filters/game_filters — proceeding with backtest. "
+                f"Unfilterable factors (informational): {unfilterable}"
+            )
 
         # ── DATE RANGE SAFETY ──
         # Never backtest against today or future — games haven't finished,
@@ -1007,6 +1014,21 @@ class BacktestEngine:
         r"\bgame.[567]\b": "postseason_stage",
         r"\bseries.length\b": "postseason_stage",
     }
+
+    @staticmethod
+    def has_structured_filters(config: dict) -> bool:
+        """Check if hypothesis has line_filters or game_filters that differentiate event sets.
+
+        When structured filters are present, the hypothesis can meaningfully
+        differentiate games even without context factor filtering. This prevents
+        the keyword-based context inference from blocking otherwise testable hypotheses.
+        """
+        lf = config.get("line_filters") or {}
+        gf = config.get("game_filters") or {}
+        return bool(
+            any(v for v in lf.values() if v)
+            or any(v is not None for v in gf.values())
+        )
 
     @staticmethod
     def _infer_context_needs(thesis: str, name: str) -> list[str]:

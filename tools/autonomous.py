@@ -3984,13 +3984,14 @@ class ResearchLoop:
                 except (json.JSONDecodeError, TypeError):
                     mc = {}
             ctx_coverage = BacktestEngine.compute_context_coverage(mc)
+            has_struct = BacktestEngine.has_structured_filters(mc)
             if ctx_coverage >= 0.5 and not mc.get("context_factors"):
                 h_thesis = h.get("thesis", "")
                 h_name = h.get("name", "")
                 inferred = BacktestEngine._infer_context_needs(h_thesis, h_name)
-                if inferred:
+                if inferred and not has_struct:
                     continue  # Skip — will fail context check anyway
-            elif ctx_coverage < 0.5:
+            elif ctx_coverage < 0.5 and not has_struct:
                 continue  # Skip — insufficient context coverage
             testable.append(h)
 
@@ -4053,6 +4054,7 @@ class ResearchLoop:
                     model_cfg = {}
             from tools.backtest import BacktestEngine
             ctx_coverage = BacktestEngine.compute_context_coverage(model_cfg)
+            has_struct = BacktestEngine.has_structured_filters(model_cfg)
             # Also infer context needs from thesis/name BEFORE running backtest
             # (same inference run_backtest does internally). This prevents wasting
             # a backtest cycle on hypotheses that will just return "untestable".
@@ -4060,13 +4062,18 @@ class ResearchLoop:
                 h_thesis = h.get("thesis", "")
                 h_name_for_ctx = h.get("name", "")
                 inferred_pre = BacktestEngine._infer_context_needs(h_thesis, h_name_for_ctx)
-                if inferred_pre:
+                if inferred_pre and not has_struct:
                     ctx_coverage = 0.0
                     logger.info(
                         f"Research: pre-backtest inference for {h['hypothesis_id']} "
                         f"({h_name_for_ctx}) detected unfilterable needs: {inferred_pre}"
                     )
-            if ctx_coverage < 0.5:
+                elif inferred_pre and has_struct:
+                    logger.info(
+                        f"Research: {h['hypothesis_id']} ({h_name_for_ctx}) has inferred "
+                        f"unfilterable needs {inferred_pre} but structured filters present — proceeding"
+                    )
+            if ctx_coverage < 0.5 and not has_struct:
                 ctx_factors = model_cfg.get("context_factors", [])
                 logger.info(
                     f"Research: skipping backtest for {h['hypothesis_id']} — "
@@ -4502,6 +4509,7 @@ class ResearchLoop:
                 # be properly evaluated when game context enrichment is available.
                 from tools.backtest import BacktestEngine
                 ctx_coverage = BacktestEngine.compute_context_coverage(model_config)
+                has_struct = BacktestEngine.has_structured_filters(model_config)
 
                 # Also infer context needs from thesis/name (same logic as
                 # run_backtest). Without this, hypotheses with empty
@@ -4511,11 +4519,16 @@ class ResearchLoop:
                     thesis = h.get("thesis", "")
                     h_name = h.get("name", "")
                     inferred = BacktestEngine._infer_context_needs(thesis, h_name)
-                    if inferred:
+                    if inferred and not has_struct:
                         ctx_coverage = 0.0
                         logger.info(
                             f"Research: {h['hypothesis_id']} ({h_name}) — inferred "
                             f"unfilterable context needs: {inferred}"
+                        )
+                    elif inferred and has_struct:
+                        logger.info(
+                            f"Research: {h['hypothesis_id']} ({h_name}) — inferred "
+                            f"unfilterable needs {inferred} but structured filters present — proceeding"
                         )
 
                 # Also check needs_unique_data flag from self-repair
@@ -4680,12 +4693,13 @@ class ResearchLoop:
                 except (json.JSONDecodeError, TypeError):
                     mc = {}
                 ctx_cov = BacktestEngine.compute_context_coverage(mc)
+                has_struct = BacktestEngine.has_structured_filters(mc)
                 # Also check inferred context needs
                 if ctx_cov >= 0.5 and not mc.get("context_factors"):
                     inferred = BacktestEngine._infer_context_needs(thesis or "", hname or "")
-                    if inferred:
+                    if inferred and not has_struct:
                         ctx_cov = 0.0
-                if ctx_cov < 0.5:
+                if ctx_cov < 0.5 and not has_struct:
                     await self.hypothesis_manager.update_status(
                         hid, "rejected",
                         f"auto:untestable_draft — ctx_coverage={ctx_cov:.0%}, "
