@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 logger = logging.getLogger("callisto.inference")
 
-import ollama
+import httpx
 from dotenv import load_dotenv
 
 # Hermes path setup — imports are lazy to avoid pulling in pandas/yfinance at startup
@@ -192,7 +192,6 @@ PRELOAD_MODELS = ["devstral-small-2"]
 
 async def warmup_models():
     """Preload priority models into VRAM with keep_alive to prevent thrashing."""
-    import httpx
     async with httpx.AsyncClient(timeout=120) as client:
         for model in PRELOAD_MODELS:
             try:
@@ -432,12 +431,53 @@ def _parse_json_response(text: str) -> Optional[Any]:
 
 
 class OllamaInference:
-    """Ollama inference client for a specific agent."""
+    """Ollama inference client using raw httpx HTTP calls.
+
+    Replaces the ollama Python library which hangs indefinitely on some models
+    (notably devstral-small-2). Raw httpx calls complete in ~3s for the same
+    requests. Uses stream=false for single JSON responses.
+    """
+
+    # Default timeout for inference requests (seconds).
+    # Most models in MODEL_LADDER use 60-150s; 180s covers the longest.
+    _DEFAULT_TIMEOUT = 180
 
     def __init__(self, config: AgentConfig):
         self.config = config
-        self.client = ollama.Client(host=OLLAMA_HOST)
-        self.async_client = ollama.AsyncClient(host=OLLAMA_HOST)
+        self.client = httpx.Client(
+            base_url=OLLAMA_HOST,
+            timeout=httpx.Timeout(self._DEFAULT_TIMEOUT, connect=10.0),
+        )
+        self.async_client = httpx.AsyncClient(
+            base_url=OLLAMA_HOST,
+            timeout=httpx.Timeout(self._DEFAULT_TIMEOUT, connect=10.0),
+        )
+
+    def _build_chat_payload(
+        self,
+        messages: list[dict],
+        tools: Optional[list[dict]] = None,
+        options: Optional[dict] = None,
+        think: Optional[bool] = None,
+        format: Optional[dict] = None,
+    ) -> dict:
+        """Build the JSON payload for /api/chat."""
+        opts = {**self.config.default_options, **(options or {})}
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": messages,
+            "options": opts,
+            "stream": False,
+        }
+        if tools and self.config.supports_native_tools:
+            payload["tools"] = tools
+        # think parameter: explicit arg > config default
+        t = think if think is not None else self.config.think
+        if t is not None:
+            payload["think"] = t
+        if format is not None:
+            payload["format"] = format
+        return payload
 
     def chat(
         self,
@@ -446,22 +486,11 @@ class OllamaInference:
         options: Optional[dict] = None,
         think: Optional[bool] = None,
     ) -> dict:
-        """Synchronous chat with the model."""
-        opts = {**self.config.default_options, **(options or {})}
-        kwargs: dict[str, Any] = {
-            "model": self.config.model,
-            "messages": messages,
-            "options": opts,
-        }
-        if tools and self.config.supports_native_tools:
-            kwargs["tools"] = tools
-        # think parameter: explicit arg > config default
-        t = think if think is not None else self.config.think
-        if t is not None:
-            kwargs["think"] = t
-
-        response = self.client.chat(**kwargs)
-        return self._process_response(response)
+        """Synchronous chat with the model via POST /api/chat."""
+        payload = self._build_chat_payload(messages, tools, options, think)
+        resp = self.client.post("/api/chat", json=payload)
+        resp.raise_for_status()
+        return self._process_response(resp.json())
 
     async def achat(
         self,
@@ -471,47 +500,42 @@ class OllamaInference:
         think: Optional[bool] = None,
         format: Optional[dict] = None,
     ) -> dict:
-        """Async chat with the model.
+        """Async chat with the model via POST /api/chat.
 
         Args:
             format: JSON schema dict for Ollama structured output.
                     When provided, output is constrained to match the schema exactly.
         """
-        opts = {**self.config.default_options, **(options or {})}
-        kwargs: dict[str, Any] = {
-            "model": self.config.model,
-            "messages": messages,
-            "options": opts,
-        }
-        if tools and self.config.supports_native_tools:
-            kwargs["tools"] = tools
-        t = think if think is not None else self.config.think
-        if t is not None:
-            kwargs["think"] = t
-        if format is not None:
-            kwargs["format"] = format
-
-        response = await self.async_client.chat(**kwargs)
-        return self._process_response(response)
+        payload = self._build_chat_payload(messages, tools, options, think, format)
+        resp = await self.async_client.post("/api/chat", json=payload)
+        resp.raise_for_status()
+        return self._process_response(resp.json())
 
     def generate(self, prompt: str, options: Optional[dict] = None) -> str:
-        """Raw generate (completion mode) for models without chat template."""
+        """Raw generate (completion mode) via POST /api/generate."""
         opts = {**self.config.default_options, **(options or {})}
-        response = self.client.generate(
-            model=self.config.model,
-            prompt=prompt,
-            options=opts,
-        )
-        return getattr(response, "response", "") or ""
+        payload = {
+            "model": self.config.model,
+            "prompt": prompt,
+            "options": opts,
+            "stream": False,
+        }
+        resp = self.client.post("/api/generate", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("response", "") or ""
 
     def ping(self) -> dict:
         """Check if the model is responsive. Returns status dict."""
         try:
-            response = self.client.chat(
-                model=self.config.model,
-                messages=[{"role": "user", "content": "ping"}],
-                options={"num_predict": 1},
-            )
+            payload = {
+                "model": self.config.model,
+                "messages": [{"role": "user", "content": "ping"}],
+                "options": {"num_predict": 1},
+                "stream": False,
+            }
+            resp = self.client.post("/api/chat", json=payload)
+            resp.raise_for_status()
             return {"status": "ok", "model": self.config.model}
         except Exception as e:
             return {"status": "error", "model": self.config.model, "error": str(e)}
@@ -519,30 +543,29 @@ class OllamaInference:
     async def aping(self) -> dict:
         """Async version of ping."""
         try:
-            await self.async_client.chat(
-                model=self.config.model,
-                messages=[{"role": "user", "content": "ping"}],
-                options={"num_predict": 1},
-            )
+            payload = {
+                "model": self.config.model,
+                "messages": [{"role": "user", "content": "ping"}],
+                "options": {"num_predict": 1},
+                "stream": False,
+            }
+            resp = await self.async_client.post("/api/chat", json=payload)
+            resp.raise_for_status()
             return {"status": "ok", "model": self.config.model}
         except Exception as e:
             return {"status": "error", "model": self.config.model, "error": str(e)}
 
-    def _process_response(self, response) -> dict:
-        """Process response with dual-mode tool call extraction.
+    def _process_response(self, response: dict) -> dict:
+        """Process raw dict response from Ollama HTTP API.
 
-        Handles both dict responses and Pydantic model responses (ollama >= 0.4).
+        Handles dual-mode tool call extraction:
+        1. Native Ollama tool_calls from the response JSON
+        2. Hermes XML fallback (<tool_call>...</tool_call>) in content
         """
-        # Extract message — handle Pydantic objects and dicts
-        if hasattr(response, "message"):
-            message = response.message
-        elif isinstance(response, dict):
-            message = response.get("message", {})
-        else:
-            message = {}
+        message = response.get("message", {})
 
-        content = getattr(message, "content", None) or (message.get("content", "") if isinstance(message, dict) else "")
-        thinking = getattr(message, "thinking", None) or (message.get("thinking", "") if isinstance(message, dict) else "")
+        content = message.get("content", "") or ""
+        thinking = message.get("thinking", "") or ""
 
         # If content is empty but thinking has content, use thinking as content
         # (DeepSeek-R1 puts everything in thinking when think=True)
@@ -552,12 +575,12 @@ class OllamaInference:
         tool_calls = []
 
         # Mode 1: Native Ollama tool_calls
-        native_calls = getattr(message, "tool_calls", None) or (message.get("tool_calls") if isinstance(message, dict) else None)
+        native_calls = message.get("tool_calls")
         if native_calls:
             for tc in native_calls:
-                func = getattr(tc, "function", None) or (tc.get("function", {}) if isinstance(tc, dict) else {})
-                name = getattr(func, "name", None) or (func.get("name", "") if isinstance(func, dict) else "")
-                args = getattr(func, "arguments", None) or (func.get("arguments", {}) if isinstance(func, dict) else {})
+                func = tc.get("function", {})
+                name = func.get("name", "")
+                args = func.get("arguments", {})
                 tool_calls.append({"name": name, "arguments": args})
 
         # Mode 2: Hermes XML fallback (if no native calls found)
