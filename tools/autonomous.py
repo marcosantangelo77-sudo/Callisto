@@ -4195,13 +4195,47 @@ class ResearchLoop:
                     )
                     continue
 
+                # ── Flush any dangling transactions before backtest writes ──
+                # Phase timeouts (self_repair, etc.) can leave uncommitted
+                # transactions on shared connections, holding the WAL write lock.
+                for _flush_db in [
+                    getattr(self.data_collector, "_db", None),
+                    getattr(self.backtest_engine, "_db", None),
+                ]:
+                    if _flush_db:
+                        try:
+                            await _flush_db.rollback()
+                        except Exception:
+                            pass
+
                 _bt_t0 = time.time()
-                result = await self.backtest_engine.run_backtest(
-                    hypothesis_id=h["hypothesis_id"],
-                    start_date=start_date,
-                    end_date=end_date,
-                    credit_budget=30,  # Enough for ~10 dates × 3 markets
-                )
+                # Retry on database lock — other subsystems (line_monitor,
+                # self_repair) occasionally hold the WAL write lock.
+                _max_retries = 3
+                result = None
+                for _attempt in range(_max_retries):
+                    try:
+                        result = await self.backtest_engine.run_backtest(
+                            hypothesis_id=h["hypothesis_id"],
+                            start_date=start_date,
+                            end_date=end_date,
+                            credit_budget=30,
+                        )
+                        break  # Success
+                    except Exception as _bt_err:
+                        if "database is locked" in str(_bt_err) and _attempt < _max_retries - 1:
+                            _wait = 5 * (2 ** _attempt)  # 5s, 10s
+                            logger.warning(
+                                f"Backtest {h['hypothesis_id']} hit DB lock "
+                                f"(attempt {_attempt + 1}/{_max_retries}), "
+                                f"retrying in {_wait}s"
+                            )
+                            await asyncio.sleep(_wait)
+                        else:
+                            raise  # Re-raise for outer except handler
+                if result is None:
+                    continue  # All retries exhausted
+
                 _bt_elapsed = time.time() - _bt_t0
                 if _bt_elapsed > 30:
                     logger.warning(
