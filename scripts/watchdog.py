@@ -92,42 +92,62 @@ def log_flush():
 PID_FILE = CALLISTO_DIR / "memory" / "watchdog.pid"
 
 
+LOCK_FILE = CALLISTO_DIR / "memory" / "watchdog.lock"
+_lock_fh = None  # Keep file handle alive for the process lifetime
+
+
 def check_single_instance():
-    """Ensure only one watchdog runs. Kill stale instances if needed."""
+    """Ensure only one watchdog runs using an exclusive file lock.
+
+    On Windows uses msvcrt.locking, on Unix uses fcntl.flock.
+    The lock is held for the entire process lifetime — if a second watchdog
+    starts, it will fail to acquire the lock and exit immediately.
+    """
+    global _lock_fh
+
+    # Step 1: Kill any watchdog registered in the PID file (handles pre-lock stale instances)
     if PID_FILE.exists():
         try:
             old_pid = int(PID_FILE.read_text().strip())
-            if old_pid == os.getpid():
-                return  # That's us
-
-            # Check if old process is still alive using a lightweight method
-            if sys.platform == "win32":
-                # Use taskkill with no force first -- if process doesn't exist, it fails silently
-                try:
-                    result = subprocess.run(
-                        ["taskkill", "/F", "/PID", str(old_pid)],
-                        capture_output=True, text=True, timeout=5,
-                    )
-                    if result.returncode == 0:
-                        logger.warning(f"Killed old watchdog PID {old_pid}")
+            if old_pid != os.getpid():
+                if sys.platform == "win32":
+                    try:
+                        result = subprocess.run(
+                            ["taskkill", "/F", "/PID", str(old_pid)],
+                            capture_output=True, text=True, timeout=5,
+                        )
+                        if result.returncode == 0:
+                            logger.warning(f"Killed old watchdog PID {old_pid}")
+                            time.sleep(2)
+                    except subprocess.TimeoutExpired:
+                        pass
+                else:
+                    try:
+                        os.kill(old_pid, 0)
+                        logger.warning(f"Killing old watchdog PID {old_pid}")
+                        os.kill(old_pid, signal.SIGTERM)
                         time.sleep(2)
-                    # else: process already dead, fine
-                except subprocess.TimeoutExpired:
-                    logger.warning(f"Taskkill timed out for PID {old_pid}")
-            else:
-                try:
-                    os.kill(old_pid, 0)  # Check if process exists
-                    logger.warning(f"Another watchdog running (PID {old_pid}). Killing it.")
-                    os.kill(old_pid, signal.SIGTERM)
-                    time.sleep(2)
-                except ProcessLookupError:
-                    pass  # Old process is dead, fine
+                    except ProcessLookupError:
+                        pass
         except (ValueError, OSError):
-            pass  # Corrupt PID file or dead process, fine
-        except Exception as e:
-            logger.warning(f"PID check failed (non-fatal): {e}")
+            pass
 
-    # Write our PID
+    # Step 2: Acquire exclusive file lock — this is the real singleton gate
+    try:
+        _lock_fh = open(LOCK_FILE, "w", encoding="utf-8")
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(_lock_fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_fh.write(str(os.getpid()))
+        _lock_fh.flush()
+    except (IOError, OSError) as e:
+        logger.error(f"Another watchdog is already running (lock held). Exiting. ({e})")
+        sys.exit(0)
+
+    # Step 3: Write PID file for diagnostic purposes
     try:
         PID_FILE.write_text(str(os.getpid()))
     except Exception as e:
