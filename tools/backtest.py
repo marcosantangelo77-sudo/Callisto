@@ -68,6 +68,12 @@ class BacktestEngine:
         self.historical_fetcher = historical_fetcher
         self.db_path = db_path
         self._db: Optional[aiosqlite.Connection] = None
+        # Lightweight fingerprint cache for staleness detection in
+        # recalculate_all_active_runs.  Key = run_id, value = (total_events,
+        # signals_count, resolved_count).  Only runs whose fingerprint
+        # changed since last recalculation get the expensive scipy/numpy
+        # recompute.  Keeps 10-15 min stalls down to seconds.
+        self._run_fingerprints: dict[str, tuple[int, int, int]] = {}
 
     async def initialize(self) -> None:
         from tools.schema import open_db
@@ -3455,6 +3461,14 @@ class BacktestEngine:
         backtest_runs stats become outdated. The promotion gate checks these stats,
         so stale data blocks promotion of winning hypotheses.
 
+        Uses a lightweight fingerprint cache to skip runs whose underlying
+        backtest_events haven't changed since the last recalculation.  The
+        fingerprint is (total_events, signals_count, resolved_count) per run —
+        a single cheap aggregate query that catches new events, retroactive
+        signal_generated flips, AND game result resolution updates.  Only runs
+        with a changed fingerprint get the expensive scipy/numpy recompute.
+        This cuts the typical 10-15 min stall to seconds.
+
         Args:
             hypothesis_ids: If provided, only recalculate runs for these hypotheses.
                            If None, recalculates ALL active runs (legacy behavior).
@@ -3476,16 +3490,58 @@ class BacktestEngine:
             )
         run_ids = [row[0] for row in await cursor.fetchall()]
 
-        updated = 0
+        if not run_ids:
+            return 0
+
+        # ── Staleness check: compute lightweight fingerprints ──
+        # One query for ALL candidate runs — far cheaper than per-run recalculate_run_stats
+        # which does 4 queries + scipy/numpy each.
+        fp_placeholders = ",".join("?" for _ in run_ids)
+        cursor = await self._db.execute(
+            f"SELECT run_id, "
+            f"  COUNT(*), "
+            f"  SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END), "
+            f"  SUM(CASE WHEN actual_result IS NOT NULL THEN 1 ELSE 0 END) "
+            f"FROM backtest_events "
+            f"WHERE run_id IN ({fp_placeholders}) "
+            f"GROUP BY run_id",
+            run_ids,
+        )
+        current_fps: dict[str, tuple[int, int, int]] = {}
+        for row in await cursor.fetchall():
+            current_fps[row[0]] = (row[1] or 0, row[2] or 0, row[3] or 0)
+
+        # Determine which runs actually need recalculation
+        stale_run_ids = []
         for run_id in run_ids:
+            fp = current_fps.get(run_id, (0, 0, 0))
+            cached_fp = self._run_fingerprints.get(run_id)
+            if fp != cached_fp:
+                stale_run_ids.append(run_id)
+
+        if not stale_run_ids:
+            logger.debug(
+                f"Staleness check: all {len(run_ids)} runs unchanged, skipping recalculation"
+            )
+            return 0
+
+        logger.info(
+            f"Staleness check: {len(stale_run_ids)}/{len(run_ids)} runs have new data, recalculating"
+        )
+
+        updated = 0
+        for run_id in stale_run_ids:
             try:
                 if await self.recalculate_run_stats(run_id):
                     updated += 1
+                # Update cache AFTER successful recalculation
+                if run_id in current_fps:
+                    self._run_fingerprints[run_id] = current_fps[run_id]
             except Exception as e:
                 logger.warning(f"Failed to recalculate run {run_id}: {e}")
 
         if updated:
-            logger.info(f"Recalculated stats for {updated}/{len(run_ids)} active backtest runs")
+            logger.info(f"Recalculated stats for {updated}/{len(stale_run_ids)} stale backtest runs (skipped {len(run_ids) - len(stale_run_ids)} unchanged)")
         return updated
 
     async def generate_paper_trade_signal(

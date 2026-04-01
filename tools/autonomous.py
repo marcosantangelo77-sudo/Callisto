@@ -4459,8 +4459,11 @@ class ResearchLoop:
         # signal updates and game resolution change backtest_events AFTER the run
         # completes, but backtest_runs keeps the original stats. The promotion
         # gate checks backtest_runs, so stale data blocks promotion.
-        # Previously recalculated ALL 40+ backtesting hypotheses every cycle,
-        # causing 10-15 min stalls. Now scoped to the 8-13 in the batch.
+        # Previously recalculated ALL runs in the batch every cycle (even unchanged
+        # ones), causing 10-15 min stalls. Now uses a lightweight fingerprint cache
+        # inside recalculate_all_active_runs: only runs with new/changed
+        # backtest_events (new events, signal flips, result resolution) get the
+        # expensive scipy/numpy recompute. Unchanged runs are skipped in O(1).
         try:
             batch_ids = [h["hypothesis_id"] for h in backtesting]
             updated = await self.backtest_engine.recalculate_all_active_runs(
