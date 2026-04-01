@@ -1249,7 +1249,7 @@ REGIME_ANALYSIS_INTERVAL = 5        # Run regime analysis every N cycles — reg
 # Hypotheses train on data before the cutoff, backtest on data after.
 # This prevents look-ahead bias / circular testing.
 DEFAULT_TRAINING_WINDOW_DAYS = 30    # Train on everything before (today - N days)
-BACKTEST_GAP_DAYS = 7                # Gap between training end and backtest start (matches temporal_analysis default)
+BACKTEST_GAP_DAYS = 2                # 2 days: enough temporal isolation to prevent leakage, but avoids the 7-day deadlock where start > end when training_period_end is recent
 
 # ── Sport priority for backtest queue ──
 # Sports with more historical data get tested first.
