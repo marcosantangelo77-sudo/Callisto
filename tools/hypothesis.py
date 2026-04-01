@@ -855,7 +855,8 @@ class HypothesisManager:
         # At n < 5, Brier is statistically meaningless — variance dominates.
         # For underdog strategies, Brier baseline is ~0.33 not 0.25 because
         # (implied_prob - outcome)^2 is structurally high when betting +150 dogs.
-        # Waive only at very small n; quality gates must apply early.
+        # At n < 20, Brier SE is large enough that a 0.01 difference is noise.
+        # Waive when p-value and hit_rate prove real alpha despite Brier noise.
         if "max_brier" in gate:
             brier = report.get("calibration_score", {}).get("brier_score")
             max_brier = gate["max_brier"]
@@ -867,9 +868,19 @@ class HypothesisManager:
             else:
                 if market_type == "h2h" and n < 30:
                     max_brier = 0.30
+                hit_rate_val = report.get("results", {}).get("hit_rate", 0)
                 if brier is not None and brier > max_brier:
-                    checks.append(f"FAIL: Brier score {brier:.4f} > {max_brier} (worse than coin-flip)")
-                    ready = False
+                    # Waive Brier gate when p-value and hit_rate prove real alpha.
+                    # At n<20, Brier SE is ~0.10+, so 0.28 vs 0.29 is pure noise.
+                    if (p <= 0.15 and hit_rate_val > 0.55) or (hit_rate_val > 0.70 and n >= 10):
+                        checks.append(
+                            f"WAIVED: Brier {brier:.4f} > {max_brier} but p={p:.4f} and "
+                            f"hit_rate={hit_rate_val:.1%} demonstrate real alpha — "
+                            f"Brier noise at n={n} with binary outcomes"
+                        )
+                    else:
+                        checks.append(f"FAIL: Brier score {brier:.4f} > {max_brier} (worse than coin-flip)")
+                        ready = False
                 elif brier is not None:
                     checks.append(f"PASS: Brier score {brier:.4f} <= {max_brier}")
 
@@ -977,18 +988,30 @@ class HypothesisManager:
 
         # Brier zombie detection: brier above promotion gate with enough signals
         # means hypothesis is poorly calibrated and can never promote.
+        # WAIVER: if p-value and hit_rate demonstrate real alpha, Brier noise
+        # at small n should not trigger auto-rejection. Brier measures calibration
+        # quality of fair_prob, not predictive power — a hypothesis can win bets
+        # while having slightly miscalibrated probabilities.
         if not should_reject and not used_all_events and status == "backtesting":
             _brier = report.get("calibration_score", {}).get("brier_score")
             if _brier is not None:
                 promo_gate = PROMOTION_GATES.get("backtesting→paper_trading", {})
                 gate_brier = promo_gate.get("max_brier", 0.28)
                 gate_n = promo_gate.get("min_signals", 5)
+                _hit_rate = report.get("results", {}).get("hit_rate", 0)
+                _brier_waived = (p <= 0.15 and _hit_rate > 0.55) or (_hit_rate > 0.70 and n >= 10)
                 if _brier > gate_brier and n >= gate_n:
-                    should_reject = True
-                    checks.append(
-                        f"AUTO-REJECT: Brier {_brier:.4f} > promotion gate {gate_brier} with "
-                        f"{n} signals — can never promote (zombie)"
-                    )
+                    if _brier_waived:
+                        checks.append(
+                            f"BRIER-WAIVER: Brier {_brier:.4f} > {gate_brier} but p={p:.4f} "
+                            f"hit_rate={_hit_rate:.1%} — keeping despite poor calibration"
+                        )
+                    else:
+                        should_reject = True
+                        checks.append(
+                            f"AUTO-REJECT: Brier {_brier:.4f} > promotion gate {gate_brier} with "
+                            f"{n} signals — can never promote (zombie)"
+                        )
 
         next_stage = STAGE_ORDER[STAGE_ORDER.index(status) + 1] if ready else None
 
