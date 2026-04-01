@@ -676,8 +676,8 @@ class HypothesisManager:
         # signal events), making it identical to signals_n.
         if stage == "backtest":
             count_cursor = await self._db.execute(
-                "SELECT COUNT(*), "
-                "SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) "
+                "SELECT COUNT(DISTINCT event_id), "
+                "COUNT(DISTINCT CASE WHEN signal_generated = 1 THEN event_id END) "
                 "FROM backtest_events WHERE hypothesis_id = ?",
                 (hypothesis_id,),
             )
