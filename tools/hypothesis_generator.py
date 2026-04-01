@@ -553,8 +553,7 @@ class HypothesisGenerator:
 
         Returns list of created hypothesis summaries.
         """
-        existing = await self.hypothesis_manager.list_hypotheses()
-        existing_names = {h["name"] for h in existing}
+        existing_names = await self.hypothesis_manager.get_all_names()
 
         # Compute temporal metadata
         today = datetime.now(timezone.utc).date()
