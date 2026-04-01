@@ -126,6 +126,10 @@ async def wal_checkpoint_loop():
 
     PASSIVE mode doesn't block readers or writers, it just checkpoints
     pages that aren't needed by any active reader. Runs every 5 minutes.
+
+    When PASSIVE can't checkpoint enough (aiosqlite holds persistent connections
+    that block PASSIVE), escalate to TRUNCATE with a longer busy_timeout.
+    TRUNCATE briefly blocks new readers to force a full checkpoint.
     """
     while True:
         try:
@@ -141,15 +145,25 @@ async def wal_checkpoint_loop():
                         f"WAL checkpoint: busy={busy}, log={log_pages} pages "
                         f"({wal_size_mb:.1f} MB), checkpointed={checkpointed}"
                     )
-                    # If PASSIVE couldn't checkpoint enough, try TRUNCATE
+                    # If PASSIVE couldn't checkpoint enough, try TRUNCATE with
+                    # a dedicated connection and longer busy_timeout. PASSIVE
+                    # never works when aiosqlite holds persistent readers.
                     if log_pages > 5000 and checkpointed < log_pages // 2:
-                        cursor2 = await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                        row2 = await cursor2.fetchone()
-                        if row2:
-                            logger.info(
-                                f"WAL TRUNCATE checkpoint: busy={row2[0]}, "
-                                f"log={row2[1]}, checkpointed={row2[2]}"
-                            )
+                        async with aiosqlite.connect(DB_PATH) as trunc_db:
+                            await trunc_db.execute("PRAGMA busy_timeout = 30000")
+                            cursor2 = await trunc_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                            row2 = await cursor2.fetchone()
+                            if row2:
+                                t_busy, t_log, t_ckpt = row2
+                                logger.info(
+                                    f"WAL TRUNCATE checkpoint: busy={t_busy}, "
+                                    f"log={t_log}, checkpointed={t_ckpt}"
+                                )
+                                if t_busy and t_log > 0:
+                                    logger.warning(
+                                        f"WAL TRUNCATE could not complete: {t_log} pages remain. "
+                                        f"Persistent readers are preventing checkpoint."
+                                    )
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -194,9 +208,14 @@ async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle manager."""
     global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task
 
-    # Start memory profiling early — before any allocations
-    tracemalloc.start(3)  # 3-frame depth — enough for useful traces, 8x less overhead
-    logger.info("tracemalloc started with 3-frame depth")
+    # Start memory profiling only when explicitly requested — tracemalloc tracks every
+    # allocation in C-level metadata (~50-100 bytes each), which adds 55-110 MB of invisible
+    # overhead from the JSON decoder alone (1.1M allocations) plus severe fragmentation.
+    if os.environ.get("CALLISTO_TRACEMALLOC") == "1":
+        tracemalloc.start(3)
+        logger.info("tracemalloc started with 3-frame depth (CALLISTO_TRACEMALLOC=1)")
+    else:
+        logger.info("tracemalloc disabled (set CALLISTO_TRACEMALLOC=1 to enable)")
 
     # Startup — ensure DB schema is up to date
     await ensure_schema()
@@ -2538,7 +2557,10 @@ async def debug_memory():
     rss_mb = process.memory_info().rss / (1024 * 1024)
 
     if not tracemalloc.is_tracing():
-        return {"error": "tracemalloc not active — restart API to enable"}
+        return {
+            "rss_mb": round(rss_mb, 1),
+            "error": "tracemalloc not active — set CALLISTO_TRACEMALLOC=1 and restart to enable",
+        }
 
     current = tracemalloc.take_snapshot()
     current = current.filter_traces((
@@ -2588,7 +2610,7 @@ async def debug_memory():
 async def debug_memory_traces(limit: int = 10):
     """Show full stack traces for the top memory consumers."""
     if not tracemalloc.is_tracing():
-        return {"error": "tracemalloc not active"}
+        return {"error": "tracemalloc not active — set CALLISTO_TRACEMALLOC=1 and restart to enable"}
 
     snapshot = tracemalloc.take_snapshot()
     snapshot = snapshot.filter_traces((
@@ -2614,12 +2636,16 @@ async def debug_gc():
     gc.collect()  # Second pass catches ref cycles
     import psutil
     rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
-    return {
+    result = {
         "rss_mb": round(rss_mb, 1),
         "gc_counts": gc.get_count(),
         "gc_stats": gc.get_stats(),
-        "tracemalloc_traced_mb": round(tracemalloc.get_traced_memory()[0] / (1024 * 1024), 1),
     }
+    if tracemalloc.is_tracing():
+        result["tracemalloc_traced_mb"] = round(tracemalloc.get_traced_memory()[0] / (1024 * 1024), 1)
+    else:
+        result["tracemalloc"] = "disabled (set CALLISTO_TRACEMALLOC=1 to enable)"
+    return result
 
 
 @app.post("/admin/sql")

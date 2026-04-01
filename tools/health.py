@@ -396,7 +396,7 @@ class SystemHealth:
             # when the true steady-state rate is <50 MB/hr.
             leak_detected = False
             growth_rate = 0.0
-            STARTUP_GRACE_SECONDS = 300  # 5 minutes
+            STARTUP_GRACE_SECONDS = 900  # 15 minutes — loading 500MB DB + scipy takes time
             if len(self._memory_samples) >= 10:
                 # Find first sample after startup grace period
                 process_start = self._memory_samples[0][0]
