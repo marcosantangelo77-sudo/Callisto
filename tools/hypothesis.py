@@ -43,8 +43,8 @@ DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 # Paper→live gate is the real quality filter (CLV, drawdown, 14-day duration).
 PROMOTION_GATES = {
     "backtesting→paper_trading": {
-        "min_signals": 5,              # 1% signal rate needs ~500 events for 5
-        "max_p_value": 0.10,           # relax for backtest→paper; tighten at live gate
+        "min_signals": 3,              # paper trading is low-risk; let borderline candidates in
+        "max_p_value": 0.25,           # exact binomial: 3/3=0.125, 4/5=0.188, 5/6=0.109; paper→live requires 0.05
         "min_clv_rate": 0.0,           # CLV not available in historical backtests
         "min_sharpe": 0.0,             # don't gate on Sharpe for first promotion
         "min_positive_edge_rate": 0.40, # at least 40% of events must show positive edge
@@ -105,15 +105,37 @@ def _norm_sf(x: float) -> float:
     return 1.0 - _norm_cdf(x)
 
 
+def _exact_binomial_sf(wins: int, total: int, p: float) -> float:
+    """Exact binomial survival function: P(X >= wins | n=total, p).
+    Used for small samples (n <= 30) where normal approximation is unreliable."""
+    if wins <= 0:
+        return 1.0
+    if wins > total:
+        return 0.0
+    # P(X >= wins) = sum_{k=wins}^{total} C(n,k) * p^k * (1-p)^(n-k)
+    prob = 0.0
+    # Use log-space to avoid overflow for larger n
+    log_comb = 0.0  # log(C(n, wins))
+    for i in range(wins):
+        log_comb += math.log(total - i) - math.log(i + 1)
+    for k in range(wins, total + 1):
+        if k > wins:
+            log_comb += math.log(total - k + 1) - math.log(k)
+        prob += math.exp(log_comb + k * math.log(p) + (total - k) * math.log(1 - p))
+    return prob
+
+
 def binomial_pvalue(wins: int, total: int, expected_rate: float) -> float:
     """
-    One-sided binomial test using normal approximation with continuity correction.
+    One-sided binomial test.
     H0: true win rate = expected_rate
     H1: true win rate > expected_rate
-    Valid for N > 30.
+    Uses exact binomial for n <= 30, normal approximation for n > 30.
     """
     if total < 1 or expected_rate <= 0 or expected_rate >= 1:
         return 1.0
+    if total <= 30:
+        return _exact_binomial_sf(wins, total, expected_rate)
     mean = total * expected_rate
     std = math.sqrt(total * expected_rate * (1 - expected_rate))
     if std < 1e-9:
@@ -767,7 +789,7 @@ class HypothesisManager:
                     # Zombie detection: IC below promotion gate with enough signals
                     # to be evaluated means this hypothesis can NEVER promote.
                     # The promotion gate requires min_ic=-0.05; if IC is below that
-                    # with min_signals (5) worth of data, it's permanently stuck.
+                    # with min_signals worth of data, it's permanently stuck.
                     promo_gate = PROMOTION_GATES.get("backtesting→paper_trading", {})
                     gate_ic = promo_gate.get("min_ic", -0.05)
                     gate_n = promo_gate.get("min_signals", 5)
