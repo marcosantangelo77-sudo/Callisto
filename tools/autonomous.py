@@ -4632,7 +4632,7 @@ class ResearchLoop:
                 "SUM(CASE WHEN be.signal_generated = 1 THEN 1 ELSE 0 END) as signals "
                 "FROM hypotheses h "
                 "JOIN backtest_events be ON h.hypothesis_id = be.hypothesis_id "
-                "WHERE h.status = 'draft' "
+                "WHERE h.status IN ('draft', 'backtesting') "
                 "GROUP BY h.hypothesis_id "
                 "HAVING events >= ? AND avg_edge < ?",
                 (MIN_EVENTS_FOR_REJECTION, MAX_EDGE_FOR_REJECTION),
@@ -4641,22 +4641,22 @@ class ResearchLoop:
             for row in draft_rejects:
                 hid, hname, mtype, events, avg_edge, signals = row
                 reason = (
-                    f"auto:draft_disproven — {events} events, "
+                    f"auto:negative_edge_disproven — {events} events, "
                     f"avg_edge={avg_edge:.2%}, signals={signals}. "
                     f"Data definitively disproves thesis."
                 )
                 await self.hypothesis_manager.update_status(hid, "rejected", reason)
                 self._rejections += 1
                 logger.info(
-                    f"Research: REJECTED draft {hid} ({hname}) — "
+                    f"Research: REJECTED zombie {hid} ({hname}) — "
                     f"{events} events, avg_edge={avg_edge:.2%}, {signals} signals"
                 )
             if draft_rejects:
                 logger.info(
-                    f"Research: auto-rejected {len(draft_rejects)} disproven draft hypotheses"
+                    f"Research: auto-rejected {len(draft_rejects)} disproven zombie hypotheses"
                 )
         except Exception as e:
-            logger.warning(f"Draft auto-rejection failed: {e}")
+            logger.warning(f"Zombie auto-rejection failed: {e}")
 
         # ── Untestable draft sweep ──
         # Drafts with ctx_coverage < 0.5 are skipped during backtesting selection
