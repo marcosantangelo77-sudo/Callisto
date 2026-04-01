@@ -3293,23 +3293,38 @@ class BacktestEngine:
         Updates signals_generated, total_events, win/loss/hit_rate, and edge
         metrics. This is critical because retroactive signal updates and game
         result resolution change backtest_events AFTER the run completes.
+
+        Signal metrics (signals_count, wins, losses, pushes, hit_rate, avg_edge,
+        p-value, Sharpe, Brier, IC) are deduplicated per unique event_id, keeping
+        only the best-edge row per event. This matches the deduplication in
+        _get_backtest_signals / evaluate_significance. total_events still counts
+        all book-level rows.
         """
         # Recount total events and signals from backtest_events (source of truth)
+        # total_events = all rows (book-level); signals_count = unique event_ids with signal
+        # raw_signals = all signal rows before dedup (for debugging inflation)
         cursor = await self._db.execute(
-            "SELECT COUNT(*), SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) "
+            "SELECT COUNT(*), "
+            "COUNT(DISTINCT CASE WHEN signal_generated = 1 THEN event_id END), "
+            "SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) "
             "FROM backtest_events WHERE run_id = ?",
             (run_id,),
         )
         row = await cursor.fetchone()
         total_events = row[0] or 0
         signals_count = row[1] or 0
+        raw_signals = row[2] or 0
 
-        # Get win/loss from SIGNAL events only
+        # Get win/loss from SIGNAL events only — deduplicated by event_id (best edge)
         cursor = await self._db.execute(
-            "SELECT actual_result, COUNT(*) FROM backtest_events "
-            "WHERE run_id = ? AND actual_result IS NOT NULL "
-            "AND signal_generated = 1 "
-            "GROUP BY actual_result",
+            "WITH unique_signals AS ("
+            "  SELECT event_id, actual_result, "
+            "    ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY edge DESC) as rn "
+            "  FROM backtest_events "
+            "  WHERE run_id = ? AND signal_generated = 1 AND actual_result IS NOT NULL"
+            ") "
+            "SELECT actual_result, COUNT(*) FROM unique_signals "
+            "WHERE rn = 1 GROUP BY actual_result",
             (run_id,),
         )
         results = {r[0]: r[1] for r in await cursor.fetchall()}
@@ -3322,22 +3337,26 @@ class BacktestEngine:
         if total_decided == 0 and signals_count == 0:
             return False  # Nothing to update
 
-        # Count unresolved
+        # Count unresolved — unique signal events with NULL result
         cursor = await self._db.execute(
-            "SELECT COUNT(*) FROM backtest_events "
-            "WHERE run_id = ? AND actual_result IS NULL",
+            "SELECT COUNT(DISTINCT event_id) FROM backtest_events "
+            "WHERE run_id = ? AND signal_generated = 1 AND actual_result IS NULL",
             (run_id,),
         )
         unresolved = (await cursor.fetchone())[0]
 
         hit_rate = wins / total_decided if total_decided > 0 else None
 
-        # Calculate avg_edge, avg_ev from signal-generated events only
+        # Calculate avg_edge, avg_ev from signal-generated events — deduplicated
         cursor = await self._db.execute(
-            "SELECT AVG(CASE WHEN signal_generated = 1 THEN edge END), "
-            "AVG(CASE WHEN signal_generated = 1 THEN ev_pct END), "
-            "AVG(CASE WHEN signal_generated = 1 THEN clv_implied END) "
-            "FROM backtest_events WHERE run_id = ? AND actual_result IS NOT NULL",
+            "WITH unique_signals AS ("
+            "  SELECT event_id, edge, ev_pct, clv_implied, "
+            "    ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY edge DESC) as rn "
+            "  FROM backtest_events "
+            "  WHERE run_id = ? AND signal_generated = 1 AND actual_result IS NOT NULL"
+            ") "
+            "SELECT AVG(edge), AVG(ev_pct), AVG(clv_implied) "
+            "FROM unique_signals WHERE rn = 1",
             (run_id,),
         )
         row = await cursor.fetchone()
@@ -3364,11 +3383,16 @@ class BacktestEngine:
             result = binomtest(wins, total_decided, 0.5, alternative="greater")
             p_binomial = result.pvalue
 
-            # Get per-signal returns for t-test, Sharpe, Sortino, ROI
+            # Get per-signal returns for t-test, Sharpe, Sortino, ROI — deduplicated
             cursor = await self._db.execute(
+                "WITH unique_signals AS ("
+                "  SELECT event_id, book_odds_american, actual_result, model_fair_prob, edge, "
+                "    ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY edge DESC) as rn "
+                "  FROM backtest_events "
+                "  WHERE run_id = ? AND signal_generated = 1 AND actual_result IN ('won', 'lost')"
+                ") "
                 "SELECT book_odds_american, actual_result, model_fair_prob, edge "
-                "FROM backtest_events "
-                "WHERE run_id = ? AND signal_generated = 1 AND actual_result IN ('won', 'lost')",
+                "FROM unique_signals WHERE rn = 1",
                 (run_id,),
             )
             signal_events = await cursor.fetchall()
@@ -3445,11 +3469,12 @@ class BacktestEngine:
         await self._db.commit()
         logger.info(
             f"Run {run_id}: recalculated — {wins}W/{losses}L/{pushes}P "
-            f"({unresolved} unresolved), hr={hit_rate:.3f}, p={p_binomial:.4f}, "
+            f"({unresolved} unresolved), signals={signals_count} unique/{raw_signals} raw, "
+            f"hr={hit_rate:.3f}, p={p_binomial:.4f}, "
             f"brier={brier:.3f if brier else 'N/A'}, ic={ic:.3f if ic else 'N/A'}"
             if hit_rate else
             f"Run {run_id}: recalculated — {wins}W/{losses}L/{pushes}P "
-            f"({unresolved} unresolved)"
+            f"({unresolved} unresolved), signals={signals_count} unique/{raw_signals} raw"
         )
         return True
 
