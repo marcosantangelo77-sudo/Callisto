@@ -41,7 +41,7 @@ DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 # Paper→live gate is the real quality filter (CLV, drawdown, 14-day duration).
 PROMOTION_GATES = {
     "backtesting→paper_trading": {
-        "min_signals": 3,              # paper trading is low-risk; let borderline candidates in
+        "min_signals": 10,             # require meaningful sample before paper trading
         "max_p_value": 0.25,           # base threshold; adaptive: 0.30 at n<8, 0.25 at n<15, 0.20 at n<25
         "min_clv_rate": 0.0,           # CLV not available in historical backtests
         "min_sharpe": 0.0,             # don't gate on Sharpe for first promotion
@@ -801,19 +801,47 @@ class HypothesisManager:
             else:
                 checks.append(f"PASS: Positive edge rate {pos_rate:.1%} >= {min_per:.0%}")
 
+        # Overall edge distribution check
+        # A hypothesis where the vast majority of events have negative edges
+        # should NOT promote even if a handful of signals went on a lucky streak.
+        # This catches e.g. 221/224 negative-edge events with 3 signals going 3-0.
+        if transition == "backtesting→paper_trading":
+            try:
+                edge_cursor = await self._db.execute(
+                    "SELECT edge FROM backtest_events "
+                    "WHERE hypothesis_id = ? AND edge IS NOT NULL",
+                    (hypothesis_id,),
+                )
+                all_edges = [row[0] for row in await edge_cursor.fetchall()]
+                if all_edges:
+                    overall_avg_edge = sum(all_edges) / len(all_edges)
+                    if overall_avg_edge < 0:
+                        checks.append(
+                            f"FAIL: overall edge distribution is negative "
+                            f"(avg_edge={overall_avg_edge:.4f} across {len(all_edges)} events)"
+                        )
+                        ready = False
+                    else:
+                        checks.append(
+                            f"PASS: overall edge distribution positive "
+                            f"(avg_edge={overall_avg_edge:.4f} across {len(all_edges)} events)"
+                        )
+            except Exception as e:
+                logger.warning(f"Could not check overall edge distribution: {e}")
+
         # Brier score (calibration quality)
-        # At n < 20, Brier is statistically meaningless — variance dominates.
+        # At n < 5, Brier is statistically meaningless — variance dominates.
         # For underdog strategies, Brier baseline is ~0.33 not 0.25 because
         # (implied_prob - outcome)^2 is structurally high when betting +150 dogs.
-        # Waive entirely for backtesting→paper at small n; paper trading is the real gate.
+        # Waive only at very small n; quality gates must apply early.
         if "max_brier" in gate:
             brier = report.get("calibration_score", {}).get("brier_score")
             max_brier = gate["max_brier"]
             market_type = h.get("market_type", "")
-            if n < 20 and transition == "backtesting→paper_trading":
-                # Waive: Brier needs ~50+ samples for statistical power
+            if n < 5 and transition == "backtesting→paper_trading":
+                # Waive: Brier needs minimum samples for any statistical meaning
                 if brier is not None:
-                    checks.append(f"SKIP: Brier score {brier:.4f} (n={n} < 20, waived for paper promotion)")
+                    checks.append(f"SKIP: Brier score {brier:.4f} (n={n} < 5, waived for paper promotion)")
             else:
                 if market_type == "h2h" and n < 30:
                     max_brier = 0.30
@@ -825,17 +853,17 @@ class HypothesisManager:
 
         # Information coefficient
         # IC measures correlation between predicted edge and realized return.
-        # At n < 20 with binary outcomes, IC has no statistical power — two
+        # At n < 5 with binary outcomes, IC has no statistical power — two
         # unlucky high-edge losses can drive IC to -0.8 on noise alone.
-        # Waive for backtesting→paper at small n; enforce at paper→live.
+        # Waive only at very small n; quality gates must apply early.
         if "min_ic" in gate:
             ic = report.get("calibration_score", {}).get("information_coefficient")
             min_ic = gate["min_ic"]
             market_type = h.get("market_type", "")
-            if n < 20 and transition == "backtesting→paper_trading":
-                # Waive: IC needs ~30+ samples for meaningful correlation
+            if n < 5 and transition == "backtesting→paper_trading":
+                # Waive: IC needs minimum samples for any statistical meaning
                 if ic is not None:
-                    checks.append(f"SKIP: IC {ic:.4f} (n={n} < 20, waived for paper promotion)")
+                    checks.append(f"SKIP: IC {ic:.4f} (n={n} < 5, waived for paper promotion)")
             else:
                 if market_type == "h2h":
                     min_ic = -0.10
