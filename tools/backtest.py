@@ -3138,7 +3138,11 @@ class BacktestEngine:
             key = (r_sport, r_date, r_home, r_away)
             seen.add(key)
             games_by_date[(r_sport, r_date)].append((r_home, r_away, r_hscore, r_ascore))
-            games_by_date[("", r_date)].append((r_home, r_away, r_hscore, r_ascore))
+
+        # Track unique dates for sport-agnostic fallback lookups
+        _dates_with_games: set = set()
+        for r_sport, r_date, *_ in result_rows:
+            _dates_with_games.add(r_date)
 
         # Fallback: game_contexts also stores scores from ESPN
         ctx_cursor = await self._db.execute(
@@ -3154,7 +3158,7 @@ class BacktestEngine:
             if key not in seen:
                 seen.add(key)
                 games_by_date[(r_sport, r_date)].append((r_home, r_away, r_hscore, r_ascore))
-                games_by_date[("", r_date)].append((r_home, r_away, r_hscore, r_ascore))
+                _dates_with_games.add(r_date)
                 ctx_added += 1
         if ctx_added > 0:
             logger.info(f"Resolution: added {ctx_added} games from game_contexts fallback")
@@ -3199,8 +3203,12 @@ class BacktestEngine:
 
             for try_date in date_candidates:
                 candidates = games_by_date.get((ev_sport, try_date), [])
-                if not candidates:
-                    candidates = games_by_date.get(("", try_date), [])
+                if not candidates and try_date in _dates_with_games:
+                    # Sport-agnostic fallback: gather all games for this date
+                    candidates = [
+                        g for k, v in games_by_date.items()
+                        if k[1] == try_date for g in v
+                    ]
 
                 for r_home, r_away, r_hscore, r_ascore in candidates:
                     if self._team_matches(home_team, r_home) and self._team_matches(away_team, r_away):

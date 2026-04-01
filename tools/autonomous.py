@@ -3129,8 +3129,8 @@ class ResearchLoop:
 
                     # Check if hypothesis already exists
                     try:
-                        existing = await self.hypothesis_manager.list_hypotheses()
-                        if any(h["name"] == hypo_name for h in existing):
+                        existing_names = await self.hypothesis_manager.get_all_names()
+                        if hypo_name in existing_names:
                             continue
                     except Exception:
                         pass
@@ -3223,15 +3223,11 @@ class ResearchLoop:
         if (now - self._last_claude_call > CLAUDE_ESCALATION_COOLDOWN
                 and self._claude_ok()):
             try:
-                # Gather context for Claude
-                all_hypos = await self.hypothesis_manager.list_hypotheses()
-                existing_names = [h["name"] for h in all_hypos]
-                draft_count = sum(1 for h in all_hypos if h["status"] == "draft")
-                active_count = sum(
-                    1 for h in all_hypos
-                    if h["status"] in ("backtesting", "paper_trading", "live")
-                )
-                rejected_count = sum(1 for h in all_hypos if h["status"] == "rejected")
+                # Gather context for Claude — use lightweight queries instead of loading all rows
+                existing_names = list(await self.hypothesis_manager.get_all_names())
+                draft_count = await self.hypothesis_manager.count_by_status("draft")
+                active_count = await self.hypothesis_manager.count_by_status("backtesting", "paper_trading", "live")
+                rejected_count = await self.hypothesis_manager.count_by_status("rejected")
 
                 data_stats = await self.data_collector.get_collection_stats()
 
@@ -3565,8 +3561,7 @@ class ResearchLoop:
             from tools.claude_code import is_available as _ca
             if not _ca():
                 try:
-                    all_hypos = await self.hypothesis_manager.list_hypotheses()
-                    existing_names = [h["name"] for h in all_hypos]
+                    existing_names = await self.hypothesis_manager.get_names()
                     deferred_prompt = (
                         f"CALLISTO HYPOTHESIS GENERATION — Deferred from Cycle #{self._cycles}\n\n"
                         f"Generate 3-5 UNCONVENTIONAL sports betting hypotheses across: {RESEARCH_SPORTS}\n\n"
@@ -3592,8 +3587,7 @@ class ResearchLoop:
                 # Try local model via escalation ladder (Apriel > Qwen3 > DeepSeek)
                 try:
                     from inference import escalate_with_ladder
-                    all_hypos_l = await self.hypothesis_manager.list_hypotheses()
-                    existing_l = [h["name"] for h in all_hypos_l][:30]
+                    existing_l = (await self.hypothesis_manager.get_names())[:30]
                     ladder_prompt = (
                         f"Generate 3 testable sports betting hypotheses.\n"
                         f"Sports: {RESEARCH_SPORTS}\n"
@@ -3656,8 +3650,7 @@ class ResearchLoop:
                         f"Cycles: {self._cycles}, Hypotheses: {self._hypotheses_generated}, "
                         f"Backtests: {self._backtests_run}"
                     )
-                    all_hypos = await self.hypothesis_manager.list_hypotheses()
-                    existing_names = [h["name"] for h in all_hypos]
+                    existing_names = await self.hypothesis_manager.get_names()
                     local_hypos = await local_fallback_hypothesis_gen(
                         pipeline_state, existing_names, ""
                     )

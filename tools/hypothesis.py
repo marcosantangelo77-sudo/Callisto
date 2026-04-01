@@ -347,16 +347,16 @@ class HypothesisManager:
         h["model_config"] = json.loads(h["model_config"]) if h["model_config"] else {}
         return h
 
-    async def list_hypotheses(self, status: Optional[str] = None) -> list[dict]:
+    async def list_hypotheses(self, status: Optional[str] = None, limit: int = None) -> list[dict]:
         if status:
-            cursor = await self._db.execute(
-                "SELECT * FROM hypotheses WHERE status = ? ORDER BY updated_at DESC",
-                (status,),
-            )
+            query = "SELECT * FROM hypotheses WHERE status = ? ORDER BY updated_at DESC"
+            params: tuple = (status,)
         else:
-            cursor = await self._db.execute(
-                "SELECT * FROM hypotheses ORDER BY updated_at DESC"
-            )
+            query = "SELECT * FROM hypotheses ORDER BY updated_at DESC"
+            params = ()
+        if limit:
+            query += f" LIMIT {int(limit)}"
+        cursor = await self._db.execute(query, params)
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
         result = []
@@ -365,6 +365,31 @@ class HypothesisManager:
             h["model_config"] = json.loads(h["model_config"]) if h["model_config"] else {}
             result.append(h)
         return result
+
+    async def count_by_status(self, *statuses: str) -> int:
+        """Count hypotheses by status without loading full rows."""
+        placeholders = ",".join("?" for _ in statuses)
+        cursor = await self._db.execute(
+            f"SELECT COUNT(*) FROM hypotheses WHERE status IN ({placeholders})",
+            statuses,
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+    async def get_names(self, status: Optional[str] = None) -> list[str]:
+        """Get just hypothesis names (not full rows)."""
+        if status:
+            cursor = await self._db.execute(
+                "SELECT name FROM hypotheses WHERE status = ?", (status,)
+            )
+        else:
+            cursor = await self._db.execute("SELECT name FROM hypotheses")
+        return [row[0] for row in await cursor.fetchall()]
+
+    async def get_all_names(self) -> set[str]:
+        """Get all hypothesis names as a set for dedup checks."""
+        cursor = await self._db.execute("SELECT name FROM hypotheses")
+        return {row[0] for row in await cursor.fetchall()}
 
     async def update_status(
         self, hypothesis_id: str, new_status: str, promoted_by: str = "manual",
