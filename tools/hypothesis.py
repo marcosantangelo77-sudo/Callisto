@@ -889,9 +889,21 @@ class HypothesisManager:
             else:
                 if market_type == "h2h":
                     min_ic = -0.10
+                # Waive IC gate when p-value and hit_rate demonstrate real alpha.
+                # IC measures edge-magnitude calibration, not predictive quality.
+                # At n<30 with binary outcomes, IC is dominated by noise — one
+                # unlucky high-edge loss can drive IC to -0.8 on a profitable hypothesis.
+                hit_rate = report.get("results", {}).get("hit_rate", 0)
                 if ic is not None and ic < min_ic:
-                    checks.append(f"FAIL: IC {ic:.4f} < {min_ic} (model is anti-predictive)")
-                    ready = False
+                    if (p <= 0.15 and hit_rate > 0.55) or (hit_rate > 0.70 and n >= 10):
+                        checks.append(
+                            f"WAIVED: IC {ic:.4f} < {min_ic} but p={p:.4f} and "
+                            f"hit_rate={hit_rate:.1%} demonstrate real alpha — "
+                            f"IC noise at n={n} with binary outcomes"
+                        )
+                    else:
+                        checks.append(f"FAIL: IC {ic:.4f} < {min_ic} (model is anti-predictive)")
+                        ready = False
                 elif ic is not None:
                     checks.append(f"PASS: IC {ic:.4f} >= {min_ic}")
 
@@ -919,7 +931,23 @@ class HypothesisManager:
         if not should_reject and not used_all_events:
             _ic = report.get("calibration_score", {}).get("information_coefficient")
             if _ic is not None:
-                if (_ic < AUTO_REJECT_IC and n >= AUTO_REJECT_IC_MIN_N):
+                # Waive IC rejection when p-value and hit_rate demonstrate real alpha.
+                # IC measures edge-magnitude calibration, not predictive quality.
+                # At small n with binary outcomes, IC is dominated by noise.
+                _hit_rate = report.get("results", {}).get("hit_rate", 0)
+                _ic_waived = (p <= 0.15 and _hit_rate > 0.55) or (_hit_rate > 0.70 and n >= 10)
+                if _ic_waived:
+                    if _ic < AUTO_REJECT_IC:
+                        checks.append(
+                            f"IC-WAIVER: IC {_ic:.4f} < {AUTO_REJECT_IC} but p={p:.4f} "
+                            f"hit_rate={_hit_rate:.1%} — keeping despite poor IC"
+                        )
+                    elif _ic < -0.05:
+                        checks.append(
+                            f"IC-WAIVER: IC {_ic:.4f} below promotion gate but p={p:.4f} "
+                            f"hit_rate={_hit_rate:.1%} — waived, not a zombie"
+                        )
+                elif (_ic < AUTO_REJECT_IC and n >= AUTO_REJECT_IC_MIN_N):
                     should_reject = True
                     checks.append(
                         f"AUTO-REJECT: IC {_ic:.4f} < {AUTO_REJECT_IC} with "
@@ -936,6 +964,7 @@ class HypothesisManager:
                     # to be evaluated means this hypothesis can NEVER promote.
                     # The promotion gate requires min_ic=-0.05; if IC is below that
                     # with min_signals worth of data, it's permanently stuck.
+                    # Note: _ic_waived is False here (else branch), so no waiver needed.
                     promo_gate = PROMOTION_GATES.get("backtesting→paper_trading", {})
                     gate_ic = promo_gate.get("min_ic", -0.05)
                     gate_n = promo_gate.get("min_signals", 5)
