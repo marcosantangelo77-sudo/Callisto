@@ -34,7 +34,7 @@ logger = logging.getLogger("callisto.claude_code")
 CLAUDE_CMD = os.getenv("CLAUDE_CMD", "claude")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
 MAX_BUDGET_USD = float(os.getenv("CLAUDE_MAX_BUDGET", "0"))  # 0 = no limit (Max sub)
-CLAUDE_TIMEOUT = int(os.getenv("CLAUDE_TIMEOUT", "180"))  # seconds
+CLAUDE_TIMEOUT = int(os.getenv("CLAUDE_TIMEOUT", "300"))  # seconds
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
 # Rate limit / backoff configuration
