@@ -329,6 +329,30 @@ class HypothesisManager:
             )
             return existing[0]
 
+        # ── Duplicate game_filters guard: reject if same sport+market+filters already active ──
+        new_gf = model_config.get("game_filters") if model_config else None
+        new_gf_normalized = json.dumps(new_gf, sort_keys=True) if new_gf else None
+
+        dup_cursor = await self._db.execute(
+            "SELECT hypothesis_id, name, model_config FROM hypotheses "
+            "WHERE sport = ? AND market_type = ? AND status IN ('draft', 'backtesting', 'paper_trading')",
+            (sport, market_type),
+        )
+        dup_rows = await dup_cursor.fetchall()
+        for row in dup_rows:
+            existing_mc = json.loads(row[2]) if row[2] else {}
+            existing_gf = existing_mc.get("game_filters")
+            existing_gf_normalized = json.dumps(existing_gf, sort_keys=True) if existing_gf else None
+
+            if new_gf_normalized == existing_gf_normalized:
+                logger.warning(
+                    f"DUPLICATE game_filters blocked: '{name}' has identical "
+                    f"sport={sport}, market_type={market_type}, "
+                    f"game_filters={new_gf_normalized or 'null'} "
+                    f"as existing hypothesis '{row[1]}' ({row[0]}). Skipping creation."
+                )
+                return row[0]
+
         hid = str(uuid.uuid4())[:12]
         now = datetime.now(timezone.utc).isoformat()
 
