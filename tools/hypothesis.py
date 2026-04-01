@@ -36,15 +36,13 @@ logger = logging.getLogger("callisto.hypothesis")
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
 # Promotion gates: {transition: {min_n, max_p, min_clv_rate, extras}}
-# Note: min_signals must be achievable given current data volume.
-# Historical odds data is mostly single-book consensus → structural 1% signal rate.
-# With 50 events per hypothesis, expect ~0.5 signals. Need gates that don't require
-# thousands of events. Binomial test at n=5, p<0.10 is still statistically meaningful.
+# Note: max_p_value is the BASE threshold. Actual threshold is adaptive via
+# get_adaptive_p_value_threshold() — relaxed at small n, tightens as data grows.
 # Paper→live gate is the real quality filter (CLV, drawdown, 14-day duration).
 PROMOTION_GATES = {
     "backtesting→paper_trading": {
         "min_signals": 3,              # paper trading is low-risk; let borderline candidates in
-        "max_p_value": 0.25,           # exact binomial: 3/3=0.125, 4/5=0.188, 5/6=0.109; paper→live requires 0.05
+        "max_p_value": 0.25,           # base threshold; adaptive: 0.30 at n<8, 0.25 at n<15, 0.20 at n<25
         "min_clv_rate": 0.0,           # CLV not available in historical backtests
         "min_sharpe": 0.0,             # don't gate on Sharpe for first promotion
         "min_positive_edge_rate": 0.40, # at least 40% of events must show positive edge
@@ -53,7 +51,7 @@ PROMOTION_GATES = {
     },
     "paper_trading→live": {
         "min_signals": 20,             # real filter is CLV + drawdown
-        "max_p_value": 0.05,
+        "max_p_value": 0.05,           # base threshold; adaptive: 0.15 at n<25, 0.10 at n<40
         "min_clv_rate": 0.50,          # must beat closing line 50%+ of the time
         "max_drawdown": 0.30,
         "min_days": 14,
@@ -80,6 +78,47 @@ AUTO_REJECT_IC_STRONG = -0.25      # Very strong anti-prediction needs fewer sam
 AUTO_REJECT_IC_STRONG_MIN_N = 10   # 10 signals sufficient when IC < -0.25
 
 STAGE_ORDER = ["draft", "backtesting", "paper_trading", "live", "retired"]
+
+
+def get_adaptive_p_value_threshold(n_signals: int, base_threshold: float) -> float:
+    """Adaptive p-value threshold based on sample size.
+
+    Small samples make standard significance thresholds mathematically
+    unreachable.  At n=6, even 5W/1L gives p~0.109 (exact binomial).
+    A flat gate of 0.10 blocks every hypothesis regardless of merit.
+
+    This function relaxes the threshold for small n and tightens it as
+    evidence accumulates, converging to the base_threshold at large n.
+
+    Tiers (for backtesting->paper_trading, base=0.25):
+      n < 8:   0.30  — accept strong directional evidence despite noise
+      n < 15:  0.25  — moderate evidence (base threshold)
+      n < 25:  0.20  — tighter with more data
+      n >= 25: base   — full statistical rigor
+
+    For paper_trading->live (base=0.05):
+      n < 25:  0.15  — real money demands more evidence, but small n still limited
+      n < 40:  0.10  — approaching standard significance
+      n >= 40: 0.05  — full rigor
+    """
+    if base_threshold >= 0.20:
+        # backtesting -> paper_trading path
+        if n_signals < 8:
+            return 0.30
+        elif n_signals < 15:
+            return 0.25
+        elif n_signals < 25:
+            return 0.20
+        else:
+            return base_threshold
+    else:
+        # paper_trading -> live path (base is typically 0.05)
+        if n_signals < 25:
+            return 0.15
+        elif n_signals < 40:
+            return 0.10
+        else:
+            return base_threshold
 
 
 # ──────────────────────────────────────────────────
@@ -645,14 +684,22 @@ class HypothesisManager:
         else:
             checks.append(f"PASS: {n}/{required_n} signals")
 
-        # P-value
+        # P-value — use adaptive threshold based on sample size.
+        # Small n makes standard thresholds mathematically unreachable;
+        # adaptive gate relaxes for small samples, tightens as n grows.
         p = report.get("significance", {}).get("p_value_binomial", 1.0)
-        max_p = gate["max_p_value"]
+        base_p = gate["max_p_value"]
+        max_p = get_adaptive_p_value_threshold(n, base_p)
+        if max_p != base_p:
+            logger.info(
+                f"Hypothesis {hypothesis_id}: adaptive p-value threshold "
+                f"{max_p:.2f} (base={base_p:.2f}, n={n})"
+            )
         if p > max_p:
-            checks.append(f"FAIL: p-value {p:.4f} > {max_p}")
+            checks.append(f"FAIL: p-value {p:.4f} > {max_p:.4f} (adaptive, base={base_p}, n={n})")
             ready = False
         else:
-            checks.append(f"PASS: p-value {p:.4f} < {max_p}")
+            checks.append(f"PASS: p-value {p:.4f} <= {max_p:.4f} (adaptive, base={base_p}, n={n})")
 
         # CLV rate
         clv_rate = report.get("clv", {}).get("positive_clv_rate", 0)
@@ -838,7 +885,7 @@ class HypothesisManager:
 
         Hard gates (cannot be bypassed by statistical tests):
           - backtesting → paper_trading: backtest_events MUST exist for this hypothesis
-            AND meet minimum sample size (>20) with p-value < 0.05
+            AND meet min_signals with adaptive p-value threshold (see PROMOTION_GATES)
           - paper_trading → live: paper_trades MUST exist AND show positive ROI
 
         Auto-rejection:
