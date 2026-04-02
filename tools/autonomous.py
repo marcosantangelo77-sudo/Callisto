@@ -4197,15 +4197,25 @@ class ResearchLoop:
                 # ── Flush any dangling transactions before backtest writes ──
                 # Phase timeouts (self_repair, etc.) can leave uncommitted
                 # transactions on shared connections, holding the WAL write lock.
-                for _flush_db in [
-                    getattr(self.data_collector, "_db", None),
-                    getattr(self.backtest_engine, "_db", None),
-                ]:
-                    if _flush_db:
+                _flush_conns = {
+                    "data_collector": getattr(self.data_collector, "_db", None),
+                    "backtest_engine": getattr(self.backtest_engine, "_db", None),
+                    "line_monitor": getattr(self.line_monitor, "_db", None),
+                    "hypothesis_mgr": getattr(self.hypothesis_manager, "_db", None),
+                }
+                _tx_state = []
+                for _fn, _fdb in _flush_conns.items():
+                    if _fdb and hasattr(_fdb, "_conn") and _fdb._conn:
                         try:
-                            await _flush_db.rollback()
+                            _in_tx = _fdb._conn.in_transaction
+                            _tx_state.append(f"{_fn}={_in_tx}")
+                            if _in_tx:
+                                await _fdb.rollback()
+                                logger.warning(f"Flushed dangling transaction on {_fn}")
                         except Exception:
-                            pass
+                            _tx_state.append(f"{_fn}=err")
+                if _tx_state:
+                    logger.info(f"Pre-backtest tx state: {', '.join(_tx_state)}")
 
                 _bt_t0 = time.time()
                 # Retry on database lock — other subsystems (line_monitor,

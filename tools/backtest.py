@@ -639,10 +639,23 @@ class BacktestEngine:
         # connections that may hold implicit read transactions. The persistent
         # self._db connection shares the event loop with line_monitor, data_collector,
         # etc., causing deadlock-like contention. A fresh connection writes cleanly.
+        # Diagnostic: check which connections have open transactions
+        _diag_parts = []
+        for _dname, _ddb in [
+            ("self._db", self._db),
+            ("self.db", getattr(self, "db", None)),
+        ]:
+            if _ddb and hasattr(_ddb, "_conn") and _ddb._conn:
+                try:
+                    _in_tx = _ddb._conn.in_transaction
+                    _diag_parts.append(f"{_dname}.in_transaction={_in_tx}")
+                except Exception:
+                    _diag_parts.append(f"{_dname}=check_failed")
         logger.info(
             f"Backtest {run_id}: starting deferred write — "
             f"{total_events} events, {len(all_pending_rows)} rows, "
-            f"status_update={_deferred_status_update}"
+            f"status_update={_deferred_status_update}, "
+            f"conn_state=[{', '.join(_diag_parts)}]"
         )
         completed = datetime.now(timezone.utc).isoformat()
         import random as _rnd_bt
