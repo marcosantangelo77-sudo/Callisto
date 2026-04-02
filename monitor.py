@@ -68,7 +68,13 @@ class HealthMonitor:
             return
 
         elapsed_ms = (time.monotonic() - start) * 1000
-        available_models = {m["name"] for m in data.get("models", [])}
+        # Match both "model" and "model:latest" — Ollama returns tagged names
+        available_models = set()
+        for m in data.get("models", []):
+            name = m["name"]
+            available_models.add(name)
+            if ":" in name:
+                available_models.add(name.split(":")[0])
 
         for name, config in AGENT_CONFIGS.items():
             if config.model in available_models:
