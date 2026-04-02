@@ -3701,8 +3701,9 @@ class BacktestEngine:
             else:
                 logger.warning(
                     f"Paper trade {hypothesis_id}: context filter ENABLED but "
-                    f"schedule_context is EMPTY — all games will be rejected (fail-closed)"
+                    f"schedule_context is EMPTY — falling through WITHOUT context filter"
                 )
+                use_context_filter = False  # fail-open: proceed without context gating
 
         for game in games:
             # ── Game-level context filter (same as backtest path) ──
