@@ -379,6 +379,7 @@ CREATE TABLE IF NOT EXISTS paper_trades (
 
 CREATE INDEX IF NOT EXISTS idx_paper_hypo ON paper_trades(hypothesis_id, game_date);
 CREATE INDEX IF NOT EXISTS idx_paper_result ON paper_trades(hypothesis_id, actual_result);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_dedup ON paper_trades(hypothesis_id, event_id, book, game_date);
 
 -- ──────────────────────────────────────────
 -- HYPOTHESIS STATS: rolling aggregates

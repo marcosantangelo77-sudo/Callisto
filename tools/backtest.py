@@ -3800,8 +3800,20 @@ class BacktestEngine:
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
 
+        dupes_skipped = 0
         for row in rows:
             event = dict(zip(cols, row))
+
+            # ── Dedup: skip if we already recorded this trade ──
+            dup_cur = await self._db.execute(
+                "SELECT 1 FROM paper_trades "
+                "WHERE hypothesis_id = ? AND event_id = ? AND book = ? AND game_date = ?",
+                (hypothesis_id, event["event_id"], event["book"], today),
+            )
+            if await dup_cur.fetchone():
+                dupes_skipped += 1
+                continue
+
             trade_id = str(uuid.uuid4())[:12]
 
             # Move to paper_trades table
@@ -3856,6 +3868,12 @@ class BacktestEngine:
                 "trade_id": trade_id,
                 **event,
             })
+
+        if dupes_skipped:
+            logger.info(
+                f"Paper trade {hypothesis_id[:12]}: skipped {dupes_skipped} "
+                f"duplicate trades (already recorded)"
+            )
 
         # Clean up temporary paper events from backtest_events
         await self._db.execute(
