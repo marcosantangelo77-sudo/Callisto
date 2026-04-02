@@ -4197,10 +4197,13 @@ class ResearchLoop:
                 # ── Flush any dangling transactions before backtest writes ──
                 # Phase timeouts (self_repair, etc.) can leave uncommitted
                 # transactions on shared connections, holding the WAL write lock.
+                # Check all accessible DB connections. line_monitor is on the
+                # orchestrator, not directly accessible from ResearchLoop.
+                _lm = getattr(self.orchestrator, "line_monitor", None) if self.orchestrator else None
                 _flush_conns = {
                     "data_collector": getattr(self.data_collector, "_db", None),
                     "backtest_engine": getattr(self.backtest_engine, "_db", None),
-                    "line_monitor": getattr(self.line_monitor, "_db", None),
+                    "line_monitor": getattr(_lm, "_db", None) if _lm else None,
                     "hypothesis_mgr": getattr(self.hypothesis_manager, "_db", None),
                 }
                 _tx_state = []
