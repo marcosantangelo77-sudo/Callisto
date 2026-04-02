@@ -664,7 +664,7 @@ class BacktestEngine:
             _write_db = None
             try:
                 _write_db = await _aiosqlite_bt.connect(self.db_path)
-                await _write_db.execute("PRAGMA busy_timeout = 10000")
+                await _write_db.execute("PRAGMA busy_timeout = 60000")
                 await _write_db.execute("PRAGMA journal_mode = WAL")
                 await _write_db.execute("PRAGMA synchronous = NORMAL")
                 await _write_db.execute(
@@ -3197,7 +3197,7 @@ class BacktestEngine:
 
         result_cursor = await self._db.execute(
             "SELECT sport, game_date, home_team, away_team, home_score, away_score "
-            "FROM game_results WHERE game_date >= date(?, '-1 day') AND game_date <= date(?, '+1 day')",
+            "FROM game_results WHERE game_date >= date(?, '-3 day') AND game_date <= date(?, '+3 day')",
             (min_date, max_date),
         )
         result_rows = await result_cursor.fetchall()
@@ -3215,7 +3215,7 @@ class BacktestEngine:
         ctx_cursor = await self._db.execute(
             "SELECT sport, game_date, home_team, away_team, home_score, away_score "
             "FROM game_contexts WHERE home_score IS NOT NULL AND away_score IS NOT NULL "
-            "AND game_date >= date(?, '-1 day') AND game_date <= date(?, '+1 day')",
+            "AND game_date >= date(?, '-3 day') AND game_date <= date(?, '+3 day')",
             (min_date, max_date),
         )
         ctx_rows = await ctx_cursor.fetchall()
@@ -3255,8 +3255,9 @@ class BacktestEngine:
                 continue
 
             # Fuzzy match: find the game in results for this date
-            # Try exact date first, then ±1 day to handle timezone offsets
-            # (odds API uses US dates, results sources may use UTC/AU dates)
+            # Try exact date first, then ±1 day for timezone offsets,
+            # then ±2-3 days for pre-game odds captured before game day
+            # (e.g. Opening Day odds posted days before the actual games)
             scores = None
             try:
                 base = _dt.strptime(game_date, "%Y-%m-%d")
@@ -3264,6 +3265,10 @@ class BacktestEngine:
                     game_date,
                     (base + _td(days=1)).strftime("%Y-%m-%d"),
                     (base - _td(days=1)).strftime("%Y-%m-%d"),
+                    (base + _td(days=2)).strftime("%Y-%m-%d"),
+                    (base - _td(days=2)).strftime("%Y-%m-%d"),
+                    (base + _td(days=3)).strftime("%Y-%m-%d"),
+                    (base - _td(days=3)).strftime("%Y-%m-%d"),
                 ]
             except ValueError:
                 date_candidates = [game_date]
