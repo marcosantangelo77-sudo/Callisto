@@ -448,19 +448,11 @@ class BacktestEngine:
         run_id = str(uuid.uuid4())[:12]
         now = datetime.now(timezone.utc).isoformat()
 
-        # Record run start
-        await self._db.execute(
-            "INSERT INTO backtest_runs "
-            "(run_id, hypothesis_id, date_range_start, date_range_end, "
-            "started_at, run_config) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (run_id, hypothesis_id, start_date, end_date, now, json.dumps(config)),
-        )
-        await self._db.commit()
-
-        # Update hypothesis status if still draft
-        if h["status"] == "draft":
-            await self.hypothesis_manager.update_status(hypothesis_id, "backtesting", "auto")
+        # DEFERRED WRITE: Don't INSERT backtest_runs yet — the write lock
+        # contention with line_monitor causes 5-minute blocks. Do all reads
+        # first (computing events/signals), then batch-write at the end.
+        # The run_id is still generated so _process_game_lines can reference it.
+        _deferred_status_update = h["status"] == "draft"
 
         # Fetch historical data
         logger.info(f"Backtest {run_id}: fetching {sport} odds {start_date} to {end_date}")
@@ -641,14 +633,45 @@ class BacktestEngine:
             f"{singlebook_skipped} dates with single-book only (no cross-book edges)"
         )
 
-        # Update run with totals
+        # ── DEFERRED WRITE: batch all writes into one transaction ──
+        # INSERT backtest_runs + status update + totals in a single commit.
+        # This minimizes write lock duration (was blocking 5+ minutes when
+        # competing with line_monitor's snapshot writes).
         completed = datetime.now(timezone.utc).isoformat()
-        await self._db.execute(
-            "UPDATE backtest_runs SET total_events = ?, signals_generated = ?, "
-            "completed_at = ? WHERE run_id = ?",
-            (total_events, total_signals, completed, run_id),
-        )
-        await self._db.commit()
+        import random as _rnd_bt
+        for _bt_write_attempt in range(5):
+            try:
+                await self._db.execute(
+                    "INSERT OR REPLACE INTO backtest_runs "
+                    "(run_id, hypothesis_id, date_range_start, date_range_end, "
+                    "started_at, run_config, total_events, signals_generated, completed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (run_id, hypothesis_id, start_date, end_date, now,
+                     json.dumps(config), total_events, total_signals, completed),
+                )
+                if _deferred_status_update:
+                    await self._db.execute(
+                        "UPDATE hypotheses SET status = 'backtesting', "
+                        "updated_at = datetime('now') WHERE hypothesis_id = ? "
+                        "AND status = 'draft'",
+                        (hypothesis_id,),
+                    )
+                await self._db.commit()
+                break
+            except Exception as _bw_e:
+                if "locked" in str(_bw_e).lower() and _bt_write_attempt < 4:
+                    _wait = min(2 * (2 ** _bt_write_attempt), 15) + _rnd_bt.uniform(0, 1)
+                    logger.warning(
+                        f"Backtest {run_id} deferred write locked "
+                        f"(attempt {_bt_write_attempt + 1}/5), retrying in {_wait:.1f}s"
+                    )
+                    try:
+                        await self._db.rollback()
+                    except Exception:
+                        pass
+                    await asyncio.sleep(_wait)
+                else:
+                    raise
 
         logger.info(
             f"Backtest {run_id} complete: {total_events} events, {total_signals} signals"
