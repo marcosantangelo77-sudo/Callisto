@@ -184,7 +184,7 @@ async def analyze_book_leadership(
     import aiosqlite
 
     async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout = 10000")
+        await db.execute("PRAGMA busy_timeout = 60000")
 
         # Get price movements grouped by bookmaker, ordered by time
         cursor = await db.execute(
@@ -298,7 +298,7 @@ async def store_results(db_path: str, results: dict) -> int:
     stored = 0
 
     async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout = 5000")
+        await db.execute("PRAGMA busy_timeout = 60000")
         for pair in results.get("pair_results", []):
             for direction_key in ["a_causes_b", "b_causes_a"]:
                 test = pair[direction_key]
@@ -340,7 +340,7 @@ async def get_sharp_leader(
     import aiosqlite
 
     async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout = 5000")
+        await db.execute("PRAGMA busy_timeout = 60000")
         # Only consider results from the last 30 days to avoid stale regime data
         cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         cursor = await db.execute(

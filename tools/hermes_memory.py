@@ -112,7 +112,7 @@ class HermesMemory:
 
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute("PRAGMA busy_timeout = 10000")
+                await db.execute("PRAGMA busy_timeout = 60000")
                 await self._ensure_tables(db)
 
                 # Build all sections
@@ -186,7 +186,7 @@ class HermesMemory:
         """
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute("PRAGMA busy_timeout = 10000")
+                await db.execute("PRAGMA busy_timeout = 60000")
                 await self._ensure_tables(db)
                 await db.execute(
                     "INSERT INTO hermes_learnings (key, value, learned_at, confidence, source) "
@@ -240,7 +240,7 @@ class HermesMemory:
         """
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute("PRAGMA busy_timeout = 10000")
+                await db.execute("PRAGMA busy_timeout = 60000")
                 await self._ensure_tables(db)
                 cursor = await db.execute(
                     "SELECT key, value, confidence, occurrences, source, learned_at "
@@ -280,7 +280,7 @@ class HermesMemory:
         """
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute("PRAGMA busy_timeout = 10000")
+                await db.execute("PRAGMA busy_timeout = 60000")
                 await self._ensure_tables(db)
                 await db.execute(
                     "INSERT INTO hermes_messages (timestamp, sender, message) VALUES (?, ?, ?)",
@@ -297,7 +297,7 @@ class HermesMemory:
         """Get all unread messages and mark them as read."""
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                await db.execute("PRAGMA busy_timeout = 10000")
+                await db.execute("PRAGMA busy_timeout = 60000")
                 await self._ensure_tables(db)
                 rows = await db.execute_fetchall(
                     "SELECT id, timestamp, sender, message FROM hermes_messages "

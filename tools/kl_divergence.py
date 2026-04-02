@@ -107,7 +107,7 @@ async def compute_game_kl(
     Returns dict with metrics, or None if insufficient data.
     """
     async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout = 5000")
+        await db.execute("PRAGMA busy_timeout = 60000")
 
         # Find snapshots for this event — earliest and latest
         cursor = await db.execute(
@@ -189,7 +189,7 @@ async def store_kl_metrics(db_path: str, metrics: list[dict]) -> int:
     if not metrics:
         return 0
     async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout = 5000")
+        await db.execute("PRAGMA busy_timeout = 60000")
         count = 0
         for m in metrics:
             try:

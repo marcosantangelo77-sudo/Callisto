@@ -95,7 +95,7 @@ class GameScheduler:
         """
         try:
             async with aiosqlite.connect(self._db_path) as db:
-                await db.execute("PRAGMA busy_timeout = 5000")
+                await db.execute("PRAGMA busy_timeout = 60000")
                 cursor = await db.execute(
                     "SELECT DISTINCT event_id, sport, home_team, away_team, commence_time "
                     "FROM markets "

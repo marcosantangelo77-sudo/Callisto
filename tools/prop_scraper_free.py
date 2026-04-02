@@ -1130,7 +1130,7 @@ CREATE INDEX IF NOT EXISTS idx_prop_snap_event
 async def ensure_prop_schema(db_path: str = DB_PATH) -> None:
     """Create prop_snapshots table if it doesn't exist."""
     async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout = 10000")
+        await db.execute("PRAGMA busy_timeout = 60000")
         await db.executescript(PROP_SCHEMA_SQL)
         await db.commit()
     logger.info("Prop schema ensured")
@@ -1154,7 +1154,7 @@ async def store_prop_snapshot(props: list[dict], sport: str, db_path: str = DB_P
     now = datetime.now(timezone.utc).isoformat()
 
     async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout = 10000")
+        await db.execute("PRAGMA busy_timeout = 60000")
         rows = [
             (
                 sport,

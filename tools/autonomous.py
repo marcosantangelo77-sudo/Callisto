@@ -5777,7 +5777,7 @@ class ResearchLoop:
         # Check if we ran recently (within 7 days) — skip if so
         try:
             async with aiosqlite.connect(db_path) as db:
-                await db.execute("PRAGMA busy_timeout = 5000")
+                await db.execute("PRAGMA busy_timeout = 60000")
                 cursor = await db.execute(
                     "SELECT MAX(computed_at) FROM granger_results"
                 )

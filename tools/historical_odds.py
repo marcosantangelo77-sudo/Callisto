@@ -39,7 +39,7 @@ class HistoricalOddsFetcher:
         self._read_db = await aiosqlite.connect(
             f"file:{self.db_path}?mode=ro", uri=True
         )
-        await self._read_db.execute("PRAGMA busy_timeout = 5000")
+        await self._read_db.execute("PRAGMA busy_timeout = 60000")
         logger.info("Historical odds fetcher initialized")
 
     async def close(self) -> None:
@@ -91,26 +91,29 @@ class HistoricalOddsFetcher:
         groups: dict[tuple, dict] = {}
         seen_book: dict[tuple, set] = defaultdict(set)
 
-        while True:
-            rows = await cursor.fetchmany(1000)
-            if not rows:
-                break
-            for row in rows:
-                eid, player, market, line, side, book, price, home, away, gdate = row
-                key = (eid or f"{gdate}|{home}|{away}", player, market, line)
+        try:
+            while True:
+                rows = await cursor.fetchmany(1000)
+                if not rows:
+                    break
+                for row in rows:
+                    eid, player, market, line, side, book, price, home, away, gdate = row
+                    key = (eid or f"{gdate}|{home}|{away}", player, market, line)
 
-                if key not in groups:
-                    groups[key] = {
-                        "event_id": key[0], "player": player, "market": market,
-                        "line": line, "home_team": home or "", "away_team": away or "",
-                        "game_date": gdate, "books": {},
+                    if key not in groups:
+                        groups[key] = {
+                            "event_id": key[0], "player": player, "market": market,
+                            "line": line, "home_team": home or "", "away_team": away or "",
+                            "game_date": gdate, "books": {},
+                        }
+
+                    # Keep latest snapshot per book per side (overwrite older)
+                    book_side_key = (book, side)
+                    groups[key]["books"][book_side_key] = {
+                        "book": book, "side": side, "price_american": price,
                     }
-
-                # Keep latest snapshot per book per side (overwrite older)
-                book_side_key = (book, side)
-                groups[key]["books"][book_side_key] = {
-                    "book": book, "side": side, "price_american": price,
-                }
+        finally:
+            await cursor.close()
 
         # Flatten books dict to list
         result = []
@@ -135,7 +138,10 @@ class HistoricalOddsFetcher:
             "WHERE sport = ? ORDER BY d",
             (sport,),
         )
-        return [row[0] for row in await cursor.fetchall()]
+        try:
+            return [row[0] for row in await cursor.fetchall()]
+        finally:
+            await cursor.close()
 
     async def fetch_historical_odds(
         self,
@@ -276,10 +282,13 @@ class HistoricalOddsFetcher:
             "FROM historical_odds_cache WHERE sport = ?",
             (sport,),
         )
-        row = await cursor.fetchone()
-        if row and row[0]:
-            return row[0], row[1]
-        return None, None
+        try:
+            row = await cursor.fetchone()
+            if row and row[0]:
+                return row[0], row[1]
+            return None, None
+        finally:
+            await cursor.close()
 
     async def get_cached_dates(self, sport: str) -> list[str]:
         """List all cached dates for a sport."""
@@ -289,8 +298,11 @@ class HistoricalOddsFetcher:
             "WHERE sport = ? ORDER BY snapshot_date",
             (sport,),
         )
-        rows = await cursor.fetchall()
-        return [r[0] for r in rows]
+        try:
+            rows = await cursor.fetchall()
+            return [r[0] for r in rows]
+        finally:
+            await cursor.close()
 
     async def get_cache_stats(self) -> dict:
         """Return cache usage statistics."""
@@ -301,12 +313,15 @@ class HistoricalOddsFetcher:
             "SUM(credits_cost) as total_credits "
             "FROM historical_odds_cache GROUP BY sport"
         )
-        rows = await cursor.fetchall()
-        cols = [d[0] for d in cursor.description]
-        return {
-            "sports": [dict(zip(cols, row)) for row in rows],
-            "api_credits_remaining": _credits_remaining,
-        }
+        try:
+            rows = await cursor.fetchall()
+            cols = [d[0] for d in cursor.description]
+            return {
+                "sports": [dict(zip(cols, row)) for row in rows],
+                "api_credits_remaining": _credits_remaining,
+            }
+        finally:
+            await cursor.close()
 
     async def bulk_fetch_date_range(
         self,
@@ -376,10 +391,13 @@ class HistoricalOddsFetcher:
                 "WHERE sport = ? AND snapshot_date = ? AND event_id IS NULL AND market_type = ?",
                 (sport, date, market_type),
             )
-        row = await cursor.fetchone()
-        if row:
-            return json.loads(row[0])
-        return None
+        try:
+            row = await cursor.fetchone()
+            if row:
+                return json.loads(row[0])
+            return None
+        finally:
+            await cursor.close()
 
     async def _cache_response(
         self,

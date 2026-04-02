@@ -135,7 +135,7 @@ async def wal_checkpoint_loop():
         try:
             await asyncio.sleep(300)  # 5 minutes
             async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("PRAGMA busy_timeout = 5000")
+                await db.execute("PRAGMA busy_timeout = 60000")
                 cursor = await db.execute("PRAGMA wal_checkpoint(PASSIVE)")
                 row = await cursor.fetchone()
                 if row:
