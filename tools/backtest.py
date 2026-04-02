@@ -3472,7 +3472,9 @@ class BacktestEngine:
                 if pe.std() > 0 and re.std() > 0:
                     ic = float(np.corrcoef(pe, re)[0, 1])
 
-        await self._db.execute(
+        from tools.db_utils import execute_with_retry, commit_with_retry
+        await execute_with_retry(
+            self._db,
             "UPDATE backtest_runs SET "
             "total_events = ?, signals_generated = ?, "
             "actual_win = ?, actual_loss = ?, actual_push = ?, unresolved = ?, "
@@ -3487,8 +3489,9 @@ class BacktestEngine:
              sharpe, sortino,
              brier, ic, roi_pct,
              run_id),
+            operation="backtest recalculate_run_stats",
         )
-        await self._db.commit()
+        await commit_with_retry(self._db, operation="backtest recalculate_run_stats")
         logger.info(
             f"Run {run_id}: recalculated — {wins}W/{losses}L/{pushes}P "
             f"({unresolved} unresolved), signals={signals_count} unique/{raw_signals} raw, "

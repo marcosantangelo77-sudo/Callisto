@@ -323,7 +323,9 @@ class DataCollector:
             # officials, rest_days, broadcasts, etc. that may have been missing
             # from earlier collections (due to DB locks or pre-enrichment code).
             try:
-                await self._db.execute(
+                from tools.db_utils import execute_with_retry
+                await execute_with_retry(
+                    self._db,
                     "INSERT INTO game_contexts "
                     "(sport, event_id, game_date, home_team, away_team, "
                     "home_score, away_score, context_json) "
@@ -338,6 +340,7 @@ class DataCollector:
                         home_score, away_score,
                         json.dumps(context),
                     ),
+                    operation="data_collector store_game",
                 )
                 games_stored += 1
                 # Publish game completed event
@@ -363,7 +366,9 @@ class DataCollector:
                     else away_team if away_score > home_score
                     else "push"
                 )
-                await self._db.execute(
+                from tools.db_utils import execute_with_retry
+                await execute_with_retry(
+                    self._db,
                     "INSERT OR IGNORE INTO game_results "
                     "(sport, game_date, home_team, away_team, home_score, "
                     "away_score, total_score, spread_result, winner, source) "
@@ -372,6 +377,7 @@ class DataCollector:
                         sport, game_date_fmt, home_team, away_team,
                         home_score, away_score, total_score, spread_result, winner,
                     ),
+                    operation="data_collector store_game_result",
                 )
             except Exception as e:
                 logger.warning(f"Failed to store game_result {event_id}: {e}")

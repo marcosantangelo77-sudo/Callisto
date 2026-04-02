@@ -3367,7 +3367,7 @@ class ResearchLoop:
                     f"is broken or data quality is insufficient, say so in a 'pipeline_warning' "
                     f"field instead of generating garbage hypotheses.\n\n"
                     f"PIPELINE STATE:\n"
-                    f"  Total hypotheses: {len(all_hypos)} "
+                    f"  Total hypotheses: {draft_count + active_count + rejected_count} "
                     f"({draft_count} draft, {active_count} active, {rejected_count} rejected)\n"
                     f"  Rejection rate: {rejected_count}/{max(1, rejected_count + active_count)}"
                     f" — if this is >90%, challenge whether the pipeline can test ANY hypothesis\n"

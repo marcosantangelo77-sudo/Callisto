@@ -140,8 +140,10 @@ class VectorStore:
         metadata: Optional[dict] = None,
     ) -> int:
         """Store a text + embedding. Returns row ID. Deduplicates by content hash."""
+        from tools.db_utils import execute_with_retry, commit_with_retry
         content_hash = _content_hash(text)
-        cursor = await self._db.execute(
+        cursor = await execute_with_retry(
+            self._db,
             "INSERT OR IGNORE INTO embeddings "
             "(collection, content_hash, content_text, embedding_json, embedding_blob, metadata_json) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -153,8 +155,9 @@ class VectorStore:
                 _to_blob(embedding),
                 json.dumps(metadata) if metadata else None,
             ),
+            operation="vector_store store",
         )
-        await self._db.commit()
+        await commit_with_retry(self._db, operation="vector_store store")
         return cursor.lastrowid
 
     async def store_batch(
