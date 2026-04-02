@@ -290,6 +290,7 @@ async def lifespan(app: FastAPI):
         data_collector=data_collector,
         vector_store=vector_store,
         orchestrator=orchestrator_instance,
+        line_monitor=line_monitor,
     )
     await research_loop.start()
 

@@ -1310,6 +1310,7 @@ class ResearchLoop:
         data_collector,
         vector_store,
         orchestrator=None,
+        line_monitor=None,
     ):
         self.hypothesis_manager = hypothesis_manager
         self.hypothesis_generator = hypothesis_generator
@@ -1317,6 +1318,7 @@ class ResearchLoop:
         self.data_collector = data_collector
         self.vector_store = vector_store
         self.orchestrator = orchestrator
+        self.line_monitor = line_monitor
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
@@ -2116,9 +2118,8 @@ class ResearchLoop:
                 # ── Pause line_monitor for ENTIRE cycle to prevent SQLite lock cascade.
                 # All phases do DB writes; concurrent line_monitor snapshots cause
                 # deadlocks even with 120s busy_timeout. Snapshots catch up between cycles.
-                _lm_pause = getattr(self.orchestrator, "line_monitor", None) if self.orchestrator else None
-                if _lm_pause:
-                    _lm_pause._paused = True
+                if self.line_monitor:
+                    self.line_monitor._paused = True
                     logger.debug("line_monitor paused for research cycle")
 
                 # ── Queue drain: if Claude just became available, burn through deferred work ──
@@ -2424,9 +2425,8 @@ class ResearchLoop:
                 await asyncio.sleep(120)
             finally:
                 # ── Always unpause line_monitor — runs on normal exit, break, and exception ──
-                _lm_unpause = getattr(self.orchestrator, "line_monitor", None) if self.orchestrator else None
-                if _lm_unpause:
-                    _lm_unpause._paused = False
+                if self.line_monitor:
+                    self.line_monitor._paused = False
                     logger.debug("line_monitor unpaused after research cycle")
 
     async def _phase_self_repair(self) -> None:
@@ -3064,8 +3064,7 @@ class ResearchLoop:
             "baseball_mlb": "MLB",
         }
 
-        _lm_sports = getattr(self.orchestrator, "line_monitor", None) if self.orchestrator else None
-        active_sports = list(_lm_sports._snapshots.keys()) if _lm_sports else []
+        active_sports = list(self.line_monitor._snapshots.keys()) if self.line_monitor else []
         if not active_sports:
             active_sports = ["basketball_nba"]
 
@@ -4200,13 +4199,11 @@ class ResearchLoop:
                 # ── Flush any dangling transactions before backtest writes ──
                 # Phase timeouts (self_repair, etc.) can leave uncommitted
                 # transactions on shared connections, holding the WAL write lock.
-                # Check all accessible DB connections. line_monitor is on the
-                # orchestrator, not directly accessible from ResearchLoop.
-                _lm = getattr(self.orchestrator, "line_monitor", None) if self.orchestrator else None
+                # Check all accessible DB connections.
                 _flush_conns = {
                     "data_collector": getattr(self.data_collector, "_db", None),
                     "backtest_engine": getattr(self.backtest_engine, "_db", None),
-                    "line_monitor": getattr(_lm, "_db", None) if _lm else None,
+                    "line_monitor": getattr(self.line_monitor, "_db", None) if self.line_monitor else None,
                     "hypothesis_mgr": getattr(self.hypothesis_manager, "_db", None),
                 }
                 _tx_state = []
@@ -5364,10 +5361,8 @@ class ResearchLoop:
                     live_odds = {}
 
                     # Try line_monitor cache first — instant, no network call
-                    # line_monitor lives on the orchestrator, not on ResearchLoop
-                    _lm = getattr(self.orchestrator, "line_monitor", None) if self.orchestrator else None
-                    if _lm:
-                        snap = _lm._snapshots.get(sport, {})
+                    if self.line_monitor:
+                        snap = self.line_monitor._snapshots.get(sport, {})
                         if snap and not snap.get("error") and snap.get("games"):
                             live_odds = snap
                             logger.info(
