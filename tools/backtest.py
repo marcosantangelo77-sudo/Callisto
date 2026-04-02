@@ -635,9 +635,10 @@ class BacktestEngine:
         )
 
         # ── DEFERRED WRITE: batch ALL writes into one transaction ──
-        # backtest_runs + status update + ALL event rows in a single commit.
-        # Previously: 274 per-game commits each fighting line_monitor for the
-        # write lock. Now: one commit with everything. Lock held <1 second.
+        # Uses a FRESH connection to avoid lock contention from persistent
+        # connections that may hold implicit read transactions. The persistent
+        # self._db connection shares the event loop with line_monitor, data_collector,
+        # etc., causing deadlock-like contention. A fresh connection writes cleanly.
         logger.info(
             f"Backtest {run_id}: starting deferred write — "
             f"{total_events} events, {len(all_pending_rows)} rows, "
@@ -645,12 +646,15 @@ class BacktestEngine:
         )
         completed = datetime.now(timezone.utc).isoformat()
         import random as _rnd_bt
-        # Use short busy_timeout for the write — our retry loop handles backoff.
-        # The 300s default causes silent 5-minute hangs when lock is contended.
-        await self._db.execute("PRAGMA busy_timeout = 5000")
+        import aiosqlite as _aiosqlite_bt
         for _bt_write_attempt in range(5):
+            _write_db = None
             try:
-                await self._db.execute(
+                _write_db = await _aiosqlite_bt.connect(self.db_path)
+                await _write_db.execute("PRAGMA busy_timeout = 10000")
+                await _write_db.execute("PRAGMA journal_mode = WAL")
+                await _write_db.execute("PRAGMA synchronous = NORMAL")
+                await _write_db.execute(
                     "INSERT OR REPLACE INTO backtest_runs "
                     "(run_id, hypothesis_id, date_range_start, date_range_end, "
                     "started_at, run_config, total_events, signals_generated, completed_at) "
@@ -659,14 +663,14 @@ class BacktestEngine:
                      json.dumps(config), total_events, total_signals, completed),
                 )
                 if _deferred_status_update:
-                    await self._db.execute(
+                    await _write_db.execute(
                         "UPDATE hypotheses SET status = 'backtesting', "
                         "updated_at = datetime('now') WHERE hypothesis_id = ? "
                         "AND status = 'draft'",
                         (hypothesis_id,),
                     )
                 if all_pending_rows:
-                    await self._db.executemany(
+                    await _write_db.executemany(
                         "INSERT OR IGNORE INTO backtest_events "
                         "(run_id, event_id, hypothesis_id, sport, player, market, "
                         "line, side, book, book_odds_american, book_implied_prob, "
@@ -675,25 +679,24 @@ class BacktestEngine:
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         all_pending_rows,
                     )
-                await self._db.commit()
+                await _write_db.commit()
+                await _write_db.close()
                 break
             except Exception as _bw_e:
+                if _write_db:
+                    try:
+                        await _write_db.close()
+                    except Exception:
+                        pass
                 if "locked" in str(_bw_e).lower() and _bt_write_attempt < 4:
                     _wait = min(2 * (2 ** _bt_write_attempt), 15) + _rnd_bt.uniform(0, 1)
                     logger.warning(
                         f"Backtest {run_id} deferred write locked "
                         f"(attempt {_bt_write_attempt + 1}/5), retrying in {_wait:.1f}s"
                     )
-                    try:
-                        await self._db.rollback()
-                    except Exception:
-                        pass
                     await asyncio.sleep(_wait)
                 else:
                     raise
-
-        # Restore long timeout for subsequent reads
-        await self._db.execute("PRAGMA busy_timeout = 300000")
 
         logger.info(
             f"Backtest {run_id} complete: {total_events} events, {total_signals} signals"
