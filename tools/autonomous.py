@@ -2438,9 +2438,8 @@ class ResearchLoop:
 
         # Cache rotation — rebuild hot cache, archive stale data
         try:
-            from tools.cache_manager import CacheManager
-            cm = CacheManager()
-            await cm.rotate_caches()
+            from tools.cache_manager import rotate_caches
+            await rotate_caches()
         except Exception as e:
             logger.debug(f"Cache rotation failed (non-fatal): {e}")
 

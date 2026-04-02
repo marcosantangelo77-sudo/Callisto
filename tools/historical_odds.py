@@ -86,29 +86,31 @@ class HistoricalOddsFetcher:
             "ORDER BY event_id, player, market, line, book, snapshot_time",
             tuple(params),
         )
-        rows = await cursor.fetchall()
-
         # Group by (event_id, player, market, line) — take latest snapshot per book
         from collections import defaultdict
         groups: dict[tuple, dict] = {}
         seen_book: dict[tuple, set] = defaultdict(set)
 
-        for row in rows:
-            eid, player, market, line, side, book, price, home, away, gdate = row
-            key = (eid or f"{gdate}|{home}|{away}", player, market, line)
+        while True:
+            rows = await cursor.fetchmany(1000)
+            if not rows:
+                break
+            for row in rows:
+                eid, player, market, line, side, book, price, home, away, gdate = row
+                key = (eid or f"{gdate}|{home}|{away}", player, market, line)
 
-            if key not in groups:
-                groups[key] = {
-                    "event_id": key[0], "player": player, "market": market,
-                    "line": line, "home_team": home or "", "away_team": away or "",
-                    "game_date": gdate, "books": {},
+                if key not in groups:
+                    groups[key] = {
+                        "event_id": key[0], "player": player, "market": market,
+                        "line": line, "home_team": home or "", "away_team": away or "",
+                        "game_date": gdate, "books": {},
+                    }
+
+                # Keep latest snapshot per book per side (overwrite older)
+                book_side_key = (book, side)
+                groups[key]["books"][book_side_key] = {
+                    "book": book, "side": side, "price_american": price,
                 }
-
-            # Keep latest snapshot per book per side (overwrite older)
-            book_side_key = (book, side)
-            groups[key]["books"][book_side_key] = {
-                "book": book, "side": side, "price_american": price,
-            }
 
         # Flatten books dict to list
         result = []
@@ -424,6 +426,7 @@ class HistoricalOddsFetcher:
                 AND hoc.event_id IS NULL
             )
             ORDER BY os.timestamp
+            LIMIT 100
             """
         )
         rows = await cursor.fetchall()
