@@ -3763,17 +3763,20 @@ class BacktestEngine:
                 all_paper_rows.extend(_paper_rows)
 
         # Edge distribution diagnostic — shows why 0-signal cycles happen
+        # Tuple layout: (run_id[0], event_id[1], hyp_id[2], sport[3], player[4],
+        #   market[5], line[6], side[7], book[8], odds_american[9], implied[10],
+        #   fair_prob[11], model_factors_json[12], edge[13], ev_pct[14],
+        #   kelly[15], signal_generated[16], game_date[17], snapshot_time[18])
         if all_paper_rows:
-            edges = [row[14] for row in all_paper_rows]  # edge is index 14
+            edges = [row[13] for row in all_paper_rows]
             max_edge = max(edges) if edges else 0
             min_edge = min(edges) if edges else 0
             above_thresh = sum(1 for e in edges if e >= edge_threshold)
-            # Check non_target_count from model_factors
             import json as _json
             books_counts = []
             for row in all_paper_rows:
                 try:
-                    factors = _json.loads(row[13]) if row[13] else {}
+                    factors = _json.loads(row[12]) if row[12] else {}
                     books_counts.append(factors.get("books_used", 0))
                 except Exception:
                     pass
