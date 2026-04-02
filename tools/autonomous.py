@@ -2116,8 +2116,9 @@ class ResearchLoop:
                 # ── Pause line_monitor for ENTIRE cycle to prevent SQLite lock cascade.
                 # All phases do DB writes; concurrent line_monitor snapshots cause
                 # deadlocks even with 120s busy_timeout. Snapshots catch up between cycles.
-                if hasattr(self, 'line_monitor') and self.line_monitor:
-                    self.line_monitor._paused = True
+                _lm_pause = getattr(self.orchestrator, "line_monitor", None) if self.orchestrator else None
+                if _lm_pause:
+                    _lm_pause._paused = True
                     logger.debug("line_monitor paused for research cycle")
 
                 # ── Queue drain: if Claude just became available, burn through deferred work ──
@@ -2423,8 +2424,9 @@ class ResearchLoop:
                 await asyncio.sleep(120)
             finally:
                 # ── Always unpause line_monitor — runs on normal exit, break, and exception ──
-                if hasattr(self, 'line_monitor') and self.line_monitor:
-                    self.line_monitor._paused = False
+                _lm_unpause = getattr(self.orchestrator, "line_monitor", None) if self.orchestrator else None
+                if _lm_unpause:
+                    _lm_unpause._paused = False
                     logger.debug("line_monitor unpaused after research cycle")
 
     async def _phase_self_repair(self) -> None:
@@ -3062,7 +3064,8 @@ class ResearchLoop:
             "baseball_mlb": "MLB",
         }
 
-        active_sports = list(self.line_monitor._snapshots.keys()) if hasattr(self, 'line_monitor') and self.line_monitor else []
+        _lm_sports = getattr(self.orchestrator, "line_monitor", None) if self.orchestrator else None
+        active_sports = list(_lm_sports._snapshots.keys()) if _lm_sports else []
         if not active_sports:
             active_sports = ["basketball_nba"]
 
@@ -5331,8 +5334,10 @@ class ResearchLoop:
                     live_odds = {}
 
                     # Try line_monitor cache first — instant, no network call
-                    if hasattr(self, 'line_monitor') and self.line_monitor:
-                        snap = self.line_monitor._snapshots.get(sport, {})
+                    # line_monitor lives on the orchestrator, not on ResearchLoop
+                    _lm = getattr(self.orchestrator, "line_monitor", None) if self.orchestrator else None
+                    if _lm:
+                        snap = _lm._snapshots.get(sport, {})
                         if snap and not snap.get("error") and snap.get("games"):
                             live_odds = snap
                             logger.info(
