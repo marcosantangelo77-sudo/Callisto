@@ -1362,7 +1362,7 @@ class ResearchLoop:
 
         # Mode control
         self._paused = False
-        self._local_only = False  # When True, skip all Claude Code calls
+        self._local_only = os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes")
 
     async def start(self) -> None:
         """Start the research loop."""
