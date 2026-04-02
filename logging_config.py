@@ -44,6 +44,10 @@ def setup_logging(level: int = LOG_LEVEL) -> None:
     root = logging.getLogger()
     root.setLevel(level)
 
+    # Prevent duplicate handlers on repeated calls (e.g., watchdog restart)
+    if root.handlers:
+        return
+
     # Console handler
     console = logging.StreamHandler()
     console.setLevel(level)

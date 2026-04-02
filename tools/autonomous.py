@@ -4472,6 +4472,36 @@ class ResearchLoop:
 
         backtesting = await self.hypothesis_manager.list_hypotheses(status="backtesting")
 
+        # ── Recovery: promote stuck drafts with completed backtests ──
+        # If the system restarts after a backtest completes but before the
+        # draft→backtesting promotion, the hypothesis stays in draft forever.
+        # This sweep catches those orphans and promotes them.
+        try:
+            db = self.hypothesis_manager._db
+            cursor = await db.execute(
+                "SELECT DISTINCT h.hypothesis_id, h.name "
+                "FROM hypotheses h "
+                "JOIN backtest_runs br ON h.hypothesis_id = br.hypothesis_id "
+                "WHERE h.status = 'draft' "
+                "AND br.total_events > 0 "
+                "AND br.completed_at IS NOT NULL"
+            )
+            stuck_drafts = await cursor.fetchall()
+            for hid, hname in stuck_drafts:
+                await self.hypothesis_manager.update_status(
+                    hid, "backtesting",
+                    "auto:recovery — draft had completed backtests, promoting"
+                )
+                logger.info(
+                    f"Research: recovered stuck draft {hname} → backtesting"
+                )
+                # Add to current evaluation batch
+                h_data = await self.hypothesis_manager.get_hypothesis(hid)
+                if h_data:
+                    backtesting.append(h_data)
+        except Exception as e:
+            logger.warning(f"Stuck draft recovery failed: {e}")
+
         # ── Batch-limit: evaluate top N by signal count per cycle ──
         # IMPORTANT: batch selection happens BEFORE stats recalculation so we
         # only recalculate the hypotheses we're actually evaluating (not all 40+).
@@ -5350,8 +5380,23 @@ class ResearchLoop:
                         from tools.dk_scraper import scrape_dk_odds
                         live_odds = await scrape_dk_odds(sport)
 
-                    # Last resort: Odds API (costs credits)
-                    if live_odds.get("error") or not live_odds.get("games"):
+                    # DK scraper returns only 1 book (draftkings). Paper trading
+                    # needs multi-book data for devigging to compute fair probs.
+                    # Check if we have sufficient books, otherwise fall through.
+                    _needs_multibook = True
+                    if live_odds.get("games") and not live_odds.get("error"):
+                        _sample_books = len(live_odds["games"][0].get("bookmakers", []))
+                        if _sample_books < 2:
+                            logger.info(
+                                f"Paper trade: {sport} has only {_sample_books} book(s) "
+                                f"(need ≥2 for devig) — enriching with Odds API"
+                            )
+                            _needs_multibook = True
+                        else:
+                            _needs_multibook = False
+
+                    # Odds API: needed when no games OR single-book data
+                    if live_odds.get("error") or not live_odds.get("games") or _needs_multibook:
                         from tools.odds_api import get_odds
                         live_odds = await get_odds(
                             sport=sport,
