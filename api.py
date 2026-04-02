@@ -184,6 +184,13 @@ async def task_worker():
             skip_search = _is_internal_query(query)
             logger.info(f"Worker picked up task {task_id} (skip_search={skip_search}): {query}")
 
+            # In local_only mode, skip tasks that would require Claude
+            # (orchestrator calls claude_code_query without checking local_only)
+            if research_loop and research_loop._local_only:
+                logger.info(f"Task {task_id} skipped — local_only mode, orchestrator would call Claude")
+                await queue.fail_task(task_id, "local_only mode — Claude unavailable")
+                continue
+
             try:
                 result = await orchestrator_instance.run_session(query, skip_search=skip_search)
                 session_id = result.get("session_id")
