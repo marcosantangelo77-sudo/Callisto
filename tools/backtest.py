@@ -505,6 +505,7 @@ class BacktestEngine:
         multibook_dates = 0
         singlebook_skipped = 0
         context_filtered = 0
+        all_pending_rows: list[tuple] = []  # Collect ALL event rows for batch INSERT
 
         # ── Pre-compute schedule context for game-level filtering ──
         use_context_filter = self._needs_context_filter(h_name, thesis, config)
@@ -569,7 +570,7 @@ class BacktestEngine:
                         context_filtered += 1
                         continue
 
-                events, signals = await self._process_game(
+                events, signals, rows = await self._process_game(
                     run_id=run_id,
                     hypothesis_id=hypothesis_id,
                     game=game,
@@ -587,6 +588,7 @@ class BacktestEngine:
                 )
                 total_events += events
                 total_signals += signals
+                all_pending_rows.extend(rows)
 
         if context_filtered > 0:
             logger.info(
@@ -633,10 +635,10 @@ class BacktestEngine:
             f"{singlebook_skipped} dates with single-book only (no cross-book edges)"
         )
 
-        # ── DEFERRED WRITE: batch all writes into one transaction ──
-        # INSERT backtest_runs + status update + totals in a single commit.
-        # This minimizes write lock duration (was blocking 5+ minutes when
-        # competing with line_monitor's snapshot writes).
+        # ── DEFERRED WRITE: batch ALL writes into one transaction ──
+        # backtest_runs + status update + ALL event rows in a single commit.
+        # Previously: 274 per-game commits each fighting line_monitor for the
+        # write lock. Now: one commit with everything. Lock held <1 second.
         completed = datetime.now(timezone.utc).isoformat()
         import random as _rnd_bt
         for _bt_write_attempt in range(5):
@@ -655,6 +657,16 @@ class BacktestEngine:
                         "updated_at = datetime('now') WHERE hypothesis_id = ? "
                         "AND status = 'draft'",
                         (hypothesis_id,),
+                    )
+                if all_pending_rows:
+                    await self._db.executemany(
+                        "INSERT OR IGNORE INTO backtest_events "
+                        "(run_id, event_id, hypothesis_id, sport, player, market, "
+                        "line, side, book, book_odds_american, book_implied_prob, "
+                        "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
+                        "signal_generated, game_date, snapshot_time) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        all_pending_rows,
                     )
                 await self._db.commit()
                 break
@@ -2124,7 +2136,7 @@ class BacktestEngine:
         # For thin markets (NCAAW, NWSL) with consensus_min_books=2, allow 2 total.
         required_total = max(2, min_books + 1)
         if bookmaker_count < required_total:
-            return 0, 0
+            return 0, 0, []
 
         # target_book is now just a hint — _process_game_lines evaluates
         # ALL soft books against the consensus. No single-book dependency.
@@ -2393,31 +2405,9 @@ class BacktestEngine:
                             is_signal, game_date, snapshot_time,
                     ))
 
-        # Batch INSERT all rows in one transaction — dramatically reduces lock contention
-        if _pending_rows:
-            import random as _rnd
-            for _attempt in range(5):
-                try:
-                    await self._db.executemany(
-                        "INSERT OR IGNORE INTO backtest_events "
-                        "(run_id, event_id, hypothesis_id, sport, player, market, "
-                        "line, side, book, book_odds_american, book_implied_prob, "
-                        "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
-                        "signal_generated, game_date, snapshot_time) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        _pending_rows,
-                    )
-                    break
-                except Exception as _e:
-                    if "locked" in str(_e).lower() and _attempt < 4:
-                        _wait = min(0.5 * (2 ** _attempt), 8) + _rnd.uniform(0, 0.5)
-                        logger.warning(f"DB locked on backtest executemany (attempt {_attempt+1}/5), retrying in {_wait:.1f}s")
-                        await asyncio.sleep(_wait)
-                    else:
-                        raise
-            from tools.db_utils import commit_with_retry
-            await commit_with_retry(self._db, operation="backtest batch_insert")
-        return events, signals
+        # Return pending rows to caller for batch INSERT at end of backtest.
+        # Per-game commits caused 274× write lock contention with line_monitor.
+        return events, signals, _pending_rows
 
     async def _process_game_props(
         self,
@@ -3720,7 +3710,7 @@ class BacktestEngine:
                     filters=filters,
                 )
             else:
-                events, _ = await self._process_game_lines(
+                events, _, _paper_rows = await self._process_game_lines(
                     run_id="paper",
                     hypothesis_id=hypothesis_id,
                     game=game,
