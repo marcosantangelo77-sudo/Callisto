@@ -1240,7 +1240,7 @@ class AutonomousLoop:
 RESEARCH_CYCLE_INTERVAL = 60        # 1 min between cycles — tight as possible
 DATA_COLLECTION_INTERVAL = 300      # 5 min between data pulls — fresher data for live edges
 HYPOTHESIS_GEN_INTERVAL = 120       # 2 min between hypothesis generation — Claude drives, smaller batches
-BACKTEST_BATCH_SIZE = 50            # Hypotheses to backtest per cycle — 2.5x previous to drain 3K draft queue
+BACKTEST_BATCH_SIZE = 5             # 50 was timing out every cycle (5min/hyp from DB locks). 5 fits in 600s.
 CLAUDE_ESCALATION_COOLDOWN = 10     # 10s cooldown — 45 calls/hr means ~80s natural spacing, let rate limiter govern
 SYSTEM_IMPROVEMENT_INTERVAL = 10    # Run system improvement every N cycles
 REGIME_ANALYSIS_INTERVAL = 5        # Run regime analysis every N cycles — regime changes are slow
