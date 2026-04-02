@@ -205,7 +205,6 @@ class BacktestEngine:
                 mlb_season_start = _dt_check(end_dt.year, 3, 20)
                 try:
                     if self.db:
-                        import asyncio
                         # Check for actual MLB regular season games in game_results
                         cursor = await self.db.execute(
                             "SELECT MIN(game_date) FROM game_results "
@@ -2126,7 +2125,7 @@ class BacktestEngine:
             if effective_market not in available_markets:
                 effective_market = next(iter(available_markets), None)
                 if not effective_market:
-                    return 0, 0
+                    return 0, 0, []
 
         available_books = {bm.get("key", "").lower() for bm in game.get("bookmakers", [])}
         bookmaker_count = len(available_books)
