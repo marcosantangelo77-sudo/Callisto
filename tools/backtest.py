@@ -3762,11 +3762,35 @@ class BacktestEngine:
                 total_signals_found += sigs
                 all_paper_rows.extend(_paper_rows)
 
+        # Edge distribution diagnostic — shows why 0-signal cycles happen
+        if all_paper_rows:
+            edges = [row[14] for row in all_paper_rows]  # edge is index 14
+            max_edge = max(edges) if edges else 0
+            min_edge = min(edges) if edges else 0
+            above_thresh = sum(1 for e in edges if e >= edge_threshold)
+            # Check non_target_count from model_factors
+            import json as _json
+            books_counts = []
+            for row in all_paper_rows:
+                try:
+                    factors = _json.loads(row[13]) if row[13] else {}
+                    books_counts.append(factors.get("books_used", 0))
+                except Exception:
+                    pass
+            min_books_seen = min(books_counts) if books_counts else 0
+            max_books_seen = max(books_counts) if books_counts else 0
+        else:
+            max_edge = min_edge = 0
+            above_thresh = 0
+            min_books_seen = max_books_seen = 0
+
         logger.info(
             f"Paper trade {hypothesis_id[:12]}: {games_processed}/{len(games)} games processed, "
             f"{total_events} events, {total_signals_found} signals, "
             f"{len(all_paper_rows)} pending rows, "
-            f"market={h['market_type']}, filters={filters}, threshold={edge_threshold}"
+            f"market={h['market_type']}, filters={filters}, threshold={edge_threshold}, "
+            f"edge_range=[{min_edge:.4f}, {max_edge:.4f}], above_thresh={above_thresh}, "
+            f"books_range=[{min_books_seen}, {max_books_seen}]"
         )
 
         # Batch-insert paper events so the SELECT below can find signals.
