@@ -3705,6 +3705,7 @@ class BacktestEngine:
                 )
                 use_context_filter = False  # fail-open: proceed without context gating
 
+        all_paper_rows: list[tuple] = []
         for game in games:
             # ── Game-level context filter (same as backtest path) ──
             if use_context_filter:
@@ -3752,6 +3753,22 @@ class BacktestEngine:
                     h_sport=sport,
                     filters=filters,
                 )
+                all_paper_rows.extend(_paper_rows)
+
+        # Batch-insert paper events so the SELECT below can find signals.
+        # _process_game_lines returns pending rows (deferred write pattern)
+        # but never inserts them — the caller must do it.
+        if all_paper_rows:
+            await self._db.executemany(
+                "INSERT OR IGNORE INTO backtest_events "
+                "(run_id, event_id, hypothesis_id, sport, player, market, "
+                "line, side, book, book_odds_american, book_implied_prob, "
+                "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
+                "signal_generated, game_date, snapshot_time) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                all_paper_rows,
+            )
+            await self._db.commit()
 
         if context_filtered:
             logger.info(
