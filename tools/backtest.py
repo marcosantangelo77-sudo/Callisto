@@ -3706,6 +3706,9 @@ class BacktestEngine:
                 use_context_filter = False  # fail-open: proceed without context gating
 
         all_paper_rows: list[tuple] = []
+        total_events = 0
+        total_signals_found = 0
+        games_processed = 0
         for game in games:
             # ── Game-level context filter (same as backtest path) ──
             if use_context_filter:
@@ -3721,6 +3724,7 @@ class BacktestEngine:
                     context_filtered += 1
                     continue
 
+            games_processed += 1
             # Use same processing logic as backtest
             if h["market_type"].startswith("player_"):
                 events, _ = await self._process_game_props(
@@ -3737,8 +3741,9 @@ class BacktestEngine:
                     config=config,
                     filters=filters,
                 )
+                total_events += events
             else:
-                events, _, _paper_rows = await self._process_game_lines(
+                events, sigs, _paper_rows = await self._process_game_lines(
                     run_id="paper",
                     hypothesis_id=hypothesis_id,
                     game=game,
@@ -3753,7 +3758,16 @@ class BacktestEngine:
                     h_sport=sport,
                     filters=filters,
                 )
+                total_events += events
+                total_signals_found += sigs
                 all_paper_rows.extend(_paper_rows)
+
+        logger.info(
+            f"Paper trade {hypothesis_id[:12]}: {games_processed}/{len(games)} games processed, "
+            f"{total_events} events, {total_signals_found} signals, "
+            f"{len(all_paper_rows)} pending rows, "
+            f"market={h['market_type']}, filters={filters}, threshold={edge_threshold}"
+        )
 
         # Batch-insert paper events so the SELECT below can find signals.
         # _process_game_lines returns pending rows (deferred write pattern)
