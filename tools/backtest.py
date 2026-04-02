@@ -638,8 +638,16 @@ class BacktestEngine:
         # backtest_runs + status update + ALL event rows in a single commit.
         # Previously: 274 per-game commits each fighting line_monitor for the
         # write lock. Now: one commit with everything. Lock held <1 second.
+        logger.info(
+            f"Backtest {run_id}: starting deferred write — "
+            f"{total_events} events, {len(all_pending_rows)} rows, "
+            f"status_update={_deferred_status_update}"
+        )
         completed = datetime.now(timezone.utc).isoformat()
         import random as _rnd_bt
+        # Use short busy_timeout for the write — our retry loop handles backoff.
+        # The 300s default causes silent 5-minute hangs when lock is contended.
+        await self._db.execute("PRAGMA busy_timeout = 5000")
         for _bt_write_attempt in range(5):
             try:
                 await self._db.execute(
@@ -683,6 +691,9 @@ class BacktestEngine:
                     await asyncio.sleep(_wait)
                 else:
                     raise
+
+        # Restore long timeout for subsequent reads
+        await self._db.execute("PRAGMA busy_timeout = 300000")
 
         logger.info(
             f"Backtest {run_id} complete: {total_events} events, {total_signals} signals"
