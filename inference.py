@@ -94,6 +94,20 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
         supports_native_tools=True,  # GPT-OSS template has tool handling
         system_prompt="",  # set via Modelfile SYSTEM
     ),
+    "strategist": AgentConfig(
+        model="gemma4",
+        capabilities=["reasoning", "synthesis", "hypothesis_gen", "deep_work"],
+        default_options={"temperature": 0.7},  # Higher temp for creative hypothesis gen
+        think=False,
+        supports_native_tools=True,  # Gemma 4: native function calling + structured JSON
+        system_prompt=(
+            "You are The Strategist — the creative reasoning agent in the Callisto system. "
+            "You generate novel, diverse sports betting hypotheses and perform deep analysis. "
+            "Focus on edges that models don't have columns for: team identity, roster sociology, "
+            "ref biases, scheme geometry, media narrative inflation, calendar quirks. "
+            "Always respond with structured JSON when requested. Be creative but rigorous."
+        ),
+    ),
     "sentinel": AgentConfig(
         model="qwen3.5:4b",
         capabilities=["classification", "monitoring", "domain_tagging"],
@@ -139,44 +153,42 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
 # Qwen3-14B remains best for fast structured output — clean JSON first try.
 DEVSTRAL_MODEL = "devstral-small-2"
 APRIEL_MODEL = "hf.co/ServiceNow-AI/Apriel-1.6-15b-Thinker-GGUF:Q4_K_M"
+GEMMA4_MODEL = "gemma4"  # E4B: 4.5B effective, 9.6GB, native function calling + JSON, #3 Arena class
 MODEL_LADDER: dict[str, list[dict]] = {
     "reasoning": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 120},           # #3 Arena, native function calling, 256K ctx
         {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 120},         # Best local tool use, agentic coding
         {"model": APRIEL_MODEL, "quality": "high", "timeout": 120},           # 88% AIME, strongest local reasoning
-        {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},          # 140 tok/s, best throughput
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Matches 32B, thinking mode
-        {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},     # Deep CoT
         {"model": "qwen3.5:4b", "quality": "medium", "timeout": 60},
     ],
     "classification": [
         {"model": "qwen3.5:4b", "quality": "medium", "timeout": 30},
     ],
     "review": [
+        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 90},           # General reasoning > GPT-OSS for review
         {"model": "manager:latest", "quality": "high", "timeout": 60},
     ],
     "code_generation": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
         {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 120},         # Purpose-built for code, SWE-bench leader
-        {"model": APRIEL_MODEL, "quality": "high", "timeout": 120},           # 81% LiveCodeBench
+        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 120},           # Strong general coding
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Good code + JSON
-        {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},
     ],
     "hypothesis_gen": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 150},           # PRIMARY for hypothesis gen — creative, diverse, native JSON
         {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 120},         # Strong structured output + tool use
         {"model": APRIEL_MODEL, "quality": "high", "timeout": 120},           # Best local for creative hypotheses
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Best local JSON + thinking
-        {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},
-        {"model": "gpt-oss:20b", "quality": "high", "timeout": 60},
     ],
     "deep_work": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
+        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 180},           # PRIMARY for deep work — broad knowledge, strong reasoning
         {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 150},         # Best local for agentic deep analysis
         {"model": APRIEL_MODEL, "quality": "high", "timeout": 150},           # Strongest local for deep reasoning
         {"model": "qwen3:14b", "quality": "high", "timeout": 120},           # Best local for diagnosis
-        {"model": "deepseek-r1:14b", "quality": "high", "timeout": 120},
-        {"model": "gpt-oss:20b", "quality": "high", "timeout": 90},
     ],
 }
 
