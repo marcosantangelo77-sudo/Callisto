@@ -127,6 +127,10 @@ def is_available() -> bool:
     attempting escalation. If unavailable, skip Claude-dependent
     work and continue with local-only phases.
     """
+    # Hard kill switch: CALLISTO_LOCAL_ONLY=1 means NO Claude calls anywhere
+    if os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes"):
+        return False
+
     global _available, _cooldown_until, _call_count, _last_reset
 
     # Reset tracking window if expired — this MUST happen before the
