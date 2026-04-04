@@ -40,6 +40,34 @@ from tools.dead_numbers import (
 
 logger = logging.getLogger("callisto.edge_scanner")
 
+
+def _filter_in_progress_games(games: list[dict]) -> list[dict]:
+    """Remove games whose commence_time has passed (in-progress or finished).
+
+    Live odds contaminate sharp consensus and produce phantom edges
+    (see BAL@PIT 2026-04-04 incident). This is defense-in-depth — callers
+    like full_edge_scan() also filter, but individual scan functions must
+    be self-protective so direct API callers can't bypass the gate.
+    """
+    now = datetime.now(timezone.utc)
+    pre_game = []
+    for g in games:
+        ct = g.get("commence_time")
+        if ct:
+            try:
+                if isinstance(ct, str):
+                    ct_dt = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+                else:
+                    ct_dt = ct
+                if ct_dt.tzinfo is None:
+                    ct_dt = ct_dt.replace(tzinfo=timezone.utc)
+                if ct_dt <= now:
+                    continue
+            except (ValueError, TypeError):
+                pass  # Can't parse — include to be safe
+        pre_game.append(g)
+    return pre_game
+
 # ---------------------------------------------------------------------------
 # Sport key -> pace_model.Sport mapping for API sport keys
 # ---------------------------------------------------------------------------
@@ -132,6 +160,8 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads", sport: str
     When Granger temporal prediction data is available for the sport,
     the identified leader book is dynamically added to the sharp set.
     """
+    games = _filter_in_progress_games(games)
+
     # Dynamic sharp set — Granger leader (if available) enriches the static set
     SHARP_TITLES = get_sharp_titles_for_sport(sport)
     SOFT_TITLES = {"fanduel", "draftkings", "betmgm", "pointsbet", "caesars", "betrivers", "mybookie.ag", "bovada", "betus", "fanatics", "fanatics sportsbook"}
@@ -430,6 +460,7 @@ def scan_vig_edges(games: list[dict], market: str = "spreads") -> list[dict]:
     Books with lower vig give you better prices structurally —
     over thousands of bets, reduced vig is the simplest edge.
     """
+    games = _filter_in_progress_games(games)
     vig_edges = []
 
     for game in games:
@@ -517,6 +548,7 @@ def scan_pace_model_total_edges(
     Returns:
         List of model-based total edge dicts.
     """
+    games = _filter_in_progress_games(games)
     pace_sport = _PACE_SPORT_MAP.get(sport.lower())
     if not pace_sport:
         return []
@@ -692,25 +724,8 @@ def full_edge_scan(snapshot: dict) -> dict:
 
     # Filter out in-progress games — their odds are live lines, not pre-game.
     # Mixing live and pre-game odds produces phantom edges (see BAL@PIT 2026-04-04).
-    now = datetime.now(timezone.utc)
-    pre_game = []
-    in_progress_count = 0
-    for g in games:
-        ct = g.get("commence_time")
-        if ct:
-            try:
-                if isinstance(ct, str):
-                    ct_dt = datetime.fromisoformat(ct.replace("Z", "+00:00"))
-                else:
-                    ct_dt = ct
-                if ct_dt.tzinfo is None:
-                    ct_dt = ct_dt.replace(tzinfo=timezone.utc)
-                if ct_dt <= now:
-                    in_progress_count += 1
-                    continue
-            except (ValueError, TypeError):
-                pass  # Can't parse — include the game to be safe
-        pre_game.append(g)
+    pre_game = _filter_in_progress_games(games)
+    in_progress_count = len(games) - len(pre_game)
     games = pre_game
 
     if in_progress_count:
@@ -793,6 +808,7 @@ def _simulation_validate_edges(games: list[dict], sport: str, report: dict) -> l
     For totals in low-scoring sports: run compare_poisson_to_market().
     Only validates edges that passed the cross-book divergence filter.
     """
+    games = _filter_in_progress_games(games)
     try:
         from tools.simulation import simulate_spread, simulate_poisson, compare_poisson_to_market, _classify_sport
     except ImportError:
@@ -915,6 +931,7 @@ def _scan_dead_number_steals(games: list[dict], sport: str) -> list[dict]:
     find_dead_number_steals() to find books sitting on dead numbers
     while others are on key numbers.
     """
+    games = _filter_in_progress_games(games)
     all_steals = []
 
     for game in games:
