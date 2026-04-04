@@ -177,11 +177,11 @@ MODEL_LADDER: dict[str, list[dict]] = {
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Good code + JSON
     ],
     "hypothesis_gen": [
-        {"model": "claude_code", "quality": "frontier", "timeout": 180},
-        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 150},           # PRIMARY for hypothesis gen — creative, diverse, native JSON
-        {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 120},         # Strong structured output + tool use
-        {"model": APRIEL_MODEL, "quality": "high", "timeout": 120},           # Best local for creative hypotheses
-        {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Best local JSON + thinking
+        # HYBRID MODE: Gemma 4 handles hypothesis gen to save Claude credits.
+        # Claude's value is in interpretation/deep work, not mass generation.
+        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 150},           # PRIMARY — creative, diverse, native JSON
+        {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 120},         # Fallback structured output
+        {"model": "claude_code", "quality": "frontier", "timeout": 180},      # Last resort — saves $$$
     ],
     "deep_work": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
