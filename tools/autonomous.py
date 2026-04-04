@@ -1374,6 +1374,10 @@ class ResearchLoop:
         # Refreshed every REGIME_ANALYSIS_INTERVAL cycles
         self._last_regime_analysis = 0
 
+        # Dedup reactive game completion handlers — prevents 14×14 ESPN calls
+        # when 14 games complete on the same date. Cleared each research cycle.
+        self._reactive_collected: set[tuple[str, str]] = set()
+
         # Deferred work queue + downtime tracker (never-idle loop)
         from tools.work_queue import get_work_queue, get_downtime_tracker
         self._work_queue = get_work_queue()
@@ -1423,6 +1427,15 @@ class ResearchLoop:
         game_date = event_data.get("game_date", "")
         if not sport or not game_date:
             return
+
+        # Dedup: collect_play_by_play fetches ALL games for a date, so
+        # calling it once per (sport, date) is sufficient. Without this,
+        # 14 completed MLB games fire 14 handlers × 14 ESPN calls each = 196.
+        key = (sport, game_date)
+        if key in self._reactive_collected:
+            return
+        self._reactive_collected.add(key)
+
         try:
             date_str = game_date.replace("-", "")
             await self.data_collector.collect_box_scores(sport, date_str)
@@ -2125,6 +2138,7 @@ class ResearchLoop:
         while self._running:
             try:
                 self._cycles += 1
+                self._reactive_collected.clear()
                 logger.info(f"Research cycle #{self._cycles} starting")
 
                 # Pause check — sleep and skip cycle
