@@ -1328,7 +1328,7 @@ class HypothesisManager:
             for t in trades:
                 if t.get("actual_result") == "won":
                     from tools.math_utils import american_to_decimal
-                    dec = american_to_decimal(t["book_odds_american"])
+                    dec = american_to_decimal(t["signal_odds_american"])
                     returns.append(dec - 1)
                 elif t.get("actual_result") == "lost":
                     returns.append(-1.0)
