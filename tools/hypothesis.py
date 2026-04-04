@@ -820,17 +820,18 @@ class HypothesisManager:
             else:
                 checks.append(f"PASS: Positive edge rate {pos_rate:.1%} >= {min_per:.0%}")
 
-        # Overall edge distribution check (deduplicated by event_id)
-        # A hypothesis where context-matched games have systematically negative
-        # best-edge-per-game should NOT promote — the context filter isn't finding
-        # mispriced games. Previous version used ALL rows (including multi-book
-        # duplicates), which always produced negative averages since most books
-        # don't have the edge. Fix: keep best edge per unique event.
+        # Overall edge distribution check (SIGNAL events only, deduplicated by event_id)
+        # CRITICAL FIX: Previous version averaged ALL events including non-signals.
+        # Non-signal events having negative edge is EXPECTED — the hypothesis correctly
+        # didn't fire on those. Same bug was fixed for rejections in commit 10e61db.
+        # A hypothesis with 10 winning signals should not be blocked because 6
+        # non-signal events drag the average negative.
         if transition == "backtesting→paper_trading":
             try:
                 edge_cursor = await self._db.execute(
                     "SELECT event_id, MAX(edge) FROM backtest_events "
                     "WHERE hypothesis_id = ? AND edge IS NOT NULL "
+                    "AND signal_generated = 1 "
                     "GROUP BY event_id",
                     (hypothesis_id,),
                 )
@@ -839,15 +840,18 @@ class HypothesisManager:
                     overall_avg_edge = sum(dedup_edges) / len(dedup_edges)
                     if overall_avg_edge < 0:
                         checks.append(
-                            f"FAIL: overall edge distribution is negative "
-                            f"(avg_edge={overall_avg_edge:.4f} across {len(dedup_edges)} unique events)"
+                            f"FAIL: signal edge distribution is negative "
+                            f"(avg_edge={overall_avg_edge:.4f} across {len(dedup_edges)} signal events)"
                         )
                         ready = False
                     else:
                         checks.append(
-                            f"PASS: overall edge distribution positive "
-                            f"(avg_edge={overall_avg_edge:.4f} across {len(dedup_edges)} unique events)"
+                            f"PASS: signal edge distribution positive "
+                            f"(avg_edge={overall_avg_edge:.4f} across {len(dedup_edges)} signal events)"
                         )
+                else:
+                    checks.append("FAIL: no signal events with edge data")
+                    ready = False
             except Exception as e:
                 logger.warning(f"Could not check overall edge distribution: {e}")
 
