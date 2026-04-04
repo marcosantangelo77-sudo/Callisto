@@ -19,6 +19,7 @@ This is the quantitative core. Three edge types:
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from tools.odds_api import (
@@ -296,6 +297,7 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads", sport: str
                 edges.append({
                     "game": f"{away} @ {home}",
                     "game_id": game.get("id", ""),
+                    "commence_time": game.get("commence_time"),
                     "team": team,
                     "market": market,
                     "best_line": {
@@ -688,8 +690,42 @@ def full_edge_scan(snapshot: dict) -> dict:
     if not games:
         return {"error": "No games in snapshot", "edges": []}
 
+    # Filter out in-progress games — their odds are live lines, not pre-game.
+    # Mixing live and pre-game odds produces phantom edges (see BAL@PIT 2026-04-04).
+    now = datetime.now(timezone.utc)
+    pre_game = []
+    in_progress_count = 0
+    for g in games:
+        ct = g.get("commence_time")
+        if ct:
+            try:
+                if isinstance(ct, str):
+                    ct_dt = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+                else:
+                    ct_dt = ct
+                if ct_dt.tzinfo is None:
+                    ct_dt = ct_dt.replace(tzinfo=timezone.utc)
+                if ct_dt <= now:
+                    in_progress_count += 1
+                    continue
+            except (ValueError, TypeError):
+                pass  # Can't parse — include the game to be safe
+        pre_game.append(g)
+    games = pre_game
+
+    if in_progress_count:
+        logger.info(
+            f"Filtered {in_progress_count} in-progress game(s) from edge scan "
+            f"(live odds contaminate sharp consensus)"
+        )
+
+    if not games:
+        return {"error": "All games in progress — no pre-game edges", "edges": [],
+                "filtered_in_progress": in_progress_count}
+
     report = {
         "game_count": len(games),
+        "filtered_in_progress": in_progress_count,
         "sport": snapshot.get("sport", "unknown"),
     }
 

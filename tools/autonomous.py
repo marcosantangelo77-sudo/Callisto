@@ -676,6 +676,22 @@ class AutonomousLoop:
                         injury_kw["injury_market_adjustment"] = injury_data["confidence_modifier"]
                         injury_kw["injury_is_contrarian"] = injury_data["is_contrarian"]
 
+                    # Compute hours_to_game from commence_time
+                    hours_to_game = None
+                    ct = edge.get("commence_time")
+                    if ct:
+                        try:
+                            from datetime import datetime, timezone
+                            if isinstance(ct, str):
+                                ct_dt = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+                            else:
+                                ct_dt = ct
+                            if ct_dt.tzinfo is None:
+                                ct_dt = ct_dt.replace(tzinfo=timezone.utc)
+                            hours_to_game = max(0, (ct_dt - datetime.now(timezone.utc)).total_seconds() / 3600)
+                        except (ValueError, TypeError):
+                            pass
+
                     # Score confidence (psychology + line analysis + injury)
                     conf = score_edge(
                         edge_pct=round(best_soft * 100, 2),
@@ -684,6 +700,7 @@ class AutonomousLoop:
                         market=mkt_name,
                         has_sharp_book=edge.get("sharp_consensus") is not None,
                         regime_data=team_regime,
+                        hours_to_game=hours_to_game,
                         **kl_kw,
                         **line_analysis_kw,
                         **injury_kw,
@@ -710,6 +727,7 @@ class AutonomousLoop:
                         "worst_line": edge.get("worst_line", {}),
                         "sharp_consensus": edge.get("sharp_consensus"),
                         "num_bookmakers": edge.get("num_bookmakers", 0),
+                        "hours_to_game": hours_to_game,
                         "confidence": conf,
                         "psychology": psych_signals,
                         "pace_model": pace_confirm,
