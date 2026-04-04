@@ -4710,39 +4710,59 @@ class ResearchLoop:
         # Hypotheses that were backtested but reverted to draft (or never left it)
         # may have definitive negative-edge data. Reject them instead of letting
         # them clog the queue forever.
+        #
+        # CRITICAL: Only consider SIGNAL events for edge quality. Non-signal events
+        # having negative edge is EXPECTED — the hypothesis correctly didn't fire on
+        # those. A hypothesis with 16W-1L signals but negative all-event edge is GOOD.
         MIN_EVENTS_FOR_REJECTION = 30
-        MAX_EDGE_FOR_REJECTION = -0.005  # -0.5% avg edge = definitively disproven
+        MAX_SIGNAL_EDGE_FOR_REJECTION = -0.005  # -0.5% avg edge on SIGNAL events
+        MIN_SIGNAL_WIN_RATE_PROTECT = 0.60  # Never reject if signals win 60%+
         try:
             db = self.hypothesis_manager._db
             cursor = await db.execute(
                 "SELECT h.hypothesis_id, h.name, h.market_type, "
                 "COUNT(be.id) as events, "
-                "COALESCE(AVG(be.edge), 0) as avg_edge, "
-                "SUM(CASE WHEN be.signal_generated = 1 THEN 1 ELSE 0 END) as signals "
+                "COALESCE(AVG(CASE WHEN be.signal_generated = 1 THEN be.edge END), 0) as signal_avg_edge, "
+                "SUM(CASE WHEN be.signal_generated = 1 THEN 1 ELSE 0 END) as signals, "
+                "SUM(CASE WHEN be.signal_generated = 1 AND be.actual_result = 'won' THEN 1 ELSE 0 END) as wins, "
+                "SUM(CASE WHEN be.signal_generated = 1 AND be.actual_result = 'lost' THEN 1 ELSE 0 END) as losses "
                 "FROM hypotheses h "
                 "JOIN backtest_events be ON h.hypothesis_id = be.hypothesis_id "
                 "WHERE h.status IN ('draft', 'backtesting') "
                 "GROUP BY h.hypothesis_id "
-                "HAVING events >= ? AND avg_edge < ?",
-                (MIN_EVENTS_FOR_REJECTION, MAX_EDGE_FOR_REJECTION),
+                "HAVING events >= ? AND signal_avg_edge < ?",
+                (MIN_EVENTS_FOR_REJECTION, MAX_SIGNAL_EDGE_FOR_REJECTION),
             )
             draft_rejects = await cursor.fetchall()
             for row in draft_rejects:
-                hid, hname, mtype, events, avg_edge, signals = row
+                hid, hname, mtype, events, signal_edge, signals, wins, losses = row
+                total_decided = (wins or 0) + (losses or 0)
+                win_rate = (wins or 0) / max(total_decided, 1)
+
+                # PROTECT: never reject hypotheses with strong signal win rate
+                if total_decided >= 5 and win_rate >= MIN_SIGNAL_WIN_RATE_PROTECT:
+                    logger.info(
+                        f"Research: PROTECTED {hid[:12]} ({hname}) from rejection — "
+                        f"signal WR={win_rate:.0%} ({wins}W-{losses}L) despite "
+                        f"signal_edge={signal_edge:.2%}"
+                    )
+                    continue
+
                 reason = (
                     f"auto:negative_edge_disproven — {events} events, "
-                    f"avg_edge={avg_edge:.2%}, signals={signals}. "
-                    f"Data definitively disproves thesis."
+                    f"signal_avg_edge={signal_edge:.2%}, signals={signals}. "
+                    f"Signal data disproves thesis."
                 )
                 await self.hypothesis_manager.update_status(hid, "rejected", reason)
                 self._rejections += 1
                 logger.info(
-                    f"Research: REJECTED zombie {hid} ({hname}) — "
-                    f"{events} events, avg_edge={avg_edge:.2%}, {signals} signals"
+                    f"Research: REJECTED zombie {hid[:12]} ({hname}) — "
+                    f"{events} events, signal_edge={signal_edge:.2%}, "
+                    f"{signals} signals, {wins}W-{losses}L"
                 )
             if draft_rejects:
                 logger.info(
-                    f"Research: auto-rejected {len(draft_rejects)} disproven zombie hypotheses"
+                    f"Research: processed {len(draft_rejects)} zombie candidates"
                 )
         except Exception as e:
             logger.warning(f"Zombie auto-rejection failed: {e}")
