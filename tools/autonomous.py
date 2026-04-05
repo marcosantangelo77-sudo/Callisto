@@ -2200,13 +2200,14 @@ class ResearchLoop:
                 # ── Pause line_monitor for ENTIRE cycle to prevent SQLite lock cascade.
                 # All phases do DB writes; concurrent line_monitor snapshots cause
                 # deadlocks even with 120s busy_timeout. Snapshots catch up between cycles.
+                # wait_for_drain() sets _paused, waits for loop ack AND in-flight DB
+                # ops to complete — no more fire-and-forget WAL contention.
                 if self.line_monitor:
-                    self.line_monitor._paused = True
-                    try:
-                        await asyncio.wait_for(self.line_monitor._pause_ack.wait(), timeout=30)
-                        logger.debug("line_monitor paused and idle for research cycle")
-                    except asyncio.TimeoutError:
-                        logger.warning("line_monitor did not ack pause within 30s — proceeding (may contend on WAL)")
+                    drained = await self.line_monitor.wait_for_drain(timeout=60)
+                    if drained:
+                        logger.debug("line_monitor paused and drained for research cycle")
+                    else:
+                        logger.warning("line_monitor drain incomplete — proceeding (may contend on WAL)")
 
                 # ── Queue drain: if Claude just became available, burn through deferred work ──
                 try:
@@ -2548,6 +2549,7 @@ class ResearchLoop:
                 # ── Always unpause line_monitor — runs on normal exit, break, and exception ──
                 if self.line_monitor:
                     self.line_monitor._paused = False
+                    self.line_monitor._pause_ack.clear()
                     logger.debug("line_monitor unpaused after research cycle")
 
     async def _phase_self_repair(self) -> None:

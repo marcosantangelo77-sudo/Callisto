@@ -84,6 +84,7 @@ class LineMonitor:
         self._running = False
         self._paused = False  # Set True to pause snapshot writes (during backtests)
         self._pause_ack = asyncio.Event()  # Signals when monitor has entered paused state (no in-flight DB ops)
+        self._in_flight_db = False  # True while a snapshot DB write is in progress
         self._snapshots: dict[str, dict] = {}  # sport -> last snapshot (only latest per sport)
         from collections import deque
         self._alerts: deque = deque(maxlen=100)  # Hard-capped at 100 (was unbounded list)
@@ -176,6 +177,26 @@ class LineMonitor:
             await self._db.close()
         logger.info("Line monitor stopped")
 
+    async def wait_for_drain(self, timeout: float = 60) -> bool:
+        """Pause the monitor and wait until all in-flight DB ops complete.
+
+        Sets _paused, then polls until _pause_ack is set AND _in_flight_db
+        is False. Returns True if drained within timeout, False otherwise.
+        """
+        self._paused = True
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            # ack means loop reached top (no new snapshots starting)
+            # not _in_flight_db means current _process_snapshot finished
+            if self._pause_ack.is_set() and not self._in_flight_db:
+                return True
+            await asyncio.sleep(0.5)
+        logger.warning(
+            f"wait_for_drain timed out after {timeout}s "
+            f"(ack={self._pause_ack.is_set()}, in_flight={self._in_flight_db})"
+        )
+        return False
+
     async def _monitor_loop(self) -> None:
         """Main monitoring loop — snapshot, compare, alert.
 
@@ -226,6 +247,13 @@ class LineMonitor:
                 # Prop snapshots — free cascade (DK + FD + BetMGM), no credits
                 if not self._paused:
                     await self._snapshot_props()
+
+                # If paused mid-cycle (broke out of sport loop), skip the
+                # interval sleep and loop back immediately so _pause_ack fires.
+                # Without this, autonomous waits 30s, always times out, and
+                # proceeds with WAL-contending DB writes.
+                if self._paused:
+                    continue
 
                 await asyncio.sleep(interval)
 
@@ -624,10 +652,20 @@ class LineMonitor:
 
     async def _process_snapshot(self, sport: str, new_snapshot: dict) -> None:
         """Process an odds snapshot — store, scan edges, detect movements.
+        Sets _in_flight_db while DB writes are active so autonomous loop
+        can wait for drain before starting backtest phases.
 
         Shared pipeline used by both primary (Odds API) and fallback
         (DraftKings scraper, OddsPapi) snapshot paths.
         """
+        self._in_flight_db = True
+        try:
+            await self._process_snapshot_inner(sport, new_snapshot)
+        finally:
+            self._in_flight_db = False
+
+    async def _process_snapshot_inner(self, sport: str, new_snapshot: dict) -> None:
+        """Inner snapshot processing — separated so _in_flight_db wraps all DB ops."""
         now = datetime.now(timezone.utc).isoformat()
         game_count = new_snapshot.get("game_count", 0)
         credits_remaining = new_snapshot.get("credits", {}).get("remaining")
