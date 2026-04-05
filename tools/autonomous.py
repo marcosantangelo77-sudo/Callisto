@@ -2912,6 +2912,32 @@ class ResearchLoop:
                         f"Signal refresh: upgraded {updated.rowcount} events "
                         f"to signal=1 (threshold lowered after backtest)"
                     )
+                    # Sync backtest_runs.signals_generated from backtest_events
+                    # so monitoring/display data reflects retroactive updates.
+                    await db.execute(
+                        """UPDATE backtest_runs SET signals_generated = (
+                               SELECT COUNT(DISTINCT event_id)
+                               FROM backtest_events
+                               WHERE backtest_events.run_id = backtest_runs.run_id
+                               AND signal_generated = 1
+                           )
+                           WHERE run_id IN (
+                               SELECT DISTINCT run_id FROM backtest_events
+                               WHERE signal_generated = 1
+                           )"""
+                    )
+                    await db.commit()
+                    # Recalculate full stats for affected runs
+                    affected_runs = await db.execute(
+                        "SELECT DISTINCT run_id FROM backtest_events "
+                        "WHERE signal_generated = 1"
+                    )
+                    run_ids = [r[0] for r in await affected_runs.fetchall()]
+                    for rid in run_ids:
+                        try:
+                            await self.backtest_engine.recalculate_run_stats(rid)
+                        except Exception as rc_e:
+                            logger.warning(f"Signal refresh: recalculate_run_stats({rid[:8]}) failed: {rc_e}")
         except Exception as e:
             logger.warning(f"Signal refresh failed: {e}")
 

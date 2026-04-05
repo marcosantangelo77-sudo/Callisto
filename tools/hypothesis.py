@@ -1157,6 +1157,20 @@ class HypothesisManager:
                         )).fetchone()
                         new_signals = sig_cursor[0] if sig_cursor else 0
 
+                        # Sync backtest_runs.signals_generated so monitoring
+                        # reflects the retroactive update (not just evaluate_significance)
+                        await execute_with_retry(
+                            self._db,
+                            "UPDATE backtest_runs SET signals_generated = ("
+                            "  SELECT COUNT(DISTINCT event_id) FROM backtest_events"
+                            "  WHERE backtest_events.run_id = backtest_runs.run_id"
+                            "  AND signal_generated = 1"
+                            ") WHERE hypothesis_id = ?",
+                            (hypothesis_id,),
+                            operation="hypothesis sync_backtest_runs_signals",
+                        )
+                        await commit_with_retry(self._db, operation="hypothesis sync_backtest_runs_signals")
+
                         logger.info(
                             f"Hypothesis {hypothesis_id}: lowered edge_threshold "
                             f"from {edge_diag['current_threshold']:.3f} to {new_threshold:.3f} "
