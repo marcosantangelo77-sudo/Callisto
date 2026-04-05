@@ -1824,38 +1824,49 @@ class ResearchLoop:
             logger.info(f"Stale signal rejection requeue: restored {count} hypotheses")
 
     async def _reject_anti_predictive(self) -> None:
-        """Reject any hypothesis in backtesting/paper_trading with IC < -0.10.
+        """Reject hypotheses with strongly negative IC on sufficient sample size.
 
-        Anti-predictive hypotheses (strongly negative information coefficient)
-        are worse than random — they actively lose money. Reject immediately
-        rather than waiting for the evaluate phase to catch them.
+        Uses the same thresholds as hypothesis.py auto-rejection:
+        - IC < -0.15 with 15+ signals (standard)
+        - IC < -0.25 with 10+ signals (strong anti-prediction)
+        Previous threshold of IC < -0.10 with NO sample minimum was rejecting
+        hypotheses based on noise (e.g. IC=-0.13 on 11 paper trades is meaningless).
         """
         db = self.hypothesis_manager._db
         if db is None:
             return
 
         cursor = await db.execute(
-            "SELECT h.hypothesis_id, h.name, h.status, hs.information_coefficient, hs.brier_score "
+            "SELECT h.hypothesis_id, h.name, h.status, "
+            "hs.information_coefficient, hs.brier_score, hs.signals_n "
             "FROM hypotheses h "
             "JOIN hypothesis_stats hs ON h.hypothesis_id = hs.hypothesis_id "
             "WHERE h.status IN ('backtesting', 'paper_trading') "
-            "AND hs.information_coefficient < -0.10"
+            "AND hs.information_coefficient < -0.15"
         )
         rows = await cursor.fetchall()
 
         count = 0
-        for hid, name, status, ic, brier in rows:
+        for hid, name, status, ic, brier, signals_n in rows:
+            signals_n = signals_n or 0
+            # Require minimum sample size for IC to be meaningful
+            if ic < -0.25 and signals_n >= 10:
+                pass  # strong anti-prediction — reject
+            elif ic < -0.15 and signals_n >= 15:
+                pass  # standard anti-prediction — reject
+            else:
+                continue  # insufficient evidence
             try:
                 brier_str = f"{brier:.3f}" if brier is not None else "N/A"
                 ic_str = f"{ic:.3f}" if ic is not None else "N/A"
                 await self.hypothesis_manager.update_status(
                     hid, "rejected",
-                    f"auto:anti_predictive — IC={ic_str}, brier={brier_str}. "
+                    f"auto:anti_predictive — IC={ic_str}, brier={brier_str}, n={signals_n}. "
                     f"Strongly anti-predictive, worse than random."
                 )
                 count += 1
                 logger.info(
-                    f"Rejected anti-predictive {hid} ({name}): IC={ic_str}, brier={brier_str}"
+                    f"Rejected anti-predictive {hid} ({name}): IC={ic_str}, brier={brier_str}, n={signals_n}"
                 )
             except Exception as e:
                 logger.warning(f"Failed to reject anti-predictive {hid} ({name}): {e}")

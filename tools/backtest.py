@@ -3868,20 +3868,38 @@ class BacktestEngine:
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
 
-        dupes_skipped = 0
+        # ── Game-level dedup: keep only best-edge book per game ──
+        # Multiple books show edge for the same game. Recording all of them
+        # inflates paper_trade counts 5x. Keep only the highest-edge entry
+        # per event_id so paper_trades reflects independent betting opportunities.
+        best_by_game: dict[str, dict] = {}
         for row in rows:
             event = dict(zip(cols, row))
+            eid = event.get("event_id", "")
+            existing = best_by_game.get(eid)
+            if existing is None or (event.get("edge") or 0) > (existing.get("edge") or 0):
+                best_by_game[eid] = event
+        deduped_events = list(best_by_game.values())
+        multi_book_skipped = len(rows) - len(deduped_events)
+        if multi_book_skipped:
+            logger.info(
+                f"Paper trade {hypothesis_id[:12]}: kept {len(deduped_events)} "
+                f"best-edge trades, skipped {multi_book_skipped} multi-book duplicates"
+            )
+
+        dupes_skipped = 0
+        for event in deduped_events:
 
             # Look up game info (home_team, away_team, actual game_date)
             eid = event.get("event_id", "")
             gi = _paper_game_info.get(eid, ("", "", event.get("game_date", today)))
             home_team, away_team, actual_gd = gi
 
-            # ── Dedup: skip if we already recorded this trade ──
+            # ── Dedup: skip if we already recorded this game for this hypothesis ──
             dup_cur = await self._db.execute(
                 "SELECT 1 FROM paper_trades "
-                "WHERE hypothesis_id = ? AND event_id = ? AND book = ? AND game_date = ?",
-                (hypothesis_id, eid, event["book"], actual_gd),
+                "WHERE hypothesis_id = ? AND game_date = ? AND home_team = ? AND away_team = ?",
+                (hypothesis_id, actual_gd, home_team, away_team),
             )
             if await dup_cur.fetchone():
                 dupes_skipped += 1
