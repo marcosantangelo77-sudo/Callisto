@@ -800,9 +800,14 @@ class HypothesisManager:
                 checks.append(f"PASS: Sharpe {sr:.2f}")
 
         # Max drawdown (paper trade only)
+        # At n < 10, a single loss creates MDD = 1.0 (100%) regardless of
+        # strategy quality. Waive the gate at small n — the p-value gate is
+        # the real quality filter for small samples.
         if "max_drawdown" in gate:
             mdd = report.get("risk", {}).get("max_drawdown", 1.0)
-            if mdd > gate["max_drawdown"]:
+            if n < 10:
+                checks.append(f"SKIP: Drawdown {mdd:.1%} (n={n} < 10, waived — single loss = 100% MDD at small n)")
+            elif mdd > gate["max_drawdown"]:
                 checks.append(f"FAIL: Drawdown {mdd:.1%} > {gate['max_drawdown']:.0%}")
                 ready = False
             else:
