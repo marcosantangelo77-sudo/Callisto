@@ -726,8 +726,16 @@ class HypothesisManager:
 
         return report
 
-    async def check_promotion_readiness(self, hypothesis_id: str) -> dict:
-        """Check if a hypothesis meets criteria to advance to next stage."""
+    async def check_promotion_readiness(self, hypothesis_id: str, *, stage_override: str | None = None) -> dict:
+        """Check if a hypothesis meets criteria to advance to next stage.
+
+        Args:
+            stage_override: Force evaluation on a different data stage.
+                Used by auto_promote when paper_trading hypotheses have
+                0 paper trades but sufficient backtest evidence — without
+                this, the readiness check would evaluate on empty
+                paper_trade data and always fail (the deadlock bug).
+        """
         h = await self.get_hypothesis(hypothesis_id)
         if not h:
             return {"error": "Hypothesis not found"}
@@ -745,7 +753,7 @@ class HypothesisManager:
             stage = "backtest"
         elif status == "paper_trading":
             transition = "paper_trading→live"
-            stage = "paper_trade"
+            stage = stage_override or "paper_trade"
         else:
             return {"ready": False, "reason": f"Unknown status: {status}"}
 
@@ -1058,7 +1066,9 @@ class HypothesisManager:
         Hard gates (cannot be bypassed by statistical tests):
           - backtesting → paper_trading: backtest_events MUST exist for this hypothesis
             AND meet min_signals with adaptive p-value threshold (see PROMOTION_GATES)
-          - paper_trading → live: paper_trades MUST exist AND show positive ROI
+          - paper_trading → live: paper_trades with positive ROI, OR if 0 paper
+            trades exist (rare-condition hypotheses), backtest evidence with
+            sufficient signals meeting paper_trading→live statistical gates
 
         Auto-rejection:
           - If a hypothesis has been in 'backtesting' through 10+ evaluate cycles
@@ -1071,6 +1081,7 @@ class HypothesisManager:
             return {"action": "error", "reason": "Hypothesis not found"}
 
         status = h["status"]
+        _use_backtest_evidence = False  # set True when paper_trading has 0 trades but backtest data suffices
 
         # ── Hard data-existence gates ──
         if status == "backtesting":
@@ -1400,9 +1411,14 @@ class HypothesisManager:
                     f"{len(backtest_signals)} backtest signals — evaluating "
                     f"promotion using backtest evidence"
                 )
+                # Signal to readiness check: evaluate on backtest data,
+                # not empty paper_trade data (fixes deadlock where 0 paper
+                # trades + sufficient backtest signals = perpetual "held").
+                _use_backtest_evidence = True
 
         # ── Standard readiness check (statistical significance, gates, etc.) ──
-        readiness = await self.check_promotion_readiness(hypothesis_id)
+        _stage_override = "backtest" if _use_backtest_evidence else None
+        readiness = await self.check_promotion_readiness(hypothesis_id, stage_override=_stage_override)
 
         if readiness.get("should_reject"):
             await self.update_status(hypothesis_id, "rejected", "auto")
