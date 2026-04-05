@@ -88,7 +88,7 @@ class LineMonitor:
         self._alerts: deque = deque(maxlen=100)  # Hard-capped at 100 (was unbounded list)
         self._latest_edge_reports: dict[str, dict] = {}  # sport -> latest edge scan (only latest per sport)
         self._kl_cache: dict[str, dict] = {}  # "sport:event_id:market" -> KL metrics (capped in _put_kl)
-        self._KL_CACHE_MAX = 10000  # Evict oldest when exceeded
+        self._KL_CACHE_MAX = 2000  # was 10000 — 5x reduction to limit arena fragmentation
         # Self-healing: track consecutive all-source failures per sport.
         # Alert via Telegram only after 3+ consecutive failures.
         self._consecutive_failures: dict[str, int] = {}  # sport -> count

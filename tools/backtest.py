@@ -74,6 +74,7 @@ class BacktestEngine:
         # changed since last recalculation get the expensive scipy/numpy
         # recompute.  Keeps 10-15 min stalls down to seconds.
         self._run_fingerprints: dict[str, tuple[int, int, int]] = {}
+        self._RUN_FP_MAX = 500  # Cap fingerprint cache — only active runs matter
 
     async def initialize(self) -> None:
         from tools.schema import open_db
@@ -3649,6 +3650,12 @@ class BacktestEngine:
                     self._run_fingerprints[run_id] = current_fps[run_id]
             except Exception as e:
                 logger.warning(f"Failed to recalculate run {run_id}: {e}")
+
+        # Prune fingerprint cache — only keep entries for currently active runs
+        if len(self._run_fingerprints) > self._RUN_FP_MAX:
+            active_set = set(run_ids)
+            pruned = {k: v for k, v in self._run_fingerprints.items() if k in active_set}
+            self._run_fingerprints = pruned
 
         if updated:
             logger.info(f"Recalculated stats for {updated}/{len(stale_run_ids)} stale backtest runs (skipped {len(run_ids) - len(stale_run_ids)} unchanged)")

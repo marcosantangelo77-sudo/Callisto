@@ -23,11 +23,13 @@ async def open_db(db_path: str = None) -> aiosqlite.Connection:
     if db_path is None:
         db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
     db = await aiosqlite.connect(db_path)
-    await db.execute("PRAGMA busy_timeout = 60000")   # 60s — prevents 'database is locked' during bulk writes
+    await db.execute("PRAGMA busy_timeout = 60000")   # 60s �� prevents 'database is locked' during bulk writes
     await db.execute("PRAGMA journal_mode = WAL")      # WAL mode for concurrent reads during writes
     await db.execute("PRAGMA synchronous = NORMAL")    # Safe with WAL, reduces fsync overhead
     await db.execute("PRAGMA wal_autocheckpoint = 1000")  # Checkpoint after 1000 pages (~4MB) — prevents WAL bloat
     await db.execute("PRAGMA journal_size_limit = 67108864")  # 64MB WAL cap — SQLite tries harder to checkpoint
+    await db.execute("PRAGMA cache_size = -512")        # 512KB page cache (default -2000 = 2MB) — reduces RSS per conn
+    await db.execute("PRAGMA mmap_size = 0")           # Disable mmap — prevents WAL from being memory-mapped into RSS
     return db
 
 logger = logging.getLogger("callisto.schema")

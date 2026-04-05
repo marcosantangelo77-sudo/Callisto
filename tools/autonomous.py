@@ -1883,6 +1883,14 @@ class ResearchLoop:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        # Unsubscribe from event bus to prevent leaked references on restart
+        try:
+            from tools.event_bus import get_event_bus, EVENT_GAME_COMPLETED, EVENT_GAME_LINEUP_WINDOW
+            bus = get_event_bus()
+            bus.unsubscribe(EVENT_GAME_COMPLETED, self._on_game_completed)
+            bus.unsubscribe(EVENT_GAME_LINEUP_WINDOW, self._on_game_lineup_window)
+        except Exception:
+            pass
         # Record final downtime stats
         await self._downtime_tracker.record_to_hermes()
         logger.info(
@@ -2437,7 +2445,6 @@ class ResearchLoop:
                 await self._check_progress()
 
                 _cycle_total = time.monotonic() - _cycle_start
-                logger.info(f"Research cycle #{self._cycles} completed in {_cycle_total:.0f}s")
 
                 # Force garbage collection after each cycle — large numpy arrays
                 # and JSON dicts from backtest processing don't always get freed promptly.
@@ -2446,6 +2453,17 @@ class ResearchLoop:
                 gc.collect()  # Second pass catches reference cycles
                 import linecache
                 linecache.clearcache()
+
+                # ── Memory telemetry: track RSS per cycle to detect leaks ──
+                try:
+                    import psutil
+                    _rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
+                    logger.info(
+                        f"Research cycle #{self._cycles} completed in {_cycle_total:.0f}s | "
+                        f"RSS={_rss_mb:.0f}MB | KL_cache={len(self.line_monitor._kl_cache) if self.line_monitor else '?'}"
+                    )
+                except Exception:
+                    logger.info(f"Research cycle #{self._cycles} completed in {_cycle_total:.0f}s")
 
                 # Proactive DB prune — prop_snapshots grows 15K rows/hr,
                 # backtest_events from rejected hypotheses bloat DB indefinitely
