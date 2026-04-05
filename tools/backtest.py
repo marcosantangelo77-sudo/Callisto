@@ -3336,6 +3336,22 @@ class BacktestEngine:
             if recalc_count > 0:
                 logger.info(f"Recalculated stats for {recalc_count} backtest runs after resolution")
 
+            # Update fingerprint cache so recalculate_all_active_runs() in Phase 5
+            # sees these runs as already-current and skips the expensive re-recalc.
+            # Without this, every resolution batch triggers double-recalculation:
+            # once here, once in Phase 5 when it detects stale fingerprints.
+            if affected_runs:
+                fp_ph = ",".join("?" for _ in affected_runs)
+                fp_cursor = await self._db.execute(
+                    f"SELECT run_id, COUNT(*), "
+                    f"SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END), "
+                    f"SUM(CASE WHEN actual_result IS NOT NULL THEN 1 ELSE 0 END) "
+                    f"FROM backtest_events WHERE run_id IN ({fp_ph}) GROUP BY run_id",
+                    affected_runs,
+                )
+                for row in await fp_cursor.fetchall():
+                    self._run_fingerprints[row[0]] = (row[1] or 0, row[2] or 0, row[3] or 0)
+
         return {"resolved": resolved_count, "unresolved": len(unresolved) - resolved_count}
 
     async def _get_affected_run_ids(self, run_id: Optional[str] = None) -> list[str]:
