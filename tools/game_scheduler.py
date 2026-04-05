@@ -25,6 +25,7 @@ from tools.event_bus import (
     EventBus,
     EVENT_GAME_STARTING,
     EVENT_GAME_IMMINENT,
+    EVENT_GAME_LINEUP_WINDOW,
     get_event_bus,
 )
 
@@ -148,6 +149,11 @@ class GameScheduler:
     def _default_triggers(self) -> list[GameTrigger]:
         """Default triggers for each game."""
         return [
+            GameTrigger(
+                offset_minutes=-180,
+                event_type=EVENT_GAME_LINEUP_WINDOW,
+                extra_data={"reason": "T-180min: lineup confirmation window, re-scan edges"},
+            ),
             GameTrigger(
                 offset_minutes=-60,
                 event_type=EVENT_GAME_STARTING,

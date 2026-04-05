@@ -1396,10 +1396,11 @@ class ResearchLoop:
         logger.info(f"Research loop starting — all sports equal: {RESEARCH_SPORTS}")
         # Subscribe to event bus for reactive data collection
         try:
-            from tools.event_bus import get_event_bus, EVENT_GAME_COMPLETED
+            from tools.event_bus import get_event_bus, EVENT_GAME_COMPLETED, EVENT_GAME_LINEUP_WINDOW
             bus = get_event_bus()
             bus.subscribe(EVENT_GAME_COMPLETED, self._on_game_completed)
-            logger.info("Research loop subscribed to game_completed events")
+            bus.subscribe(EVENT_GAME_LINEUP_WINDOW, self._on_game_lineup_window)
+            logger.info("Research loop subscribed to game_completed and lineup_window events")
         except Exception as e:
             logger.debug(f"Event bus subscription failed (non-critical): {e}")
         # One-time backfill of temporal metadata on legacy hypotheses
@@ -1466,6 +1467,35 @@ class ResearchLoop:
                 logger.debug(f"KL divergence computation failed: {e}")
         except Exception as e:
             logger.debug(f"Reactive collection failed for {sport} {game_date}: {e}")
+
+    async def _on_game_lineup_window(self, event_data: dict) -> None:
+        """Reactive handler: re-scan edges when lineup cards may be posted (T-180min)."""
+        sport = event_data.get("sport", "")
+        event_id = event_data.get("event_id", "")
+        home_team = event_data.get("home_team", "")
+        away_team = event_data.get("away_team", "")
+        commence_time = event_data.get("commence_time", "")
+
+        if not sport or not event_id:
+            return
+
+        matchup = f"{away_team}@{home_team}" if away_team and home_team else event_id
+        logger.info(
+            f"Lineup window trigger: {matchup} ({sport}) — "
+            f"re-scanning edges for lineup confirmation"
+        )
+
+        try:
+            query = (
+                f"LINEUP_WINDOW_RESCAN for {matchup}: Re-evaluate edges now that "
+                f"lineup cards may be posted. Check market hold normalization, spread "
+                f"compression, and whether pre-lineup phantom edges have resolved. "
+                f"event_id={event_id} sport={sport} commence_time={commence_time}"
+            )
+            await self._work_queue.enqueue("lineup_rescan", query, priority=1)
+            logger.info(f"Lineup rescan task enqueued for {matchup}")
+        except Exception as e:
+            logger.warning(f"Failed to enqueue lineup rescan for {matchup}: {e}")
 
     async def _backfill_temporal_metadata(self) -> None:
         """Backfill training_period_end on legacy hypotheses that lack temporal metadata.
