@@ -4631,6 +4631,14 @@ class ResearchLoop:
                         )
                     except Exception as e:
                         logger.warning(f"Telegram notification failed for proven hypothesis {h['name']}: {e}")
+                else:
+                    checks = result.get("checks", [])
+                    reason = result.get("reason", "")
+                    logger.info(
+                        f"Research: paper_trading {h.get('name', h['hypothesis_id'])} "
+                        f"{action.upper()} — reason={reason[:200] if reason else 'N/A'}, "
+                        f"gates={checks}"
+                    )
             except Exception as e:
                 logger.warning(f"Paper trade eval failed for {h['hypothesis_id']}: {e}")
 
