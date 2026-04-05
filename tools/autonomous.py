@@ -4731,21 +4731,88 @@ class ResearchLoop:
             )
             if updated > 0:
                 logger.info(f"Research: recomputed stats for {updated} backtest runs (batch of {len(all_recompute_ids)}, incl {len(paper_ids)} paper_trading)")
-                # ── Sync hypothesis_stats from updated backtest_runs ──
-                # recalculate_all_active_runs updates backtest_runs but NOT
-                # hypothesis_stats.  The anti-predictive IC gate in
-                # _phase_paper_trade reads hypothesis_stats, so stale data
-                # there can block promotion or miss anti-predictive signals.
-                # Call evaluate_significance to upsert hypothesis_stats.
-                synced = 0
-                for hid in all_recompute_ids:
-                    try:
-                        await self.hypothesis_manager.evaluate_significance(hid, "backtest")
+                # ── Sync hypothesis_stats from freshly-recomputed backtest_runs ──
+                # The IC gate in _phase_paper_trade and other consumers read from
+                # hypothesis_stats, but recalculate_all_active_runs only updates
+                # backtest_runs.  Without this sync the two tables diverge: e.g.
+                # backtest_runs shows 5W-0L p=0.031 while hypothesis_stats still
+                # says p=0.214 from the last evaluate_significance call.
+                # Previous approach called evaluate_significance per hypothesis,
+                # which re-queries backtest_events and is expensive.  This reads
+                # directly from the already-recomputed backtest_runs instead.
+                try:
+                    from tools.db_utils import execute_with_retry, commit_with_retry
+                    db = self.backtest_engine._db
+                    now = datetime.now(timezone.utc).isoformat()
+                    hs_placeholders = ",".join("?" for _ in all_recompute_ids)
+                    # Get the latest run per hypothesis (most recent run_id)
+                    hs_cursor = await db.execute(
+                        f"SELECT br.hypothesis_id, "
+                        f"  br.total_events, br.signals_generated, "
+                        f"  br.actual_win, br.actual_loss, br.actual_push, "
+                        f"  br.hit_rate, br.avg_edge, br.avg_ev, br.avg_clv, "
+                        f"  br.roi_pct, br.sharpe_ratio, br.p_value_binomial, "
+                        f"  br.sortino_ratio_val, br.brier_score, br.information_coefficient, "
+                        f"  h.significance_level, h.min_sample_size, h.status "
+                        f"FROM backtest_runs br "
+                        f"JOIN hypotheses h ON br.hypothesis_id = h.hypothesis_id "
+                        f"WHERE br.hypothesis_id IN ({hs_placeholders}) "
+                        f"ORDER BY br.run_id DESC",
+                        all_recompute_ids,
+                    )
+                    rows = await hs_cursor.fetchall()
+                    # Keep only the latest run per hypothesis
+                    seen = set()
+                    synced = 0
+                    for row in rows:
+                        hid = row[0]
+                        if hid in seen:
+                            continue
+                        seen.add(hid)
+                        (total_n, signals_n, wins, losses, pushes,
+                         hit_rate, avg_edge, avg_ev, avg_clv,
+                         roi_pct, sharpe, p_value,
+                         sortino, brier, ic,
+                         sig_level, min_sample, status) = row[1:]
+                        # Determine stage from hypothesis status
+                        stage = "paper_trade" if status == "paper_trading" else "backtest"
+                        decided = (wins or 0) + (losses or 0)
+                        sig_level = sig_level or 0.05
+                        min_sample = min_sample or 50
+                        is_significant = (
+                            p_value is not None
+                            and p_value < sig_level
+                            and decided >= min_sample
+                        )
+                        await execute_with_retry(
+                            db,
+                            "DELETE FROM hypothesis_stats "
+                            "WHERE hypothesis_id = ? AND stage = ?",
+                            (hid, stage),
+                            operation="sync hypothesis_stats delete",
+                        )
+                        await execute_with_retry(
+                            db,
+                            "INSERT INTO hypothesis_stats "
+                            "(hypothesis_id, stage, computed_at, total_n, signals_n, "
+                            "win, loss, push_, hit_rate, avg_edge, avg_ev, avg_clv, "
+                            "positive_clv_rate, roi_pct, sharpe, max_drawdown, p_value, "
+                            "is_significant, sortino, brier_score, information_coefficient) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (hid, stage, now, total_n or 0, signals_n or 0,
+                             wins or 0, losses or 0, pushes or 0,
+                             hit_rate, avg_edge, avg_ev, avg_clv,
+                             None, roi_pct, sharpe, None, p_value,
+                             is_significant,
+                             sortino, brier, ic),
+                            operation="sync hypothesis_stats insert",
+                        )
                         synced += 1
-                    except Exception as sig_e:
-                        logger.debug(f"hypothesis_stats sync skipped for {hid}: {sig_e}")
-                if synced:
-                    logger.info(f"Research: synced hypothesis_stats for {synced}/{len(all_recompute_ids)} hypotheses")
+                    if synced > 0:
+                        await commit_with_retry(db, operation="sync hypothesis_stats")
+                        logger.info(f"Research: synced hypothesis_stats for {synced} hypotheses from backtest_runs")
+                except Exception as e:
+                    logger.warning(f"hypothesis_stats sync from backtest_runs failed: {e}")
         except Exception as e:
             logger.warning(f"Backtest stats recompute failed: {e}")
 
