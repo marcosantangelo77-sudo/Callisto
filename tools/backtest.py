@@ -3853,6 +3853,28 @@ class BacktestEngine:
             above_thresh = 0
             min_books_seen = max_books_seen = 0
 
+        # Diagnose WHY above_thresh > 0 but signals = 0 (prevents false "broken" alarms)
+        suppression_reasons = []
+        if above_thresh > 0 and total_signals_found == 0 and all_paper_rows:
+            for row in all_paper_rows:
+                edge_val = row[13]
+                if edge_val < edge_threshold:
+                    continue
+                fair_prob = row[11]
+                try:
+                    factors = _json.loads(row[12]) if row[12] else {}
+                except Exception:
+                    factors = {}
+                n_books = factors.get("books_used", 0)
+                if h["market_type"] == "h2h" and fair_prob > 0.80:
+                    suppression_reasons.append(
+                        f"heavy_fav(fair={fair_prob:.3f},edge={edge_val:.4f},book={row[8]})"
+                    )
+                elif n_books < 4:
+                    suppression_reasons.append(
+                        f"min_books(n={n_books},edge={edge_val:.4f},book={row[8]})"
+                    )
+
         logger.info(
             f"Paper trade {hypothesis_id[:12]}: {games_processed}/{len(games)} games processed, "
             f"{total_events} events, {total_signals_found} signals, "
@@ -3861,6 +3883,11 @@ class BacktestEngine:
             f"edge_range=[{min_edge:.4f}, {max_edge:.4f}], above_thresh={above_thresh}, "
             f"books_range=[{min_books_seen}, {max_books_seen}]"
         )
+        if suppression_reasons:
+            logger.info(
+                f"Paper trade {hypothesis_id[:12]}: {above_thresh} edge(s) above threshold "
+                f"SUPPRESSED — {'; '.join(suppression_reasons)}"
+            )
 
         # Batch-insert paper events so the SELECT below can find signals.
         # _process_game_lines returns pending rows (deferred write pattern)
