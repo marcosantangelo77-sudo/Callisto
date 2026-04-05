@@ -529,6 +529,15 @@ async def get_edges(sport: Optional[str] = None):
     return report
 
 
+@app.get("/odds/narrative-edges")
+async def get_narrative_edges(sport: str = "basketball_nba"):
+    """Detect player-level narrative edges: usage surges, role changes,
+    milestone proximity, revenge games. These exploit the lag between
+    a player's real situation and their prop line (set from season averages)."""
+    from tools.narrative_edge import full_narrative_scan
+    return await full_narrative_scan(sport)
+
+
 @app.get("/odds/kl-metrics")
 async def get_kl_metrics(sport: Optional[str] = None, limit: int = 50):
     """Get KL divergence metrics — measures information flow between odds snapshots.

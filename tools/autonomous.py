@@ -2308,6 +2308,17 @@ class ResearchLoop:
                 if not self._running:
                     break
 
+                # Phase 6c: Narrative edge detection (milestones, role changes, revenge)
+                try:
+                    await asyncio.wait_for(self._phase_narrative_edges(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase narrative_edges timed out after 120s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase narrative_edges failed (non-fatal): {e}")
+
+                if not self._running:
+                    break
+
                 # Phase 7: Claude deep analysis — use remaining budget
                 try:
                     await asyncio.wait_for(self._phase_claude_deep_work(), timeout=300)
@@ -4895,6 +4906,67 @@ class ResearchLoop:
                         logger.warning(f"Telegram notification failed for proven hypothesis {h['name']}: {e}")
             except Exception as e:
                 logger.warning(f"Paper trade eval failed for {h['hypothesis_id']}: {e}")
+
+    async def _phase_narrative_edges(self) -> None:
+        """Detect player-level narrative edges that models can't price.
+
+        Runs every cycle to find: usage surges, role changes, milestone
+        proximity, revenge games. Logs actionable findings and stores
+        them for the deep_work phase to incorporate into analysis.
+        """
+        try:
+            from tools.narrative_edge import full_narrative_scan
+        except ImportError as e:
+            logger.debug(f"Narrative edge module not available: {e}")
+            return
+
+        # Run for active sports with player data
+        for sport in ["basketball_nba", "icehockey_nhl", "baseball_mlb"]:
+            try:
+                results = await full_narrative_scan(sport)
+
+                # Log actionable edges
+                actionable = [
+                    e for e in results.get("usage_surges", [])
+                    if e.get("actionable")
+                ]
+                if actionable:
+                    for edge in actionable[:5]:
+                        logger.info(
+                            f"NARRATIVE EDGE: {edge['player']} {edge['stat_type']} "
+                            f"surge {edge['surge_ratio']:.2f}x "
+                            f"(recent {edge['recent_avg']:.1f} vs season {edge['season_avg']:.1f}) "
+                            f"| line={edge.get('current_line','?')} gap={edge.get('line_gap','?')} "
+                            f"| {edge.get('book','?')} [{sport}]"
+                        )
+
+                role_changes = results.get("role_changes", [])
+                if role_changes:
+                    for rc in role_changes[:3]:
+                        logger.info(
+                            f"ROLE CHANGE: {rc['player']} "
+                            f"+{rc['minute_increase']:.0f} min/game "
+                            f"({rc['season_avg_minutes']:.0f} -> {rc['recent_avg_minutes']:.0f}) [{sport}]"
+                        )
+
+                milestones = results.get("milestones", [])
+                if milestones:
+                    for m in milestones[:3]:
+                        logger.info(
+                            f"MILESTONE: {m['player']} "
+                            f"{m['edge_type']} — {m.get('note','')} [{sport}]"
+                        )
+
+                revenge = results.get("revenge_games", [])
+                if revenge:
+                    for r in revenge[:3]:
+                        logger.info(
+                            f"REVENGE GAME: {r['player']} "
+                            f"(now {r['current_team']}, ex-{', '.join(r['former_teams'])}) [{sport}]"
+                        )
+
+            except Exception as e:
+                logger.debug(f"Narrative scan failed for {sport}: {e}")
 
     async def _phase_live_execute(self) -> None:
         """Execute bets on live (proven) hypotheses using the bet executor.
