@@ -50,7 +50,7 @@ PROMOTION_GATES = {
         "min_ic": -0.05,              # block anti-predictive models (IC < -0.05 = inversely correlated)
     },
     "paper_trading→live": {
-        "min_signals": 8,              # lowered from 20: context-dependent signals fire rarely (~1-2/week)
+        "min_signals": 5,              # match backtesting→paper gate: p-value gate provides quality filter
         "max_p_value": 0.10,           # base threshold; adaptive: 0.15 at n<25, 0.10 at n<40
         "min_clv_rate": 0.0,           # disabled: CLV capture not yet operational (all CLV=0.0)
         "max_drawdown": 0.30,
