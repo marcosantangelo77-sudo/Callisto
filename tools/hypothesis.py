@@ -226,17 +226,23 @@ def sharpe_ratio(returns: list[float]) -> float:
 
 
 def max_drawdown(returns: list[float]) -> float:
-    """Maximum drawdown from a series of per-bet returns."""
+    """Maximum drawdown from a series of per-bet returns.
+
+    Uses a 100-unit starting bankroll so MDD is expressed as a fraction of
+    capital, not peak cumulative profit.  The old code started at 0, which
+    made early losses produce >100 % drawdown values — mathematically
+    correct for a zero-start series but meaningless as a risk metric.
+    """
     if not returns:
         return 0.0
-    cumulative = 0.0
-    peak = 0.0
+    equity = 100.0          # 100-unit bankroll, flat $1 per signal
+    peak = equity
     worst = 0.0
     for r in returns:
-        cumulative += r
-        if cumulative > peak:
-            peak = cumulative
-        dd = (peak - cumulative) / max(peak, 1.0) if peak > 0 else 0.0
+        equity += r
+        if equity > peak:
+            peak = equity
+        dd = (peak - equity) / peak if peak > 0 else 0.0
         if dd > worst:
             worst = dd
     return worst
