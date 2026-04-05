@@ -373,6 +373,8 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     actual_stat REAL,
     hypothetical_pnl REAL,
     game_date DATE NOT NULL,
+    home_team TEXT,
+    away_team TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (hypothesis_id) REFERENCES hypotheses(hypothesis_id)
 );
@@ -854,6 +856,15 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
                 await db.execute(f"ALTER TABLE backtest_runs ADD COLUMN {col} REAL")
                 await db.commit()
                 logger.info(f"Added {col} column to backtest_runs")
+            except Exception:
+                pass  # Column already exists
+
+        # Migration: add home_team/away_team to paper_trades for resolution matching
+        for col in ("home_team", "away_team"):
+            try:
+                await db.execute(f"ALTER TABLE paper_trades ADD COLUMN {col} TEXT")
+                await db.commit()
+                logger.info(f"Added {col} column to paper_trades")
             except Exception:
                 pass  # Column already exists
 

@@ -954,9 +954,9 @@ class DataCollector:
         # Build a comma-separated placeholder list for the IN clause
         placeholders = ",".join("?" for _ in self.GAME_LEVEL_MARKETS)
 
-        # Fetch unresolved game-level paper trades
+        # Fetch unresolved game-level paper trades (include home_team/away_team for matching)
         cursor = await self._db.execute(
-            f"SELECT trade_id, event_id, market, line, side "
+            f"SELECT trade_id, event_id, market, line, side, home_team, away_team "
             f"FROM paper_trades "
             f"WHERE sport = ? AND game_date = ? AND actual_result IS NULL "
             f"AND market IN ({placeholders})",
@@ -1000,7 +1000,10 @@ class DataCollector:
         resolved = 0
         unmatched = 0
 
-        for trade_id, event_id, market, line, side in trades:
+        for trade_row in trades:
+            trade_id, event_id, market, line, side = trade_row[:5]
+            pt_home = trade_row[5] if len(trade_row) > 5 else None
+            pt_away = trade_row[6] if len(trade_row) > 6 else None
             game = None
 
             # Strategy 1: match by event_id if paper trade has one
@@ -1031,6 +1034,17 @@ class DataCollector:
             # Strategy 2: match by team name from the side field
             if not game and side and games:
                 matched_team = self._fuzzy_team_match(side, all_team_names)
+                if matched_team:
+                    for g in games:
+                        if matched_team in (g["home_team"], g["away_team"]):
+                            game = g
+                            break
+
+            # Strategy 3: match by stored home_team/away_team (critical for totals
+            # where side="Over"/"Under" and can't team-match via Strategy 2)
+            if not game and games and (pt_home or pt_away):
+                match_name = pt_home or pt_away
+                matched_team = self._fuzzy_team_match(match_name, all_team_names)
                 if matched_team:
                     for g in games:
                         if matched_team in (g["home_team"], g["away_team"]):

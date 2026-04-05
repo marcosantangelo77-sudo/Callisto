@@ -3683,6 +3683,16 @@ class BacktestEngine:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         now = datetime.now(timezone.utc).isoformat()
 
+        def _game_date_from_commence(game_obj: dict) -> str:
+            """Extract actual game date from commence_time, fallback to today."""
+            ct = game_obj.get("commence_time", "")
+            if ct and len(ct) >= 10:
+                try:
+                    return ct[:10]  # YYYY-MM-DD from ISO timestamp
+                except Exception:
+                    pass
+            return today
+
         # Parse hypothesis-specific filters (same as main backtest path)
         thesis = h.get("thesis", "")
         h_name = h.get("name", "")
@@ -3727,6 +3737,8 @@ class BacktestEngine:
                 use_context_filter = False  # fail-open: proceed without context gating
 
         all_paper_rows: list[tuple] = []
+        # Map event_id → (home_team, away_team, game_date) for paper trade insertion
+        _paper_game_info: dict[str, tuple[str, str, str]] = {}
         total_events = 0
         total_signals_found = 0
         games_processed = 0
@@ -3746,13 +3758,21 @@ class BacktestEngine:
                     continue
 
             games_processed += 1
+            # Derive actual game date from commence_time (not signal date)
+            actual_game_date = _game_date_from_commence(game)
+            g_home = game.get("home_team", "")
+            g_away = game.get("away_team", "")
+            g_eid = game.get("id", "")
+            if g_eid:
+                _paper_game_info[g_eid] = (g_home, g_away, actual_game_date)
+
             # Use same processing logic as backtest
             if h["market_type"].startswith("player_"):
                 events, _ = await self._process_game_props(
                     run_id="paper",  # won't be stored via run
                     hypothesis_id=hypothesis_id,
                     game=game,
-                    game_date=today,
+                    game_date=actual_game_date,
                     snapshot_time=now,
                     market_type=h["market_type"],
                     target_book=target_book,
@@ -3768,7 +3788,7 @@ class BacktestEngine:
                     run_id="paper",
                     hypothesis_id=hypothesis_id,
                     game=game,
-                    game_date=today,
+                    game_date=actual_game_date,
                     snapshot_time=now,
                     market_type=h["market_type"],
                     target_book=target_book,
@@ -3852,11 +3872,16 @@ class BacktestEngine:
         for row in rows:
             event = dict(zip(cols, row))
 
+            # Look up game info (home_team, away_team, actual game_date)
+            eid = event.get("event_id", "")
+            gi = _paper_game_info.get(eid, ("", "", event.get("game_date", today)))
+            home_team, away_team, actual_gd = gi
+
             # ── Dedup: skip if we already recorded this trade ──
             dup_cur = await self._db.execute(
                 "SELECT 1 FROM paper_trades "
                 "WHERE hypothesis_id = ? AND event_id = ? AND book = ? AND game_date = ?",
-                (hypothesis_id, event["event_id"], event["book"], today),
+                (hypothesis_id, eid, event["book"], actual_gd),
             )
             if await dup_cur.fetchone():
                 dupes_skipped += 1
@@ -3870,16 +3895,17 @@ class BacktestEngine:
                 "(trade_id, hypothesis_id, event_id, sport, player, market, "
                 "line, side, book, signal_time, signal_odds_american, "
                 "signal_implied_prob, model_fair_prob, edge, ev_pct, "
-                "kelly_fraction, game_date) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "kelly_fraction, game_date, home_team, away_team) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    trade_id, hypothesis_id, event["event_id"],
+                    trade_id, hypothesis_id, eid,
                     event["sport"], event.get("player"), event["market"],
                     event.get("line"), event["side"], event["book"],
                     now, event["book_odds_american"],
                     event["book_implied_prob"], event["model_fair_prob"],
                     event["edge"], event["ev_pct"],
-                    event.get("kelly_fraction"), today,
+                    event.get("kelly_fraction"), actual_gd,
+                    home_team, away_team,
                 ),
             )
             # Also insert into signals table
