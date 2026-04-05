@@ -3462,8 +3462,26 @@ class BacktestEngine:
             from scipy.stats import binomtest, ttest_1samp
             import numpy as np
 
-            # Binomial test: wins vs expected 50%
-            result = binomtest(wins, total_decided, 0.5, alternative="greater")
+            # Compute expected win rate from avg book implied probability
+            # (NOT 0.5 coin-flip — a 5W-0L record on -300 favorites is NOT
+            # as impressive as 5W-0L on coin-flips. The null hypothesis must
+            # match the market's expected rate.)
+            cursor = await self._db.execute(
+                "WITH unique_signals AS ("
+                "  SELECT event_id, book_implied_prob, "
+                "    ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY edge DESC) as rn "
+                "  FROM backtest_events "
+                "  WHERE run_id = ? AND signal_generated = 1 "
+                "  AND actual_result IN ('won', 'lost') "
+                "  AND book_implied_prob IS NOT NULL AND book_implied_prob > 0"
+                ") "
+                "SELECT AVG(book_implied_prob) FROM unique_signals WHERE rn = 1",
+                (run_id,),
+            )
+            row_imp = await cursor.fetchone()
+            expected_rate = row_imp[0] if row_imp and row_imp[0] else 0.5
+
+            result = binomtest(wins, total_decided, expected_rate, alternative="greater")
             p_binomial = result.pvalue
 
             # Get per-signal returns for t-test, Sharpe, Sortino, ROI — deduplicated
