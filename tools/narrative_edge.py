@@ -64,7 +64,9 @@ async def detect_usage_surge(
                    MAX(game_date) as last_game
             FROM player_stats
             WHERE sport = ?
-            AND stat_type IN ('Points', 'Rebounds', 'Assists', 'Threes',
+            AND stat_type IN ('points', 'rebounds', 'assists', 'threes',
+                              'steals', 'blocks',
+                              'Points', 'Rebounds', 'Assists', 'Threes',
                               'Steals', 'Blocks')
             GROUP BY player_name, stat_type
             HAVING games >= ?
@@ -171,11 +173,12 @@ async def detect_role_change(
                    AVG(minutes_played) as season_avg_min,
                    COUNT(*) as total_games
             FROM player_stats
-            WHERE sport = ? AND stat_type = 'Points'
+            WHERE sport = ? AND stat_type IN ('Points', 'points')
             AND minutes_played IS NOT NULL AND minutes_played > 0
             GROUP BY player_name
             HAVING total_games >= 10
         """, (sport,))
+        # Note: stat_type might be lowercase ('points') or capitalized ('Points')
         players = await cursor.fetchall()
 
         cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
@@ -186,7 +189,7 @@ async def detect_role_change(
                        COUNT(*) as recent_games,
                        MAX(game_date) as last_game
                 FROM player_stats
-                WHERE sport = ? AND player_name = ? AND stat_type = 'Points'
+                WHERE sport = ? AND player_name = ? AND stat_type IN ('Points', 'points')
                 AND minutes_played IS NOT NULL
                 AND game_date >= ?
             """, (sport, player_name, cutoff))
@@ -241,7 +244,7 @@ async def detect_milestone_proximity(
                    MAX(CASE WHEN stat_type='Rebounds' THEN stat_value END) as reb,
                    MAX(CASE WHEN stat_type='Assists' THEN stat_value END) as ast
             FROM player_stats
-            WHERE sport = ? AND stat_type IN ('Points', 'Rebounds', 'Assists')
+            WHERE sport = ? AND stat_type IN ('Points', 'Rebounds', 'Assists', 'points', 'rebounds', 'assists')
             AND game_date >= date('now', '-7 days')
             GROUP BY player_name, game_date
             HAVING pts IS NOT NULL AND reb IS NOT NULL AND ast IS NOT NULL
@@ -292,7 +295,7 @@ async def detect_milestone_proximity(
                     AND ps2.stat_type = ps.stat_type
                     ORDER BY game_date DESC LIMIT 1) as last_game_val
             FROM player_stats ps
-            WHERE sport = ? AND stat_type IN ('Points', 'Rebounds', 'Assists', 'Threes')
+            WHERE sport = ? AND stat_type IN ('Points', 'Rebounds', 'Assists', 'Threes', 'points', 'rebounds', 'assists', 'threes')
             GROUP BY player_name, stat_type
             HAVING season_high > 15
         """, (sport,))
@@ -334,7 +337,7 @@ async def detect_revenge_game(
             SELECT player_name, GROUP_CONCAT(DISTINCT team) as teams,
                    COUNT(DISTINCT team) as team_count
             FROM player_stats
-            WHERE sport = ? AND stat_type = 'Points'
+            WHERE sport = ? AND stat_type IN ('Points', 'points')
             AND game_date >= date('now', '-180 days')
             GROUP BY player_name
             HAVING team_count >= 2
@@ -348,7 +351,7 @@ async def detect_revenge_game(
             # Get their current team (most recent game)
             cursor2 = await db.execute("""
                 SELECT team, game_date FROM player_stats
-                WHERE sport = ? AND player_name = ? AND stat_type = 'Points'
+                WHERE sport = ? AND player_name = ? AND stat_type IN ('Points', 'points')
                 ORDER BY game_date DESC LIMIT 1
             """, (sport, player))
             current = await cursor2.fetchone()
@@ -360,7 +363,7 @@ async def detect_revenge_game(
             # Get their season avg and check if any upcoming games are vs former team
             cursor3 = await db.execute("""
                 SELECT AVG(stat_value) FROM player_stats
-                WHERE sport = ? AND player_name = ? AND stat_type = 'Points'
+                WHERE sport = ? AND player_name = ? AND stat_type IN ('Points', 'points')
             """, (sport, player))
             avg_pts = (await cursor3.fetchone())[0]
 
@@ -423,11 +426,11 @@ async def full_narrative_scan(sport: str = "basketball_nba") -> dict:
 def _stat_to_prop_market(stat_type: str) -> Optional[str]:
     """Map ESPN stat type names to prop market keys."""
     mapping = {
-        "Points": "player_points",
-        "Rebounds": "player_rebounds",
-        "Assists": "player_assists",
-        "Threes": "player_threes",
-        "Steals": "player_steals",
-        "Blocks": "player_blocks",
+        "Points": "player_points", "points": "player_points",
+        "Rebounds": "player_rebounds", "rebounds": "player_rebounds",
+        "Assists": "player_assists", "assists": "player_assists",
+        "Threes": "player_threes", "threes": "player_threes",
+        "Steals": "player_steals", "steals": "player_steals",
+        "Blocks": "player_blocks", "blocks": "player_blocks",
     }
     return mapping.get(stat_type)
