@@ -4539,7 +4539,7 @@ class ResearchLoop:
         try:
             active_sports = set()
             cursor = await self.backtest_engine._db.execute(
-                "SELECT DISTINCT sport FROM hypotheses WHERE status = 'backtesting'"
+                "SELECT DISTINCT sport FROM hypotheses WHERE status IN ('backtesting', 'paper_trading')"
             )
             for row in await cursor.fetchall():
                 active_sports.add(row[0])
@@ -4637,11 +4637,21 @@ class ResearchLoop:
         # expensive scipy/numpy recompute. Unchanged runs are skipped in O(1).
         try:
             batch_ids = [h["hypothesis_id"] for h in backtesting]
+            # Also recompute stats for paper_trading hypotheses — their backtest
+            # events keep accumulating from the line monitor but stats were only
+            # computed when they were still in backtesting.  Stale stats make
+            # pipeline integrity checks misleading and live-promotion decisions
+            # use outdated backtest performance.
+            paper_ids = [
+                h["hypothesis_id"]
+                for h in await self.hypothesis_manager.list_hypotheses(status="paper_trading")
+            ]
+            all_recompute_ids = batch_ids + paper_ids
             updated = await self.backtest_engine.recalculate_all_active_runs(
-                hypothesis_ids=batch_ids
+                hypothesis_ids=all_recompute_ids
             )
             if updated > 0:
-                logger.info(f"Research: recomputed stats for {updated} backtest runs (batch of {len(batch_ids)})")
+                logger.info(f"Research: recomputed stats for {updated} backtest runs (batch of {len(all_recompute_ids)}, incl {len(paper_ids)} paper_trading)")
         except Exception as e:
             logger.warning(f"Backtest stats recompute failed: {e}")
 
