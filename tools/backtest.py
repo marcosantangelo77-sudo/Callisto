@@ -551,6 +551,11 @@ class BacktestEngine:
                 singlebook_skipped += 1
 
             for game in games:
+                # ── Sport-level defense-in-depth filter ──
+                game_sport = game.get("sport_key", "")
+                if game_sport and game_sport != sport:
+                    continue
+
                 # ── Game-level context filter ──
                 # Apply schedule-derived filters BEFORE processing lines.
                 # This is where b2b, road_trip, clinched, sandwich, etc. take effect.
