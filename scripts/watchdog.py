@@ -432,6 +432,31 @@ def main():
                 logger.info(f"=== RESTARTING API (attempt #{consecutive_restarts + 1}) ===")
                 log_flush()
 
+                # Step 0: If repeated crashes (5+), free system memory before retry
+                if consecutive_restarts >= 5:
+                    logger.warning(
+                        f"Repeated crashes ({consecutive_restarts}) — freeing system memory"
+                    )
+                    try:
+                        # Unload Ollama models to free VRAM/RAM
+                        import urllib.request
+                        for model in ["devstral-small-2", "gemma4"]:
+                            try:
+                                req = urllib.request.Request(
+                                    "http://localhost:11434/api/generate",
+                                    data=json.dumps({"model": model, "keep_alive": "0"}).encode(),
+                                    headers={"Content-Type": "application/json"},
+                                    method="POST",
+                                )
+                                urllib.request.urlopen(req, timeout=10)
+                                logger.info(f"Unloaded {model} from VRAM")
+                            except Exception:
+                                pass
+                        # Give OS time to reclaim memory
+                        time.sleep(5)
+                    except Exception as e:
+                        logger.warning(f"Memory cleanup failed: {e}")
+
                 # Step 1: Kill anything on port 8420
                 kill_port_8420()
 

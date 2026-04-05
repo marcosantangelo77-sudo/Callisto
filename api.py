@@ -122,18 +122,41 @@ async def _maybe_auto_followup(parent_task_id: int, result: dict) -> None:
 
 
 async def wal_checkpoint_loop():
-    """Periodic WAL checkpoint — prevents WAL file from growing unbounded.
+    """Periodic WAL checkpoint + memory guardian.
 
-    PASSIVE mode doesn't block readers or writers, it just checkpoints
-    pages that aren't needed by any active reader. Runs every 5 minutes.
-
-    When PASSIVE can't checkpoint enough (aiosqlite holds persistent connections
-    that block PASSIVE), escalate to TRUNCATE with a longer busy_timeout.
-    TRUNCATE briefly blocks new readers to force a full checkpoint.
+    Every 5 minutes:
+    1. Checkpoint WAL to prevent bloat
+    2. Check process memory — if RSS > 2GB, signal graceful restart
+       The watchdog will pick us back up with fresh memory.
     """
+    MEMORY_RESTART_MB = 2048  # 2GB — restart before Windows kills us at ~3-4GB
     while True:
         try:
             await asyncio.sleep(300)  # 5 minutes
+
+            # ── Memory Guardian ──
+            try:
+                import psutil
+                rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
+                if rss_mb > MEMORY_RESTART_MB:
+                    logger.warning(
+                        f"MEMORY GUARDIAN: RSS={rss_mb:.0f}MB > {MEMORY_RESTART_MB}MB — "
+                        f"requesting graceful restart to prevent OOM crash"
+                    )
+                    # Signal the watchdog to restart us
+                    restart_file = os.path.join(
+                        os.path.dirname(__file__), "memory", "restart_requested"
+                    )
+                    with open(restart_file, "w") as f:
+                        f.write(f"memory_guardian: RSS={rss_mb:.0f}MB at {datetime.now()}")
+                    # Give the signal file a moment to be detected, then exit cleanly
+                    await asyncio.sleep(2)
+                    logger.warning("MEMORY GUARDIAN: exiting for restart")
+                    os._exit(0)  # Clean exit — watchdog restarts us
+                elif rss_mb > MEMORY_RESTART_MB * 0.75:
+                    logger.info(f"Memory check: {rss_mb:.0f}MB (warning threshold: {MEMORY_RESTART_MB}MB)")
+            except ImportError:
+                pass  # psutil not installed
             async with aiosqlite.connect(DB_PATH) as db:
                 await db.execute("PRAGMA busy_timeout = 60000")
                 cursor = await db.execute("PRAGMA wal_checkpoint(PASSIVE)")
