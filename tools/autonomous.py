@@ -4555,6 +4555,50 @@ class ResearchLoop:
         except Exception as e:
             logger.warning(f"Backtest resolution failed: {e}")
 
+        # ── Paper trading evaluation FIRST ──
+        # Paper_trading hypotheses are closest to live and there are only a handful.
+        # Evaluate them before backtesting so they always get processed even if the
+        # backtesting loop (which can have 15+ hypotheses × 60s each) times out the
+        # phase. Previously this block was at the END of _phase_evaluate and never
+        # ran because backtesting evaluation consumed the entire 600s budget.
+        paper = await self.hypothesis_manager.list_hypotheses(status="paper_trading")
+        for h in paper:
+            try:
+                model_config = h.get("model_config", {})
+                if isinstance(model_config, str):
+                    try:
+                        model_config = json.loads(model_config)
+                    except (json.JSONDecodeError, TypeError):
+                        model_config = {}
+
+                has_temporal = bool(model_config.get("training_period_end"))
+                has_backtest = bool(model_config.get("temporal_isolation"))
+
+                if not has_temporal and not has_backtest:
+                    logger.warning(
+                        f"Research: hypothesis {h['hypothesis_id']} lacks temporal "
+                        f"isolation metadata — allowing paper trade eval but flagging"
+                    )
+
+                result = await self.hypothesis_manager.auto_promote(h["hypothesis_id"])
+                action = result.get("action", "held")
+                if action == "promoted":
+                    self._promotions += 1
+                    logger.info(
+                        f"Research: hypothesis {h['hypothesis_id']} PROMOTED TO LIVE"
+                    )
+                    try:
+                        await telegram.alert_system(
+                            f"HYPOTHESIS PROVEN: {h['name']}\n"
+                            f"Thesis: {h['thesis'][:200]}\n"
+                            f"Status: LIVE — ready for real money\n"
+                            f"Temporal isolation: {'YES' if has_temporal else 'LEGACY (no metadata)'}"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Telegram notification failed for proven hypothesis {h['name']}: {e}")
+            except Exception as e:
+                logger.warning(f"Paper trade eval failed for {h['hypothesis_id']}: {e}")
+
         backtesting = await self.hypothesis_manager.list_hypotheses(status="backtesting")
 
         # ── Recovery: promote stuck drafts with completed backtests ──
@@ -4915,52 +4959,6 @@ class ResearchLoop:
             await self._reject_anti_predictive()
         except Exception as e:
             logger.warning(f"Anti-predictive sweep failed: {e}")
-
-        # Also evaluate paper trading hypotheses — require BOTH backtest
-        # significance AND paper trading data on temporally isolated data
-        paper = await self.hypothesis_manager.list_hypotheses(status="paper_trading")
-        for h in paper:
-            try:
-                # ── Temporal isolation gate for live promotion ──
-                model_config = h.get("model_config", {})
-                if isinstance(model_config, str):
-                    try:
-                        model_config = json.loads(model_config)
-                    except (json.JSONDecodeError, TypeError):
-                        model_config = {}
-
-                # Paper trades must be AFTER hypothesis creation date
-                # (this is inherently true since paper trades use live odds,
-                # but we verify the hypothesis has temporal isolation)
-                has_temporal = bool(model_config.get("training_period_end"))
-                has_backtest = bool(model_config.get("temporal_isolation"))
-
-                if not has_temporal and not has_backtest:
-                    # Legacy hypothesis — allow promotion but log warning
-                    logger.warning(
-                        f"Research: hypothesis {h['hypothesis_id']} lacks temporal "
-                        f"isolation metadata — allowing paper trade eval but flagging"
-                    )
-
-                result = await self.hypothesis_manager.auto_promote(h["hypothesis_id"])
-                action = result.get("action", "held")
-                if action == "promoted":
-                    self._promotions += 1
-                    logger.info(
-                        f"Research: hypothesis {h['hypothesis_id']} PROMOTED TO LIVE"
-                    )
-                    # Alert Marco — this thesis is proven
-                    try:
-                        await telegram.alert_system(
-                            f"HYPOTHESIS PROVEN: {h['name']}\n"
-                            f"Thesis: {h['thesis'][:200]}\n"
-                            f"Status: LIVE — ready for real money\n"
-                            f"Temporal isolation: {'YES' if has_temporal else 'LEGACY (no metadata)'}"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Telegram notification failed for proven hypothesis {h['name']}: {e}")
-            except Exception as e:
-                logger.warning(f"Paper trade eval failed for {h['hypothesis_id']}: {e}")
 
     async def _phase_narrative_edges(self) -> None:
         """Detect player-level narrative edges that models can't price.
