@@ -2202,7 +2202,11 @@ class ResearchLoop:
                 # deadlocks even with 120s busy_timeout. Snapshots catch up between cycles.
                 if self.line_monitor:
                     self.line_monitor._paused = True
-                    logger.debug("line_monitor paused for research cycle")
+                    try:
+                        await asyncio.wait_for(self.line_monitor._pause_ack.wait(), timeout=30)
+                        logger.debug("line_monitor paused and idle for research cycle")
+                    except asyncio.TimeoutError:
+                        logger.warning("line_monitor did not ack pause within 30s — proceeding (may contend on WAL)")
 
                 # ── Queue drain: if Claude just became available, burn through deferred work ──
                 try:

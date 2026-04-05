@@ -83,6 +83,7 @@ class LineMonitor:
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._paused = False  # Set True to pause snapshot writes (during backtests)
+        self._pause_ack = asyncio.Event()  # Signals when monitor has entered paused state (no in-flight DB ops)
         self._snapshots: dict[str, dict] = {}  # sport -> last snapshot (only latest per sport)
         from collections import deque
         self._alerts: deque = deque(maxlen=100)  # Hard-capped at 100 (was unbounded list)
@@ -186,8 +187,10 @@ class LineMonitor:
         while self._running:
             # Yield to backtests when paused
             if self._paused:
+                self._pause_ack.set()
                 await asyncio.sleep(5)
                 continue
+            self._pause_ack.clear()
             try:
                 credits = get_credit_status()
                 use_fallback = False
@@ -213,13 +216,16 @@ class LineMonitor:
                         interval = max(SNAPSHOT_INTERVAL, 1800)  # 30min when moderate
 
                 for sport in MONITORED_SPORTS:
+                    if self._paused:
+                        break  # Exit early — autonomous loop waiting for us
                     if use_fallback:
                         await self._snapshot_sport_fallback(sport.strip())
                     else:
                         await self._snapshot_sport(sport.strip())
 
                 # Prop snapshots — free cascade (DK + FD + BetMGM), no credits
-                await self._snapshot_props()
+                if not self._paused:
+                    await self._snapshot_props()
 
                 await asyncio.sleep(interval)
 
