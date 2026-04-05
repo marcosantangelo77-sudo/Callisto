@@ -1529,7 +1529,37 @@ class HypothesisManager:
         return row[0] if row else 0
 
     async def _get_paper_trades(self, hypothesis_id: str) -> list[dict]:
-        """Get all paper trades for a hypothesis."""
+        """Get paper trades for a hypothesis, deduplicated to best-edge per unique game.
+
+        Each game can produce multiple paper trades (one per book showing edge).
+        For evaluation, we keep only the highest-edge trade per unique game
+        (game_date + home_team + away_team) to avoid inflating sample counts.
+        """
+        cursor = await self._db.execute(
+            """
+            SELECT * FROM paper_trades
+            WHERE rowid IN (
+                SELECT rowid FROM (
+                    SELECT rowid,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY hypothesis_id, game_date, home_team, away_team
+                               ORDER BY edge DESC
+                           ) as rn
+                    FROM paper_trades
+                    WHERE hypothesis_id = ?
+                )
+                WHERE rn = 1
+            )
+            ORDER BY game_date
+            """,
+            (hypothesis_id,),
+        )
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in rows]
+
+    async def _get_paper_trades_all(self, hypothesis_id: str) -> list[dict]:
+        """Get ALL paper trades including multi-book duplicates (for detailed reporting)."""
         cursor = await self._db.execute(
             "SELECT * FROM paper_trades WHERE hypothesis_id = ? ORDER BY game_date",
             (hypothesis_id,),
