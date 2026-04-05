@@ -5722,19 +5722,29 @@ class ResearchLoop:
         top_hypos = []
         try:
             cursor = await db.execute("""
-                SELECT h.hypothesis_id, h.name, h.thesis, h.sport,
+                SELECT h.hypothesis_id, h.name, h.thesis, h.sport, h.status,
                        COUNT(DISTINCT CASE WHEN be.signal_generated=1 THEN be.event_id END) as sigs,
                        COUNT(DISTINCT be.event_id) as events,
-                       AVG(CASE WHEN be.signal_generated=1 THEN be.edge END) as avg_edge
+                       AVG(CASE WHEN be.signal_generated=1 THEN be.edge END) as avg_edge,
+                       br.actual_win, br.actual_loss, br.p_value_binomial
                 FROM hypotheses h
                 LEFT JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id
-                WHERE h.status = 'backtesting'
+                LEFT JOIN backtest_runs br ON br.hypothesis_id = h.hypothesis_id
+                WHERE h.status IN ('backtesting', 'paper_trading')
                 GROUP BY h.hypothesis_id
                 ORDER BY sigs DESC, events DESC
                 LIMIT 15
             """)
             for r in await cursor.fetchall():
-                top_hypos.append(f"  {r[1]} [{r[3]}]: {r[4]} signals / {r[5]} events, avg_edge={r[6] or 0:.4f}")
+                w = r[8] or 0
+                l = r[9] or 0
+                p = r[10] or 1.0
+                wr = w / (w + l) * 100 if (w + l) > 0 else 0
+                status_tag = f"[{r[4]}]" if r[4] == "paper_trading" else ""
+                top_hypos.append(
+                    f"  {r[1]} [{r[3]}]{status_tag}: {r[5]} signals / {r[6]} events, "
+                    f"avg_edge={r[7] or 0:.4f}, {w}W-{l}L ({wr:.0f}%), p={p:.4f}"
+                )
         except Exception as e:
             logger.warning(f"Failed to query top hypotheses for deep work prompt: {e}")
 
@@ -5747,7 +5757,7 @@ class ResearchLoop:
                        COUNT(DISTINCT CASE WHEN be.signal_generated=1 THEN be.event_id END) as unique_signals
                 FROM hypotheses h
                 JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id
-                WHERE h.status = 'backtesting'
+                WHERE h.status IN ('backtesting', 'paper_trading')
                 GROUP BY h.hypothesis_id
                 HAVING unique_events > 0
                 ORDER BY unique_events DESC
@@ -5764,7 +5774,7 @@ class ResearchLoop:
                        COUNT(DISTINCT CASE WHEN be.signal_generated=1 THEN be.event_id END) as unique_signals
                 FROM hypotheses h
                 JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id
-                WHERE h.status = 'backtesting'
+                WHERE h.status IN ('backtesting', 'paper_trading')
                 GROUP BY h.hypothesis_id
                 HAVING unique_events > 10
             """)
