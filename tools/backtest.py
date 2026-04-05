@@ -3266,26 +3266,21 @@ class BacktestEngine:
             scores = None
             try:
                 base = _dt.strptime(game_date, "%Y-%m-%d")
+                # Only try exact date and ±1 day (timezone offsets).
+                # ±3 days was matching bets to wrong games days apart.
                 date_candidates = [
                     game_date,
                     (base + _td(days=1)).strftime("%Y-%m-%d"),
                     (base - _td(days=1)).strftime("%Y-%m-%d"),
-                    (base + _td(days=2)).strftime("%Y-%m-%d"),
-                    (base - _td(days=2)).strftime("%Y-%m-%d"),
-                    (base + _td(days=3)).strftime("%Y-%m-%d"),
-                    (base - _td(days=3)).strftime("%Y-%m-%d"),
                 ]
             except ValueError:
                 date_candidates = [game_date]
 
             for try_date in date_candidates:
                 candidates = games_by_date.get((ev_sport, try_date), [])
-                if not candidates and try_date in _dates_with_games:
-                    # Sport-agnostic fallback: gather all games for this date
-                    candidates = [
-                        g for k, v in games_by_date.items()
-                        if k[1] == try_date for g in v
-                    ]
+                # REMOVED: sport-agnostic fallback. A Cardinals MLB bet was
+                # matching against NBA/NHL games on the same date, producing
+                # random win/loss attribution. Only match within the same sport.
 
                 for r_home, r_away, r_hscore, r_ascore in candidates:
                     if self._team_matches(home_team, r_home) and self._team_matches(away_team, r_away):
