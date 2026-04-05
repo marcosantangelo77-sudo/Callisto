@@ -4731,6 +4731,21 @@ class ResearchLoop:
             )
             if updated > 0:
                 logger.info(f"Research: recomputed stats for {updated} backtest runs (batch of {len(all_recompute_ids)}, incl {len(paper_ids)} paper_trading)")
+                # ── Sync hypothesis_stats from updated backtest_runs ──
+                # recalculate_all_active_runs updates backtest_runs but NOT
+                # hypothesis_stats.  The anti-predictive IC gate in
+                # _phase_paper_trade reads hypothesis_stats, so stale data
+                # there can block promotion or miss anti-predictive signals.
+                # Call evaluate_significance to upsert hypothesis_stats.
+                synced = 0
+                for hid in all_recompute_ids:
+                    try:
+                        await self.hypothesis_manager.evaluate_significance(hid, "backtest")
+                        synced += 1
+                    except Exception as sig_e:
+                        logger.debug(f"hypothesis_stats sync skipped for {hid}: {sig_e}")
+                if synced:
+                    logger.info(f"Research: synced hypothesis_stats for {synced}/{len(all_recompute_ids)} hypotheses")
         except Exception as e:
             logger.warning(f"Backtest stats recompute failed: {e}")
 
