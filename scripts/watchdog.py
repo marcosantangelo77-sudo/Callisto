@@ -222,11 +222,18 @@ def is_port_free() -> bool:
         return True
 
 
-def wait_for_port_free(max_wait: int = 15):
-    """Wait until port 8420 is free, up to max_wait seconds."""
+def wait_for_port_free(max_wait: int = 90):
+    """Wait until port 8420 is free, up to max_wait seconds.
+
+    Windows holds TCP sockets in TIME_WAIT for up to 4 minutes.
+    The previous 15s timeout was the #1 cause of crash-loops —
+    the port wasn't free yet when the new process tried to bind.
+    """
     for i in range(max_wait):
         if is_port_free():
             return True
+        if i % 10 == 0 and i > 0:
+            logger.info(f"Port {PORT} still in TIME_WAIT ({i}s elapsed)...")
         time.sleep(1)
     return False
 
@@ -460,9 +467,9 @@ def main():
                 # Step 1: Kill anything on port 8420
                 kill_port_8420()
 
-                # Step 2: Wait for port to be free
-                if not wait_for_port_free(15):
-                    logger.error("Port 8420 still occupied after 15s — force continuing")
+                # Step 2: Wait for port to be free (up to 90s for TIME_WAIT)
+                if not wait_for_port_free(90):
+                    logger.error("Port 8420 still occupied after 90s — force continuing")
 
                 # Step 3: Start the API
                 try:

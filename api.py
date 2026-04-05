@@ -2783,5 +2783,28 @@ async def executor_login():
 
 
 if __name__ == "__main__":
+    import socket
     import uvicorn
+
+    # Wait for port to be free — the #1 cause of crash-loops.
+    # Windows holds TCP sockets in TIME_WAIT for up to 4 minutes after
+    # the process dies. Without this check, uvicorn bind fails silently
+    # with exit code 0xC0000142 and the watchdog loops forever.
+    for attempt in range(30):  # 30 × 2s = 60s max wait
+        try:
+            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            test_sock.bind(("0.0.0.0", CALLISTO_PORT))
+            test_sock.close()
+            break  # Port is free
+        except OSError:
+            if attempt < 29:
+                import time as _time
+                logger.warning(f"Port {CALLISTO_PORT} in use, waiting... (attempt {attempt+1}/30)")
+                _time.sleep(2)
+            else:
+                logger.error(f"Port {CALLISTO_PORT} still in use after 60s — exiting")
+                import sys
+                sys.exit(1)
+
     uvicorn.run("api:app", host="0.0.0.0", port=CALLISTO_PORT, reload=False)
