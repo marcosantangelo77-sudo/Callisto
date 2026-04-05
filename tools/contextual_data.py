@@ -50,6 +50,7 @@ ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
 SPORT_MAP = {
     "basketball_nba": ("basketball", "nba"),
     "basketball_ncaab": ("basketball", "mens-college-basketball"),
+    "basketball_ncaaw": ("basketball", "womens-college-basketball"),
     "americanfootball_nfl": ("football", "nfl"),
     "americanfootball_ncaaf": ("football", "college-football"),
     "baseball_mlb": ("baseball", "mlb"),
