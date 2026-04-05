@@ -4731,15 +4731,14 @@ class ResearchLoop:
             )
             if updated > 0:
                 logger.info(f"Research: recomputed stats for {updated} backtest runs (batch of {len(all_recompute_ids)}, incl {len(paper_ids)} paper_trading)")
-                # ── Sync hypothesis_stats from freshly-recomputed backtest_runs ──
-                # The IC gate in _phase_paper_trade and other consumers read from
-                # hypothesis_stats, but recalculate_all_active_runs only updates
-                # backtest_runs.  Without this sync the two tables diverge: e.g.
-                # backtest_runs shows 5W-0L p=0.031 while hypothesis_stats still
-                # says p=0.214 from the last evaluate_significance call.
-                # Previous approach called evaluate_significance per hypothesis,
-                # which re-queries backtest_events and is expensive.  This reads
-                # directly from the already-recomputed backtest_runs instead.
+            # ── Always sync hypothesis_stats from backtest_runs ──
+            # Must run even when updated==0: after a restart the fingerprint
+            # cache is rebuilt but backtest_runs may already be correct, so
+            # recalculate returns 0.  Meanwhile hypothesis_stats can be stale
+            # from the previous session (e.g. paper_trading hypothesis promoted
+            # but stats still show old stage/p_value).  The sync is cheap
+            # (one query + N deletes + N inserts) so always running it is safe.
+            if all_recompute_ids:
                 try:
                     from tools.db_utils import execute_with_retry, commit_with_retry
                     db = self.backtest_engine._db
@@ -4784,11 +4783,16 @@ class ResearchLoop:
                             and p_value < sig_level
                             and decided >= min_sample
                         )
+                        # Delete ALL stages for this hypothesis — when promoted
+                        # from backtesting→paper_trading the old row has
+                        # stage='backtest' but we'd be inserting stage='paper_trade'.
+                        # Without clearing all stages the stale row persists and
+                        # the promotion gate reads the wrong p_value.
                         await execute_with_retry(
                             db,
                             "DELETE FROM hypothesis_stats "
-                            "WHERE hypothesis_id = ? AND stage = ?",
-                            (hid, stage),
+                            "WHERE hypothesis_id = ?",
+                            (hid,),
                             operation="sync hypothesis_stats delete",
                         )
                         await execute_with_retry(
