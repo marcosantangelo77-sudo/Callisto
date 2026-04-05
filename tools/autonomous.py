@@ -1260,8 +1260,8 @@ DATA_COLLECTION_INTERVAL = 300      # 5 min between data pulls — fresher data 
 HYPOTHESIS_GEN_INTERVAL = 120       # 2 min between hypothesis generation — Claude drives, smaller batches
 BACKTEST_BATCH_SIZE = 5             # 50 was timing out every cycle (5min/hyp from DB locks). 5 fits in 600s.
 CLAUDE_ESCALATION_COOLDOWN = 10     # 10s cooldown — 45 calls/hr means ~80s natural spacing, let rate limiter govern
-SYSTEM_IMPROVEMENT_INTERVAL = 10    # Run system improvement every N cycles
-REGIME_ANALYSIS_INTERVAL = 5        # Run regime analysis every N cycles — regime changes are slow
+SYSTEM_IMPROVEMENT_INTERVAL = 11    # Run system improvement every N cycles (prime — avoids collision with regime/integrity)
+REGIME_ANALYSIS_INTERVAL = 7        # Run regime analysis every N cycles — regime changes are slow (coprime with 4,11,13)
 
 # ── Temporal isolation defaults ──
 # Hypotheses train on data before the cutoff, backtest on data after.
@@ -2169,6 +2169,7 @@ class ResearchLoop:
             try:
                 self._cycles += 1
                 self._reactive_collected.clear()
+                _cycle_start = time.monotonic()
                 logger.info(f"Research cycle #{self._cycles} starting")
 
                 # Pause check — sleep and skip cycle
@@ -2256,8 +2257,8 @@ class ResearchLoop:
                 if not self._running:
                     break
 
-                # Phase 2b: Injury-driven prop hypotheses (every 3 cycles)
-                if self._cycles % 3 == 0:
+                # Phase 2b: Injury-driven prop hypotheses (every 4 cycles — coprime with regime/integrity)
+                if self._cycles % 4 == 0:
                     try:
                         await asyncio.wait_for(
                             self._phase_injury_prop_hypotheses(), timeout=120,
@@ -2360,58 +2361,72 @@ class ResearchLoop:
                 if not self._running:
                     break
 
-                # Phase 8: System self-improvement (every N cycles)
-                try:
-                    await asyncio.wait_for(self._phase_system_improvement(), timeout=120)
-                except asyncio.TimeoutError:
-                    logger.warning("Phase system_improvement timed out after 120s — skipping")
-                except Exception as e:
-                    logger.warning(f"Phase system_improvement failed (non-fatal): {e}")
-
-                if not self._running:
-                    break
-
-                # Phase 9: Pipeline integrity check (every N cycles)
-                try:
-                    await asyncio.wait_for(self._phase_integrity_check(), timeout=120)
-                except asyncio.TimeoutError:
-                    logger.warning("Phase integrity_check timed out after 120s — skipping")
-                except Exception as e:
-                    logger.warning(f"Phase integrity_check failed (non-fatal): {e}")
-
-                # Phase 10: System watchdog (every 10 cycles)
-                if self._cycles % 10 == 0 and self._cycles > 0:
+                # ── Periodic phases: defer if core phases already consumed >5 min ──
+                # This prevents phase collision from stacking 10+ min cycles
+                # (was causing stalls at cycles 6, 10, 15, 16, 20).
+                _cycle_elapsed = time.monotonic() - _cycle_start
+                _CYCLE_TIME_BUDGET = 300  # 5 min — if core phases took this long, skip periodic
+                if _cycle_elapsed > _CYCLE_TIME_BUDGET:
+                    logger.info(
+                        f"Cycle #{self._cycles} core phases took {_cycle_elapsed:.0f}s "
+                        f"(>{_CYCLE_TIME_BUDGET}s) — deferring periodic phases"
+                    )
+                else:
+                    # Phase 8: System self-improvement (every N cycles)
                     try:
-                        await asyncio.wait_for(self._phase_system_watchdog(), timeout=60)
+                        await asyncio.wait_for(self._phase_system_improvement(), timeout=120)
                     except asyncio.TimeoutError:
-                        logger.warning("Phase system_watchdog timed out")
+                        logger.warning("Phase system_improvement timed out after 120s — skipping")
                     except Exception as e:
-                        logger.warning(f"Phase system_watchdog failed: {e}")
+                        logger.warning(f"Phase system_improvement failed (non-fatal): {e}")
 
-                if not self._running:
-                    break
+                    if not self._running:
+                        break
 
-                # Phase 10: Granger temporal prediction — identify sharp book leaders (weekly)
-                try:
-                    await asyncio.wait_for(self._phase_granger_analysis(), timeout=300)
-                except asyncio.TimeoutError:
-                    logger.warning("Phase granger_analysis timed out after 300s — skipping")
-                except Exception as e:
-                    logger.warning(f"Phase granger_analysis failed (non-fatal): {e}")
+                    # Phase 9: Pipeline integrity check (every N cycles)
+                    try:
+                        await asyncio.wait_for(self._phase_integrity_check(), timeout=120)
+                    except asyncio.TimeoutError:
+                        logger.warning("Phase integrity_check timed out after 120s — skipping")
+                    except Exception as e:
+                        logger.warning(f"Phase integrity_check failed (non-fatal): {e}")
 
-                if not self._running:
-                    break
+                    # Phase 10: System watchdog (every 13 cycles — coprime with regime/improvement)
+                    if self._cycles % 13 == 0 and self._cycles > 0:
+                        try:
+                            await asyncio.wait_for(self._phase_system_watchdog(), timeout=60)
+                        except asyncio.TimeoutError:
+                            logger.warning("Phase system_watchdog timed out")
+                        except Exception as e:
+                            logger.warning(f"Phase system_watchdog failed: {e}")
 
-                # Phase 11: Regime analysis — detect regime changes, recency bias, mean reversion
-                try:
-                    await asyncio.wait_for(self._phase_regime_analysis(), timeout=180)
-                except asyncio.TimeoutError:
-                    logger.warning("Phase regime_analysis timed out after 180s — skipping")
-                except Exception as e:
-                    logger.warning(f"Phase regime_analysis failed (non-fatal): {e}")
+                    if not self._running:
+                        break
+
+                    # Phase 10b: Granger temporal prediction — identify sharp book leaders (weekly)
+                    try:
+                        await asyncio.wait_for(self._phase_granger_analysis(), timeout=300)
+                    except asyncio.TimeoutError:
+                        logger.warning("Phase granger_analysis timed out after 300s — skipping")
+                    except Exception as e:
+                        logger.warning(f"Phase granger_analysis failed (non-fatal): {e}")
+
+                    if not self._running:
+                        break
+
+                    # Phase 11: Regime analysis — detect regime changes, recency bias, mean reversion
+                    try:
+                        await asyncio.wait_for(self._phase_regime_analysis(), timeout=180)
+                    except asyncio.TimeoutError:
+                        logger.warning("Phase regime_analysis timed out after 180s — skipping")
+                    except Exception as e:
+                        logger.warning(f"Phase regime_analysis failed (non-fatal): {e}")
 
                 # ── Progress tracking: detect spinning ──
                 await self._check_progress()
+
+                _cycle_total = time.monotonic() - _cycle_start
+                logger.info(f"Research cycle #{self._cycles} completed in {_cycle_total:.0f}s")
 
                 # Force garbage collection after each cycle — large numpy arrays
                 # and JSON dicts from backtest processing don't always get freed promptly.

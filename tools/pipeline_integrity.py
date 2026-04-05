@@ -47,7 +47,7 @@ SIGNAL_PIPELINE_MIN_HYPOTHESES = 40  # Need this many in backtesting to check si
 REJECTION_RATE_BROKEN_THRESHOLD = 0.95  # > 95% rejection suggests broken evaluation
 PHASE_ERROR_RATE_THRESHOLD = 0.50  # > 50% error rate over last 10 runs = broken phase
 METRIC_STALE_HOURS = 24            # Alert if a metric hasn't changed in this long
-INTEGRITY_CHECK_INTERVAL_CYCLES = 3  # Run every N research loop cycles
+INTEGRITY_CHECK_INTERVAL_CYCLES = 5  # Run every N research loop cycles (coprime with injury=4, regime=7, improvement=11)
 
 # ── Issue severity levels ──
 SEVERITY_CRITICAL = "CRITICAL"  # Pipeline is broken, producing wrong output
