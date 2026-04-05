@@ -1327,6 +1327,18 @@ class HypothesisManager:
                     "action": "held",
                     "reason": "No paper trades exist — cannot promote to live.",
                 }
+
+            # Always cache paper_trade stats — even when ROI is negative.
+            # Without this, hypothesis_stats for stage='paper_trade' is never
+            # populated because the ROI check below returns early before
+            # check_promotion_readiness() (which calls evaluate_significance).
+            resolved_trades = [t for t in trades if t.get("actual_result")]
+            if len(resolved_trades) >= 2:
+                try:
+                    await self.evaluate_significance(hypothesis_id, "paper_trade")
+                except Exception as e:
+                    logger.warning(f"Paper trade stats cache failed for {hypothesis_id}: {e}")
+
             # Check positive ROI
             returns = []
             for t in trades:
@@ -1556,7 +1568,17 @@ class HypothesisManager:
         )
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
-        return [dict(zip(cols, row)) for row in rows]
+        result = [dict(zip(cols, row)) for row in rows]
+
+        # Map paper_trades column names to backtest_events names so that
+        # evaluate_significance() (which expects book_odds_american etc.)
+        # works transparently with paper trade data.
+        for row in result:
+            row["book_odds_american"] = row.get("signal_odds_american")
+            row["book_implied_prob"] = row.get("signal_implied_prob")
+            row["signal_generated"] = 1  # all paper trades are signals
+
+        return result
 
     async def _get_paper_trades_all(self, hypothesis_id: str) -> list[dict]:
         """Get ALL paper trades including multi-book duplicates (for detailed reporting)."""
