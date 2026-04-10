@@ -4828,19 +4828,25 @@ class ResearchLoop:
         # expensive scipy/numpy recompute. Unchanged runs are skipped in O(1).
         try:
             batch_ids = [h["hypothesis_id"] for h in backtesting]
-            # Also recompute stats for paper_trading hypotheses — their backtest
-            # events keep accumulating from the line monitor but stats were only
-            # computed when they were still in backtesting.  Stale stats make
-            # pipeline integrity checks misleading and live-promotion decisions
-            # use outdated backtest performance.
             paper_ids = [
                 h["hypothesis_id"]
                 for h in await self.hypothesis_manager.list_hypotheses(status="paper_trading")
             ]
             all_recompute_ids = batch_ids + paper_ids
+            # Expensive recalculation (scipy/numpy) only for the batch
             updated = await self.backtest_engine.recalculate_all_active_runs(
                 hypothesis_ids=all_recompute_ids
             )
+            # Sync hypothesis_stats for ALL backtesting hypotheses (not just
+            # the batch). The sync itself is cheap (reads from backtest_runs),
+            # only the recalculation above is expensive. Without this, hypotheses
+            # outside the top-8 batch have perpetually stale hypothesis_stats,
+            # which breaks auto-reject tiers and promotion gate evaluation.
+            all_backtesting_ids = [
+                h["hypothesis_id"]
+                for h in await self.hypothesis_manager.list_hypotheses(status="backtesting")
+            ]
+            all_sync_ids = list(set(all_backtesting_ids + paper_ids))
             if updated > 0:
                 logger.info(f"Research: recomputed stats for {updated} backtest runs (batch of {len(all_recompute_ids)}, incl {len(paper_ids)} paper_trading)")
             # ── Always sync hypothesis_stats from backtest_runs ──
@@ -4850,12 +4856,12 @@ class ResearchLoop:
             # from the previous session (e.g. paper_trading hypothesis promoted
             # but stats still show old stage/p_value).  The sync is cheap
             # (one query + N deletes + N inserts) so always running it is safe.
-            if all_recompute_ids:
+            if all_sync_ids:
                 try:
                     from tools.db_utils import execute_with_retry, commit_with_retry
                     db = self.backtest_engine._db
                     now = datetime.now(timezone.utc).isoformat()
-                    hs_placeholders = ",".join("?" for _ in all_recompute_ids)
+                    hs_placeholders = ",".join("?" for _ in all_sync_ids)
                     # Get the latest run per hypothesis (most recent run_id)
                     hs_cursor = await db.execute(
                         f"SELECT br.hypothesis_id, "
@@ -4869,7 +4875,7 @@ class ResearchLoop:
                         f"JOIN hypotheses h ON br.hypothesis_id = h.hypothesis_id "
                         f"WHERE br.hypothesis_id IN ({hs_placeholders}) "
                         f"ORDER BY br.run_id DESC",
-                        all_recompute_ids,
+                        all_sync_ids,
                     )
                     rows = await hs_cursor.fetchall()
                     # Keep only the latest run per hypothesis
@@ -5507,8 +5513,8 @@ class ResearchLoop:
 
         remaining = CLAUDE_ESCALATION_COOLDOWN - (time.time() - self._last_claude_call)
         if remaining > 0:
-            logger.debug(f"Interpret backtests: waiting {remaining:.0f}s for cooldown")
-            await asyncio.sleep(remaining)
+            logger.debug(f"Interpret backtests: cooldown active ({remaining:.0f}s left), deferring to next cycle")
+            return
 
         try:
             result = await claude_code_query(prompt, hermes_caller="deep_work")
@@ -5807,11 +5813,19 @@ class ResearchLoop:
                     # Odds API: needed when no games OR single-book data
                     if live_odds.get("error") or not live_odds.get("games") or _needs_multibook:
                         from tools.odds_api_io import get_odds
+                        _fallback_odds = live_odds
                         live_odds = await get_odds(
                             sport=sport,
                             regions="us",
                             markets="h2h,spreads,totals",
                         )
+                        # If Odds API failed but we had line_monitor data, keep it
+                        if (live_odds.get("error") or not live_odds.get("games")) and _fallback_odds.get("games"):
+                            live_odds = _fallback_odds
+                            logger.info(
+                                f"Paper trade: Odds API failed for {sport}, "
+                                f"using line_monitor data ({len(_fallback_odds.get('games', []))} games, single-book)"
+                            )
 
                     if live_odds.get("error") or not live_odds.get("games"):
                         logger.warning(
@@ -6090,8 +6104,8 @@ class ResearchLoop:
 
         remaining = CLAUDE_ESCALATION_COOLDOWN - (_time.time() - self._last_claude_call)
         if remaining > 0:
-            logger.debug(f"Deep work: waiting {remaining:.0f}s for cooldown")
-            await asyncio.sleep(remaining)
+            logger.debug(f"Deep work: cooldown active ({remaining:.0f}s left), deferring to next cycle")
+            return
 
         try:
             result = await claude_code_query(prompt, hermes_caller="deep_work")
