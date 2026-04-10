@@ -1419,6 +1419,7 @@ class ResearchLoop:
         await self._requeue_stale_signal_rejections()
         # Reject any anti-predictive hypotheses still stuck in active states
         await self._reject_anti_predictive()
+        await self._reject_low_signal_rate()
         self._task = asyncio.create_task(self._loop())
         logger.info("Research loop started — autonomous hypothesis machine online")
 
@@ -1873,6 +1874,48 @@ class ResearchLoop:
 
         if count:
             logger.info(f"Anti-predictive sweep: rejected {count} hypotheses")
+
+    async def _reject_low_signal_rate(self) -> None:
+        """Reject backtesting hypotheses with 100+ events but <2% signal rate.
+
+        These hypotheses target edge conditions that don't exist at detectable
+        frequency. All p-value and IC rejection tiers gate on signal count,
+        so near-zero-signal hypotheses slip through indefinitely.
+        """
+        db = self.hypothesis_manager._db
+        if db is None:
+            return
+
+        cursor = await db.execute(
+            "SELECT h.hypothesis_id, h.name, hs.total_n, hs.signals_n "
+            "FROM hypotheses h "
+            "JOIN hypothesis_stats hs ON h.hypothesis_id = hs.hypothesis_id "
+            "WHERE h.status = 'backtesting' "
+            "AND hs.total_n >= 100 "
+            "AND (CAST(hs.signals_n AS REAL) / hs.total_n) < 0.02"
+        )
+        rows = await cursor.fetchall()
+
+        count = 0
+        for hid, name, total_n, signals_n in rows:
+            signals_n = signals_n or 0
+            rate = signals_n / total_n if total_n > 0 else 0
+            try:
+                await self.hypothesis_manager.update_status(
+                    hid, "rejected",
+                    f"auto:low_signal_rate — {signals_n}/{total_n} events = "
+                    f"{rate:.1%} signal rate < 2%. Edge condition too rare."
+                )
+                count += 1
+                logger.info(
+                    f"Rejected low-signal-rate {hid} ({name}): "
+                    f"{signals_n}/{total_n} = {rate:.1%}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to reject low-signal-rate {hid} ({name}): {e}")
+
+        if count:
+            logger.info(f"Low-signal-rate sweep: rejected {count} hypotheses")
 
     async def stop(self) -> None:
         """Stop the research loop."""
@@ -5149,6 +5192,11 @@ class ResearchLoop:
             await self._reject_anti_predictive()
         except Exception as e:
             logger.warning(f"Anti-predictive sweep failed: {e}")
+        # Low signal rate sweep: reject hypotheses with 100+ events but <2% signal rate
+        try:
+            await self._reject_low_signal_rate()
+        except Exception as e:
+            logger.warning(f"Low-signal-rate sweep failed: {e}")
 
     async def _phase_narrative_edges(self) -> None:
         """Detect player-level narrative edges that models can't price.

@@ -78,6 +78,10 @@ AUTO_REJECT_IC = -0.15             # IC below this = actively anti-predictive
 AUTO_REJECT_IC_MIN_N = 15          # Need 15 signals for IC to be meaningful
 AUTO_REJECT_IC_STRONG = -0.25      # Very strong anti-prediction needs fewer samples
 AUTO_REJECT_IC_STRONG_MIN_N = 10   # 10 signals sufficient when IC < -0.25
+# Low signal rate rejection: hypothesis tested many events but generated almost
+# no signals — the edge condition is too rare or nonexistent.
+AUTO_REJECT_LOW_SIGNAL_RATE = 0.02     # <2% signal rate = edge condition too rare
+AUTO_REJECT_LOW_SIGNAL_MIN_EVENTS = 100  # Need 100+ events to judge signal rate
 
 STAGE_ORDER = ["draft", "backtesting", "paper_trading", "live", "retired"]
 
@@ -684,6 +688,8 @@ class HypothesisManager:
                 "information_coefficient": round(ic, 4) if ic is not None else None,
             },
             "recommendation": rec,
+            "total_events": 0,   # placeholder, updated below with true event count
+            "total_signals": 0,  # placeholder, updated below with true signal count
         }
 
         # Store in hypothesis_stats (upsert: one row per hypothesis+stage)
@@ -708,6 +714,9 @@ class HypothesisManager:
             # For paper_trade stage, total_n = resolved signals evaluated above
             stats_total_n = resolved
             stats_signals_n = sum(1 for e in events if e.get("signal_generated"))
+
+        report["total_events"] = stats_total_n
+        report["total_signals"] = stats_signals_n
 
         await execute_with_retry(
             self._db,
@@ -973,6 +982,22 @@ class HypothesisManager:
                 or (p > 0.15 and n >= 30)
             )
         )
+
+        # Low signal rate rejection: hypothesis tested 100+ distinct events but
+        # generated signals on <2%. The edge condition is too rare or nonexistent.
+        # All existing tiers gate on signal count n, so hypotheses with 500 events
+        # and 2 signals (0.4%) slip through every tier indefinitely.
+        if not should_reject and status == "backtesting":
+            total_events = report.get("total_events", 0)
+            if total_events >= AUTO_REJECT_LOW_SIGNAL_MIN_EVENTS:
+                signal_rate = n / total_events if total_events > 0 else 0
+                if signal_rate < AUTO_REJECT_LOW_SIGNAL_RATE:
+                    should_reject = True
+                    checks.append(
+                        f"AUTO-REJECT: signal rate {n}/{total_events} = "
+                        f"{signal_rate:.1%} < {AUTO_REJECT_LOW_SIGNAL_RATE:.0%} — "
+                        f"edge condition too rare to be actionable"
+                    )
 
         # Anti-predictive IC rejection: model predicts the WRONG direction.
         # These hypotheses can never promote (IC gate blocks them) but without
