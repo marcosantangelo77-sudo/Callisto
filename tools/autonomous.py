@@ -6599,8 +6599,8 @@ class ResearchLoop:
         now = time.time()
         remaining = CLAUDE_ESCALATION_COOLDOWN - (now - self._last_claude_call)
         if remaining > 0:
-            logger.debug(f"System improvement: waiting {remaining:.0f}s for cooldown")
-            await asyncio.sleep(remaining)
+            logger.debug(f"System improvement: cooldown active ({remaining:.0f}s left), deferring to next interval")
+            return
 
         db = self.data_collector._db
         if not db:
