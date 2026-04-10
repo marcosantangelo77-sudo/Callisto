@@ -223,6 +223,10 @@ def devig_market(
     Returns dict with: method, raw_implied, overround, fair_probabilities,
     fair_decimal_odds, fair_american_odds, solver_param
     """
+    if not odds_list:
+        return {"error": "Empty odds list", "fair_probabilities": [], "overround": 0.0}
+    if any(o <= 0 for o in odds_list):
+        return {"error": "Non-positive odds in list", "fair_probabilities": [], "overround": 0.0}
     overround = sum(1 / o for o in odds_list) - 1.0
     param = None
 

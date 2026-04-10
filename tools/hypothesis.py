@@ -1238,12 +1238,24 @@ class HypothesisManager:
                         # produces garbage edges, don't blame the hypothesis.
                         avg_books = await self._avg_books_used(hypothesis_id)
                         if avg_books is not None and avg_books < 2.0:
+                            # Don't hold forever — after 15 eval cycles with thin data,
+                            # reject rather than consuming budget indefinitely
+                            if eval_cycles >= 15:
+                                return {
+                                    "action": "rejected",
+                                    "reason": (
+                                        f"Rejecting after {eval_cycles} cycles: avg "
+                                        f"books_used={avg_books:.1f} never improved past 2.0. "
+                                        f"Data quality insufficient for this hypothesis."
+                                    ),
+                                }
                             return {
                                 "action": "held",
                                 "reason": (
                                     f"0 signals in {total_events} events but avg "
                                     f"books_used={avg_books:.1f} — devig data too thin "
-                                    f"to produce reliable edges. Holding for better data."
+                                    f"to produce reliable edges. Holding for better data "
+                                    f"(cycle {eval_cycles}/15 before auto-reject)."
                                 ),
                             }
 

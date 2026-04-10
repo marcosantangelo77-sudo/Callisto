@@ -75,6 +75,11 @@ def _to_blob(embedding: list[float]) -> bytes:
 
 def _from_blob(blob: bytes) -> np.ndarray:
     """Deserialize binary blob back to numpy array."""
+    expected_size = EMBED_DIM * 4  # 768 * 4 = 3072 bytes
+    if len(blob) != expected_size:
+        raise ValueError(
+            f"Corrupted embedding blob: {len(blob)} bytes, expected {expected_size}"
+        )
     return np.frombuffer(blob, dtype=np.float32).copy()
 
 

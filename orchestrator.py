@@ -703,8 +703,9 @@ def _clamp_confidence(score: float, best_source_class: str = "INFERRED") -> floa
 
 def _best_source_class(evidence: list, used_tools: bool) -> str:
     """Determine the best (most authoritative) source class from evidence."""
-    if not evidence and not used_tools:
-        return "INFERRED"
+    if not evidence:
+        # Tools used but no evidence collected → SECONDARY (not INFERRED)
+        return "SECONDARY" if used_tools else "INFERRED"
     rank = {"PRIMARY": 4, "SECONDARY": 3, "SIGNAL": 2, "INFERRED": 1}
     best = "INFERRED"
     for ev in evidence:
@@ -1538,12 +1539,13 @@ class Orchestrator:
         parsed = _parse_json_response(content) if content else None
 
         if parsed and isinstance(parsed, dict):
-            # Add Claude Code evidence as PRIMARY
+            # Claude Code is reasoning/synthesis, not primary documents → SECONDARY
+            # (PRIMARY requires direct analysis of ground-truth data)
             claude_evidence = Evidence(
                 content=parsed.get("conclusion", content[:500]),
-                source_class=SourceClass.PRIMARY,
+                source_class=SourceClass.SECONDARY,
                 confidence_score=_clamp_confidence(
-                    float(parsed.get("confidence_score", 0.85)), "PRIMARY"
+                    float(parsed.get("confidence_score", 0.85)), "SECONDARY"
                 ),
                 domain=session.domain,
                 origin_agent="claude_code",
@@ -1554,7 +1556,7 @@ class Orchestrator:
             # Update summary with Claude's analysis
             summary.conclusion = parsed.get("conclusion", summary.conclusion)
             new_confidence = _clamp_confidence(
-                float(parsed.get("confidence_score", 0.85)), "PRIMARY"
+                float(parsed.get("confidence_score", 0.85)), "SECONDARY"
             )
             summary.confidence_score = new_confidence
             summary.evidence_count = len(session.evidence)
@@ -1562,11 +1564,11 @@ class Orchestrator:
                 f"Claude Code enhancement → confidence={new_confidence}"
             )
         else:
-            # Couldn't parse JSON — still use raw text as PRIMARY evidence
+            # Couldn't parse JSON — still use raw text as SECONDARY evidence
             claude_evidence = Evidence(
                 content=content[:500],
-                source_class=SourceClass.PRIMARY,
-                confidence_score=0.80,
+                source_class=SourceClass.SECONDARY,
+                confidence_score=0.75,
                 domain=session.domain,
                 origin_agent="claude_code",
                 source_name=f"Claude Code ({result['model']})",

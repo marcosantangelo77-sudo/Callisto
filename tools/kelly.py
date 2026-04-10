@@ -489,7 +489,7 @@ def ruin_probability(
 
     # Expected profit per bet (in units of stake)
     ev_per_bet = win_rate * b - q
-    units = bankroll / avg_stake if avg_stake > 0 else float("inf")
+    units = min(bankroll / avg_stake, 10000.0) if avg_stake > 0 else 10000.0
 
     result = {
         "bankroll": bankroll,

@@ -150,8 +150,11 @@ class HermesMemory:
                 return result
 
         except Exception as e:
-            logger.error(f"Hermes context build failed: {e}")
-            return self._build_identity()
+            logger.error(
+                f"Hermes context build DEGRADED — returning identity-only context. "
+                f"Claude will operate without bets/edges/research/learnings. Error: {e}"
+            )
+            return self._build_identity() + "\n\n⚠️ HERMES CONTEXT DEGRADED: Full memory unavailable."
 
     def _get_section_order(self, caller: str) -> list[str]:
         """Return section keys in priority order based on caller type."""

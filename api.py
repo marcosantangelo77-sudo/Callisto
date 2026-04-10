@@ -11,6 +11,7 @@ import logging
 import os
 import tracemalloc
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Optional
 
 import aiosqlite
@@ -2778,18 +2779,27 @@ async def admin_sql(request: Request):
         return {"error": "No SQL provided"}
 
     # Safety: only allow SELECT statements
-    normalized = sql.upper().lstrip()
+    # Strip SQL comments first to prevent bypass via -- or /* */
+    import re as _re
+    cleaned = _re.sub(r'--[^\n]*', '', sql)  # Remove single-line comments
+    cleaned = _re.sub(r'/\*.*?\*/', '', cleaned, flags=_re.DOTALL)  # Remove block comments
+    normalized = cleaned.upper().strip()
+
     if not normalized.startswith("SELECT") and not normalized.startswith("PRAGMA"):
         return {"error": "Only SELECT and PRAGMA statements allowed"}
 
+    # Block multi-statement queries (semicolons followed by more SQL)
+    if ";" in cleaned.strip().rstrip(";"):
+        return {"error": "Multi-statement queries not allowed"}
+
     # Block dangerous patterns (word-boundary to avoid false positives like CREATED_AT)
-    import re as _re
     for forbidden in ("DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH"):
         if _re.search(rf'\b{forbidden}\b', normalized):
             return {"error": f"Forbidden keyword: {forbidden}"}
 
     try:
         async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("PRAGMA query_only = ON")
             cursor = await db.execute(sql)
             rows = await cursor.fetchall()
             cols = [d[0] for d in cursor.description] if cursor.description else []

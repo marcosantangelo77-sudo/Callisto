@@ -59,7 +59,8 @@ _call_count = 0
 _last_reset = time.monotonic()
 _TRACKING_WINDOW = 3600  # 1 hour
 
-# Availability state
+# Availability state — persisted to disk so restarts don't bypass cooldown
+_COOLDOWN_FILE = os.path.join(os.path.dirname(DB_PATH), "claude_cooldown.json")
 _available = True
 _cooldown_until = 0.0           # monotonic timestamp
 _consecutive_failures = 0
@@ -67,6 +68,59 @@ _current_backoff = INITIAL_BACKOFF
 _last_error = ""
 _total_rate_limits = 0
 _total_successful = 0
+
+
+def _persist_cooldown() -> None:
+    """Save cooldown state to disk so it survives process restarts."""
+    import json
+    try:
+        remaining = max(0, _cooldown_until - time.monotonic())
+        state = {
+            "cooldown_remaining_seconds": remaining,
+            "cooldown_set_at": time.time(),
+            "consecutive_failures": _consecutive_failures,
+            "current_backoff": _current_backoff,
+            "last_error": _last_error,
+        }
+        with open(_COOLDOWN_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception:
+        pass  # Non-critical
+
+
+def _restore_cooldown() -> None:
+    """Restore cooldown state from disk on module load."""
+    global _available, _cooldown_until, _consecutive_failures, _current_backoff, _last_error
+    import json
+    try:
+        with open(_COOLDOWN_FILE) as f:
+            state = json.load(f)
+        remaining = state.get("cooldown_remaining_seconds", 0)
+        set_at = state.get("cooldown_set_at", 0)
+        # Calculate how much cooldown is left based on wall-clock elapsed time
+        elapsed = time.time() - set_at
+        left = remaining - elapsed
+        if left > 5:  # More than 5 seconds of cooldown remaining
+            _available = False
+            _cooldown_until = time.monotonic() + left
+            _consecutive_failures = state.get("consecutive_failures", 0)
+            _current_backoff = state.get("current_backoff", INITIAL_BACKOFF)
+            _last_error = state.get("last_error", "")
+            logger.info(
+                f"Claude Code cooldown restored from disk: {left:.0f}s remaining "
+                f"(failures={_consecutive_failures})"
+            )
+        else:
+            # Cooldown expired while we were down — clean up file
+            try:
+                os.remove(_COOLDOWN_FILE)
+            except FileNotFoundError:
+                pass
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        pass  # No saved state or corrupt file — start fresh
+
+
+_restore_cooldown()
 
 
 def _track_call() -> int:
@@ -102,6 +156,7 @@ def _enter_cooldown(error_msg: str) -> None:
         MAX_BACKOFF,
     )
     _cooldown_until = time.monotonic() + _current_backoff
+    _persist_cooldown()
 
     cooldown_min = _current_backoff / 60
     logger.warning(
@@ -117,6 +172,11 @@ def _mark_success() -> None:
     _consecutive_failures = 0
     _current_backoff = INITIAL_BACKOFF
     _total_successful += 1
+    # Clean up persistent cooldown file
+    try:
+        os.remove(_COOLDOWN_FILE)
+    except FileNotFoundError:
+        pass
 
 
 def is_available() -> bool:

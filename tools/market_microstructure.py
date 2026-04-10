@@ -98,7 +98,7 @@ def sortino_ratio(returns: list[float], target: float = 0.0) -> Optional[float]:
     downside_sq = [min(0, r) ** 2 for r in excess]
     downside_dev = math.sqrt(sum(downside_sq) / len(downside_sq))
     if downside_dev < 1e-9:
-        return None if mean_excess <= 0 else float("inf")
+        return None if mean_excess <= 0 else 10.0  # Cap instead of inf to prevent downstream NaN
     return mean_excess / downside_dev
 
 

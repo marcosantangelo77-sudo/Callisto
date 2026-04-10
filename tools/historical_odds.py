@@ -377,18 +377,22 @@ class HistoricalOddsFetcher:
         """Check SQLite cache for a historical odds response.
 
         Uses read-only connection to avoid WAL write lock contention.
+        Cache entries older than 7 days are treated as stale and re-fetched
+        (odds providers sometimes issue corrections).
         """
         db = self._read_db if self._read_db else self._db
+        # 7-day TTL on cache entries — odds providers may issue corrections
+        ttl_clause = "AND fetched_at > datetime('now', '-7 days')"
         if event_id:
             cursor = await db.execute(
                 "SELECT response_json FROM historical_odds_cache "
-                "WHERE sport = ? AND snapshot_date = ? AND event_id = ? AND market_type = ?",
+                f"WHERE sport = ? AND snapshot_date = ? AND event_id = ? AND market_type = ? {ttl_clause}",
                 (sport, date, event_id, market_type),
             )
         else:
             cursor = await db.execute(
                 "SELECT response_json FROM historical_odds_cache "
-                "WHERE sport = ? AND snapshot_date = ? AND event_id IS NULL AND market_type = ?",
+                f"WHERE sport = ? AND snapshot_date = ? AND event_id IS NULL AND market_type = ? {ttl_clause}",
                 (sport, date, market_type),
             )
         try:

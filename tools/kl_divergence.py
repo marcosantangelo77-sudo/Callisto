@@ -110,17 +110,18 @@ async def compute_game_kl(
         await db.execute("PRAGMA busy_timeout = 60000")
 
         # Find snapshots for this event — earliest and latest
+        # MUST filter by event_id to avoid comparing different games' odds
         cursor = await db.execute(
             "SELECT snapshot_json, timestamp FROM odds_snapshots "
-            "WHERE sport = ? ORDER BY timestamp ASC LIMIT 1",
-            (sport,),
+            "WHERE sport = ? AND event_id = ? ORDER BY timestamp ASC LIMIT 1",
+            (sport, event_id),
         )
         opening_row = await cursor.fetchone()
 
         cursor = await db.execute(
             "SELECT snapshot_json, timestamp FROM odds_snapshots "
-            "WHERE sport = ? ORDER BY timestamp DESC LIMIT 1",
-            (sport,),
+            "WHERE sport = ? AND event_id = ? ORDER BY timestamp DESC LIMIT 1",
+            (sport, event_id),
         )
         closing_row = await cursor.fetchone()
 

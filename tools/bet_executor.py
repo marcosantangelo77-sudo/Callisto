@@ -680,6 +680,24 @@ class BetExecutor:
         implied = 1.0 - fair_prob + edge  # back-derive implied from fair - edge
 
         from tools.db_utils import execute_with_retry, commit_with_retry
+
+        # Guard against duplicate bets: check if we already have a pending bet
+        # on this event+team+market within the last hour
+        dup_check = await execute_with_retry(
+            self._db,
+            "SELECT bet_id FROM bets WHERE event_id = ? AND team = ? AND market = ? "
+            "AND result = 'pending' AND placed_at > datetime('now', '-1 hour')",
+            (event_id, team, market),
+            operation="executor dup_check",
+        )
+        existing = await dup_check.fetchone()
+        if existing:
+            logger.warning(
+                f"Duplicate bet prevented: event={event_id} team={team} market={market} "
+                f"(existing bet_id={existing[0]})"
+            )
+            return existing[0]
+
         cursor = await execute_with_retry(
             self._db,
             """INSERT INTO bets
