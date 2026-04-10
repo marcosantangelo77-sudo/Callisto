@@ -1835,13 +1835,17 @@ class BacktestEngine:
             return True
 
         # ── REGEX FALLBACKS (for hypotheses without structured filters) ──
-        # When context_factors is empty, fall through to regex-based filtering
-        # which matches hypothesis keywords (sandwich, revenge, blowout, etc.)
-        # to specific game_context fields. Each keyword maps to a DIFFERENT
-        # filter — this correctly differentiates hypotheses by their conditions.
-        # Fail-closed at end of section if no regex pattern matches.
-        # Track whether ANY filter pattern matched.  If none match, the
-        # hypothesis text is too vague to derive filters from → fail closed.
+        # Regex matching infers context filters from hypothesis keywords
+        # (sandwich, revenge, blowout, etc.). However, two hypotheses sharing
+        # the same keyword (e.g., both containing "revenge") will match the
+        # SAME game_context field and produce identical event sets.
+        #
+        # Guard: require explicit context_factors to use regex fallbacks.
+        # Hypotheses without context_factors get 0 events and are rejected
+        # for insufficient data — better than corrupted identical event sets.
+        if not cf_set:
+            return False
+
         _any_filter_matched = False
 
         # ── Back-to-back filter ──

@@ -1382,26 +1382,24 @@ class HypothesisManager:
 
         elif status == "paper_trading":
             trades = await self._get_paper_trades(hypothesis_id)
+            resolved_trades = [t for t in (trades or []) if t.get("actual_result")]
 
-            if trades:
-                # Always cache paper_trade stats — even when ROI is negative.
-                resolved_trades = [t for t in trades if t.get("actual_result")]
+            if resolved_trades:
                 if len(resolved_trades) >= 2:
                     try:
                         await self.evaluate_significance(hypothesis_id, "paper_trade")
                     except Exception as e:
                         logger.warning(f"Paper trade stats cache failed for {hypothesis_id}: {e}")
 
-                # Check positive ROI on paper trades
                 returns = []
-                for t in trades:
-                    if t.get("actual_result") == "won":
+                for t in resolved_trades:
+                    if t["actual_result"] == "won":
                         from tools.math_utils import american_to_decimal
                         dec = american_to_decimal(t["signal_odds_american"])
                         returns.append(dec - 1)
-                    elif t.get("actual_result") == "lost":
+                    elif t["actual_result"] == "lost":
                         returns.append(-1.0)
-                    elif t.get("actual_result") == "push":
+                    elif t["actual_result"] == "push":
                         returns.append(0.0)
                 if returns:
                     roi = sum(returns) / len(returns)
@@ -1411,27 +1409,24 @@ class HypothesisManager:
                             "reason": f"Paper trade ROI is {roi:.2%} — need positive ROI for live promotion.",
                         }
             else:
-                # No paper trades yet — context-dependent hypotheses may fire
-                # rarely (1-2x/week). Allow promotion using backtest evidence
-                # if the backtest is statistically significant.
+                # No resolved paper trades — use backtest evidence for promotion.
+                # Unresolved paper trade records should not block a hypothesis
+                # with strong backtest signals from advancing.
                 backtest_signals = await self._get_backtest_signals(hypothesis_id)
                 if not backtest_signals or len(backtest_signals) < PROMOTION_GATES["paper_trading→live"]["min_signals"]:
                     return {
                         "action": "held",
                         "reason": (
-                            f"No paper trades yet and only {len(backtest_signals) if backtest_signals else 0} "
+                            f"0 resolved paper trades and only {len(backtest_signals) if backtest_signals else 0} "
                             f"backtest signals (need {PROMOTION_GATES['paper_trading→live']['min_signals']}). "
                             f"Waiting for more data."
                         ),
                     }
                 logger.info(
-                    f"Hypothesis {hypothesis_id}: 0 paper trades but "
+                    f"Hypothesis {hypothesis_id}: 0 resolved paper trades but "
                     f"{len(backtest_signals)} backtest signals — evaluating "
                     f"promotion using backtest evidence"
                 )
-                # Signal to readiness check: evaluate on backtest data,
-                # not empty paper_trade data (fixes deadlock where 0 paper
-                # trades + sufficient backtest signals = perpetual "held").
                 _use_backtest_evidence = True
 
         # ── Standard readiness check (statistical significance, gates, etc.) ──
