@@ -856,7 +856,7 @@ class LineMonitor:
                 return
 
             now = datetime.now(timezone.utc)
-            closing_window_seconds = SNAPSHOT_INTERVAL + 300  # interval + 5min buffer
+            closing_window_seconds = max(SNAPSHOT_INTERVAL + 300, 3600)  # at least 1hr window
 
             games = snapshot.get("games", [])
             closing_count = 0

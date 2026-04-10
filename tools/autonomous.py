@@ -5317,8 +5317,10 @@ class ResearchLoop:
         from tools.claude_code import claude_code_query
 
         now = time.time()
-        if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
-            return
+        remaining = CLAUDE_ESCALATION_COOLDOWN - (now - self._last_claude_call)
+        if remaining > 0:
+            logger.debug(f"Interpret backtests: waiting {remaining:.0f}s for cooldown")
+            await asyncio.sleep(remaining)
 
         db = self.data_collector._db
         if not db:
@@ -6538,8 +6540,10 @@ class ResearchLoop:
         from tools.claude_code import claude_code_query
 
         now = time.time()
-        if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
-            return
+        remaining = CLAUDE_ESCALATION_COOLDOWN - (now - self._last_claude_call)
+        if remaining > 0:
+            logger.debug(f"System improvement: waiting {remaining:.0f}s for cooldown")
+            await asyncio.sleep(remaining)
 
         db = self.data_collector._db
         if not db:

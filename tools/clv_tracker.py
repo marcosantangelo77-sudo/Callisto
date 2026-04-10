@@ -215,7 +215,6 @@ class CLVTracker:
             "closing_odds = ?, closing_implied = ?, "
             "clv_implied = ? - signal_implied_prob "
             "WHERE event_id = ? AND market = ? AND side = ? "
-            "AND closing_odds IS NULL "
             "AND signal_implied_prob IS NOT NULL",
             (closing_odds, round(implied, 4),
              round(implied, 4),

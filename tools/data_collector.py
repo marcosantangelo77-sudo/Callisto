@@ -1147,6 +1147,12 @@ class DataCollector:
                 (bt_event, bt_market, bt_side),
             )
             cl_row = await cl_cursor.fetchone()
+
+            if not cl_row:
+                cl_row = await self._closing_from_snapshot(
+                    sport, game_date, bt_event, bt_market, bt_side
+                )
+
             if cl_row:
                 cl_odds, cl_implied = cl_row
                 clv = None
@@ -1182,6 +1188,63 @@ class DataCollector:
             "resolved": resolved,
             "unmatched": unmatched,
         }
+
+    async def _closing_from_snapshot(
+        self, sport: str, game_date: str, event_id: str, market: str, side: str
+    ):
+        """Extract closing odds from the last odds snapshot containing this game."""
+        import json
+
+        try:
+            cursor = await self._db.execute(
+                "SELECT snapshot_json FROM odds_snapshots "
+                "WHERE sport = ? AND timestamp LIKE ? "
+                "ORDER BY timestamp DESC LIMIT 10",
+                (sport, f"{game_date}%"),
+            )
+            rows = await cursor.fetchall()
+
+            sharp_books = {"pinnacle", "lowvig.ag", "betfair exchange", "sharp"}
+            for row in rows:
+                try:
+                    data = json.loads(row[0])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+                for game in data.get("games", []):
+                    if game.get("id") != event_id:
+                        continue
+
+                    best_odds = None
+                    best_implied = None
+                    is_sharp = False
+
+                    for bm in game.get("bookmakers", []):
+                        book = (bm.get("title") or bm.get("key") or "").lower()
+                        for mkt in bm.get("markets", []):
+                            if mkt.get("key") != market:
+                                continue
+                            for outcome in mkt.get("outcomes", []):
+                                if outcome.get("name") != side:
+                                    continue
+                                price = outcome.get("price")
+                                if price is None:
+                                    continue
+                                price = int(price)
+                                imp = 1 / (1 + 100 / abs(price)) if price > 0 else abs(price) / (abs(price) + 100)
+                                if book in sharp_books:
+                                    return (price, round(imp, 4))
+                                if best_odds is None or not is_sharp:
+                                    best_odds = price
+                                    best_implied = round(imp, 4)
+
+                    if best_odds is not None:
+                        return (best_odds, best_implied)
+
+        except Exception as e:
+            logger.debug(f"Snapshot closing line lookup failed: {e}")
+
+        return None
 
     # ── ESPN PLAY-BY-PLAY ──
 
