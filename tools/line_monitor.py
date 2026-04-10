@@ -99,7 +99,7 @@ class LineMonitor:
     async def initialize(self) -> None:
         """Create tables for odds snapshots and alerts."""
         self._db = await aiosqlite.connect(self.db_path)
-        await self._db.execute("PRAGMA busy_timeout = 300000")  # 5 min — autonomous loop bypasses write lock
+        await self._db.execute("PRAGMA busy_timeout = 120000")  # 2 min — 5 min caused cascading WAL stalls
         await self._db.executescript("""
             CREATE TABLE IF NOT EXISTS odds_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

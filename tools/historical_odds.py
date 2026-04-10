@@ -473,6 +473,10 @@ class HistoricalOddsFetcher:
                 if not games:
                     continue
 
+                for g in games:
+                    if not g.get("sport_key"):
+                        g["sport_key"] = sport
+
                 # Reformat to match historical_odds_cache response_json format
                 cache_entry = {
                     "sport": sport,

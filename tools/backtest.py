@@ -553,8 +553,11 @@ class BacktestEngine:
 
             for game in games:
                 # ── Sport-level defense-in-depth filter ──
+                # Reject games with missing/empty sport_key too — otherwise
+                # FanDuel games without competitionId bypass this filter and
+                # contaminate backtests across sports (identical event sets).
                 game_sport = game.get("sport_key", "")
-                if game_sport and game_sport != sport:
+                if not game_sport or game_sport != sport:
                     continue
 
                 # ── Game-level context filter ──
