@@ -5873,14 +5873,17 @@ class ResearchLoop:
         db = self.data_collector._db
         metrics = {}
         try:
-            # Backtest signal rate
+            # Backtest signal rate (deduplicated by event_id — each game
+            # produces multiple rows across books, COUNT(*) overcounts)
             row = await db.execute_fetchone(
-                "SELECT COUNT(*) total, SUM(CASE WHEN signal_generated=1 THEN 1 ELSE 0 END) signals "
+                "SELECT COUNT(DISTINCT event_id) total, "
+                "COUNT(DISTINCT CASE WHEN signal_generated=1 THEN event_id END) signals "
                 "FROM backtest_events"
             ) if hasattr(db, 'execute_fetchone') else None
             if not row:
                 cursor = await db.execute(
-                    "SELECT COUNT(*) total, SUM(CASE WHEN signal_generated=1 THEN 1 ELSE 0 END) signals "
+                    "SELECT COUNT(DISTINCT event_id) total, "
+                    "COUNT(DISTINCT CASE WHEN signal_generated=1 THEN event_id END) signals "
                     "FROM backtest_events"
                 )
                 row = await cursor.fetchone()

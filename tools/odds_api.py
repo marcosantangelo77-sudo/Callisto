@@ -26,7 +26,7 @@ logger = logging.getLogger("callisto.odds_api")
 
 # Configuration
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
-ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+ODDS_API_BASE = "https://api.odds-api.io/v4"
 
 # Credit tracking
 _credits_remaining: Optional[int] = None
