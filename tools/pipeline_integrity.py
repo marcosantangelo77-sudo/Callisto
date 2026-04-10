@@ -717,7 +717,8 @@ class PipelineIntegrityChecker:
                 # Get the latest stats per hypothesis (only active ones)
                 cursor = await db.execute(
                     "SELECT hs.hypothesis_id, h.name, h.status, "
-                    "hs.brier_score, hs.information_coefficient, hs.sortino "
+                    "hs.brier_score, hs.information_coefficient, hs.sortino, "
+                    "hs.signals_n "
                     "FROM hypothesis_stats hs "
                     "JOIN hypotheses h ON h.hypothesis_id = hs.hypothesis_id "
                     "WHERE h.status IN ('backtesting', 'paper_trading', 'live') "
@@ -734,7 +735,7 @@ class PipelineIntegrityChecker:
                 poor_calibration = []
                 anti_predictive = []
                 for row in rows:
-                    h_id, name, status, brier, ic, sortino = row
+                    h_id, name, status, brier, ic, sortino, signals_n = row
                     if h_id in seen:
                         continue
                     seen.add(h_id)
@@ -743,9 +744,9 @@ class PipelineIntegrityChecker:
                         poor_calibration.append(
                             f"'{name}' ({status}): brier={brier:.3f}"
                         )
-                    if ic is not None and ic < -0.05:
+                    if ic is not None and ic < -0.05 and (signals_n or 0) >= 10:
                         anti_predictive.append(
-                            f"'{name}' ({status}): IC={ic:.3f}"
+                            f"'{name}' ({status}): IC={ic:.3f}, n={signals_n}"
                         )
 
                 if poor_calibration:
