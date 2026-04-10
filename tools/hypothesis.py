@@ -70,6 +70,8 @@ AUTO_REJECT_P = 0.50               # Reject only when signal data actively dispr
 AUTO_REJECT_MIN_N = 15             # Need 15 resolved signals (not events) to reject
 AUTO_REJECT_STRONG_P = 0.70        # Strong disproof needs fewer samples
 AUTO_REJECT_STRONG_MIN_N = 10      # 10 signals sufficient when p > 0.70
+AUTO_REJECT_EXTREME_P = 0.90       # Extreme disproof: <10% chance thesis is correct
+AUTO_REJECT_EXTREME_MIN_N = 5      # 5 signals sufficient when p > 0.90
 # Anti-predictive rejection: IC strongly negative means model predicts WRONG direction.
 # At n >= 15 signals, IC < -0.15 is statistically meaningful (not noise).
 AUTO_REJECT_IC = -0.15             # IC below this = actively anti-predictive
@@ -967,6 +969,7 @@ class HypothesisManager:
             and (
                 (p > AUTO_REJECT_P and n >= AUTO_REJECT_MIN_N)
                 or (p > AUTO_REJECT_STRONG_P and n >= AUTO_REJECT_STRONG_MIN_N)
+                or (p > AUTO_REJECT_EXTREME_P and n >= AUTO_REJECT_EXTREME_MIN_N)
                 or (p > 0.15 and n >= 30)
             )
         )
