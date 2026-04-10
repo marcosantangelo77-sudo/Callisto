@@ -2774,8 +2774,8 @@ class ResearchLoop:
             if self._hypotheses_generated > 0 and self._backtests_run > 0:
                 # Check total signals across all backtest events
                 cursor = await db.execute(
-                    "SELECT COUNT(*) as total, "
-                    "SUM(CASE WHEN signal_generated = 1 THEN 1 ELSE 0 END) as signals "
+                    "SELECT COUNT(DISTINCT event_id) as total, "
+                    "COUNT(DISTINCT CASE WHEN signal_generated = 1 THEN event_id END) as signals "
                     "FROM backtest_events"
                 )
                 row = await cursor.fetchone()
@@ -5096,9 +5096,9 @@ class ResearchLoop:
             db = self.hypothesis_manager._db
             cursor = await db.execute(
                 "SELECT h.hypothesis_id, h.name, h.market_type, "
-                "COUNT(be.id) as events, "
+                "COUNT(DISTINCT be.event_id) as events, "
                 "COALESCE(AVG(CASE WHEN be.signal_generated = 1 THEN be.edge END), 0) as signal_avg_edge, "
-                "SUM(CASE WHEN be.signal_generated = 1 THEN 1 ELSE 0 END) as signals, "
+                "COUNT(DISTINCT CASE WHEN be.signal_generated = 1 THEN be.event_id END) as signals, "
                 "SUM(CASE WHEN be.signal_generated = 1 AND be.actual_result = 'won' THEN 1 ELSE 0 END) as wins, "
                 "SUM(CASE WHEN be.signal_generated = 1 AND be.actual_result = 'lost' THEN 1 ELSE 0 END) as losses "
                 "FROM hypotheses h "
