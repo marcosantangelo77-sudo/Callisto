@@ -5316,12 +5316,6 @@ class ResearchLoop:
         """
         from tools.claude_code import claude_code_query
 
-        now = time.time()
-        remaining = CLAUDE_ESCALATION_COOLDOWN - (now - self._last_claude_call)
-        if remaining > 0:
-            logger.debug(f"Interpret backtests: waiting {remaining:.0f}s for cooldown")
-            await asyncio.sleep(remaining)
-
         db = self.data_collector._db
         if not db:
             return
@@ -5433,7 +5427,6 @@ class ResearchLoop:
         )
 
         if not self._claude_ok():
-            # Defer to queue for when Claude returns
             await self._work_queue.enqueue("interpret_backtests", prompt, priority=2)
             self._downtime_tracker.item_queued()
             logger.info("Research: backtest interpretation deferred to work queue (Claude unavailable)")
@@ -5464,6 +5457,11 @@ class ResearchLoop:
                 logger.debug(f"Local fallback interpretation failed: {e}")
             return
 
+        remaining = CLAUDE_ESCALATION_COOLDOWN - (time.time() - self._last_claude_call)
+        if remaining > 0:
+            logger.debug(f"Interpret backtests: waiting {remaining:.0f}s for cooldown")
+            await asyncio.sleep(remaining)
+
         try:
             result = await claude_code_query(prompt, hermes_caller="deep_work")
             self._last_claude_call = time.time()
@@ -5472,7 +5470,6 @@ class ResearchLoop:
             if result.get("content") and not result.get("error"):
                 content = result["content"]
                 try:
-                    # Extract JSON
                     json_str = content
                     if "```" in json_str:
                         parts = json_str.split("```")
@@ -5813,12 +5810,6 @@ class ResearchLoop:
         from tools.claude_code import claude_code_query
         import time as _time
 
-        now = _time.time()
-        # Respect inter-phase cooldown to prevent burst stalls
-        if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
-            wait = CLAUDE_ESCALATION_COOLDOWN - (now - self._last_claude_call)
-            logger.debug(f"Deep work: waiting {wait:.0f}s for inter-phase cooldown")
-            await asyncio.sleep(min(wait, CLAUDE_ESCALATION_COOLDOWN))
         if not self._claude_ok():
             # Local model deep work via model ladder (Qwen3-14B primary)
             # Much better than rule-based: structured diagnosis, JSON output
@@ -5843,7 +5834,7 @@ class ResearchLoop:
                     f'{{"pipeline_issues": ["specific problem"], "reject_ids": [], "actions": ["specific fix"]}}'
                 )
                 result = await escalate_with_ladder(
-                    local_prompt, task_type="deep_work", timeout=90,
+                    local_prompt, task_type="deep_work", timeout=30,
                 )
                 if result.get("content") and result.get("model_used") != "none":
                     logger.info(
@@ -6043,12 +6034,16 @@ class ResearchLoop:
             f"  SGP correlation mispricing, media narrative inflation, calendar quirks.\n"
         )
 
-        # If Claude unavailable, defer the fully-built prompt and return
         if _defer_deep_work:
             await self._work_queue.enqueue("deep_work", prompt, priority=3)
             self._downtime_tracker.item_queued()
             logger.info("Research: deep work prompt deferred to work queue (Claude unavailable)")
             return
+
+        remaining = CLAUDE_ESCALATION_COOLDOWN - (_time.time() - self._last_claude_call)
+        if remaining > 0:
+            logger.debug(f"Deep work: waiting {remaining:.0f}s for cooldown")
+            await asyncio.sleep(remaining)
 
         try:
             result = await claude_code_query(prompt, hermes_caller="deep_work")
