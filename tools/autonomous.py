@@ -5222,13 +5222,13 @@ class ResearchLoop:
                 # Get live odds (DK scraper for game-level, Odds API for props)
                 if sport not in odds_cache:
                     if market.startswith("player_"):
-                        from tools.odds_api import get_odds
+                        from tools.odds_api_io import get_odds
                         odds_data = await get_odds(sport=sport, regions="us", markets="h2h,spreads,totals")
                     else:
                         from tools.dk_scraper import scrape_dk_odds
                         odds_data = await scrape_dk_odds(sport)
                         if odds_data.get("error") or not odds_data.get("games"):
-                            from tools.odds_api import get_odds
+                            from tools.odds_api_io import get_odds
                             odds_data = await get_odds(sport=sport, regions="us", markets="h2h,spreads,totals")
 
                     if not odds_data.get("error"):
@@ -5592,7 +5592,7 @@ class ResearchLoop:
                 # For player props: use Odds API prop scanner (DK scraper has no props)
                 if market.startswith("player_"):
                     from tools.prop_scanner import scan_props_ev
-                    from tools.odds_api import get_odds
+                    from tools.odds_api_io import get_odds
                     import uuid as _uuid
                     # Get upcoming games for this sport
                     if sport not in odds_cache:
@@ -5733,7 +5733,7 @@ class ResearchLoop:
 
                     # Odds API: needed when no games OR single-book data
                     if live_odds.get("error") or not live_odds.get("games") or _needs_multibook:
-                        from tools.odds_api import get_odds
+                        from tools.odds_api_io import get_odds
                         live_odds = await get_odds(
                             sport=sport,
                             regions="us",
