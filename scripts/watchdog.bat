@@ -26,6 +26,11 @@ if exist "venv\Scripts\python.exe" (
     python scripts\watchdog.py
 )
 
-echo [%date% %time%] Watchdog exited with code %ERRORLEVEL%. Restarting in 10s...
-timeout /t 10 /nobreak
+if %ERRORLEVEL% == 42 (
+    echo [%date% %time%] Another watchdog already running. Retrying in 300s...
+    timeout /t 300 /nobreak
+) else (
+    echo [%date% %time%] Watchdog exited with code %ERRORLEVEL%. Restarting in 10s...
+    timeout /t 10 /nobreak
+)
 goto loop

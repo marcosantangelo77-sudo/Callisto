@@ -145,7 +145,7 @@ def check_single_instance():
         _lock_fh.flush()
     except (IOError, OSError) as e:
         logger.error(f"Another watchdog is already running (lock held). Exiting. ({e})")
-        sys.exit(0)
+        sys.exit(42)  # Distinct code: lock held = another instance running
 
     # Step 3: Write PID file for diagnostic purposes
     try:
