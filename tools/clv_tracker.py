@@ -207,6 +207,23 @@ class CLVTracker:
             max_retries=10,
             operation="clv_tracker record_closing_line update",
         )
+
+        # Update any pending paper trades for this event
+        await execute_with_retry(
+            self._db,
+            "UPDATE paper_trades SET "
+            "closing_odds = ?, closing_implied = ?, "
+            "clv_implied = ? - signal_implied_prob "
+            "WHERE event_id = ? AND market = ? AND side = ? "
+            "AND closing_odds IS NULL "
+            "AND signal_implied_prob IS NOT NULL",
+            (closing_odds, round(implied, 4),
+             round(implied, 4),
+             event_id, market, team),
+            max_retries=10,
+            operation="clv_tracker record_closing_line paper_trades",
+        )
+
         await commit_with_retry(self._db, max_retries=10, operation="clv_tracker record_closing_line")
 
         logger.info(

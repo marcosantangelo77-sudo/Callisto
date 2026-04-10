@@ -1125,6 +1125,51 @@ class DataCollector:
 
         from tools.db_utils import commit_with_retry
         await commit_with_retry(self._db, operation="data_collector resolve_game_paper_trades")
+
+        # Backfill closing odds from closing_lines table for trades missing them
+        cl_backfilled = 0
+        backfill_cursor = await self._db.execute(
+            "SELECT trade_id, event_id, market, side, signal_implied_prob "
+            "FROM paper_trades "
+            "WHERE sport = ? AND game_date = ? AND closing_odds IS NULL",
+            (sport, game_date),
+        )
+        backfill_trades = await backfill_cursor.fetchall()
+
+        for bt in backfill_trades:
+            bt_id, bt_event, bt_market, bt_side, bt_signal_imp = bt
+            cl_cursor = await self._db.execute(
+                "SELECT closing_odds, closing_implied FROM closing_lines "
+                "WHERE event_id = ? AND market = ? AND team = ? "
+                "ORDER BY CASE WHEN source = 'Pinnacle' THEN 0 "
+                "WHEN source = 'LowVig.ag' THEN 1 ELSE 2 END, "
+                "captured_at DESC LIMIT 1",
+                (bt_event, bt_market, bt_side),
+            )
+            cl_row = await cl_cursor.fetchone()
+            if cl_row:
+                cl_odds, cl_implied = cl_row
+                clv = None
+                if bt_signal_imp is not None and cl_implied is not None:
+                    clv = round(cl_implied - bt_signal_imp, 4)
+                await self._db.execute(
+                    "UPDATE paper_trades SET closing_odds = ?, "
+                    "closing_implied = ?, clv_implied = ? "
+                    "WHERE trade_id = ?",
+                    (cl_odds, cl_implied, clv, bt_id),
+                )
+                cl_backfilled += 1
+
+        if cl_backfilled > 0:
+            await commit_with_retry(
+                self._db,
+                operation="data_collector backfill_closing_odds",
+            )
+            logger.info(
+                f"Backfilled closing odds for {cl_backfilled} paper trades "
+                f"({sport} {game_date})"
+            )
+
         logger.info(
             f"Resolved {resolved}/{len(trades)} game-level paper trades "
             f"for {sport} on {game_date} ({unmatched} unmatched)"
