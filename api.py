@@ -220,6 +220,24 @@ async def task_worker():
                 await queue.complete_task(task_id, result, session_id=session_id)
                 logger.info(f"Task {task_id} completed, session {session_id}")
 
+                # Wiki auto-file: compound task results into knowledge base
+                try:
+                    conclusion = result.get("conclusion") or result.get("summary", {}).get("conclusion")
+                    confidence = result.get("confidence_score") or result.get("summary", {}).get("confidence_score", 0.5)
+                    domain = result.get("domain", "GENERAL")
+                    if conclusion:
+                        from tools.knowledge_wiki import get_wiki
+                        wiki = get_wiki()
+                        async with aiosqlite.connect(memory.db_path) as wdb:
+                            await wdb.execute("PRAGMA busy_timeout = 60000")
+                            filed_topic = await wiki.file_task_result(
+                                wdb, query, conclusion, confidence, domain,
+                            )
+                            if filed_topic:
+                                logger.debug(f"Task {task_id} filed to wiki: {filed_topic}")
+                except Exception as e:
+                    logger.debug(f"Wiki auto-file failed for task {task_id} (non-fatal): {e}")
+
                 # Auto-follow-up: if session concluded INSUFFICIENT DATA, queue the next step
                 await _maybe_auto_followup(task_id, result)
             except Exception as e:
@@ -509,6 +527,64 @@ async def query_world(
         domain_enum, keyword=keyword, min_confidence=min_confidence, limit=limit
     )
     return {"domain": domain_enum.value, "count": len(results), "entries": results}
+
+
+# --- Knowledge Wiki endpoints (LLM Wiki pattern) ---
+
+@app.get("/wiki/stats")
+async def wiki_stats():
+    """Get wiki compilation statistics."""
+    from tools.knowledge_wiki import get_wiki
+    wiki = get_wiki()
+    async with aiosqlite.connect(memory.db_path) as db:
+        await db.execute("PRAGMA busy_timeout = 60000")
+        return await wiki.get_stats(db)
+
+
+@app.get("/wiki/articles")
+async def wiki_articles(domain: Optional[str] = None, limit: int = 50):
+    """List wiki articles, optionally filtered by domain."""
+    from tools.knowledge_wiki import get_wiki
+    wiki = get_wiki()
+    async with aiosqlite.connect(memory.db_path) as db:
+        await db.execute("PRAGMA busy_timeout = 60000")
+        articles = await wiki.list_articles(db, domain=domain, limit=limit)
+        return {"count": len(articles), "articles": articles}
+
+
+@app.get("/wiki/article/{topic}")
+async def wiki_article(topic: str):
+    """Get a specific wiki article by topic slug."""
+    from tools.knowledge_wiki import get_wiki
+    wiki = get_wiki()
+    async with aiosqlite.connect(memory.db_path) as db:
+        await db.execute("PRAGMA busy_timeout = 60000")
+        article = await wiki.get_article(db, topic)
+        if not article:
+            raise HTTPException(status_code=404, detail=f"Article '{topic}' not found")
+        return article
+
+
+@app.get("/wiki/search")
+async def wiki_search(q: str, limit: int = 10):
+    """Search wiki articles by keyword."""
+    from tools.knowledge_wiki import get_wiki
+    wiki = get_wiki()
+    async with aiosqlite.connect(memory.db_path) as db:
+        await db.execute("PRAGMA busy_timeout = 60000")
+        results = await wiki.search(db, q, limit=limit)
+        return {"query": q, "count": len(results), "results": results}
+
+
+@app.get("/wiki/contradictions")
+async def wiki_contradictions(unresolved_only: bool = True):
+    """Get wiki contradiction findings."""
+    from tools.knowledge_wiki import get_wiki
+    wiki = get_wiki()
+    async with aiosqlite.connect(memory.db_path) as db:
+        await db.execute("PRAGMA busy_timeout = 60000")
+        items = await wiki.get_contradictions(db, unresolved_only=unresolved_only)
+        return {"count": len(items), "contradictions": items}
 
 
 # --- Betting / Odds endpoints ---

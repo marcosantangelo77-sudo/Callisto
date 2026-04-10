@@ -2446,6 +2446,22 @@ class ResearchLoop:
                     except Exception as e:
                         logger.warning(f"Phase regime_analysis failed (non-fatal): {e}")
 
+                    # Phase 12: Knowledge wiki compilation (every 7 cycles)
+                    try:
+                        await asyncio.wait_for(self._phase_knowledge_compile(), timeout=180)
+                    except asyncio.TimeoutError:
+                        logger.warning("Phase knowledge_compile timed out after 180s — skipping")
+                    except Exception as e:
+                        logger.warning(f"Phase knowledge_compile failed (non-fatal): {e}")
+
+                    # Phase 13: Knowledge wiki lint (every 11 cycles — coprime with compile)
+                    try:
+                        await asyncio.wait_for(self._phase_knowledge_lint(), timeout=120)
+                    except asyncio.TimeoutError:
+                        logger.warning("Phase knowledge_lint timed out after 120s — skipping")
+                    except Exception as e:
+                        logger.warning(f"Phase knowledge_lint failed (non-fatal): {e}")
+
                 # ── Progress tracking: detect spinning ──
                 await self._check_progress()
 
@@ -6400,6 +6416,97 @@ class ResearchLoop:
             if key.startswith(sport + ":") and team_name.lower() in key.lower():
                 return val
         return None
+
+    async def _phase_knowledge_compile(self) -> None:
+        """Knowledge wiki compilation — LLM Wiki pattern (Karpathy).
+
+        Reads recent sessions/evidence/learnings and compiles them into
+        persistent, cross-referenced wiki articles. Knowledge compounds
+        instead of being re-discovered each time.
+
+        Runs every COMPILE_INTERVAL_CYCLES (7) — coprime with lint (11).
+        Uses Gemma 4 (local, free) for compilation.
+        """
+        from tools.knowledge_wiki import get_wiki, COMPILE_INTERVAL_CYCLES
+
+        if self._cycles % COMPILE_INTERVAL_CYCLES != 0:
+            return
+
+        db = self.data_collector._db
+        if not db:
+            return
+
+        try:
+            wiki = get_wiki()
+            stats = await wiki.compile(db, self._cycles)
+            created = stats.get("articles_created", 0)
+            updated = stats.get("articles_updated", 0)
+            if created or updated:
+                logger.info(
+                    f"Wiki compile: {created} new articles, {updated} updated"
+                )
+            try:
+                from tools.pipeline_integrity import get_checker
+                get_checker().record_phase_result("knowledge_compile", True)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"Knowledge compile phase failed: {e}")
+            try:
+                from tools.pipeline_integrity import get_checker
+                get_checker().record_phase_result("knowledge_compile", False)
+            except Exception:
+                pass
+
+    async def _phase_knowledge_lint(self) -> None:
+        """Knowledge wiki lint — detect contradictions, stale claims, orphans.
+
+        Scans wiki articles for:
+          - Contradictions: conflicting claims between articles
+          - Stale articles: not updated in >72 hours
+          - Orphans: articles with no cross-references
+
+        Runs every LINT_INTERVAL_CYCLES (11) — coprime with compile (7).
+        Uses Qwen 3.5 4B (ultra-fast classifier) for contradiction detection.
+        """
+        from tools.knowledge_wiki import get_wiki, LINT_INTERVAL_CYCLES
+
+        if self._cycles % LINT_INTERVAL_CYCLES != 0:
+            return
+
+        db = self.data_collector._db
+        if not db:
+            return
+
+        try:
+            wiki = get_wiki()
+            stats = await wiki.lint(db, self._cycles)
+
+            # Alert on high-severity contradictions
+            contradictions = stats.get("contradictions_found", 0)
+            if contradictions > 0:
+                try:
+                    from tools import telegram
+                    await telegram.alert_system(
+                        f"Wiki lint: {contradictions} contradictions detected. "
+                        f"Stale: {stats.get('stale_articles', 0)}, "
+                        f"Orphans: {stats.get('orphan_articles', 0)}"
+                    )
+                except Exception:
+                    pass
+
+            try:
+                from tools.pipeline_integrity import get_checker
+                get_checker().record_phase_result("knowledge_lint", True)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"Knowledge lint phase failed: {e}")
+            try:
+                from tools.pipeline_integrity import get_checker
+                get_checker().record_phase_result("knowledge_lint", False)
+            except Exception:
+                pass
 
     async def _phase_system_improvement(self) -> None:
         """Self-improvement phase — runs every SYSTEM_IMPROVEMENT_INTERVAL cycles.
