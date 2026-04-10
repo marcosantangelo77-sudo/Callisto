@@ -2550,6 +2550,14 @@ class ResearchLoop:
                 # the allocator to release pages back to the OS.
                 gc.collect()
 
+                # ── Unpause line_monitor BEFORE sleeping so it can take snapshots
+                # during the inter-cycle window. Previously this was in the finally
+                # block which ran after the sleep, giving the monitor ~0ms to run.
+                if self.line_monitor:
+                    self.line_monitor._paused = False
+                    self.line_monitor._pause_ack.clear()
+                    logger.info("line_monitor unpaused for inter-cycle snapshot window")
+
                 logger.info(
                     f"Research cycle #{self._cycles} complete — "
                     f"sleeping {RESEARCH_CYCLE_INTERVAL}s"
@@ -2562,11 +2570,10 @@ class ResearchLoop:
                 logger.error(f"Research loop error: {e}", exc_info=True)
                 await asyncio.sleep(120)
             finally:
-                # ── Always unpause line_monitor — runs on normal exit, break, and exception ──
+                # ── Safety net: always unpause on exception/cancel too ──
                 if self.line_monitor:
                     self.line_monitor._paused = False
                     self.line_monitor._pause_ack.clear()
-                    logger.debug("line_monitor unpaused after research cycle")
 
     async def _phase_self_repair(self) -> None:
         """

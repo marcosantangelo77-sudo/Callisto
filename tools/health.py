@@ -452,14 +452,14 @@ class SystemHealth:
                 except Exception as e:
                     results["espn"] = f"error: {e}"
 
-                # Odds API (just check DNS/connectivity, don't waste credits)
+                # Odds API (check odds-api.io connectivity, don't waste credits)
                 try:
                     r = await client.get(
-                        "https://api.the-odds-api.com/v4/sports/",
-                        params={"apiKey": "test"},
+                        "https://api.odds-api.io/v3/events",
+                        params={"sport": "basketball", "league": "usa-nba", "apiKey": "test"},
                     )
-                    # 401 = reachable but bad key, which is fine for health check
-                    results["odds_api"] = "ok" if r.status_code in (200, 401) else f"HTTP {r.status_code}"
+                    # 401/403 = reachable but bad key, which is fine for health check
+                    results["odds_api"] = "ok" if r.status_code in (200, 401, 403) else f"HTTP {r.status_code}"
                 except Exception as e:
                     results["odds_api"] = f"error: {e}"
 

@@ -535,15 +535,15 @@ class HermesMemory:
 
             top_hypos = await db.execute_fetchall(
                 """SELECT h.name, h.sport, h.market_type, h.thesis,
-                          COUNT(be.id) as events,
+                          COUNT(DISTINCT be.event_id) as events,
                           SUM(CASE WHEN be.signal_generated=1 THEN 1 ELSE 0 END) as signals,
                           AVG(be.edge) as avg_edge
                    FROM hypotheses h
                    LEFT JOIN backtest_events be ON h.hypothesis_id = be.hypothesis_id
+                   WHERE h.status IN ('backtesting', 'paper_trading', 'live', 'draft')
                    GROUP BY h.hypothesis_id
-                   HAVING events > 0
-                   ORDER BY signals DESC, avg_edge DESC
-                   LIMIT 5"""
+                   ORDER BY signals DESC, events DESC
+                   LIMIT 25"""
             )
 
             rejected = await db.execute_fetchall(

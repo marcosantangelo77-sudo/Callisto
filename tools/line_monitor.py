@@ -158,10 +158,18 @@ class LineMonitor:
         if self._running:
             return
         self._running = True
+        # Take immediate startup snapshots before the loop begins.
+        # The autonomous loop has a 15s startup delay — use that window
+        # to get at least one round of fresh data before it pauses us.
+        for sport in MONITORED_SPORTS:
+            try:
+                await self._snapshot_sport(sport.strip())
+            except Exception as e:
+                logger.warning(f"Startup snapshot for {sport} failed: {e}")
         self._task = asyncio.create_task(self._monitor_loop())
         logger.info(
             f"Line monitor started — {len(MONITORED_SPORTS)} sports, "
-            f"{SNAPSHOT_INTERVAL}s interval"
+            f"{SNAPSHOT_INTERVAL}s interval (startup snapshots taken)"
         )
 
     async def stop(self) -> None:
