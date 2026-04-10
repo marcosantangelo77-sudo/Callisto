@@ -1429,6 +1429,25 @@ class HypothesisManager:
                 )
                 _use_backtest_evidence = True
 
+        # ── Backtest-based rejection gate for paper_trading hypotheses ──
+        # Paper trade n is usually tiny, so the standard auto-reject (p>0.15, n>=30)
+        # only fires on backtest data. Check backtest stats directly: if the thesis
+        # is noise after 30+ backtest signals, don't wait for paper trade confirmation.
+        if status == "paper_trading" and not _use_backtest_evidence:
+            bt_report = await self.evaluate_significance(hypothesis_id, "backtest")
+            bt_p = bt_report.get("significance", {}).get("p_value_binomial", 1.0)
+            bt_n = bt_report.get("sample_size", 0)
+            bt_used_all = bt_report.get("used_all_events", False)
+            if not bt_used_all and bt_p > 0.30 and bt_n > 30:
+                await self.update_status(hypothesis_id, "rejected", "auto")
+                return {
+                    "action": "rejected",
+                    "reason": (
+                        f"Backtest p={bt_p:.4f} > 0.30 with {bt_n} signals — "
+                        f"noise after sufficient data exposure."
+                    ),
+                }
+
         # ── Standard readiness check (statistical significance, gates, etc.) ──
         _stage_override = "backtest" if _use_backtest_evidence else None
         readiness = await self.check_promotion_readiness(hypothesis_id, stage_override=_stage_override)
