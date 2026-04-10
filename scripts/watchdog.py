@@ -381,9 +381,29 @@ def main():
                         except Exception:
                             pass
                 api_proc = None
-                consecutive_failures = FAILURE_THRESHOLD  # Force immediate restart
-                consecutive_restarts = 0  # Reset backoff for intentional restarts
-                time.sleep(3)
+
+                if not wait_for_port_free(30):
+                    logger.warning("Port still occupied after kill — retrying")
+                    kill_port_8420()
+                    wait_for_port_free(15)
+
+                try:
+                    api_proc = start_api()
+                    last_restart_time = time.time()
+                    consecutive_failures = 0
+                    consecutive_restarts = 0
+                    logger.info(f"Waiting {STARTUP_GRACE}s for API startup...")
+                    time.sleep(STARTUP_GRACE)
+                    if check_health():
+                        logger.info("API restarted successfully after code reload")
+                        log_flush()
+                    else:
+                        logger.warning("API started but health check failed — will monitor")
+                        consecutive_failures = 1
+                except Exception as e:
+                    logger.error(f"Failed to restart API after code reload: {e}")
+                    consecutive_failures = FAILURE_THRESHOLD
+                continue
 
             # ── Health check ──
             healthy = check_health()
