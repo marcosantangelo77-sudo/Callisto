@@ -2597,7 +2597,7 @@ class ResearchLoop:
                 # during the inter-cycle window. Previously this was in the finally
                 # block which ran after the sleep, giving the monitor ~0ms to run.
                 if self.line_monitor:
-                    self.line_monitor._paused = False
+                    self.line_monitor.resume()  # Releases snapshot lock atomically
                     self.line_monitor._pause_ack.clear()
                     logger.info("line_monitor unpaused for inter-cycle snapshot window")
 
@@ -2615,7 +2615,7 @@ class ResearchLoop:
             finally:
                 # ── Safety net: always unpause on exception/cancel too ──
                 if self.line_monitor:
-                    self.line_monitor._paused = False
+                    self.line_monitor.resume()  # Releases snapshot lock if held
                     self.line_monitor._pause_ack.clear()
 
     async def _phase_self_repair(self) -> None:

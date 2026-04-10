@@ -122,7 +122,17 @@ class DeferredWorkQueue:
             )).fetchone()
             from tools.db_utils import execute_with_retry, commit_with_retry
             if row and row[0] >= 50:
-                # Delete lowest priority (highest number) pending item
+                # Delete lowest priority (highest number) pending item — log it
+                # so we can tell when work is being silently shed under load.
+                evict_row = await (await db.execute(
+                    "SELECT id, work_type, prompt FROM deferred_work_queue "
+                    "WHERE status = 'pending' ORDER BY priority DESC, created_at ASC LIMIT 1"
+                )).fetchone()
+                if evict_row:
+                    logger.warning(
+                        f"WORK QUEUE FULL (50) — evicting low-priority item id={evict_row[0]} "
+                        f"type={evict_row[1]} prompt={evict_row[2][:80]!r}"
+                    )
                 await execute_with_retry(
                     db,
                     "DELETE FROM deferred_work_queue WHERE id = ("

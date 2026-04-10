@@ -3089,13 +3089,17 @@ class BacktestEngine:
         # Remove trailing periods from abbreviations (e.g. "St." -> "st")
         n = " ".join(n.split())
 
-        # Build alias map once (lazy singleton)
-        if not BacktestEngine._TEAM_ALIASES:
-            BacktestEngine._TEAM_ALIASES = BacktestEngine._build_alias_map()
+        # Build alias map once (lazy singleton).
+        # Build into a local first, then atomically assign — this guarantees
+        # readers never see a partially-built dict (race-safe with GIL).
+        alias_map = BacktestEngine._TEAM_ALIASES
+        if not alias_map:
+            alias_map = BacktestEngine._build_alias_map()
+            BacktestEngine._TEAM_ALIASES = alias_map
 
         # Direct alias lookup
-        if n in BacktestEngine._TEAM_ALIASES:
-            return BacktestEngine._TEAM_ALIASES[n]
+        if n in alias_map:
+            return alias_map[n]
 
         # Fallback: city abbreviation replacement for unknown names
         city_replacements = {

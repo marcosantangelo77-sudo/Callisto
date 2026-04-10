@@ -471,6 +471,45 @@ app = FastAPI(
 )
 
 
+# Global exception handler — convert any unhandled error into a structured 500
+# instead of crashing the request handler. Logs full traceback for debugging.
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+import traceback as _traceback
+
+
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception):
+    """Catch any unhandled exception and return a structured JSON error."""
+    # Don't intercept FastAPI's own HTTPException — let it pass through
+    if isinstance(exc, HTTPException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": exc.detail, "status": exc.status_code},
+        )
+    tb = _traceback.format_exc()
+    logger.error(
+        f"Unhandled exception in {request.method} {request.url.path}: {exc}\n{tb}"
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": str(exc),
+            "type": type(exc).__name__,
+            "path": request.url.path,
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Return clean 422 instead of FastAPI's default verbose error."""
+    return JSONResponse(
+        status_code=422,
+        content={"error": "Validation failed", "details": exc.errors()},
+    )
+
+
 class TaskSubmission(BaseModel):
     query: str
     priority: int = 0

@@ -67,8 +67,11 @@ MONITORED_SPORTS = os.getenv(
 ).split(",")
 
 # Movement thresholds — what counts as "significant"
-PRICE_MOVEMENT_THRESHOLD = 10    # American odds points (e.g., -110 → -120)
-POINT_MOVEMENT_THRESHOLD = 1.0   # Spread/total points (e.g., -3.5 → -4.5)
+# Tightened from 10/1.0: at -110, +5 is ~2% implied prob change which
+# is a meaningful sharp move. 0.5 captures key-number crosses (3, 7) that
+# can flip cover probability by 5-10%.
+PRICE_MOVEMENT_THRESHOLD = 5     # American odds points (~2% implied prob)
+POINT_MOVEMENT_THRESHOLD = 0.5   # Spread/total half-points (key number sensitivity)
 
 # Minimum edge for alert
 MIN_EDGE_ALERT = 0.03  # 3% edge minimum to flag as interesting
@@ -85,6 +88,7 @@ class LineMonitor:
         self._paused = False  # Set True to pause snapshot writes (during backtests)
         self._pause_ack = asyncio.Event()  # Signals when monitor has entered paused state (no in-flight DB ops)
         self._in_flight_db = False  # True while a snapshot DB write is in progress
+        self._snapshot_lock = asyncio.Lock()  # Atomic guard around _process_snapshot
         self._snapshots: dict[str, dict] = {}  # sport -> last snapshot (only latest per sport)
         from collections import deque
         self._alerts: deque = deque(maxlen=100)  # Hard-capped at 100 (was unbounded list)
@@ -188,22 +192,45 @@ class LineMonitor:
     async def wait_for_drain(self, timeout: float = 60) -> bool:
         """Pause the monitor and wait until all in-flight DB ops complete.
 
-        Sets _paused, then polls until _pause_ack is set AND _in_flight_db
-        is False. Returns True if drained within timeout, False otherwise.
+        Sets _paused, waits for _pause_ack, then ACQUIRES the snapshot lock
+        to guarantee no new snapshot can start. Returns True if drained.
+        Caller MUST eventually call resume() to release the lock.
         """
         self._paused = True
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             # ack means loop reached top (no new snapshots starting)
-            # not _in_flight_db means current _process_snapshot finished
             if self._pause_ack.is_set() and not self._in_flight_db:
-                return True
+                # Atomically grab the snapshot lock to prevent any new snapshot
+                # from starting between our check and the caller's work
+                try:
+                    await asyncio.wait_for(
+                        self._snapshot_lock.acquire(),
+                        timeout=max(1.0, deadline - time.monotonic()),
+                    )
+                    return True
+                except asyncio.TimeoutError:
+                    break
             await asyncio.sleep(0.5)
         logger.warning(
             f"wait_for_drain timed out after {timeout}s "
             f"(ack={self._pause_ack.is_set()}, in_flight={self._in_flight_db})"
         )
         return False
+
+    def resume(self) -> None:
+        """Release the drain lock and unpause the monitor.
+
+        Must be called after wait_for_drain() succeeds, in a try/finally
+        block to guarantee the lock is released.
+        """
+        self._paused = False
+        if self._snapshot_lock.locked():
+            try:
+                self._snapshot_lock.release()
+            except RuntimeError:
+                # Already released — non-fatal
+                pass
 
     async def _monitor_loop(self) -> None:
         """Main monitoring loop — snapshot, compare, alert.
@@ -660,17 +687,18 @@ class LineMonitor:
 
     async def _process_snapshot(self, sport: str, new_snapshot: dict) -> None:
         """Process an odds snapshot — store, scan edges, detect movements.
-        Sets _in_flight_db while DB writes are active so autonomous loop
-        can wait for drain before starting backtest phases.
+        Acquires _snapshot_lock so wait_for_drain() can guarantee no
+        in-flight snapshot is running. Sets _in_flight_db for legacy callers.
 
         Shared pipeline used by both primary (Odds API) and fallback
         (DraftKings scraper, OddsPapi) snapshot paths.
         """
-        self._in_flight_db = True
-        try:
-            await self._process_snapshot_inner(sport, new_snapshot)
-        finally:
-            self._in_flight_db = False
+        async with self._snapshot_lock:
+            self._in_flight_db = True
+            try:
+                await self._process_snapshot_inner(sport, new_snapshot)
+            finally:
+                self._in_flight_db = False
 
     async def _process_snapshot_inner(self, sport: str, new_snapshot: dict) -> None:
         """Inner snapshot processing — separated so _in_flight_db wraps all DB ops."""

@@ -317,13 +317,12 @@ class DataCollector:
             if venue_meta:
                 context.update(venue_meta)
 
-            # Store game context — use INSERT OR REPLACE to ensure enriched
-            # data overwrites older sparse entries. The UNIQUE(sport, event_id)
-            # constraint means re-collecting a game updates its context with
-            # officials, rest_days, broadcasts, etc. that may have been missing
-            # from earlier collections (due to DB locks or pre-enrichment code).
+            # Store game context — only overwrite if the new context is richer
+            # (more keys) than the existing one. Prevents sparse re-collections
+            # from regressing enriched data with officials/rest/broadcasts.
             try:
                 from tools.db_utils import execute_with_retry
+                context_json = json.dumps(context)
                 await execute_with_retry(
                     self._db,
                     "INSERT INTO game_contexts "
@@ -331,14 +330,18 @@ class DataCollector:
                     "home_score, away_score, context_json) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(sport, event_id) DO UPDATE SET "
-                    "context_json = excluded.context_json, "
-                    "home_score = excluded.home_score, "
-                    "away_score = excluded.away_score",
+                    "context_json = CASE "
+                    "  WHEN length(excluded.context_json) >= length(context_json) "
+                    "    THEN excluded.context_json "
+                    "  ELSE context_json "
+                    "END, "
+                    "home_score = COALESCE(excluded.home_score, home_score), "
+                    "away_score = COALESCE(excluded.away_score, away_score)",
                     (
                         sport, event_id, game_date_fmt,
                         home_team, away_team,
                         home_score, away_score,
-                        json.dumps(context),
+                        context_json,
                     ),
                     operation="data_collector store_game",
                 )
@@ -456,6 +459,10 @@ class DataCollector:
             boxscore = box_data.get("boxscore", {})
             players_data = boxscore.get("players", [])
 
+            # Track data quality — too many dropped athletes signals partial response
+            dropped_athletes = 0
+            seen_athletes = 0
+
             for team_data in players_data:
                 team_name = team_data.get("team", {}).get("displayName", "")
                 statistics = team_data.get("statistics", [])
@@ -465,10 +472,12 @@ class DataCollector:
                     athletes = stat_group.get("athletes", [])
 
                     for athlete in athletes:
+                        seen_athletes += 1
                         player_name = athlete.get("athlete", {}).get("displayName", "")
                         stats = athlete.get("stats", [])
 
                         if not player_name or not stats:
+                            dropped_athletes += 1
                             continue
 
                         # Map label→value
@@ -483,6 +492,13 @@ class DataCollector:
                             category=category,
                         )
                         total_players += stored
+
+            # Warn if box score response was incomplete
+            if seen_athletes > 0 and dropped_athletes / seen_athletes > 0.2:
+                logger.warning(
+                    f"Box score {sport} {event_id}: dropped {dropped_athletes}/{seen_athletes} "
+                    f"athletes (>20%) — ESPN response may be incomplete"
+                )
 
         from tools.db_utils import commit_with_retry
         await commit_with_retry(self._db, operation="data_collector collect_box_scores")

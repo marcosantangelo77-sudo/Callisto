@@ -43,6 +43,7 @@ def nba_game_sim(
     off_rtg_std: float = 5.0,  # game-to-game offensive variance
     pace_std: float = 3.0,     # game-to-game pace variance
     n_sims: int = 100_000,
+    seed: Optional[int] = None,  # Set for reproducibility (testing/QA)
 ) -> dict:
     """
     HOW BOOKS MODEL NBA GAMES:
@@ -55,11 +56,15 @@ def nba_game_sim(
       Even matchup (112/112/112/112, 100 pace): home ML ≈ 0.61, margin ≈ 2.5
       Mismatch (119off/108def vs 109off/116def): home ML > 0.95
     """
+    # Use a dedicated RNG so seed=None still produces fresh randomness in production
+    # but seed=int gives reproducible results for tests/QA.
+    rng = np.random.default_rng(seed)
+
     # Expected pace for this matchup
     exp_pace = (team_a_pace * team_b_pace) / league_avg_pace
 
     # Simulate pace (shared — both teams play at same pace)
-    pace = np.random.normal(exp_pace, pace_std, n_sims)
+    pace = rng.normal(exp_pace, pace_std, n_sims)
     pace = np.maximum(pace, 80)
 
     # Opponent-adjusted offensive efficiency
@@ -67,8 +72,8 @@ def nba_game_sim(
     b_adj_off = (team_b_off_rtg * team_a_def_rtg) / league_avg_off_rtg
 
     # Add home court, rest, and random variance
-    a_eff = np.random.normal(a_adj_off + home_adv + rest_adj_a, off_rtg_std, n_sims)
-    b_eff = np.random.normal(b_adj_off + rest_adj_b, off_rtg_std, n_sims)
+    a_eff = rng.normal(a_adj_off + home_adv + rest_adj_a, off_rtg_std, n_sims)
+    b_eff = rng.normal(b_adj_off + rest_adj_b, off_rtg_std, n_sims)
 
     # Points = (efficiency / 100) × possessions
     a_pts = np.round(np.maximum((a_eff / 100) * pace, 70)).astype(int)
@@ -112,6 +117,7 @@ def nfl_game_sim(
     team_b_expected_pts: float,
     overdispersion: float = 1.5,
     n_sims: int = 100_000,
+    seed: Optional[int] = None,
 ) -> dict:
     """
     Negative Binomial model for NFL.
@@ -129,13 +135,18 @@ def nfl_game_sim(
       fav_pts = (total + |spread|) / 2
       dog_pts = (total - |spread|) / 2
     """
+    rng = np.random.default_rng(seed)
+
     def _negbin_sample(mean_pts, n):
+        # Guard: overdispersion must be > 1 (variance > mean for NegBin)
+        if overdispersion <= 1.0:
+            return np.zeros(n, dtype=int)
         p = 1 / overdispersion
         r = mean_pts * p / (1 - p)
-        if r <= 0:
+        if r <= 0 or not np.isfinite(r):
             return np.zeros(n, dtype=int)
         # numpy's negative_binomial: n=r, p=p
-        return np.random.negative_binomial(r, p, size=n)
+        return rng.negative_binomial(r, p, size=n)
 
     a = _negbin_sample(team_a_expected_pts, n_sims).astype(int)
     b = _negbin_sample(team_b_expected_pts, n_sims).astype(int)

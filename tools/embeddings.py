@@ -170,26 +170,38 @@ class VectorStore:
         collection: str,
         items: list[tuple[str, list[float], Optional[dict]]],
     ) -> int:
-        """Store multiple (text, embedding, metadata) tuples. Returns count stored."""
+        """Store multiple (text, embedding, metadata) tuples. Returns count stored.
+
+        Uses the global write lock and execute_with_retry so concurrent
+        embedders don't crash on SQLite WAL contention.
+        """
+        from tools.db_utils import get_write_lock, execute_with_retry, commit_with_retry
+        write_lock = get_write_lock()
         count = 0
-        for text, embedding, metadata in items:
-            content_hash = _content_hash(text)
-            cursor = await self._db.execute(
-                "INSERT OR IGNORE INTO embeddings "
-                "(collection, content_hash, content_text, embedding_json, embedding_blob, metadata_json) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    collection,
-                    content_hash,
-                    text,
-                    json.dumps(embedding),
-                    _to_blob(embedding),
-                    json.dumps(metadata) if metadata else None,
-                ),
-            )
-            if cursor.rowcount > 0:
-                count += 1
-        await self._db.commit()
+        async with write_lock:
+            for text, embedding, metadata in items:
+                content_hash = _content_hash(text)
+                try:
+                    cursor = await execute_with_retry(
+                        self._db,
+                        "INSERT OR IGNORE INTO embeddings "
+                        "(collection, content_hash, content_text, embedding_json, embedding_blob, metadata_json) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            collection,
+                            content_hash,
+                            text,
+                            json.dumps(embedding),
+                            _to_blob(embedding),
+                            json.dumps(metadata) if metadata else None,
+                        ),
+                        operation="vector_store store_batch insert",
+                    )
+                    if cursor.rowcount > 0:
+                        count += 1
+                except Exception as e:
+                    logger.warning(f"store_batch: failed insert for hash {content_hash[:12]}: {e}")
+            await commit_with_retry(self._db, operation="vector_store store_batch commit")
         return count
 
     async def search(

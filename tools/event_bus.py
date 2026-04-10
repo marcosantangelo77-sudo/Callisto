@@ -99,7 +99,15 @@ class EventBus:
                     "event_data": json.dumps(data),
                 })
             except asyncio.QueueFull:
-                logger.warning("Audit queue full, dropping oldest event")
+                # Track drops so we know if the audit trail has gaps
+                if not hasattr(self, "_audit_drops"):
+                    self._audit_drops = 0
+                self._audit_drops += 1
+                logger.error(
+                    f"AUDIT QUEUE FULL — dropped event {event_type} "
+                    f"(total drops: {self._audit_drops}). "
+                    f"Audit trail has gaps. Increase queue size or drain faster."
+                )
 
     async def _safe_dispatch(self, callback: Callable, event_type: str, data: dict) -> None:
         """Dispatch to a single subscriber with error isolation."""

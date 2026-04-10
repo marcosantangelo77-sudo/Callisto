@@ -226,8 +226,10 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads", sport: str
             implied_range = max(implied_probs) - min(implied_probs)
             avg_implied = sum(implied_probs) / len(implied_probs)
 
-            # Sanity: implied range > 25% is almost certainly data contamination
-            if implied_range > 0.25:
+            # Sanity: implied range > 12% is almost certainly data contamination.
+            # Tightened from 25% — at 4+ books with 1-2% vig each, real divergence
+            # rarely exceeds 8%; >12% is a signal of contaminated/wrong-side data.
+            if implied_range > 0.12:
                 logger.warning(
                     f"Implausible implied range {implied_range:.1%} for {team} "
                     f"{market} — likely data contamination, skipping"

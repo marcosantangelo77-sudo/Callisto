@@ -746,10 +746,12 @@ class Orchestrator:
         logger.info(f"Session {session.session_id}: starting — {query}")
         t0 = time.monotonic()
 
-        # Load tiered cache (hot cache auto-injected, warm available via tools)
+        # Load tiered cache (hot cache auto-injected, warm available via tools).
+        # Local variable, not instance attribute, to prevent cross-session pollution
+        # if the same Orchestrator instance handles concurrent run_session() calls.
         cache = get_cache_manager()
-        self._memory_context = await cache.get_memory_context()
-        logger.info(f"Session {session.session_id}: hot cache loaded ({len(self._memory_context)} chars)")
+        memory_context = await cache.get_memory_context()
+        logger.info(f"Session {session.session_id}: hot cache loaded ({len(memory_context)} chars)")
 
         try:
             # Step 1: Declare Scope
