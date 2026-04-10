@@ -2829,7 +2829,10 @@ class ResearchLoop:
         if new_critical:
             from tools.claude_code import claude_code_query
 
-            if self._claude_ok():
+            now = time.time()
+            if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
+                logger.debug("DIAG: skipping Claude escalation — cooldown active")
+            elif self._claude_ok():
                 # Load error patterns for institutional memory
                 _error_patterns = ""
                 try:

@@ -1834,16 +1834,12 @@ class BacktestEngine:
             # Structured filters are authoritative — skip regex fallbacks
             return True
 
-        # ── GUARD: No structured filters AND no context_factors ──
-        # _needs_context_filter() may have triggered from broad keywords in
-        # hypothesis name. Without explicit context_factors, regex fallback
-        # produces identical filtering across different hypotheses.
-        # FAIL CLOSED: if we can't differentiate this hypothesis's events
-        # from the generic pool, reject the game rather than accept all.
-        if not cf_set:
-            return False
-
-        # ── LEGACY REGEX FALLBACKS (for hypotheses without structured filters) ──
+        # ── REGEX FALLBACKS (for hypotheses without structured filters) ──
+        # When context_factors is empty, fall through to regex-based filtering
+        # which matches hypothesis keywords (sandwich, revenge, blowout, etc.)
+        # to specific game_context fields. Each keyword maps to a DIFFERENT
+        # filter — this correctly differentiates hypotheses by their conditions.
+        # Fail-closed at end of section if no regex pattern matches.
         # Track whether ANY filter pattern matched.  If none match, the
         # hypothesis text is too vague to derive filters from → fail closed.
         _any_filter_matched = False
