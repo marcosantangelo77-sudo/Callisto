@@ -1259,7 +1259,7 @@ RESEARCH_CYCLE_INTERVAL = 60        # 1 min between cycles — tight as possible
 DATA_COLLECTION_INTERVAL = 300      # 5 min between data pulls — fresher data for live edges
 HYPOTHESIS_GEN_INTERVAL = 120       # 2 min between hypothesis generation — Claude drives, smaller batches
 BACKTEST_BATCH_SIZE = 5             # 50 was timing out every cycle (5min/hyp from DB locks). 5 fits in 600s.
-CLAUDE_ESCALATION_COOLDOWN = 10     # 10s cooldown — 45 calls/hr means ~80s natural spacing, let rate limiter govern
+CLAUDE_ESCALATION_COOLDOWN = 75      # 75s cooldown — prevents burst of 3-5 calls in 30s that was causing 5x/day stalls
 SYSTEM_IMPROVEMENT_INTERVAL = 11    # Run system improvement every N cycles (prime — avoids collision with regime/integrity)
 REGIME_ANALYSIS_INTERVAL = 7        # Run regime analysis every N cycles — regime changes are slow (coprime with 4,11,13)
 
@@ -5798,8 +5798,8 @@ class ResearchLoop:
         ACTIONABLE output: hypotheses to create, hypotheses to reject, or
         specific pipeline fixes. If it can't act, it shouldn't call.
 
-        NO cooldown gate — deep work is the most valuable phase. If Claude
-        is available, use it. The rate limiter handles the rest.
+        Cooldown-gated to prevent burst stalls — deep work is valuable but
+        firing it 10s after interpret_backtests was causing 5x/day rate limit hits.
 
         When Claude is unavailable: defers the prompt to work queue AND
         runs local model fallback for basic maintenance (reject zero-signal
@@ -5809,7 +5809,11 @@ class ResearchLoop:
         import time as _time
 
         now = _time.time()
-        # No cooldown check — deep work should always fire if Claude is available
+        # Respect inter-phase cooldown to prevent burst stalls
+        if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
+            wait = CLAUDE_ESCALATION_COOLDOWN - (now - self._last_claude_call)
+            logger.debug(f"Deep work: waiting {wait:.0f}s for inter-phase cooldown")
+            await asyncio.sleep(min(wait, CLAUDE_ESCALATION_COOLDOWN))
         if not self._claude_ok():
             # Local model deep work via model ladder (Qwen3-14B primary)
             # Much better than rule-based: structured diagnosis, JSON output

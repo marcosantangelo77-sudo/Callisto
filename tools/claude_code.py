@@ -38,10 +38,10 @@ CLAUDE_TIMEOUT = int(os.getenv("CLAUDE_TIMEOUT", "300"))  # seconds
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
 # Rate limit / backoff configuration
-INITIAL_BACKOFF = 120       # 2 min after first rate limit (recover fast)
+INITIAL_BACKOFF = 300       # 5 min after first rate limit — 2 min was too short, causing rapid re-stalls
 MAX_BACKOFF = 3600          # 1 hour max backoff
 BACKOFF_MULTIPLIER = 1.5    # Gentler ramp — we want to stay aggressive
-MAX_CALLS_PER_HOUR = 45     # Claude Max subscription — let rate limit detection handle the real ceiling
+MAX_CALLS_PER_HOUR = 35     # Buffer below actual Claude Max ceiling — hitting 45 triggers hard stalls
 RATE_LIMIT_PATTERNS = [
     "rate limit",
     "rate_limit",
