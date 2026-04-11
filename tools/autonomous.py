@@ -2246,7 +2246,7 @@ class ResearchLoop:
                 # wait_for_drain() sets _paused, waits for loop ack AND in-flight DB
                 # ops to complete — no more fire-and-forget WAL contention.
                 if self.line_monitor:
-                    drained = await self.line_monitor.wait_for_drain(timeout=120)
+                    drained = await self.line_monitor.wait_for_drain(timeout=30)
                     if drained:
                         logger.debug("line_monitor paused and drained for research cycle")
                     else:

@@ -327,10 +327,14 @@ class LineMonitor:
 
         total_stored = 0
         for sport in prop_sports:
+            if self._paused:
+                break
             try:
                 result = await scrape_all_props(sport)
                 if result.get("error") or not result.get("props"):
                     continue
+                if self._paused:
+                    break
                 stored = await store_prop_snapshot(result["props"], sport, self.db_path)
                 total_stored += stored
                 logger.info(
