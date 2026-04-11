@@ -983,6 +983,18 @@ class HypothesisManager:
             )
         )
 
+        # Losing record rejection: hit_rate below 45% after 12+ signals means
+        # the hypothesis is actively losing money. The p-value tiers (>0.50 at n>=15)
+        # miss these because a 44% hit rate at n=16 gives p≈0.35 — not high enough.
+        if not should_reject and not used_all_events and status == "backtesting":
+            _hit_rate = report.get("results", {}).get("hit_rate", 0.5)
+            if n >= 12 and _hit_rate < 0.45:
+                should_reject = True
+                checks.append(
+                    f"AUTO-REJECT: hit_rate={_hit_rate:.1%} < 45% with {n} signals — "
+                    f"actively losing, edge is negative"
+                )
+
         # Low signal rate rejection: hypothesis tested 100+ distinct events but
         # generated signals on <2%. The edge condition is too rare or nonexistent.
         # All existing tiers gate on signal count n, so hypotheses with 500 events
@@ -1432,6 +1444,22 @@ class HypothesisManager:
                 if returns:
                     roi = sum(returns) / len(returns)
                     if roi <= 0:
+                        # Auto-reject paper traders with clearly losing records.
+                        # Without this, losing hypotheses stay in paper_trading
+                        # indefinitely since the only exit is promotion (ROI>0)
+                        # or the bt_p>0.30/bt_n>30 backtest gate below.
+                        n_resolved = len(resolved_trades)
+                        n_losses = sum(1 for r in returns if r < 0)
+                        loss_rate = n_losses / n_resolved if n_resolved else 0
+                        if n_resolved >= 7 and loss_rate >= 0.60:
+                            await self.update_status(hypothesis_id, "rejected", "auto")
+                            return {
+                                "action": "rejected",
+                                "reason": (
+                                    f"Paper trade ROI={roi:.2%}, {n_losses}/{n_resolved} losses "
+                                    f"({loss_rate:.0%}) — auto-demoting losing paper trader."
+                                ),
+                            }
                         return {
                             "action": "held",
                             "reason": f"Paper trade ROI is {roi:.2%} — need positive ROI for live promotion.",
