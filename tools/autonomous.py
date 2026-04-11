@@ -3632,6 +3632,7 @@ class ResearchLoop:
                     f"  - Home underdog ATS\n"
                     f"  - Eliminated team fades\n"
                     f"  - Basic weather totals\n"
+                    f"  - Blowout-loss bounce-back (63 variants tested, 0 promoted, 3 anti-predictive at p<0.02 — structurally dead)\n"
                     f"  - Any hypothesis that is just 'situational factor X is underpriced'\n"
                     f"    without specifying WHY models can't capture it\n\n"
                     f"RESPOND WITH EXACTLY THIS JSON (no other text):\n"
