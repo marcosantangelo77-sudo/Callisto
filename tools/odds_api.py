@@ -135,7 +135,11 @@ async def get_odds(
             "credits": get_credit_status(),
         }
     except httpx.HTTPStatusError as e:
-        logger.error(f"Odds API HTTP error: {e.response.status_code}")
+        # 404 = sport not currently active (off-season), demote to debug
+        if e.response.status_code == 404:
+            logger.debug(f"Odds API 404 (sport inactive): {sport}")
+        else:
+            logger.error(f"Odds API HTTP error: {e.response.status_code}")
         return {"error": f"HTTP {e.response.status_code}", "games": []}
     except Exception as e:
         logger.error(f"Odds API error: {e}")

@@ -38,6 +38,10 @@ _FREE_LIMIT = 250
 # Shared client
 _client: Optional[httpx.AsyncClient] = None
 
+# Rate limit cooldown — when 429 hit, back off entirely for this long
+_cooldown_until: float = 0.0
+_COOLDOWN_SECONDS = 300  # 5 min
+
 # Sport key mapping: odds_api style -> OddsPapi sportId
 # These are discovered via the /v4/sports endpoint; common IDs:
 SPORT_IDS = {
@@ -159,9 +163,16 @@ def _check_budget(cost: int = 1) -> Optional[str]:
 
 async def _api_get(endpoint: str, params: dict) -> dict:
     """Make an authenticated GET request to OddsPapi."""
+    global _cooldown_until
     budget_err = _check_budget()
     if budget_err:
         return {"error": budget_err}
+
+    # Honor cooldown after a 429 — don't hammer the rate limiter
+    now = time.monotonic()
+    if now < _cooldown_until:
+        remaining = int(_cooldown_until - now)
+        return {"error": f"OddsPapi in cooldown ({remaining}s remaining)"}
 
     params["apiKey"] = ODDSPAPI_API_KEY
     client = _get_client()
@@ -172,8 +183,19 @@ async def _api_get(endpoint: str, params: dict) -> dict:
         _increment_usage()
         return resp.json()
     except httpx.HTTPStatusError as e:
-        logger.error(f"OddsPapi HTTP error: {e.response.status_code} on {endpoint}")
-        return {"error": f"HTTP {e.response.status_code}"}
+        status = e.response.status_code
+        # Enter cooldown on rate limit
+        if status == 429:
+            _cooldown_until = time.monotonic() + _COOLDOWN_SECONDS
+            logger.warning(
+                f"OddsPapi 429 — entering {_COOLDOWN_SECONDS}s cooldown to avoid hammering"
+            )
+        # Demote 400 to debug — usually means tournament/date has no data
+        if status == 400:
+            logger.debug(f"OddsPapi 400 (no data) on {endpoint}")
+        else:
+            logger.error(f"OddsPapi HTTP error: {status} on {endpoint}")
+        return {"error": f"HTTP {status}"}
     except httpx.TimeoutException:
         logger.error(f"OddsPapi timeout on {endpoint}")
         return {"error": "Request timeout"}

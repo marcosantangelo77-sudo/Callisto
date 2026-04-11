@@ -271,13 +271,27 @@ class LineMonitor:
                     elif remaining < 100:
                         interval = max(SNAPSHOT_INTERVAL, 1800)  # 30min when moderate
 
+                # Cycle counter for backoff scheduling
+                if not hasattr(self, "_cycle_n"):
+                    self._cycle_n = 0
+                self._cycle_n += 1
+
                 for sport in MONITORED_SPORTS:
                     if self._paused:
                         break  # Exit early — autonomous loop waiting for us
+                    s = sport.strip()
+                    # Backoff for out-of-season / chronically failing sports:
+                    # 5+ consecutive failures → skip 3 cycles between attempts
+                    # 10+ → skip 7 cycles between attempts
+                    fail_count = self._consecutive_failures.get(s, 0)
+                    if fail_count >= 10 and self._cycle_n % 8 != 0:
+                        continue
+                    if fail_count >= 5 and self._cycle_n % 4 != 0:
+                        continue
                     if use_fallback:
-                        await self._snapshot_sport_fallback(sport.strip())
+                        await self._snapshot_sport_fallback(s)
                     else:
-                        await self._snapshot_sport(sport.strip())
+                        await self._snapshot_sport(s)
 
                 # Prop snapshots — free cascade (DK + FD + BetMGM), no credits
                 if not self._paused:
@@ -1161,13 +1175,23 @@ class LineMonitor:
             if len(devigged_fair_probs) < 2:
                 continue  # need at least 2 books for reliable consensus
 
-            # Implied range sanity on devigged probs
+            # Implied range sanity on devigged probs.
+            # Tightened to 12% (was 25%) — 12% range across multi-book devig
+            # already indicates contamination. Dedup warning per (team,market)
+            # to prevent log spam (was firing 1300+/hr on Lakers/Suns h2h).
             fair_range = max(devigged_fair_probs) - min(devigged_fair_probs)
-            if fair_range > 0.25:
-                logger.warning(
-                    f"Edge eval: implausible devigged range {fair_range:.1%} "
-                    f"for {target_team} {market}, skipping"
-                )
+            if fair_range > 0.12:
+                _warn_key = f"{target_team}|{market}"
+                if not hasattr(self, "_devig_warn_dedup"):
+                    self._devig_warn_dedup = {}
+                _last = self._devig_warn_dedup.get(_warn_key, 0)
+                _now = time.monotonic()
+                if _now - _last > 600:  # warn at most once per 10 min per team+market
+                    logger.warning(
+                        f"Edge eval: implausible devigged range {fair_range:.1%} "
+                        f"for {target_team} {market}, skipping (will dedup for 10min)"
+                    )
+                    self._devig_warn_dedup[_warn_key] = _now
                 continue
 
             consensus_prob = sum(devigged_fair_probs) / len(devigged_fair_probs)
