@@ -146,7 +146,7 @@ async def scrape_fd_odds(sport: str) -> dict:
             else:
                 event_markets = markets_by_event.get(str(event.get("eventId", event_id)), {})
 
-            game = _parse_fd_event(event, event_markets)
+            game = _parse_fd_event(event, event_markets, sport)
             if game:
                 games.append(game)
 
@@ -168,7 +168,7 @@ async def scrape_fd_odds(sport: str) -> dict:
         return {"error": str(e), "games": []}
 
 
-def _parse_fd_event(event: dict, event_markets: dict) -> Optional[dict]:
+def _parse_fd_event(event: dict, event_markets: dict, sport: str = "") -> Optional[dict]:
     """Parse a FanDuel event into normalized format.
 
     Args:
@@ -194,7 +194,7 @@ def _parse_fd_event(event: dict, event_markets: dict) -> Optional[dict]:
 
         game = {
             "id": f"fd_{event.get('eventId', '')}",
-            "sport_key": event.get("competitionId", ""),
+            "sport_key": sport or event.get("competitionId", ""),
             "commence_time": commence_time,
             "home_team": home_team,
             "away_team": away_team,

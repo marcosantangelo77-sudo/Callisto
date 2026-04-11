@@ -335,7 +335,12 @@ class LineMonitor:
                     continue
                 if self._paused:
                     break
-                stored = await store_prop_snapshot(result["props"], sport, self.db_path)
+                async with self._snapshot_lock:
+                    self._in_flight_db = True
+                    try:
+                        stored = await store_prop_snapshot(result["props"], sport, self.db_path)
+                    finally:
+                        self._in_flight_db = False
                 total_stored += stored
                 logger.info(
                     f"Props {sport}: {stored} lines stored "
