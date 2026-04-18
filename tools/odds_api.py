@@ -28,6 +28,17 @@ logger = logging.getLogger("callisto.odds_api")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 ODDS_API_BASE = "https://api.odds-api.io/v4"
 
+# SECURITY (audit C-1, 2026-04-18): odds-api.io v4 only accepts apiKey as a query
+# parameter — there is no Authorization header endpoint. To prevent the key leaking
+# to console / rotating log files, logging_config.py downgrades the httpx logger to
+# WARNING. Do not log raw URLs from this module — use _redact_url() if you must.
+
+
+def _redact_url(url: str) -> str:
+    """Return a URL with apiKey query value masked. Use for any local logging."""
+    import re as _re
+    return _re.sub(r"(apiKey=)[^&\s]+", r"\1<redacted>", url)
+
 # Credit tracking
 _credits_remaining: Optional[int] = None
 _credits_used: Optional[int] = None

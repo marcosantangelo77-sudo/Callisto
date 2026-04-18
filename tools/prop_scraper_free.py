@@ -1131,7 +1131,9 @@ async def ensure_prop_schema(db_path: str = DB_PATH) -> None:
     """Create prop_snapshots table if it doesn't exist."""
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout = 60000")
-        await db.executescript(PROP_SCHEMA_SQL)
+        # SECURITY (audit C-6): per-statement DDL avoids EXCLUSIVE lock contention.
+        for stmt in (s.strip() for s in PROP_SCHEMA_SQL.split(";") if s.strip()):
+            await db.execute(stmt)
         await db.commit()
     logger.info("Prop schema ensured")
 

@@ -934,14 +934,27 @@ async def _backfill_regimes(db) -> None:
     cursor = await db.execute("SELECT sport, regime_name, start_date, end_date FROM regime_rules")
     rules = await cursor.fetchall()
 
+    from tools.db_utils import safe_ident
     for sport, regime_name, start_date, end_date in rules:
         for tbl, date_col in [("game_results", "game_date"), ("historical_odds_cache", "snapshot_date")]:
-            end_clause = f"AND {date_col} <= '{end_date}'" if end_date else ""
-            await db.execute(
-                f"UPDATE {tbl} SET regime = ? "
-                f"WHERE sport = ? AND {date_col} >= ? {end_clause} AND regime IS NULL",
-                (regime_name, sport, start_date),
-            )
+            tbl_q = safe_ident(tbl)
+            col_q = safe_ident(date_col)
+            # SECURITY (audit C-5): parameterize end_date instead of inlining a quoted
+            # string literal. Even though end_date originates from regime_rules (an
+            # internal table), splicing a quoted string into SQL is the same anti-pattern
+            # the rest of the audit closed.
+            if end_date:
+                await db.execute(
+                    f"UPDATE {tbl_q} SET regime = ? "
+                    f"WHERE sport = ? AND {col_q} >= ? AND {col_q} <= ? AND regime IS NULL",
+                    (regime_name, sport, start_date, end_date),
+                )
+            else:
+                await db.execute(
+                    f"UPDATE {tbl_q} SET regime = ? "
+                    f"WHERE sport = ? AND {col_q} >= ? AND regime IS NULL",
+                    (regime_name, sport, start_date),
+                )
     await db.commit()
     logger.info(f"Backfilled regimes for {untagged} untagged rows")
 

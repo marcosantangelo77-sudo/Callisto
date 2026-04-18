@@ -323,11 +323,12 @@ class SystemHealth:
                 journal = (await cursor.fetchone())[0]
 
                 # Count key tables
+                from tools.db_utils import safe_ident
                 counts = {}
                 for table in ["hypotheses", "backtest_events", "embeddings",
                               "game_contexts", "game_results", "player_stats"]:
                     try:
-                        cursor = await db.execute(f"SELECT COUNT(*) FROM {table}")
+                        cursor = await db.execute(f"SELECT COUNT(*) FROM {safe_ident(table)}")
                         counts[table] = (await cursor.fetchone())[0]
                     except Exception:
                         counts[table] = -1

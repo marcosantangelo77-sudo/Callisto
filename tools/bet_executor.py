@@ -677,7 +677,9 @@ class BetExecutor:
     ) -> int:
         """Record bet in the bets table and update bankroll."""
         now = datetime.now(timezone.utc).isoformat()
-        implied = 1.0 - fair_prob + edge  # back-derive implied from fair - edge
+        # SECURITY/CORRECTNESS: implied = fair_prob - edge (audit C-3, 2026-04-18).
+        # Prior formula `1.0 - fair_prob + edge` was inverted, poisoning every CLV calc.
+        implied = max(0.0, min(1.0, fair_prob - edge))
 
         from tools.db_utils import execute_with_retry, commit_with_retry
 

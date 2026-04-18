@@ -4051,10 +4051,11 @@ class ResearchLoop:
                 ("market_microstructure", "odds_snapshots", 100),
                 ("learned_correlations", "game_results", 1000),
             ]
+            from tools.db_utils import safe_ident
             for target_table, source_table, source_min in orphan_checks:
-                cursor = await db.execute(f"SELECT COUNT(*) FROM {target_table}")
+                cursor = await db.execute(f"SELECT COUNT(*) FROM {safe_ident(target_table)}")
                 target_count = (await cursor.fetchone())[0]
-                cursor = await db.execute(f"SELECT COUNT(*) FROM {source_table}")
+                cursor = await db.execute(f"SELECT COUNT(*) FROM {safe_ident(source_table)}")
                 source_count = (await cursor.fetchone())[0]
                 if target_count == 0 and source_count >= source_min:
                     issues.append(
@@ -4068,7 +4069,7 @@ class ResearchLoop:
                 ("game_contexts", "created_at", 24),
             ]:
                 cursor = await db.execute(
-                    f"SELECT MAX({ts_col}) FROM {table}"
+                    f"SELECT MAX({safe_ident(ts_col)}) FROM {safe_ident(table)}"
                 )
                 row = await cursor.fetchone()
                 if row and row[0]:
@@ -6795,8 +6796,16 @@ class ResearchLoop:
                 "market_microstructure": ("odds_snapshots", "Snapshots exist but microstructure never computed"),
                 "closing_lines": ("odds_snapshots", "Snapshots exist but closing lines never captured"),
             }
+            from tools.db_utils import safe_ident
+            # source_query is a literal SQL fragment (e.g., "bets WHERE result != 'pending'");
+            # validate only its leading identifier. The remainder is hard-coded above and
+            # is NOT user-derived — but reject any source_query whose first token isn't a
+            # plain table name to defeat future careless edits.
             for target, (source_query, msg) in orphan_checks.items():
                 try:
+                    safe_ident(target)
+                    first_tok = source_query.split()[0] if source_query else ""
+                    safe_ident(first_tok)
                     target_cnt = (await (await db.execute(f"SELECT COUNT(*) FROM {target}")).fetchone())[0]
                     source_cnt = (await (await db.execute(f"SELECT COUNT(*) FROM {source_query}")).fetchone())[0]
                     if target_cnt == 0 and source_cnt > 0:

@@ -104,17 +104,17 @@ class LineMonitor:
         """Create tables for odds snapshots and alerts."""
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA busy_timeout = 120000")  # 2 min — 5 min caused cascading WAL stalls
-        await self._db.executescript("""
-            CREATE TABLE IF NOT EXISTS odds_snapshots (
+        # SECURITY (audit C-6): per-statement DDL avoids EXCLUSIVE lock contention.
+        for stmt in (
+            """CREATE TABLE IF NOT EXISTS odds_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 sport TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
                 snapshot_json TEXT NOT NULL,
                 game_count INTEGER DEFAULT 0,
                 credits_remaining INTEGER
-            );
-
-            CREATE TABLE IF NOT EXISTS line_movements (
+            )""",
+            """CREATE TABLE IF NOT EXISTS line_movements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 sport TEXT NOT NULL,
                 detected_at TEXT NOT NULL,
@@ -129,9 +129,8 @@ class LineMonitor:
                 point_movement REAL,
                 direction TEXT,
                 ev_analysis TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS ev_opportunities (
+            )""",
+            """CREATE TABLE IF NOT EXISTS ev_opportunities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 detected_at TEXT NOT NULL,
                 sport TEXT,
@@ -146,12 +145,12 @@ class LineMonitor:
                 expected_value REAL,
                 kelly_fraction REAL,
                 status TEXT DEFAULT 'open'
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_snapshots_sport_ts ON odds_snapshots(sport, timestamp);
-            CREATE INDEX IF NOT EXISTS idx_movements_sport ON line_movements(sport, detected_at);
-            CREATE INDEX IF NOT EXISTS idx_ev_status ON ev_opportunities(status, detected_at);
-        """)
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_snapshots_sport_ts ON odds_snapshots(sport, timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_movements_sport ON line_movements(sport, detected_at)",
+            "CREATE INDEX IF NOT EXISTS idx_ev_status ON ev_opportunities(status, detected_at)",
+        ):
+            await self._db.execute(stmt)
         await self._db.commit()
         # Ensure prop_snapshots table exists
         await ensure_prop_schema(self.db_path)
@@ -198,19 +197,29 @@ class LineMonitor:
         """
         self._paused = True
         deadline = time.monotonic() + timeout
+        # SECURITY (audit C-8): acquire the lock FIRST, then verify under-lock that
+        # ack is set and no DB op is in flight. Previously we checked ack outside the
+        # lock and then acquired — between those two operations a snapshot could start
+        # and set _in_flight_db=True, leaving the caller with the lock but a live writer
+        # racing it. By holding the lock during verification we guarantee mutual
+        # exclusion: if someone else has the lock we wait; once we hold it no new
+        # snapshot can begin (the loop body acquires _snapshot_lock before doing work).
         while time.monotonic() < deadline:
-            # ack means loop reached top (no new snapshots starting)
+            try:
+                await asyncio.wait_for(
+                    self._snapshot_lock.acquire(),
+                    timeout=max(1.0, deadline - time.monotonic()),
+                )
+            except asyncio.TimeoutError:
+                break
+            # Lock held — re-check invariants under it.
             if self._pause_ack.is_set() and not self._in_flight_db:
-                # Atomically grab the snapshot lock to prevent any new snapshot
-                # from starting between our check and the caller's work
-                try:
-                    await asyncio.wait_for(
-                        self._snapshot_lock.acquire(),
-                        timeout=max(1.0, deadline - time.monotonic()),
-                    )
-                    return True
-                except asyncio.TimeoutError:
-                    break
+                return True
+            # Caller hasn't fully drained; release and retry after a short sleep.
+            try:
+                self._snapshot_lock.release()
+            except RuntimeError:
+                pass
             await asyncio.sleep(0.5)
         logger.warning(
             f"wait_for_drain timed out after {timeout}s "

@@ -43,8 +43,10 @@ class CLVTracker:
         """Create bet tracking tables."""
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA busy_timeout = 60000")
-        await self._db.executescript("""
-            CREATE TABLE IF NOT EXISTS bets (
+        # SECURITY (audit C-6): per-statement DDL avoids the EXCLUSIVE lock that
+        # executescript() takes for the duration of the whole script.
+        for stmt in (
+            """CREATE TABLE IF NOT EXISTS bets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 placed_at TEXT NOT NULL,
                 sport TEXT NOT NULL,
@@ -70,9 +72,8 @@ class CLVTracker:
                 kelly_at_placement REAL,
                 notes TEXT,
                 tags TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS bankroll (
+            )""",
+            """CREATE TABLE IF NOT EXISTS bankroll (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
                 balance REAL NOT NULL,
@@ -80,9 +81,8 @@ class CLVTracker:
                 bet_id INTEGER,
                 description TEXT,
                 FOREIGN KEY (bet_id) REFERENCES bets(id)
-            );
-
-            CREATE TABLE IF NOT EXISTS closing_lines (
+            )""",
+            """CREATE TABLE IF NOT EXISTS closing_lines (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_id TEXT NOT NULL,
                 sport TEXT,
@@ -93,13 +93,13 @@ class CLVTracker:
                 closing_odds INTEGER,
                 closing_point REAL,
                 closing_implied REAL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_bets_result ON bets(result, placed_at);
-            CREATE INDEX IF NOT EXISTS idx_bets_sport ON bets(sport, placed_at);
-            CREATE INDEX IF NOT EXISTS idx_closing_event ON closing_lines(event_id, market);
-            CREATE INDEX IF NOT EXISTS idx_bankroll_ts ON bankroll(timestamp);
-        """)
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_bets_result ON bets(result, placed_at)",
+            "CREATE INDEX IF NOT EXISTS idx_bets_sport ON bets(sport, placed_at)",
+            "CREATE INDEX IF NOT EXISTS idx_closing_event ON closing_lines(event_id, market)",
+            "CREATE INDEX IF NOT EXISTS idx_bankroll_ts ON bankroll(timestamp)",
+        ):
+            await self._db.execute(stmt)
         await self._db.commit()
         logger.info("CLV tracker initialized")
 
