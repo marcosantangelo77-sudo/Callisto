@@ -241,6 +241,15 @@ async def wal_checkpoint_loop():
             logger.warning(f"WAL checkpoint failed (non-fatal): {e}")
 
 
+# Per-task hard timeout. AGP sessions that route through Claude Code
+# occasionally run 7+ minutes (observed 419s on task 484, 2026-04-18),
+# and the worker processes tasks serially — one slow session stalls every
+# pending task behind it (today: task 485 waited >5 min). Sessions beyond
+# this budget are cancelled and marked FAILED; the worker moves on so the
+# queue stays fluid. Overridable via CALLISTO_TASK_TIMEOUT_S env var.
+TASK_WORKER_TIMEOUT_S = float(os.getenv("CALLISTO_TASK_TIMEOUT_S", "300"))
+
+
 async def task_worker():
     """Background worker: polls task queue and runs AGP sessions."""
     while True:
@@ -263,7 +272,13 @@ async def task_worker():
                 continue
 
             try:
-                result = await orchestrator_instance.run_session(query, skip_search=skip_search)
+                # Hard-cap the whole AGP session. asyncio.wait_for cancels the
+                # inner coroutine on timeout so the orchestrator stops burning
+                # Claude credits / VRAM for a result that will be discarded.
+                result = await asyncio.wait_for(
+                    orchestrator_instance.run_session(query, skip_search=skip_search),
+                    timeout=TASK_WORKER_TIMEOUT_S,
+                )
                 session_id = result.get("session_id")
                 await queue.complete_task(task_id, result, session_id=session_id)
                 logger.info(f"Task {task_id} completed, session {session_id}")
@@ -288,6 +303,15 @@ async def task_worker():
 
                 # Auto-follow-up: if session concluded INSUFFICIENT DATA, queue the next step
                 await _maybe_auto_followup(task_id, result)
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Task {task_id} TIMEOUT after {TASK_WORKER_TIMEOUT_S}s — "
+                    f"orchestrator session cancelled to unblock queue."
+                )
+                await queue.fail_task(
+                    task_id,
+                    f"timeout: orchestrator exceeded {TASK_WORKER_TIMEOUT_S}s budget",
+                )
             except Exception as e:
                 logger.error(f"Task {task_id} failed: {e}", exc_info=True)
                 await queue.fail_task(task_id, str(e))
