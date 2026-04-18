@@ -1312,23 +1312,25 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
             ")"
         )
         await db.commit()
-        # Run schema statements individually instead of executescript() to avoid
-        # EXCLUSIVE lock. executescript() blocks ALL concurrent readers/writers;
-        # individual execute() calls use WAL-mode write lock (readers can continue).
+        # Run schema statements individually instead of executescript() to
+        # avoid the EXCLUSIVE lock executescript takes for the whole script.
         #
-        # The naive `startswith("--")` filter below would skip ANY statement
-        # whose first line happens to be a `-- header comment`, which silently
-        # eats the DDL that follows the comment in the same chunk (bitten by
-        # this 2026-04-18 with statcast_pitches + mlb_players). Strip leading
-        # comment lines from each chunk before the empty/comment-only check.
-        for raw in SCHEMA_SQL.split(";"):
-            lines = [ln for ln in raw.split("\n")]
-            # Drop leading comment-only and blank lines; keep anything from
-            # the first real SQL line onward (inline `-- ...` trailing comments
-            # on data lines are handled natively by SQLite).
-            while lines and (not lines[0].strip() or lines[0].lstrip().startswith("--")):
-                lines.pop(0)
-            stmt = "\n".join(lines).strip()
+        # 2026-04-18: two bugs bit the naive `split(";")` approach and caused
+        # tables to silently fail to materialize:
+        #   1. `;` characters inside `-- ...` comments split the DDL mid-
+        #      statement (statcast_pitches, nba_shot_events).
+        #   2. A leading `-- header divider` comment on a chunk made the
+        #      naive `startswith("--")` filter drop the whole CREATE TABLE.
+        # Fix: strip every `-- line comment` (up to end-of-line) from the
+        # entire SCHEMA_SQL body BEFORE splitting on `;`. Inline trailing
+        # `-- ...` column comments survive as part of each column line until
+        # stripped, which is fine because SQLite would accept them if kept
+        # anyway. This is DDL-only; no string literals in SCHEMA_SQL depend
+        # on retaining the `-- ` sequence.
+        import re as _re_schema
+        cleaned = _re_schema.sub(r"--[^\n]*", "", SCHEMA_SQL)
+        for raw in cleaned.split(";"):
+            stmt = raw.strip()
             if stmt:
                 try:
                     await db.execute(stmt)
