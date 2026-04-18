@@ -1278,6 +1278,11 @@ CREATE INDEX IF NOT EXISTS idx_prop_snap_sport_time
     ON prop_snapshots(sport, snapshot_time);
 CREATE INDEX IF NOT EXISTS idx_prop_snap_event
     ON prop_snapshots(event_id, market, snapshot_time);
+-- Single-column time index for retention pruning (see prop_scraper_free.py
+-- for rationale). Prevents a full-table scan when the pruner runs
+-- `DELETE FROM prop_snapshots WHERE snapshot_time < ?`.
+CREATE INDEX IF NOT EXISTS idx_prop_snap_time
+    ON prop_snapshots(snapshot_time);
 
 -- ──────────────────────────────────────────
 -- MASTERS PREDICTIONS: pre-tournament rankings
