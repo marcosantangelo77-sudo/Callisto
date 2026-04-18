@@ -684,12 +684,14 @@ class BacktestEngine:
                 await _write_db.execute("PRAGMA busy_timeout = 60000")
                 await _write_db.execute("PRAGMA journal_mode = WAL")
                 await _write_db.execute("PRAGMA synchronous = NORMAL")
-                # SECURITY/PERF (audit H-11): take the writer lock up front with
-                # BEGIN IMMEDIATE so we don't ping-pong with the autonomous loop's
-                # writer for each individual statement. SQLite already serializes
-                # writes inter-process; this just batches our claim into one
-                # acquire/release, which is what SQLite actually wants.
-                await _write_db.execute("BEGIN IMMEDIATE")
+                # NOTE (audit H-11): a previous version wrapped this block in
+                # BEGIN IMMEDIATE to batch the writer-lock claim. In Marco's
+                # environment that REGRESSED concurrency — line_monitor's
+                # snapshot_insert started exhausting its db_utils retry budget
+                # because backtests held the writer lock for tens of seconds.
+                # SQLite's per-statement WAL serialization is sufficient; do
+                # not reintroduce BEGIN IMMEDIATE without first benchmarking
+                # snapshot_insert latency under realistic load.
                 await _write_db.execute(
                     "INSERT OR REPLACE INTO backtest_runs "
                     "(run_id, hypothesis_id, date_range_start, date_range_end, "
