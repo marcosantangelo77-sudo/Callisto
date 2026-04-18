@@ -17,13 +17,21 @@ load_dotenv()
 async def open_db(db_path: str = None) -> aiosqlite.Connection:
     """Open a DB connection with WAL mode and busy_timeout.
 
-    Use this instead of raw aiosqlite.connect() everywhere to avoid
-    "database is locked" errors from concurrent async writers.
+    Use this instead of raw aiosqlite.connect() everywhere. The connection is
+    tagged with ``_callisto_db_path`` so ``tools.db_utils.execute_with_retry``
+    can route writes through the matching ``WriteCoordinator`` (single-writer
+    pattern, see ``tools/db_writer.py``). When no coordinator is running the
+    connection still works as a regular aiosqlite connection.
     """
     if db_path is None:
         db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
     db = await aiosqlite.connect(db_path)
-    await db.execute("PRAGMA busy_timeout = 60000")   # 60s �� prevents 'database is locked' during bulk writes
+    # Tag the connection so coordinator routing works without a path lookup.
+    try:
+        db._callisto_db_path = os.path.abspath(db_path)
+    except Exception:
+        pass
+    await db.execute("PRAGMA busy_timeout = 60000")   # 60s — prevents 'database is locked' during bulk writes
     await db.execute("PRAGMA journal_mode = WAL")      # WAL mode for concurrent reads during writes
     await db.execute("PRAGMA synchronous = NORMAL")    # Safe with WAL, reduces fsync overhead
     await db.execute("PRAGMA wal_autocheckpoint = 1000")  # Checkpoint after 1000 pages (~4MB) — prevents WAL bloat

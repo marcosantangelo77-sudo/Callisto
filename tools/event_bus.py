@@ -156,13 +156,26 @@ class EventBus:
                         break
 
                 if batch:
-                    async with aiosqlite.connect(db_path) as db:
-                        await db.execute("PRAGMA busy_timeout = 60000")
-                        await db.executemany(
+                    # WriteCoordinator path (single-writer pattern). Skips opening
+                    # a transient connection for every drain cycle.
+                    try:
+                        from tools.db_writer import get_writer_if_running
+                        coord = get_writer_if_running(db_path)
+                    except Exception:
+                        coord = None
+                    if coord is not None:
+                        await coord.executemany(
                             "INSERT INTO event_log (event_type, event_data) VALUES (?, ?)",
                             [(e["event_type"], e["event_data"]) for e in batch],
                         )
-                        await db.commit()
+                    else:
+                        async with aiosqlite.connect(db_path) as db:
+                            await db.execute("PRAGMA busy_timeout = 60000")
+                            await db.executemany(
+                                "INSERT INTO event_log (event_type, event_data) VALUES (?, ?)",
+                                [(e["event_type"], e["event_data"]) for e in batch],
+                            )
+                            await db.commit()
                     logger.debug(f"Audit drain: persisted {len(batch)} events")
             except asyncio.CancelledError:
                 break

@@ -104,6 +104,9 @@ class BetExecutor:
     async def initialize(self) -> None:
         """Initialize database connection and ensure directories exist."""
         self._db = await aiosqlite.connect(DB_PATH)
+        # Tag for WriteCoordinator routing (single-writer pattern).
+        from tools.db_writer import tag_connection as _tag
+        _tag(self._db, DB_PATH)
         await self._db.execute("PRAGMA busy_timeout = 60000")
         SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
         SESSION_DIR.mkdir(parents=True, exist_ok=True)
