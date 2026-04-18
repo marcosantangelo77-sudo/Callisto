@@ -1053,6 +1053,36 @@ CREATE INDEX IF NOT EXISTS idx_golf_rounds_player ON golf_player_rounds(player_i
 CREATE INDEX IF NOT EXISTS idx_golf_rounds_event ON golf_player_rounds(event_id, round_num);
 CREATE INDEX IF NOT EXISTS idx_golf_rounds_course ON golf_player_rounds(course, round_date);
 
+-- live_edge_surface: ranked output of tools.quant.edge_ranker, one row
+-- per (market, outcome, snapshot). Consumed by /edges/live and by the
+-- executor once it's wired.
+CREATE TABLE IF NOT EXISTS live_edge_surface (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    computed_at        TEXT NOT NULL,
+    sport              TEXT NOT NULL,
+    event_id           TEXT NOT NULL,
+    market             TEXT NOT NULL,
+    outcome            TEXT NOT NULL,
+    placement_book     TEXT NOT NULL,
+    placement_implied  REAL NOT NULL,
+    placement_fair     REAL NOT NULL,
+    consensus_fair     REAL NOT NULL,
+    consensus_std_err  REAL,
+    raw_edge           REAL NOT NULL,
+    effective_edge     REAL NOT NULL,
+    penalty_total      REAL NOT NULL,
+    penalty_breakdown  TEXT NOT NULL,
+    disagreement       INTEGER DEFAULT 0,
+    n_books            INTEGER NOT NULL,
+    outlier_books      TEXT,
+    decision           TEXT NOT NULL,
+    rank               INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_edge_surface_recency ON live_edge_surface(computed_at);
+CREATE INDEX IF NOT EXISTS idx_edge_surface_rank ON live_edge_surface(computed_at, rank);
+CREATE INDEX IF NOT EXISTS idx_edge_surface_sport ON live_edge_surface(sport, computed_at);
+CREATE INDEX IF NOT EXISTS idx_edge_surface_event ON live_edge_surface(event_id, market);
+
 -- ──────────────────────────────────────────
 -- GAME RESULTS: actual scores for backtest resolution
 -- ──────────────────────────────────────────

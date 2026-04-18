@@ -767,6 +767,98 @@ async def get_edges(sport: Optional[str] = None):
     return report
 
 
+@app.get("/edges/live")
+async def get_live_edges(
+    sport: Optional[str] = None,
+    decision: Optional[str] = None,
+    limit: int = 50,
+):
+    """Ranked live edge surface from the quant microstructure engine.
+
+    Returns the most recent snapshot from ``live_edge_surface`` (refreshed
+    every ~60s by the quant scanner). Filters:
+      - ``sport``: restrict to one sport key (e.g., ``baseball_mlb``).
+      - ``decision``: 'recommended' | 'hold' | 'skip'. Default: all.
+      - ``limit``: max rows returned (default 50).
+
+    Each row is the ranker's full output for that (event, market, outcome,
+    placement_book) — consensus fair, placement fair, raw edge, effective
+    edge after penalties, and per-penalty breakdown for transparency.
+    """
+    import json as _json
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA busy_timeout = 30000")
+        # Most recent snapshot across the whole table.
+        cur = await db.execute(
+            "SELECT MAX(computed_at) FROM live_edge_surface"
+        )
+        row = await cur.fetchone()
+        latest = row[0] if row and row[0] else None
+        if not latest:
+            return {"computed_at": None, "count": 0, "edges": []}
+
+        where_parts = ["computed_at = ?"]
+        params: list = [latest]
+        if sport:
+            where_parts.append("sport = ?")
+            params.append(sport)
+        if decision:
+            where_parts.append("decision = ?")
+            params.append(decision)
+        where_clause = " AND ".join(where_parts)
+        params.append(limit)
+
+        cur = await db.execute(
+            f"SELECT sport, event_id, market, outcome, placement_book, "
+            f"placement_implied, placement_fair, consensus_fair, "
+            f"consensus_std_err, raw_edge, effective_edge, penalty_total, "
+            f"penalty_breakdown, disagreement, n_books, outlier_books, "
+            f"decision, rank "
+            f"FROM live_edge_surface WHERE {where_clause} "
+            f"ORDER BY decision='recommended' DESC, rank ASC, "
+            f"effective_edge DESC LIMIT ?",
+            params,
+        )
+        rows = await cur.fetchall()
+
+    edges = []
+    for r in rows:
+        try:
+            penalties = _json.loads(r[12] or "{}")
+        except Exception:
+            penalties = {}
+        try:
+            outliers = _json.loads(r[15] or "[]")
+        except Exception:
+            outliers = []
+        edges.append({
+            "sport": r[0],
+            "event_id": r[1],
+            "market": r[2],
+            "outcome": r[3],
+            "placement_book": r[4],
+            "placement_implied": r[5],
+            "placement_fair": r[6],
+            "consensus_fair": r[7],
+            "consensus_std_err": r[8],
+            "raw_edge": r[9],
+            "effective_edge": r[10],
+            "penalty_total": r[11],
+            "penalty_breakdown": penalties,
+            "disagreement": bool(r[13]),
+            "n_books": r[14],
+            "outlier_books": outliers,
+            "decision": r[16],
+            "rank": r[17],
+        })
+    return {
+        "computed_at": latest,
+        "count": len(edges),
+        "filters": {"sport": sport, "decision": decision, "limit": limit},
+        "edges": edges,
+    }
+
+
 @app.get("/odds/narrative-edges")
 async def get_narrative_edges(sport: str = "basketball_nba"):
     """Detect player-level narrative edges: usage surges, role changes,
