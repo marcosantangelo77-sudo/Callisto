@@ -166,3 +166,77 @@ async def test_db_utils_falls_back_when_no_coordinator(tmp_db):
         )
         await conn.commit()
         assert cur.lastrowid > 0
+
+
+@pytest.mark.asyncio
+async def test_aiosqlite_routing_intercepts_raw_execute(tmp_db):
+    """Even modules that bypass execute_with_retry and call ``await db.execute(write_sql)``
+    + ``await db.commit()`` directly must route through the coordinator after
+    install_aiosqlite_routing(). This is the path that broke v1 in production —
+    cache_manager / hermes / health all do raw .execute() and were contending
+    with the coordinator's owned connection on the writer lock.
+    """
+    from tools.db_writer import install_aiosqlite_routing
+    install_aiosqlite_routing()
+    coord = await get_writer(tmp_db)
+    try:
+        async with aiosqlite.connect(tmp_db) as conn:
+            cur = await conn.execute(
+                "INSERT INTO t (v, who) VALUES (?, ?)", (1234, "raw-route")
+            )
+            await conn.commit()
+            assert cur.lastrowid > 0
+        async with aiosqlite.connect(tmp_db) as conn:
+            cur = await conn.execute("SELECT COUNT(*) FROM t WHERE v=1234")
+            n = (await cur.fetchone())[0]
+        assert n == 1, "raw .execute() write should have landed"
+        assert coord.stats()["writes_total"] >= 1, "coordinator didn't serve the write"
+    finally:
+        await stop_all()
+
+
+@pytest.mark.asyncio
+async def test_aiosqlite_routing_passes_reads_through(tmp_db):
+    """Reads must NOT be routed (would deadlock the queue and lose result rows)."""
+    from tools.db_writer import install_aiosqlite_routing
+    install_aiosqlite_routing()
+    await get_writer(tmp_db)
+    try:
+        async with aiosqlite.connect(tmp_db) as conn:
+            await conn.execute("INSERT INTO t (v, who) VALUES (?, ?)", (5151, "seed"))
+            await conn.commit()
+        async with aiosqlite.connect(tmp_db) as conn:
+            cur = await conn.execute("SELECT v, who FROM t WHERE v = ?", (5151,))
+            row = await cur.fetchone()
+        assert row is not None
+        assert row[0] == 5151 and row[1] == "seed"
+    finally:
+        await stop_all()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_raw_writers_no_lock_errors_after_install(tmp_db):
+    """100 concurrent producers using raw .execute() must succeed cleanly
+    once routing is installed. This is the production scenario."""
+    from tools.db_writer import install_aiosqlite_routing
+    install_aiosqlite_routing()
+    coord = await get_writer(tmp_db)
+    try:
+        async def raw_producer(n):
+            async with aiosqlite.connect(tmp_db) as conn:
+                for i in range(20):
+                    await conn.execute(
+                        "INSERT INTO t (v, who) VALUES (?, ?)",
+                        (i, f"raw-p{n}-{i}"),
+                    )
+                    await conn.commit()
+        await asyncio.gather(*[raw_producer(p) for p in range(100)])
+        async with aiosqlite.connect(tmp_db) as conn:
+            cur = await conn.execute("SELECT COUNT(*) FROM t WHERE who LIKE 'raw-%'")
+            n = (await cur.fetchone())[0]
+        assert n == 2000, f"Expected 2000 rows, got {n}"
+        assert coord.stats()["writes_failed"] == 0, (
+            f"{coord.stats()['writes_failed']} failed writes — routing is broken"
+        )
+    finally:
+        await stop_all()

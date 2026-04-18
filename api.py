@@ -313,16 +313,22 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("tracemalloc disabled (set CALLISTO_TRACEMALLOC=1 to enable)")
 
-    # Startup — ensure DB schema is up to date
-    await ensure_schema()
-
     # Single-writer coordinator (root-cause fix for "database is locked").
-    # Owns one writer connection per DB; every write inside this process
-    # routes through it via execute_with_retry, eliminating intra-process
-    # writer contention. See tools/db_writer.py for the full rationale.
-    from tools.db_writer import get_writer as _get_writer
+    # install_aiosqlite_routing() patches aiosqlite.Connection so EVERY
+    # write — including from modules that use raw db.execute() instead of
+    # our retry helpers — routes through the coordinator transparently.
+    # MUST run before ensure_schema and any other connection so the patched
+    # aiosqlite is in effect for the rest of the process lifetime.
+    from tools.db_writer import (
+        install_aiosqlite_routing as _install_routing,
+        get_writer as _get_writer,
+    )
+    _install_routing()
     await _get_writer(DB_PATH)
-    logger.info(f"WriteCoordinator active for {DB_PATH}")
+    logger.info(f"WriteCoordinator active for {DB_PATH} (process-wide routing installed)")
+
+    # Startup — ensure DB schema is up to date (now uses patched aiosqlite).
+    await ensure_schema()
 
     # Preload priority models into VRAM (devstral-small-2 takes 28s cold, <1s warm)
     from inference import warmup_models

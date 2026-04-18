@@ -114,6 +114,13 @@ class WriteCoordinator:
         if self._running:
             return
         self._db = await aiosqlite.connect(self.db_path)
+        # SECURITY: mark this connection as the routing SINK so the patched
+        # aiosqlite.Connection.execute does not loop writes back into the
+        # coordinator's own queue (self-routing deadlock).
+        try:
+            self._db._callisto_is_coord_writer = True
+        except Exception:
+            pass
         # WAL + sane defaults. busy_timeout still matters for cross-process
         # contention from ad-hoc query scripts; the in-process side won't
         # contend at all because there's only one writer.
@@ -357,3 +364,150 @@ def tag_connection(db, db_path: str):
     except Exception:
         pass
     return db
+
+
+# ---------------------------------------------------------------------
+# Process-wide aiosqlite routing (the actual root-cause fix)
+# ---------------------------------------------------------------------
+#
+# Tagging connections only helps callers that funnel writes through
+# ``db_utils.execute_with_retry``. Most modules call ``await db.execute(sql)``
+# / ``await db.commit()`` directly on their own connections — those bypass the
+# coordinator and contend for SQLite's writer lock against it. Surgically
+# tagging ~50 untagged sites is whack-a-mole.
+#
+# ``install_aiosqlite_routing()`` instead patches ``aiosqlite.connect`` and
+# the resulting ``Connection.execute`` / ``executemany`` / ``commit`` once at
+# process startup. Every connection thereafter:
+#   1. Is auto-tagged with its absolute DB path.
+#   2. On ``execute``: if the SQL is a write AND a coordinator is running for
+#      that path, the write is routed through the coordinator and a synthetic
+#      cursor (lastrowid / rowcount) is returned. Reads pass through directly.
+#   3. On ``commit``: a no-op when the matching coordinator is running
+#      (the coordinator commits internally), otherwise legacy commit.
+#
+# This makes the single-writer pattern *transparent* to every module —
+# including third-party scripts and future code — without per-call-site edits.
+
+_INSTALLED = False
+
+# Heuristic: detect SQL statements that take the writer lock. Anything that
+# isn't clearly a SELECT/PRAGMA-read/EXPLAIN we treat as a write to be safe.
+import re as _re_writer
+_WRITE_RE = _re_writer.compile(
+    r"^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|TRUNCATE|"
+    r"VACUUM|REINDEX|ATTACH|DETACH|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b",
+    _re_writer.IGNORECASE,
+)
+
+
+def _is_write_sql(sql) -> bool:
+    if not isinstance(sql, str):
+        return False
+    return bool(_WRITE_RE.match(sql))
+
+
+def install_aiosqlite_routing() -> None:
+    """Monkey-patch aiosqlite so every Connection auto-routes writes through
+    the matching ``WriteCoordinator``. Idempotent. Call once at app startup
+    BEFORE any module opens a connection.
+    """
+    global _INSTALLED
+    if _INSTALLED:
+        return
+    import aiosqlite as _aios
+    _orig_connect = _aios.connect
+    _orig_conn_execute = _aios.Connection.execute
+    _orig_conn_executemany = _aios.Connection.executemany
+    _orig_conn_commit = _aios.Connection.commit
+
+    # Wrap connect: tag the resulting Connection with its absolute path.
+    # aiosqlite.connect returns a Connection instance that's used both as
+    # `async with ctx as db:` and `db = await ctx`. In both cases __aenter__
+    # / __await__ resolve to the SAME object — so tagging the ctx itself is
+    # sufficient and survives the connect handshake. (Instance-method
+    # patching of dunders does NOT work because Python looks them up on the
+    # class, not the instance.)
+    def _patched_connect(database, *args, **kwargs):
+        ctx = _orig_connect(database, *args, **kwargs)
+        try:
+            tag_connection(ctx, str(database))
+        except Exception:
+            pass
+        return ctx
+
+    async def _patched_execute(self, sql, parameters=None):
+        # Skip routing when called on the coordinator's OWN sink connection
+        # (avoids self-routing deadlock).
+        if getattr(self, "_callisto_is_coord_writer", False):
+            return await _orig_conn_execute(self, sql, parameters or ())
+        # Route writes through the coordinator if one is running for our DB.
+        if _is_write_sql(sql):
+            db_path = getattr(self, "_callisto_db_path", None)
+            if db_path:
+                coord = get_writer_if_running(db_path)
+                if coord is not None:
+                    value = await coord.execute(sql, parameters or ())
+                    return _RoutedCursor(value)
+        return await _orig_conn_execute(self, sql, parameters or ())
+
+    async def _patched_executemany(self, sql, parameters):
+        if getattr(self, "_callisto_is_coord_writer", False):
+            return await _orig_conn_executemany(self, sql, parameters)
+        if _is_write_sql(sql):
+            db_path = getattr(self, "_callisto_db_path", None)
+            if db_path:
+                coord = get_writer_if_running(db_path)
+                if coord is not None:
+                    rc = await coord.executemany(sql, list(parameters))
+                    return _RoutedCursor(rc)
+        return await _orig_conn_executemany(self, sql, parameters)
+
+    async def _patched_commit(self):
+        # The coordinator's own sink commits internally (and must, to flush
+        # WAL). Other connections' commits become no-ops when a coordinator
+        # is in charge of the DB they target.
+        if getattr(self, "_callisto_is_coord_writer", False):
+            return await _orig_conn_commit(self)
+        db_path = getattr(self, "_callisto_db_path", None)
+        if db_path and get_writer_if_running(db_path) is not None:
+            return None
+        return await _orig_conn_commit(self)
+
+    _aios.connect = _patched_connect
+    _aios.Connection.execute = _patched_execute
+    _aios.Connection.executemany = _patched_executemany
+    _aios.Connection.commit = _patched_commit
+    _INSTALLED = True
+    logger.info(
+        "aiosqlite routing installed — every Connection write will route "
+        "through the matching WriteCoordinator transparently."
+    )
+
+
+class _RoutedCursor:
+    """Cursor shim returned by the routed Connection.execute path.
+
+    Exposes ``lastrowid`` and ``rowcount``; raises if used as an iterable
+    (writes don't iterate, so this catches misuse loudly).
+    """
+
+    def __init__(self, value: int):
+        self.lastrowid = value if value > 0 else 0
+        self.rowcount = value
+
+    async def fetchone(self):
+        raise RuntimeError(
+            "Cursor returned by routed-write path supports lastrowid/rowcount only. "
+            "If you need to fetch rows after a write, issue a separate SELECT."
+        )
+
+    async def fetchall(self):
+        raise RuntimeError(
+            "Cursor returned by routed-write path supports lastrowid/rowcount only."
+        )
+
+    def __aiter__(self):
+        raise RuntimeError(
+            "Cursor returned by routed-write path is not iterable."
+        )
