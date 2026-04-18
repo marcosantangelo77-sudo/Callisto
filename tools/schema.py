@@ -592,6 +592,116 @@ CREATE INDEX IF NOT EXISTS idx_player_stats_lookup
     ON player_stats(sport, player_name, stat_type, game_date);
 
 -- ──────────────────────────────────────────
+-- STATCAST PITCHES: pitch-level telemetry from Baseball Savant (MLB only)
+-- One row per pitch. 40 fields carry the signal; the remaining ~80 columns
+-- from the savant CSV are intentionally dropped as derivative or low-signal.
+-- This table is THE input for pitcher-vs-batter prop modeling, pitch-mix
+-- prediction, stuff-based ERA estimators, and hitter-quality-of-contact
+-- baselines. Row count projects to ~1.9M pitches per MLB season.
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS statcast_pitches (
+    -- Identity
+    game_pk              INTEGER NOT NULL,
+    at_bat_number        INTEGER NOT NULL,
+    pitch_number         INTEGER NOT NULL,
+    game_date            DATE NOT NULL,
+    -- Teams / inning
+    home_team            TEXT,
+    away_team            TEXT,
+    inning               INTEGER,
+    inning_topbot        TEXT,              -- 'Top' | 'Bot'
+    -- Participants
+    pitcher_id           INTEGER,
+    pitcher_name         TEXT,
+    pitcher_throws       TEXT,              -- 'L' | 'R'
+    batter_id            INTEGER,
+    batter_name          TEXT,
+    batter_stands        TEXT,              -- 'L' | 'R'
+    -- Pitch physics
+    pitch_type           TEXT,              -- FF, SL, CH, CU, SI, FC, KC, FS, ST, SV, EP, KN
+    pitch_name           TEXT,              -- human-readable
+    release_speed        REAL,              -- mph
+    release_spin_rate    REAL,              -- rpm
+    release_extension    REAL,              -- ft
+    release_pos_x        REAL,
+    release_pos_y        REAL,
+    release_pos_z        REAL,
+    spin_axis            REAL,              -- degrees
+    pfx_x                REAL,              -- horizontal break (ft)
+    pfx_z                REAL,              -- vertical break (ft)
+    -- Location at the plate
+    plate_x              REAL,
+    plate_z              REAL,
+    zone                 INTEGER,           -- 1-9 in strike zone, 11-14 outside
+    sz_top               REAL,
+    sz_bot               REAL,
+    -- Batted ball (NULL if not in play)
+    launch_speed         REAL,              -- exit velocity, mph
+    launch_angle         REAL,              -- degrees
+    hit_distance_sc      REAL,              -- ft
+    bb_type              TEXT,              -- ground_ball | fly_ball | line_drive | popup
+    hc_x                 REAL,              -- spray
+    hc_y                 REAL,
+    -- Outcome
+    type                 TEXT,              -- 'S' | 'B' | 'X' (strike/ball/in-play)
+    description          TEXT,              -- hit_into_play, ball, called_strike, foul, swinging_strike, etc.
+    events               TEXT,              -- strikeout, walk, single, double, triple, home_run, field_out, ...
+    -- Count / game state when pitch was thrown
+    balls                INTEGER,
+    strikes              INTEGER,
+    outs_when_up         INTEGER,
+    on_1b                INTEGER,           -- runner id or NULL
+    on_2b                INTEGER,
+    on_3b                INTEGER,
+    -- Expected stats (Statcast models)
+    estimated_ba_using_speedangle    REAL,
+    estimated_woba_using_speedangle  REAL,
+    woba_value                       REAL,
+    woba_denom                       REAL,
+    -- Scoreboard after the pitch
+    post_home_score      INTEGER,
+    post_away_score      INTEGER,
+    ingested_at          DATETIME DEFAULT (datetime('now')),
+    PRIMARY KEY (game_pk, at_bat_number, pitch_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_statcast_date       ON statcast_pitches(game_date);
+CREATE INDEX IF NOT EXISTS idx_statcast_pitcher    ON statcast_pitches(pitcher_id, game_date);
+CREATE INDEX IF NOT EXISTS idx_statcast_batter     ON statcast_pitches(batter_id, game_date);
+CREATE INDEX IF NOT EXISTS idx_statcast_matchup    ON statcast_pitches(pitcher_id, batter_id);
+CREATE INDEX IF NOT EXISTS idx_statcast_game       ON statcast_pitches(game_pk, at_bat_number, pitch_number);
+CREATE INDEX IF NOT EXISTS idx_statcast_inplay     ON statcast_pitches(events) WHERE events IS NOT NULL;
+
+-- ──────────────────────────────────────────
+-- MLB PLAYERS: static / slow-changing metadata per player
+-- Source: MLB Stats API (https://statsapi.mlb.com, free, no key required).
+-- Refreshed nightly. Height / weight / handedness / MLB debut anchor every
+-- prop model that asks "how does a 6'6\" LHP with 7ft extension do vs a
+-- short-armed RHB who stands in the back of the box".
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS mlb_players (
+    player_id           INTEGER PRIMARY KEY,
+    full_name           TEXT NOT NULL,
+    first_name          TEXT,
+    last_name           TEXT,
+    primary_position    TEXT,              -- 'P', '1B', 'OF', ...
+    position_type       TEXT,              -- 'Pitcher', 'Hitter', 'Two-Way Player'
+    bats                TEXT,              -- 'L' | 'R' | 'S' (switch)
+    throws              TEXT,              -- 'L' | 'R'
+    height_in           INTEGER,           -- inches
+    weight_lb           INTEGER,
+    birth_date          DATE,
+    mlb_debut_date      DATE,
+    current_team_id     INTEGER,
+    current_team_abbr   TEXT,
+    active              INTEGER DEFAULT 1,
+    updated_at          DATETIME DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_mlb_players_name ON mlb_players(full_name);
+CREATE INDEX IF NOT EXISTS idx_mlb_players_team ON mlb_players(current_team_id);
+
+-- ──────────────────────────────────────────
 -- GAME RESULTS: actual scores for backtest resolution
 -- ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS game_results (
