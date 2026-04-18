@@ -288,14 +288,21 @@ class LineMonitor:
                         continue
                     if fail_count >= 5 and self._cycle_n % 4 != 0:
                         continue
-                    if use_fallback:
-                        await self._snapshot_sport_fallback(s)
-                    else:
-                        await self._snapshot_sport(s)
+                    try:
+                        if use_fallback:
+                            await asyncio.wait_for(self._snapshot_sport_fallback(s), timeout=120)
+                        else:
+                            await asyncio.wait_for(self._snapshot_sport(s), timeout=120)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Snapshot for {s} timed out after 120s — skipping")
+                        self._consecutive_failures[s] = self._consecutive_failures.get(s, 0) + 1
 
                 # Prop snapshots — free cascade (DK + FD + BetMGM), no credits
                 if not self._paused:
-                    await self._snapshot_props()
+                    try:
+                        await asyncio.wait_for(self._snapshot_props(), timeout=180)
+                    except asyncio.TimeoutError:
+                        logger.warning("Prop snapshot timed out after 180s — skipping")
 
                 # If paused mid-cycle (broke out of sport loop), skip the
                 # interval sleep and loop back immediately so _pause_ack fires.
@@ -696,6 +703,13 @@ class LineMonitor:
         merged["games"].extend(extra_only_games)
         merged["game_count"] = len(merged["games"])
 
+        # Enforce sport_key on all games to prevent cross-sport contamination
+        sport_key = merged["sport"]
+        if sport_key:
+            for g in merged["games"]:
+                if not g.get("sport_key"):
+                    g["sport_key"] = sport_key
+
         return merged
 
     @staticmethod
@@ -763,6 +777,8 @@ class LineMonitor:
         book_count = 0
         for g in new_snapshot.get("games", []):
             book_count = max(book_count, len(g.get("bookmakers", [])))
+            if not g.get("sport_key"):
+                g["sport_key"] = sport
         if game_count > 0:
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             try:

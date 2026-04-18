@@ -148,6 +148,14 @@ class BacktestEngine:
                     better_has_target = True
 
             if better_has_target and better_max_books > max_books:
+                # Filter out cross-sport contamination before returning
+                better_snapshot["games"] = [
+                    g for g in better_snapshot.get("games", [])
+                    if not g.get("sport_key") or g["sport_key"] == sport
+                ]
+                for g in better_snapshot["games"]:
+                    if not g.get("sport_key"):
+                        g["sport_key"] = sport
                 logger.info(
                     f"Enriched {sport} {date_str}: upgraded from {max_books} to "
                     f"{better_max_books} books (from odds_snapshots)"
