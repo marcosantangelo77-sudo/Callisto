@@ -675,66 +675,99 @@ class BacktestEngine:
             f"conn_state=[{', '.join(_diag_parts)}]"
         )
         completed = datetime.now(timezone.utc).isoformat()
-        import random as _rnd_bt
-        import aiosqlite as _aiosqlite_bt
-        for _bt_write_attempt in range(5):
-            _write_db = None
-            try:
-                _write_db = await _aiosqlite_bt.connect(self.db_path)
-                await _write_db.execute("PRAGMA busy_timeout = 60000")
-                await _write_db.execute("PRAGMA journal_mode = WAL")
-                await _write_db.execute("PRAGMA synchronous = NORMAL")
-                # NOTE (audit H-11): a previous version wrapped this block in
-                # BEGIN IMMEDIATE to batch the writer-lock claim. In Marco's
-                # environment that REGRESSED concurrency — line_monitor's
-                # snapshot_insert started exhausting its db_utils retry budget
-                # because backtests held the writer lock for tens of seconds.
-                # SQLite's per-statement WAL serialization is sufficient; do
-                # not reintroduce BEGIN IMMEDIATE without first benchmarking
-                # snapshot_insert latency under realistic load.
-                await _write_db.execute(
+        # WriteCoordinator path (single-writer pattern). The whole batch is one
+        # logical transaction: the run row, the optional draft→backtesting
+        # status flip, and the bulk event insert. Routing through the
+        # coordinator means it never competes with line_monitor / hermes /
+        # task_queue writers — they share the queue.
+        try:
+            from tools.db_writer import get_writer_if_running
+            coord = get_writer_if_running(self.db_path)
+        except Exception:
+            coord = None
+        if coord is not None:
+            ops: list[tuple[str, tuple]] = [
+                (
                     "INSERT OR REPLACE INTO backtest_runs "
                     "(run_id, hypothesis_id, date_range_start, date_range_end, "
                     "started_at, run_config, total_events, signals_generated, completed_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (run_id, hypothesis_id, start_date, end_date, now,
                      json.dumps(config), total_events, total_signals, completed),
+                ),
+            ]
+            if _deferred_status_update:
+                ops.append((
+                    "UPDATE hypotheses SET status = 'backtesting', "
+                    "updated_at = datetime('now') WHERE hypothesis_id = ? "
+                    "AND status = 'draft'",
+                    (hypothesis_id,),
+                ))
+            await coord.transaction(ops)
+            if all_pending_rows:
+                await coord.executemany(
+                    "INSERT OR IGNORE INTO backtest_events "
+                    "(run_id, event_id, hypothesis_id, sport, player, market, "
+                    "line, side, book, book_odds_american, book_implied_prob, "
+                    "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
+                    "signal_generated, game_date, snapshot_time) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    all_pending_rows,
                 )
-                if _deferred_status_update:
+        else:
+            # Legacy path: open a per-write connection, retry on lock.
+            import random as _rnd_bt
+            import aiosqlite as _aiosqlite_bt
+            for _bt_write_attempt in range(5):
+                _write_db = None
+                try:
+                    _write_db = await _aiosqlite_bt.connect(self.db_path)
+                    await _write_db.execute("PRAGMA busy_timeout = 60000")
+                    await _write_db.execute("PRAGMA journal_mode = WAL")
+                    await _write_db.execute("PRAGMA synchronous = NORMAL")
                     await _write_db.execute(
-                        "UPDATE hypotheses SET status = 'backtesting', "
-                        "updated_at = datetime('now') WHERE hypothesis_id = ? "
-                        "AND status = 'draft'",
-                        (hypothesis_id,),
+                        "INSERT OR REPLACE INTO backtest_runs "
+                        "(run_id, hypothesis_id, date_range_start, date_range_end, "
+                        "started_at, run_config, total_events, signals_generated, completed_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (run_id, hypothesis_id, start_date, end_date, now,
+                         json.dumps(config), total_events, total_signals, completed),
                     )
-                if all_pending_rows:
-                    await _write_db.executemany(
-                        "INSERT OR IGNORE INTO backtest_events "
-                        "(run_id, event_id, hypothesis_id, sport, player, market, "
-                        "line, side, book, book_odds_american, book_implied_prob, "
-                        "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
-                        "signal_generated, game_date, snapshot_time) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        all_pending_rows,
-                    )
-                await _write_db.commit()
-                await _write_db.close()
-                break
-            except Exception as _bw_e:
-                if _write_db:
-                    try:
-                        await _write_db.close()
-                    except Exception:
-                        pass
-                if "locked" in str(_bw_e).lower() and _bt_write_attempt < 4:
-                    _wait = min(2 * (2 ** _bt_write_attempt), 15) + _rnd_bt.uniform(0, 1)
-                    logger.warning(
-                        f"Backtest {run_id} deferred write locked "
-                        f"(attempt {_bt_write_attempt + 1}/5), retrying in {_wait:.1f}s"
-                    )
-                    await asyncio.sleep(_wait)
-                else:
-                    raise
+                    if _deferred_status_update:
+                        await _write_db.execute(
+                            "UPDATE hypotheses SET status = 'backtesting', "
+                            "updated_at = datetime('now') WHERE hypothesis_id = ? "
+                            "AND status = 'draft'",
+                            (hypothesis_id,),
+                        )
+                    if all_pending_rows:
+                        await _write_db.executemany(
+                            "INSERT OR IGNORE INTO backtest_events "
+                            "(run_id, event_id, hypothesis_id, sport, player, market, "
+                            "line, side, book, book_odds_american, book_implied_prob, "
+                            "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
+                            "signal_generated, game_date, snapshot_time) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            all_pending_rows,
+                        )
+                    await _write_db.commit()
+                    await _write_db.close()
+                    break
+                except Exception as _bw_e:
+                    if _write_db:
+                        try:
+                            await _write_db.close()
+                        except Exception:
+                            pass
+                    if "locked" in str(_bw_e).lower() and _bt_write_attempt < 4:
+                        _wait = min(2 * (2 ** _bt_write_attempt), 15) + _rnd_bt.uniform(0, 1)
+                        logger.warning(
+                            f"Backtest {run_id} deferred write locked "
+                            f"(attempt {_bt_write_attempt + 1}/5), retrying in {_wait:.1f}s"
+                        )
+                        await asyncio.sleep(_wait)
+                    else:
+                        raise
 
         logger.info(
             f"Backtest {run_id} complete: {total_events} events, {total_signals} signals"

@@ -251,6 +251,33 @@ class HermesMemory:
             confidence = max(0.0, min(1.0, confidence))
             if source not in ("claude", "callisto", "hermes", "agent", "human", "self_repair", "audit"):
                 source = "claude"
+            # WriteCoordinator path (single-writer pattern). Skips opening yet
+            # another connection just to write one row.
+            try:
+                from tools.db_writer import get_writer_if_running
+                coord = get_writer_if_running(self.db_path)
+            except Exception:
+                coord = None
+            if coord is not None:
+                # Tables are guaranteed by ensure_schema at startup; the legacy
+                # _ensure_tables call here is a belt-and-braces idempotent CREATE
+                # IF NOT EXISTS that we skip on the coordinator path.
+                if not self._db_initialized:
+                    async with aiosqlite.connect(self.db_path) as db:
+                        await self._ensure_tables(db)
+                await coord.execute(
+                    "INSERT INTO hermes_learnings (key, value, learned_at, confidence, source) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET "
+                    "value=excluded.value, occurrences=occurrences+1, "
+                    "confidence=MAX(confidence, excluded.confidence), "
+                    "learned_at=excluded.learned_at, source=excluded.source",
+                    (key, value, datetime.now(timezone.utc).isoformat(), confidence, source),
+                )
+                self._cache.clear()
+                self._cache_time.clear()
+                logger.info(f"Hermes learning recorded: {key} (confidence={confidence:.2f})")
+                return
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute("PRAGMA busy_timeout = 60000")
                 await self._ensure_tables(db)

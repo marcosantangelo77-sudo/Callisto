@@ -316,6 +316,14 @@ async def lifespan(app: FastAPI):
     # Startup — ensure DB schema is up to date
     await ensure_schema()
 
+    # Single-writer coordinator (root-cause fix for "database is locked").
+    # Owns one writer connection per DB; every write inside this process
+    # routes through it via execute_with_retry, eliminating intra-process
+    # writer contention. See tools/db_writer.py for the full rationale.
+    from tools.db_writer import get_writer as _get_writer
+    await _get_writer(DB_PATH)
+    logger.info(f"WriteCoordinator active for {DB_PATH}")
+
     # Preload priority models into VRAM (devstral-small-2 takes 28s cold, <1s warm)
     from inference import warmup_models
     await warmup_models()
@@ -480,6 +488,13 @@ async def lifespan(app: FastAPI):
             await _restart_task
         except (asyncio.CancelledError, Exception):
             pass
+    # Stop every WriteCoordinator last so any final writes from the shutdown
+    # path above were able to drain through it.
+    try:
+        from tools.db_writer import stop_all as _stop_writers
+        await _stop_writers()
+    except Exception:
+        logger.exception("WriteCoordinator shutdown error (non-fatal)")
     if data_collector:
         await data_collector.close()
     if hypothesis_generator:
@@ -2536,9 +2551,23 @@ async def health_check():
         "total_pings": getattr(app.state, "_health_ping_count", 0),
     }
 
+    # WriteCoordinator stats — exposed on /health for at-a-glance lock visibility.
+    try:
+        from tools.db_writer import all_stats as _writer_stats
+        report["write_coordinators"] = _writer_stats()
+    except Exception:
+        report["write_coordinators"] = []
+
     # Write health file for sentinel to read if HTTP is down
     system_health.write_health_file()
     return report
+
+
+@app.get("/admin/writer", dependencies=[Depends(require_admin)])
+async def writer_stats():
+    """Per-DB WriteCoordinator stats: queue depth, throughput, slowest op."""
+    from tools.db_writer import all_stats as _writer_stats
+    return {"coordinators": _writer_stats()}
 
 
 @app.get("/health/deep")

@@ -56,11 +56,21 @@ class TaskQueue:
     async def initialize(self) -> None:
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._db = await aiosqlite.connect(self.db_path)
+        # Tag for WriteCoordinator routing (single-writer pattern). When the
+        # coordinator is up, submit_task / get_next / complete_task all funnel
+        # their writes through it instead of competing on the local connection.
+        try:
+            self._db._callisto_db_path = os.path.abspath(self.db_path)
+        except Exception:
+            pass
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA wal_autocheckpoint = 1000")
         await self._db.execute("PRAGMA journal_size_limit = 67108864")
         await self._db.execute("PRAGMA busy_timeout = 120000")
-        await self._db.executescript(TASK_SCHEMA_SQL)
+        # Per-statement DDL avoids the EXCLUSIVE lock that executescript holds
+        # for the duration of the script.
+        for stmt in (s.strip() for s in TASK_SCHEMA_SQL.split(";") if s.strip()):
+            await self._db.execute(stmt)
         await self._db.commit()
         await self._recover_stuck_tasks()
 
@@ -90,8 +100,26 @@ class TaskQueue:
             self._db = None
 
     async def submit_task(self, query: str, priority: int = 0) -> int:
-        """Submit a new task. Returns task_id. Retries on DB lock."""
+        """Submit a new task. Returns task_id.
+
+        Routes through the WriteCoordinator when active so /task POST never
+        competes with the autonomous loop's writes for the SQLite writer lock.
+        Falls back to the original retry loop when no coordinator is running.
+        """
         import asyncio as _asyncio
+        # Fast path: WriteCoordinator (single in-process writer).
+        try:
+            from tools.db_writer import get_writer_if_running
+            coord = get_writer_if_running(self.db_path)
+        except Exception:
+            coord = None
+        if coord is not None:
+            return await coord.execute(
+                """INSERT INTO task_queue (query, priority, created_at)
+                   VALUES (?, ?, ?)""",
+                (query, priority, datetime.now(timezone.utc).isoformat()),
+            )
+        # Legacy path (ad-hoc scripts where coordinator never started).
         for attempt in range(8):
             try:
                 cursor = await self._db.execute(
@@ -109,8 +137,18 @@ class TaskQueue:
                     raise
 
     async def get_next(self) -> Optional[dict]:
-        """Atomically claim the next pending task. Returns task dict or None. Retries on DB lock."""
+        """Atomically claim the next pending task. Returns task dict or None.
+
+        Read of the next-pending row uses the local connection (reads don't
+        contend in WAL); the claiming UPDATE routes through the
+        WriteCoordinator when active so it never competes with other writers.
+        """
         import asyncio as _asyncio
+        try:
+            from tools.db_writer import get_writer_if_running
+            coord = get_writer_if_running(self.db_path)
+        except Exception:
+            coord = None
         # Commit to release any implicit read transaction — refreshes WAL snapshot
         # so we can see rows inserted by external processes (e.g. direct DB writes)
         try:
@@ -131,16 +169,25 @@ class TaskQueue:
                 task_id, query, priority = row[0]
                 now = datetime.now(timezone.utc).isoformat()
 
-                cursor = await self._db.execute(
-                    """UPDATE task_queue
-                       SET status = 'PROCESSING', started_at = ?
-                       WHERE task_id = ? AND status = 'PENDING'""",
-                    (now, task_id),
-                )
-                await self._db.commit()
-
-                if cursor.rowcount == 0:
-                    return None
+                if coord is not None:
+                    rowcount = await coord.execute(
+                        """UPDATE task_queue
+                           SET status = 'PROCESSING', started_at = ?
+                           WHERE task_id = ? AND status = 'PENDING'""",
+                        (now, task_id),
+                    )
+                    if rowcount == 0:
+                        return None
+                else:
+                    cursor = await self._db.execute(
+                        """UPDATE task_queue
+                           SET status = 'PROCESSING', started_at = ?
+                           WHERE task_id = ? AND status = 'PENDING'""",
+                        (now, task_id),
+                    )
+                    await self._db.commit()
+                    if cursor.rowcount == 0:
+                        return None
 
                 return {"task_id": task_id, "query": query, "priority": priority}
             except Exception as e:
@@ -153,8 +200,30 @@ class TaskQueue:
     async def complete_task(
         self, task_id: int, result: dict, session_id: Optional[str] = None
     ) -> None:
-        """Mark a task as completed with its result. Retries on DB lock."""
+        """Mark a task as completed with its result.
+
+        Routes through the WriteCoordinator when active.
+        """
         import asyncio as _asyncio
+        try:
+            from tools.db_writer import get_writer_if_running
+            coord = get_writer_if_running(self.db_path)
+        except Exception:
+            coord = None
+        if coord is not None:
+            await coord.execute(
+                """UPDATE task_queue
+                   SET status = 'COMPLETED', result = ?, session_id = ?,
+                       completed_at = ?
+                   WHERE task_id = ?""",
+                (
+                    json.dumps(result, ensure_ascii=False),
+                    session_id,
+                    datetime.now(timezone.utc).isoformat(),
+                    task_id,
+                ),
+            )
+            return
         for attempt in range(8):
             try:
                 await self._db.execute(
@@ -178,8 +247,24 @@ class TaskQueue:
                     raise
 
     async def fail_task(self, task_id: int, error: str) -> None:
-        """Mark a task as failed with error details. Retries on DB lock."""
+        """Mark a task as failed with error details.
+
+        Routes through the WriteCoordinator when active.
+        """
         import asyncio as _asyncio
+        try:
+            from tools.db_writer import get_writer_if_running
+            coord = get_writer_if_running(self.db_path)
+        except Exception:
+            coord = None
+        if coord is not None:
+            await coord.execute(
+                """UPDATE task_queue
+                   SET status = 'FAILED', error = ?, completed_at = ?
+                   WHERE task_id = ?""",
+                (error, datetime.now(timezone.utc).isoformat(), task_id),
+            )
+            return
         for attempt in range(8):
             try:
                 await self._db.execute(

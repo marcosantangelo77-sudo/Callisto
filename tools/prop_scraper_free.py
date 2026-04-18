@@ -1154,25 +1154,42 @@ async def store_prop_snapshot(props: list[dict], sport: str, db_path: str = DB_P
         return 0
 
     now = datetime.now(timezone.utc).isoformat()
+    rows = [
+        (
+            sport,
+            p.get("event_id", ""),
+            p.get("home_team", ""),
+            p.get("away_team", ""),
+            p["player"],
+            p["market"],
+            p["line"],
+            p["side"],
+            p["book"],
+            p["price"],
+            now,
+        )
+        for p in props
+    ]
+
+    # WriteCoordinator path (single-writer pattern). Avoids opening a new
+    # connection for every snapshot batch.
+    try:
+        from tools.db_writer import get_writer_if_running
+        coord = get_writer_if_running(db_path)
+    except Exception:
+        coord = None
+    if coord is not None:
+        await coord.executemany(
+            "INSERT INTO prop_snapshots "
+            "(sport, event_id, home_team, away_team, player, market, line, side, book, price_american, snapshot_time) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        logger.info(f"Stored {len(rows)} prop snapshot rows for {sport}")
+        return len(rows)
 
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout = 60000")
-        rows = [
-            (
-                sport,
-                p.get("event_id", ""),
-                p.get("home_team", ""),
-                p.get("away_team", ""),
-                p["player"],
-                p["market"],
-                p["line"],
-                p["side"],
-                p["book"],
-                p["price"],
-                now,
-            )
-            for p in props
-        ]
         await db.executemany(
             "INSERT INTO prop_snapshots "
             "(sport, event_id, home_team, away_team, player, market, line, side, book, price_american, snapshot_time) "

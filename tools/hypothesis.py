@@ -364,6 +364,9 @@ class HypothesisManager:
 
     async def initialize(self) -> None:
         self._db = await aiosqlite.connect(self.db_path)
+        # Tag for WriteCoordinator routing (single-writer pattern).
+        from tools.db_writer import tag_connection as _tag
+        _tag(self._db, self.db_path)
         await self._db.execute("PRAGMA journal_mode = WAL")
         await self._db.execute("PRAGMA wal_autocheckpoint = 1000")
         await self._db.execute("PRAGMA journal_size_limit = 67108864")
