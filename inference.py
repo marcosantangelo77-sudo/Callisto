@@ -95,11 +95,11 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
         system_prompt="",  # set via Modelfile SYSTEM
     ),
     "strategist": AgentConfig(
-        model="gemma4",
+        model="qwen36",
         capabilities=["reasoning", "synthesis", "hypothesis_gen", "deep_work"],
         default_options={"temperature": 0.7},  # Higher temp for creative hypothesis gen
         think=False,
-        supports_native_tools=True,  # Gemma 4: native function calling + structured JSON
+        supports_native_tools=True,  # Qwen3 family: native tool/JSON via ChatML
         system_prompt=(
             "You are The Strategist — the creative reasoning agent in the Callisto system. "
             "You generate novel, diverse sports betting hypotheses and perform deep analysis. "
@@ -153,11 +153,19 @@ AGENT_CONFIGS: dict[str, AgentConfig] = {
 # Qwen3-14B remains best for fast structured output — clean JSON first try.
 DEVSTRAL_MODEL = "devstral-small-2"
 APRIEL_MODEL = "hf.co/ServiceNow-AI/Apriel-1.6-15b-Thinker-GGUF:Q4_K_M"
-GEMMA4_MODEL = "gemma4"  # E4B: 4.5B effective, 9.6GB, native function calling + JSON, #3 Arena class
+GEMMA4_MODEL = "gemma4"  # E4B: 4.5B effective, 9.6GB. Demoted to fallback after qwen36 install.
+# Qwen3.6-35B-A3B (April 2026, Unsloth UD-IQ3_S quant via local Modelfile alias).
+# Sparse MoE: 35B total / 3B active per token. Beats Gemma 4-31B on SWE-bench
+# Verified (73.4% vs 52.0%) and Terminal-Bench (51.5 vs 42.9), 86% GPQA, 92.7%
+# AIME 2026. Local smoke test: ~50 tok/s steady-state, fits 16GB VRAM with KV
+# cache headroom, clean JSON discipline. Replaces gemma4 as the primary local
+# reasoning/hypothesis-gen/deep-work brain; gemma4 stays as one rung below.
+QWEN36_MODEL = "qwen36"
 MODEL_LADDER: dict[str, list[dict]] = {
     "reasoning": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
-        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 120},           # #3 Arena, native function calling, 256K ctx
+        {"model": QWEN36_MODEL, "quality": "high", "timeout": 150},           # PRIMARY — Qwen3.6-35B-A3B MoE, 86% GPQA, 92.7% AIME
+        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 120},           # Fallback — Gemma 4 E4B, native function calling
         {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 120},         # Best local tool use, agentic coding
         {"model": APRIEL_MODEL, "quality": "high", "timeout": 120},           # 88% AIME, strongest local reasoning
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Matches 32B, thinking mode
@@ -167,25 +175,29 @@ MODEL_LADDER: dict[str, list[dict]] = {
         {"model": "qwen3.5:4b", "quality": "medium", "timeout": 30},
     ],
     "review": [
-        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 90},           # General reasoning > GPT-OSS for review
+        {"model": QWEN36_MODEL, "quality": "high", "timeout": 120},          # PRIMARY review — broader reasoning than gemma
+        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 90},
         {"model": "manager:latest", "quality": "high", "timeout": 60},
     ],
     "code_generation": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
-        {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 120},         # Purpose-built for code, SWE-bench leader
-        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 120},           # Strong general coding
+        {"model": QWEN36_MODEL, "quality": "high", "timeout": 150},           # 73.4% SWE-bench Verified — beats gemma4-31B (52%)
+        {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 120},         # Purpose-built for code, SWE-bench leader (24B dense)
+        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 120},
         {"model": "qwen3:14b", "quality": "high", "timeout": 90},            # Good code + JSON
     ],
     "hypothesis_gen": [
-        # HYBRID MODE: Gemma 4 handles hypothesis gen to save Claude credits.
+        # HYBRID MODE: Qwen3.6 handles hypothesis gen to save Claude credits.
         # Claude's value is in interpretation/deep work, not mass generation.
-        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 150},           # PRIMARY — creative, diverse, native JSON
+        {"model": QWEN36_MODEL, "quality": "high", "timeout": 180},           # PRIMARY — best local creative reasoning
+        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 150},           # Fallback creative
         {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 120},         # Fallback structured output
         {"model": "claude_code", "quality": "frontier", "timeout": 180},      # Last resort — saves $$$
     ],
     "deep_work": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
-        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 180},           # PRIMARY for deep work — broad knowledge, strong reasoning
+        {"model": QWEN36_MODEL, "quality": "high", "timeout": 180},           # PRIMARY local deep work — 92.7% AIME 2026
+        {"model": GEMMA4_MODEL, "quality": "high", "timeout": 180},
         {"model": DEVSTRAL_MODEL, "quality": "high", "timeout": 150},         # Best local for agentic deep analysis
         {"model": APRIEL_MODEL, "quality": "high", "timeout": 150},           # Strongest local for deep reasoning
         {"model": "qwen3:14b", "quality": "high", "timeout": 120},           # Best local for diagnosis
