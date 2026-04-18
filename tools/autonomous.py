@@ -3162,7 +3162,9 @@ class ResearchLoop:
             except Exception as e:
                 logger.warning(f"Data collection failed for {sport}: {e}")
 
-        # Statcast pitch-level data for MLB (free from Baseball Savant)
+        # Statcast pitch-level data for MLB (free from Baseball Savant).
+        # Each call stores the full pitch timeline in statcast_pitches
+        # (one row per pitch, 40 fields of physics + location + outcome).
         if "baseball_mlb" in RESEARCH_SPORTS:
             try:
                 for dt in dates[:3]:  # Last 3 days only (Statcast is dense)
@@ -3170,6 +3172,18 @@ class ResearchLoop:
                     await self.data_collector.collect_statcast(date_fmt)
             except Exception as e:
                 logger.warning(f"Statcast collection failed: {e}")
+
+            # MLB player metadata (height, weight, bats, throws, debut, team).
+            # Refresh at most once per day — roster moves are sparse, and the
+            # endpoint takes ~30 HTTP calls. Anchored on a module-level ts.
+            try:
+                import time as _t
+                last = getattr(self, "_last_mlb_player_refresh", 0.0)
+                if _t.time() - last > 86400:  # 24h
+                    await self.data_collector.collect_mlb_players()
+                    self._last_mlb_player_refresh = _t.time()
+            except Exception as e:
+                logger.warning(f"MLB player metadata refresh failed: {e}")
 
         # Collect pre-calculated value bets from Odds-API.io Pro
         # These are updated every 5 seconds with EV computed from consensus
