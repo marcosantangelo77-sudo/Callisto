@@ -1173,30 +1173,40 @@ async def store_prop_snapshot(props: list[dict], sport: str, db_path: str = DB_P
 
     # WriteCoordinator path (single-writer pattern). Avoids opening a new
     # connection for every snapshot batch.
+    #
+    # CHUNKING (2026-04-18): the prop scraper dumps tens of thousands of rows
+    # in one call (e.g., a full round of NBA player props across 4 books is
+    # 20-40k rows). A single executemany of that size blocks the coordinator's
+    # writer loop for 25-40s wall-clock, which blocks every other producer
+    # behind it (hermes learnings, hypothesis promotions, /task POST). Break
+    # the batch into CHUNK_SIZE-row sub-batches so the queue drains between
+    # chunks. 5000 rows at ~1ms/row ≈ 200ms per chunk — plenty of room for
+    # small writes to slip in. Same strategy for the legacy fallback path.
+    CHUNK_SIZE = 5000
+    sql = (
+        "INSERT INTO prop_snapshots "
+        "(sport, event_id, home_team, away_team, player, market, line, side, book, price_american, snapshot_time) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
     try:
         from tools.db_writer import get_writer_if_running
         coord = get_writer_if_running(db_path)
     except Exception:
         coord = None
     if coord is not None:
-        await coord.executemany(
-            "INSERT INTO prop_snapshots "
-            "(sport, event_id, home_team, away_team, player, market, line, side, book, price_american, snapshot_time) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            rows,
+        for start in range(0, len(rows), CHUNK_SIZE):
+            await coord.executemany(sql, rows[start:start + CHUNK_SIZE])
+        logger.info(
+            f"Stored {len(rows)} prop snapshot rows for {sport} "
+            f"({(len(rows) + CHUNK_SIZE - 1) // CHUNK_SIZE} chunk(s))"
         )
-        logger.info(f"Stored {len(rows)} prop snapshot rows for {sport}")
         return len(rows)
 
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout = 60000")
-        await db.executemany(
-            "INSERT INTO prop_snapshots "
-            "(sport, event_id, home_team, away_team, player, market, line, side, book, price_american, snapshot_time) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            rows,
-        )
-        await db.commit()
+        for start in range(0, len(rows), CHUNK_SIZE):
+            await db.executemany(sql, rows[start:start + CHUNK_SIZE])
+            await db.commit()
 
     logger.info(f"Stored {len(rows)} prop snapshot rows for {sport}")
     return len(rows)
