@@ -3182,21 +3182,30 @@ class ResearchLoop:
                         f"Research: {vb['count']} value bets from {book} "
                         f"(top EV: {max(b['ev_pct'] for b in vb['bets']):.1%})"
                     )
-                    # Store in ev_opportunities table for edge scanner
+                    # Store in ev_opportunities table for edge scanner.
+                    # NOTE 2026-04-18: column names map onto line_monitor's canonical
+                    # schema (game_id/bookmaker/team/edge/detected_at). `source` is
+                    # 'odds_api_io_pro' so downstream consumers can distinguish
+                    # provider-fed value bets from on-box line-movement EV scans.
                     try:
                         db = self.data_collector._db
                         if db:
                             for bet in vb["bets"]:
                                 if bet["ev_pct"] >= 0.01:  # Only store 1%+ EV
                                     await db.execute(
-                                        "INSERT OR REPLACE INTO ev_opportunities "
-                                        "(event_id, book, market, side, ev_pct, "
-                                        "source, updated_at) "
-                                        "VALUES (?, ?, ?, ?, ?, 'odds_api_io_pro', ?)",
+                                        "INSERT INTO ev_opportunities "
+                                        "(detected_at, sport, game_id, team, market, "
+                                        "bookmaker, edge, expected_value, source) "
+                                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'odds_api_io_pro')",
                                         (
-                                            bet["event_id"], bet["bookmaker"],
-                                            bet["market"], bet["side"],
-                                            bet["ev_pct"], bet["updated_at"],
+                                            bet.get("updated_at", ""),
+                                            bet.get("sport", ""),
+                                            bet.get("event_id", ""),
+                                            bet.get("side", ""),
+                                            bet.get("market", ""),
+                                            bet.get("bookmaker", ""),
+                                            bet.get("ev_pct", 0.0),
+                                            bet.get("ev_pct", 0.0),
                                         ),
                                     )
                             await db.commit()
@@ -3214,23 +3223,27 @@ class ResearchLoop:
                     f"Research: {arb['count']} arbitrage opportunities found "
                     f"(guaranteed profit regardless of outcome)"
                 )
-                # Store for analysis — arbs indicate book disagreement
+                # Store for analysis — arbs indicate book disagreement.
+                # Same canonical-schema mapping as value-bet path above; source
+                # 'arbitrage' lets downstream consumers filter arb signals.
                 try:
                     db = self.data_collector._db
                     if db:
                         for bet in arb.get("bets", []):
                             await db.execute(
-                                "INSERT OR REPLACE INTO ev_opportunities "
-                                "(event_id, book, market, side, ev_pct, "
-                                "source, updated_at) "
-                                "VALUES (?, ?, ?, ?, ?, 'arbitrage', ?)",
+                                "INSERT INTO ev_opportunities "
+                                "(detected_at, sport, game_id, team, market, "
+                                "bookmaker, edge, expected_value, source) "
+                                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'arbitrage')",
                                 (
-                                    bet.get("event_id", ""),
-                                    bet.get("bookmakers", "multi"),
-                                    bet.get("market", ""),
-                                    bet.get("side", "arb"),
-                                    bet.get("profit_pct", 0),
                                     bet.get("updated_at", ""),
+                                    bet.get("sport", ""),
+                                    bet.get("event_id", ""),
+                                    bet.get("side", "arb"),
+                                    bet.get("market", ""),
+                                    bet.get("bookmakers", "multi"),
+                                    bet.get("profit_pct", 0),
+                                    bet.get("profit_pct", 0),
                                 ),
                             )
                         await db.commit()

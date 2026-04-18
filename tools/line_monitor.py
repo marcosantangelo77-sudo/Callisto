@@ -147,7 +147,13 @@ class LineMonitor:
                 edge REAL,
                 expected_value REAL,
                 kelly_fraction REAL,
-                status TEXT DEFAULT 'open'
+                status TEXT DEFAULT 'open',
+                -- source distinguishes signal provenance: 'line_movement' (default,
+                -- from line_monitor edge scan), 'odds_api_io_pro' (value bets from
+                -- the provider's pre-computed +EV feed), or 'arbitrage' (cross-book
+                -- guaranteed-profit opportunities). Added 2026-04-18 to unify the
+                -- two writer paths (line_monitor + autonomous) on one schema.
+                source TEXT DEFAULT 'line_movement'
             )""",
             "CREATE INDEX IF NOT EXISTS idx_snapshots_sport_ts ON odds_snapshots(sport, timestamp)",
             "CREATE INDEX IF NOT EXISTS idx_movements_sport ON line_movements(sport, detected_at)",
