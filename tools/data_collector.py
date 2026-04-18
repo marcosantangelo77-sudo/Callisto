@@ -1377,14 +1377,71 @@ class DataCollector:
                             "wp_after": round(curr_wp, 3),
                         })
 
-            # Store enrichment data
-            pbp_summary = {
+            # 2026-04-18: Prior version stored ONLY a 7-stat summary
+            # (total_plays, scoring_plays, periods, momentum_swings, and
+            # final/max/min win-prob). The raw `plays` and `winprobability`
+            # arrays returned by ESPN were parsed and then thrown away,
+            # meaning Callisto was not actually storing play-by-play — it
+            # was storing a histogram. Downstream pace / scoring-run /
+            # player-impact / in-game modelling had no timeline to read.
+            #
+            # This version stores a compact form of every play plus the
+            # full win-prob series, while keeping the prior summary fields
+            # for backward compatibility with any consumer reading them.
+            def _parse_clock(play_obj):
+                c = play_obj.get("clock", {}) or {}
+                val = c.get("displayValue") or c.get("value")
+                if isinstance(val, (int, float)):
+                    return int(val)
+                if isinstance(val, str) and ":" in val:
+                    try:
+                        mm, ss = val.split(":")
+                        return int(mm) * 60 + int(ss)
+                    except ValueError:
+                        return 0
+                return 0
+
+            wp_by_play_id = {
+                wp.get("playId"): wp.get("homeWinPercentage")
+                for wp in win_probs
+                if wp.get("playId")
+            }
+
+            compact_plays = []
+            for p in plays:
+                st = p.get("scoringPlay") is True
+                coord = p.get("coordinate") or {}
+                pid = p.get("id")
+                compact_plays.append({
+                    "p": p.get("period", {}).get("number", 0),
+                    "c": _parse_clock(p),
+                    "t": (p.get("type", {}) or {}).get("text") or p.get("shortText", ""),
+                    "hs": p.get("homeScore"),
+                    "as": p.get("awayScore"),
+                    "sc": p.get("homeAway") if st else None,
+                    "wp": (
+                        round(float(wp_by_play_id[pid]), 4)
+                        if pid in wp_by_play_id and wp_by_play_id[pid] is not None
+                        else None
+                    ),
+                    "x": coord.get("x") if coord else None,
+                    "y": coord.get("y") if coord else None,
+                    "tx": (p.get("text") or "")[:200],  # cap description length
+                })
+
+            pbp_payload = {
+                "plays": compact_plays,
+                "wp_series": [
+                    round(float(wp.get("homeWinPercentage")), 4)
+                    for wp in win_probs
+                    if wp.get("homeWinPercentage") is not None
+                ],
                 "total_plays": total_plays,
                 "scoring_plays": len(scoring_plays),
                 "periods": periods,
                 "momentum_swings": sorted(
                     momentum_swings, key=lambda x: x["swing"], reverse=True
-                )[:10],  # Top 10 biggest swings
+                )[:10],
                 "final_home_wp": round(
                     win_probs[-1].get("homeWinPercentage", 0.5), 3
                 ) if win_probs else None,
@@ -1396,7 +1453,11 @@ class DataCollector:
                 ) if win_probs else None,
             }
 
-            # Update existing game_context with PBP data
+            # Update existing game_context with PBP data. Also mirror the final
+            # home win-probability into a top-level `win_probability` key so
+            # queries that filter on it (e.g. "rows with win_probability set")
+            # find these games — the prior version only nested it inside
+            # play_by_play, which left the top-level filter returning 0 matches.
             cursor = await self._db.execute(
                 "SELECT id, context_json FROM game_contexts "
                 "WHERE sport = ? AND event_id = ?",
@@ -1406,14 +1467,17 @@ class DataCollector:
             if row:
                 ctx_id, ctx_json = row
                 ctx = json.loads(ctx_json) if ctx_json else {}
-                ctx["play_by_play"] = pbp_summary
+                ctx["play_by_play"] = pbp_payload
+                if pbp_payload["final_home_wp"] is not None:
+                    ctx["win_probability"] = pbp_payload["final_home_wp"]
                 await self._db.execute(
                     "UPDATE game_contexts SET context_json = ? WHERE id = ?",
                     (json.dumps(ctx), ctx_id),
                 )
                 games_enriched += 1
                 logger.debug(
-                    f"PBP enrichment: {event_id} — {total_plays} plays, "
+                    f"PBP enrichment: {event_id} — {total_plays} plays stored, "
+                    f"{len(compact_plays)} timeline entries, "
                     f"{len(momentum_swings)} momentum swings"
                 )
 

@@ -46,7 +46,10 @@ from tools.odds_api_io import (
     get_usage_status as odds_api_io_usage,
     get_value_bets as odds_api_io_value_bets,
 )
-from tools.oddspapi import get_odds as oddspapi_get_odds, get_usage_status as oddspapi_usage
+# oddspapi removed 2026-04-18 (per Marco: "NO MORE ODDS-PAPI"). We already have
+# odds-api.io Pro with superior coverage + DK/FD/Action Network scrapers as
+# fallbacks; oddspapi was redundant and was spending our 250/month quota on
+# sports we cover elsewhere.
 from tools.prop_scraper_free import scrape_all_props, store_prop_snapshot, ensure_prop_schema
 
 load_dotenv()
@@ -432,20 +435,9 @@ class LineMonitor:
         # Scraped endpoint returns 400/403 consistently, generating log noise.
         # Re-enable only if odds-api.io loses BetMGM coverage.
 
-        # 6. OddsPapi — 250/month free (last resort)
-        if not scraped:
-            try:
-                usage = oddspapi_usage()
-                if usage.get("requests_remaining", 0) > 0 and usage.get("api_key_set"):
-                    op_data = await oddspapi_get_odds(sport)
-                    if not op_data.get("error") and op_data.get("game_count", 0) > 0:
-                        scraped["oddspapi"] = op_data
-                        logger.info(
-                            f"OddsPapi {sport}: {op_data['game_count']} games "
-                            f"({usage['requests_remaining'] - 1} left)"
-                        )
-            except Exception as e:
-                logger.warning(f"OddsPapi failed for {sport}: {e}")
+        # 6. OddsPapi — REMOVED 2026-04-18. odds-api.io Pro covers the same
+        # books at higher quota; the oddspapi free tier was throwing 429 on
+        # every call. Do not reintroduce without an explicit decision.
 
         # Merge all successful sources
         if not scraped:

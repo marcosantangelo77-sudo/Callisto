@@ -157,7 +157,9 @@ class HistoricalOddsFetcher:
         Source cascade:
           1. SQLite cache (free)
           2. Odds-API.io Pro (15 books, 30K req/hr)
-          3. OddsPapi fallback (Pinnacle, 250 req/month)
+          (fallback: OddsPapi was removed 2026-04-18; odds-api.io Pro is the
+          only historical source now. If it fails, we fail loudly rather than
+          silently serving stale / lower-quality data.)
         """
         # Check cache first
         cached = await self._get_cached(sport, date, None, markets)
@@ -165,24 +167,18 @@ class HistoricalOddsFetcher:
             logger.debug(f"Cache hit: {sport} {date}")
             return cached
 
-        # Source 1: Odds-API.io Pro (15 books, best quality)
+        # Source 1 (and only): Odds-API.io Pro (15 books, best quality)
         result = await self._fetch_via_odds_api_io(sport, date, markets)
         if result and result.get("games"):
             await self._cache_response(sport, date, None, markets, result, 1)
             return result
 
-        # Source 2: OddsPapi fallback (Pinnacle, 1 credit)
-        result = await self._fetch_via_oddspapi(sport, date, markets)
-        if result and result.get("games"):
-            await self._cache_response(sport, date, None, markets, result, 1)
-            return result
-
-        # All sources failed
+        # Source failed — log with source_errors for triage.
         source_errors = []
         if result and result.get("error"):
             source_errors.append(result['error'])
-        logger.warning(f"Historical odds {sport} {date}: all sources failed — {source_errors}")
-        return result or {"error": "All historical odds sources failed", "games": []}
+        logger.warning(f"Historical odds {sport} {date}: odds-api.io failed — {source_errors}")
+        return result or {"error": "odds-api.io Pro failed (no fallback)", "games": []}
 
     async def _fetch_via_odds_api_io(
         self, sport: str, date: str, markets: str,
@@ -238,41 +234,7 @@ class HistoricalOddsFetcher:
             logger.debug(f"Odds-API.io Pro historical failed: {e}")
             return {"error": str(e), "games": []}
 
-    async def _fetch_via_oddspapi(
-        self, sport: str, date: str, markets: str,
-    ) -> dict:
-        """Try OddsPapi for historical odds (1 credit per call)."""
-        try:
-            from tools.oddspapi import get_historical_odds, get_usage_status
-
-            usage = get_usage_status()
-            if not usage.get("api_key_set"):
-                return {"error": "OddsPapi API key not set", "games": []}
-            if usage.get("requests_remaining", 0) <= 0:
-                return {"error": "OddsPapi monthly limit reached", "games": []}
-
-            result = await get_historical_odds(sport=sport, date=date)
-            if result.get("error"):
-                logger.debug(f"OddsPapi historical {sport} {date}: {result['error']}")
-                return result
-
-            games = result.get("games", [])
-            if games:
-                logger.info(
-                    f"Historical odds via OddsPapi: {sport} {date} → {len(games)} games "
-                    f"(remaining: {usage.get('requests_remaining', '?')} req)"
-                )
-            return {
-                "sport": sport,
-                "date": date,
-                "timestamp": f"{date}T00:00:00Z",
-                "games": games,
-                "game_count": len(games),
-                "source": "oddspapi",
-            }
-        except Exception as e:
-            logger.debug(f"OddsPapi historical fallback failed: {e}")
-            return {"error": str(e), "games": []}
+    # _fetch_via_oddspapi removed 2026-04-18 (per Marco: "NO MORE ODDS-PAPI").
 
     async def get_cached_date_range(self, sport: str) -> tuple[Optional[str], Optional[str]]:
         """Returns (earliest_date, latest_date) in cache for a sport."""
