@@ -1,16 +1,28 @@
-ollama
-fastapi
-uvicorn[standard]
-pydantic
-aiosqlite
-httpx
-python-dotenv
-langchain
-langchain-core
-yfinance
-pandas
-beautifulsoup4
-jsonschema
-art
-requests
-polars
+# SECURITY (audit H-12, 2026-04-18): pinned to versions currently installed in
+# Marco's environment so a fresh `pip install -r` reproduces the working set.
+# Run `pip-audit -r requirements.txt` to surface CVEs against these specific
+# versions; use `pip-compile requirements.txt -o requirements.lock` to lock the
+# transitive tree once a true lock workflow is adopted.
+
+# Core local-inference + service deps (PINNED — installed and working)
+ollama==0.6.1
+fastapi==0.135.1
+uvicorn[standard]==0.42.0
+pydantic==2.12.5
+aiosqlite==0.22.1
+httpx==0.28.1
+python-dotenv==1.2.2
+requests==2.32.5
+
+# Data manipulation (PINNED)
+pandas==3.0.1
+polars==1.39.3
+beautifulsoup4==4.14.3
+jsonschema==4.26.0
+
+# Optional / lazy-loaded (kept upper-bounded so a `pip install -r` doesn't pull
+# a major-version surprise; remove from requirements entirely if unused).
+langchain>=0.1,<0.4
+langchain-core>=0.1,<0.4
+yfinance>=0.2,<0.3
+art>=6,<7

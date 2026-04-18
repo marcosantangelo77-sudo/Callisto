@@ -252,7 +252,7 @@ def _get_client() -> httpx.AsyncClient:
     """Legacy httpx client (fallback when curl_cffi unavailable)."""
     global _client
     if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=15.0, headers=_HEADERS, follow_redirects=True)
+        _client = httpx.AsyncClient(timeout=15.0, headers=_HEADERS, follow_redirects=True, max_redirects=5)
     return _client
 
 

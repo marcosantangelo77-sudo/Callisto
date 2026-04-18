@@ -909,11 +909,33 @@ class HypothesisManager:
                 f"Hypothesis {hypothesis_id}: adaptive p-value threshold "
                 f"{max_p:.2f} (base={base_p:.2f}, n={n})"
             )
+        # SECURITY (audit H-5): apply a Šidák family-wise correction across the
+        # ACTIVE corpus (hypotheses currently in backtesting or paper_trading).
+        # Without correction, with 4594 lifetime hypotheses we expect ~230 false
+        # positives at α=0.05. Correcting against the *active* set instead of the
+        # full corpus keeps it tractable and matches the pool of decisions actually
+        # being made right now. Floored at p=0.001 so the gate stays reachable.
+        try:
+            active_cur = await self._db.execute(
+                "SELECT COUNT(*) FROM hypotheses WHERE status IN ('backtesting','paper_trading')"
+            )
+            active_n = int((await active_cur.fetchone())[0] or 1)
+        except Exception:
+            active_n = 1
+        if active_n > 1:
+            sidak = 1.0 - (1.0 - max_p) ** (1.0 / active_n)
+            sidak = max(0.001, sidak)
+            corrected_p = min(max_p, sidak)
+            checks.append(
+                f"INFO: Šidák FWER correction over {active_n} active hypotheses → "
+                f"p threshold {corrected_p:.5f} (was {max_p:.4f})"
+            )
+            max_p = corrected_p
         if p > max_p:
-            checks.append(f"FAIL: p-value {p:.4f} > {max_p:.4f} (adaptive, base={base_p}, n={n})")
+            checks.append(f"FAIL: p-value {p:.4f} > {max_p:.5f} (adaptive+FWER, base={base_p}, n={n}, active={active_n})")
             ready = False
         else:
-            checks.append(f"PASS: p-value {p:.4f} <= {max_p:.4f} (adaptive, base={base_p}, n={n})")
+            checks.append(f"PASS: p-value {p:.4f} <= {max_p:.5f} (adaptive+FWER, base={base_p}, n={n}, active={active_n})")
 
         # CLV rate
         clv_rate = report.get("clv", {}).get("positive_clv_rate", 0)

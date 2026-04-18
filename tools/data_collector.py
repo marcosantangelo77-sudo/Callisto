@@ -18,6 +18,7 @@ ESPN API is undocumented but stable. Endpoints used:
   - injuries: team injury reports
 """
 
+import asyncio
 import difflib
 import json
 import logging
@@ -48,12 +49,34 @@ ESPN_SPORTS = {
 }
 
 _client: Optional[httpx.AsyncClient] = None
+_client_lock: Optional[asyncio.Lock] = None
 
 
-def _get_client() -> httpx.AsyncClient:
+def _get_client_lock() -> asyncio.Lock:
+    """Lazy-init the asyncio.Lock so we don't bind to a non-existent loop at import."""
+    global _client_lock
+    if _client_lock is None:
+        _client_lock = asyncio.Lock()
+    return _client_lock
+
+
+async def _get_client() -> httpx.AsyncClient:
+    """Get-or-create the shared httpx client.
+
+    SECURITY (audit H-10): the previous synchronous double-check could race when
+    two concurrent collect_* calls hit the singleton at the same time, leaking
+    a client and (under sustained load) exhausting local sockets. The init is
+    now serialized by an asyncio.Lock and the function is async; callers must
+    `await` it. The lock-acquisition cost is one TLS-cheap op compared to the
+    network call that follows, so contention is irrelevant.
+    """
     global _client
-    if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=30.0)
+    if _client is not None and not _client.is_closed:
+        return _client
+    lock = _get_client_lock()
+    async with lock:
+        if _client is None or _client.is_closed:
+            _client = httpx.AsyncClient(timeout=30.0, follow_redirects=True, max_redirects=5)
     return _client
 
 
@@ -184,7 +207,7 @@ class DataCollector:
         if date is None:
             date = datetime.now(timezone.utc).strftime("%Y%m%d")
 
-        client = _get_client()
+        client = await _get_client()
         url = f"{ESPN_BASE}/{category}/{league}/scoreboard"
         params = {"dates": date}
 
@@ -420,7 +443,7 @@ class DataCollector:
             date = datetime.now(timezone.utc).strftime("%Y%m%d")
 
         # First get event IDs from scoreboard
-        client = _get_client()
+        client = await _get_client()
         url = f"{ESPN_BASE}/{category}/{league}/scoreboard"
         params = {"dates": date}
 
@@ -661,7 +684,7 @@ class DataCollector:
             return []
 
         core_category, core_league = core_sport
-        client = _get_client()
+        client = await _get_client()
 
         # If no event IDs supplied, get them from today's scoreboard
         if not event_ids:
@@ -693,7 +716,7 @@ class DataCollector:
         if not espn_sport:
             return []
         category, league = espn_sport
-        client = _get_client()
+        client = await _get_client()
         today = datetime.now(timezone.utc).strftime("%Y%m%d")
         url = f"{ESPN_BASE}/{category}/{league}/scoreboard"
         try:
@@ -1285,7 +1308,7 @@ class DataCollector:
         if date is None:
             date = datetime.now(timezone.utc).strftime("%Y%m%d")
 
-        client = _get_client()
+        client = await _get_client()
         url = f"{ESPN_BASE}/{category}/{league}/scoreboard"
         params = {"dates": date}
 
@@ -1429,7 +1452,7 @@ class DataCollector:
         if end_date is None:
             end_date = start_date
 
-        client = _get_client()
+        client = await _get_client()
         url = "https://baseballsavant.mlb.com/statcast_search/csv"
         params = {
             "all": "true",

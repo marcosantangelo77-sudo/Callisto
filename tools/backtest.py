@@ -684,6 +684,12 @@ class BacktestEngine:
                 await _write_db.execute("PRAGMA busy_timeout = 60000")
                 await _write_db.execute("PRAGMA journal_mode = WAL")
                 await _write_db.execute("PRAGMA synchronous = NORMAL")
+                # SECURITY/PERF (audit H-11): take the writer lock up front with
+                # BEGIN IMMEDIATE so we don't ping-pong with the autonomous loop's
+                # writer for each individual statement. SQLite already serializes
+                # writes inter-process; this just batches our claim into one
+                # acquire/release, which is what SQLite actually wants.
+                await _write_db.execute("BEGIN IMMEDIATE")
                 await _write_db.execute(
                     "INSERT OR REPLACE INTO backtest_runs "
                     "(run_id, hypothesis_id, date_range_start, date_range_end, "

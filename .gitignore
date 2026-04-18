@@ -2,13 +2,22 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+.env.*
+.env.local
+.env.*.local
 memory/
 *.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 .venv/
 *.egg-info/
 dist/
 build/
 logs/
+*.log
 .claude/
 
 # Temp data dumps

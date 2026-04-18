@@ -87,7 +87,7 @@ MARKET_MAP = {
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=20.0, follow_redirects=True)
+        _client = httpx.AsyncClient(timeout=20.0, follow_redirects=True, max_redirects=5)
     return _client
 
 

@@ -343,24 +343,56 @@ class CLVTracker:
         else:
             our_decimal = None
 
-        # Compute Pinnacle closing fair probability
-        # Use the closing line from the bets table (set by record_closing_line)
-        # or look up from closing_lines table
-        pinnacle_fair_prob = closing_implied
-        pinnacle_fair_decimal = None
+        # SECURITY (audit H-3): the raw closing_implied / placement_implied probs
+        # both still contain their respective books' vig. Comparing them yields
+        # apples-to-oranges (DraftKings ~5% vig vs Pinnacle ~2.5%), biasing CLV
+        # downward. We devig BOTH sides to a fair probability estimate before
+        # computing the spread. Without both legs of the market in the row, we
+        # use a half-vig two-way approximation, which is conservative but stops
+        # the systematic bias.
+        _BOOK_VIG_ESTIMATE = {
+            "pinnacle": 0.025,
+            "lowvig": 0.02,
+            "circa": 0.03,
+            "betfair_exchange": 0.02,
+            "draftkings": 0.05,
+            "fanduel": 0.05,
+            "betmgm": 0.06,
+            "caesars": 0.06,
+            "fanatics": 0.05,
+        }
 
+        def _devig_one_side(implied: float, vig: float) -> float:
+            """Half-vig approximation: fair = implied / (1 + vig/2). Bounded to (0,1)."""
+            try:
+                if implied is None or implied <= 0:
+                    return implied
+                return max(0.0, min(1.0, float(implied) / (1.0 + max(0.0, vig) / 2.0)))
+            except (TypeError, ValueError):
+                return implied
+
+        closing_source = (bet.get("closing_source") or "pinnacle").lower()
+        bookmaker = (bet.get("bookmaker") or "").lower()
+        closing_vig = _BOOK_VIG_ESTIMATE.get(closing_source, 0.025)
+        placement_vig = _BOOK_VIG_ESTIMATE.get(bookmaker, 0.05)
+
+        # Compute Pinnacle closing fair probability (devigged)
+        pinnacle_fair_prob = _devig_one_side(closing_implied, closing_vig)
+        pinnacle_fair_decimal = None
         if pinnacle_fair_prob and pinnacle_fair_prob > 0:
             pinnacle_fair_decimal = 1 / pinnacle_fair_prob
 
         # CLV in cents: positive = we got a better number
         clv_cents = None
         if closing_odds is not None and placement_odds is not None:
+            # American-cents stays a useful first-order proxy and isn't biased by vig.
             clv_cents = placement_odds - closing_odds
         elif closing_implied is not None and our_decimal:
-            # Compute from implied: our edge vs closing
-            placement_implied = bet.get("placement_implied_prob", 0)
-            if placement_implied:
-                clv_cents = round((closing_implied - placement_implied) * 10000, 1)
+            # Compute from devigged implied: fair-edge vs fair-closing
+            raw_placement_implied = bet.get("placement_implied_prob", 0)
+            if raw_placement_implied:
+                placement_fair = _devig_one_side(raw_placement_implied, placement_vig)
+                clv_cents = round((pinnacle_fair_prob - placement_fair) * 10000, 1)
 
         # Actual PnL
         actual_pnl = change
