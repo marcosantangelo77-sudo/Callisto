@@ -102,12 +102,29 @@ class EventBus:
                 # Track drops so we know if the audit trail has gaps
                 if not hasattr(self, "_audit_drops"):
                     self._audit_drops = 0
+                    self._last_audit_alert_drops = 0
                 self._audit_drops += 1
-                logger.error(
+                # SECURITY (audit H-9): escalate audit-queue drops to CRITICAL
+                # and Telegram-page on every 100 drops. Backtest results are
+                # invalid when the audit trail has gaps, so silent error logs
+                # are insufficient — operator must know NOW.
+                logger.critical(
                     f"AUDIT QUEUE FULL — dropped event {event_type} "
                     f"(total drops: {self._audit_drops}). "
-                    f"Audit trail has gaps. Increase queue size or drain faster."
+                    f"Audit trail has gaps. Backtest invariants may be violated."
                 )
+                if self._audit_drops - getattr(self, "_last_audit_alert_drops", 0) >= 100:
+                    self._last_audit_alert_drops = self._audit_drops
+                    try:
+                        from tools import telegram as _tg
+                        # Fire-and-forget; alert_system itself swallows errors.
+                        asyncio.create_task(_tg.alert_system(
+                            f"🛑 event_bus audit queue dropped {self._audit_drops} events "
+                            f"(latest: {event_type}). Backtest data integrity at risk.",
+                            is_error=True,
+                        ))
+                    except Exception:
+                        pass
 
     async def _safe_dispatch(self, callback: Callable, event_type: str, data: dict) -> None:
         """Dispatch to a single subscriber with error isolation."""

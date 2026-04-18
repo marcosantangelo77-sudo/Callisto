@@ -485,9 +485,10 @@ async def rotate_caches(db_path: str = DB_PATH, warm_days: int = 30):
             cutoff = (datetime.now(timezone.utc) - timedelta(days=warm_days)).isoformat()
 
             # Ensure archived column exists on key tables
+            from tools.db_utils import safe_ident
             for table in ["bets", "ev_opportunities", "line_movements", "odds_snapshots"]:
                 try:
-                    await db.execute(f"ALTER TABLE {table} ADD COLUMN archived BOOLEAN DEFAULT 0")
+                    await db.execute(f"ALTER TABLE {safe_ident(table)} ADD COLUMN archived BOOLEAN DEFAULT 0")
                 except Exception:
                     pass  # Expected: column already exists (ALTER TABLE doesn't have IF NOT EXISTS)
 
@@ -496,7 +497,7 @@ async def rotate_caches(db_path: str = DB_PATH, warm_days: int = 30):
                 try:
                     col = "detected_at" if table != "odds_snapshots" else "timestamp"
                     await db.execute(
-                        f"UPDATE {table} SET archived = 1 WHERE {col} < ? AND archived = 0",
+                        f"UPDATE {safe_ident(table)} SET archived = 1 WHERE {safe_ident(col)} < ? AND archived = 0",
                         (cutoff,),
                     )
                 except Exception as e:

@@ -1116,8 +1116,20 @@ class Orchestrator:
                 logger.warning(f"Brave search failed for '{q}': {e}")
                 return []
 
-        results_lists = await asyncio.gather(*[_single_search(q) for q in queries])
-        return [r for sublist in results_lists for r in sublist]
+        # SECURITY (audit H-13): return_exceptions=True so a single failed query
+        # doesn't crash the whole batch. _single_search already returns [] on
+        # caught exceptions, but defense-in-depth covers any unhandled raise.
+        results_lists = await asyncio.gather(
+            *[_single_search(q) for q in queries],
+            return_exceptions=True,
+        )
+        out: list = []
+        for entry in results_lists:
+            if isinstance(entry, Exception):
+                logger.warning(f"web_search subquery raised: {entry!r}")
+                continue
+            out.extend(entry)
+        return out
 
     async def _execute_tool(self, name: str, arguments: dict):
         """Execute a tool call."""

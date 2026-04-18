@@ -244,9 +244,10 @@ class SelfRepairEngine:
         try:
             async with aiosqlite.connect(DB_PATH) as db:
                 await db.execute("PRAGMA busy_timeout = 60000")
+                from tools.db_utils import safe_ident
                 for table, col in [("odds_snapshots_v2", "snapshot_time"), ("odds_snapshots", "timestamp")]:
                     try:
-                        row = (await (await db.execute(f"SELECT MAX({col}) FROM {table}")).fetchone())
+                        row = (await (await db.execute(f"SELECT MAX({safe_ident(col)}) FROM {safe_ident(table)}")).fetchone())
                         if row and row[0]:
                             latest = datetime.fromisoformat(str(row[0]).replace("Z", "+00:00"))
                             if latest.tzinfo is None:

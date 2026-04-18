@@ -104,7 +104,10 @@ class MemoryStore:
         await self._db.execute("PRAGMA journal_size_limit = 67108864")
         await self._db.execute("PRAGMA busy_timeout = 120000")
         await self._db.execute("PRAGMA foreign_keys=ON")
-        await self._db.executescript(SCHEMA_SQL)
+        # SECURITY (audit C-6): apply DDL one statement at a time so we never
+        # hold an EXCLUSIVE lock long enough to block concurrent WAL readers.
+        for stmt in (s.strip() for s in SCHEMA_SQL.split(";") if s.strip()):
+            await self._db.execute(stmt)
         await self._db.commit()
 
     async def close(self) -> None:

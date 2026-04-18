@@ -86,6 +86,77 @@ AUTO_REJECT_LOW_SIGNAL_MIN_EVENTS = 100  # Need 100+ events to judge signal rate
 STAGE_ORDER = ["draft", "backtesting", "paper_trading", "live", "retired"]
 
 
+# SECURITY (audit C-4 / P2 #25): allowlist of model_config keys + per-key types.
+# Anything else is rejected at the API boundary so that LLM-derived configs cannot
+# silently smuggle unexpected fields into downstream consumers.
+_MODEL_CONFIG_SCHEMA = {
+    # Adaptive evaluation
+    "evaluate_cycles": int,
+    "edge_threshold": float,
+    "demotion_count": int,
+    # Temporal split metadata
+    "training_period_start": str,
+    "training_period_end": str,
+    "backtest_period_start": str,
+    "backtest_period_end": str,
+    "temporal_split_gap_days": int,
+    "temporal_isolation": bool,
+    # Game / context filters (lists of short strings)
+    "game_filters": list,
+    "context_factors": list,
+    "needs_unique_data": bool,
+    # Free-form, but capped: brief description + originating thesis family
+    "thesis_family": str,
+    "description": str,
+    # Numeric tunables
+    "min_edge": float,
+    "max_edge": float,
+    "stake_multiplier": float,
+}
+
+_MODEL_CONFIG_MAX_STR = 1024
+_MODEL_CONFIG_MAX_LIST = 64
+_MODEL_CONFIG_MAX_LIST_ITEM = 256
+
+
+def validate_model_config(cfg: dict) -> dict:
+    """Validate a model_config dict against the allowlist schema.
+
+    Raises ValueError on any unknown key, type mismatch, or oversized value.
+    Returns the validated dict (a fresh copy with primitive values only).
+    """
+    if not isinstance(cfg, dict):
+        raise ValueError("model_config must be a dict")
+    if len(cfg) > 64:
+        raise ValueError("model_config has too many keys (>64)")
+    out: dict = {}
+    for k, v in cfg.items():
+        if not isinstance(k, str) or not k or len(k) > 64:
+            raise ValueError(f"invalid key: {k!r}")
+        if k not in _MODEL_CONFIG_SCHEMA:
+            raise ValueError(f"unknown key: {k!r}")
+        expected = _MODEL_CONFIG_SCHEMA[k]
+        # bool is a subclass of int; accept exact bool when expected
+        if expected is int and isinstance(v, bool):
+            raise ValueError(f"{k}: expected int, got bool")
+        if expected is float and isinstance(v, (int,)) and not isinstance(v, bool):
+            v = float(v)
+        if not isinstance(v, expected):
+            raise ValueError(f"{k}: expected {expected.__name__}, got {type(v).__name__}")
+        if isinstance(v, str) and len(v) > _MODEL_CONFIG_MAX_STR:
+            raise ValueError(f"{k}: string too long")
+        if isinstance(v, list):
+            if len(v) > _MODEL_CONFIG_MAX_LIST:
+                raise ValueError(f"{k}: list too long")
+            for item in v:
+                if not isinstance(item, (str, int, float, bool)):
+                    raise ValueError(f"{k}: list items must be primitives")
+                if isinstance(item, str) and len(item) > _MODEL_CONFIG_MAX_LIST_ITEM:
+                    raise ValueError(f"{k}: list item string too long")
+        out[k] = v
+    return out
+
+
 def get_adaptive_p_value_threshold(n_signals: int, base_threshold: float) -> float:
     """Adaptive p-value threshold based on sample size.
 
@@ -467,11 +538,49 @@ class HypothesisManager:
         return {row[0] for row in await cursor.fetchall()}
 
     async def update_status(
-        self, hypothesis_id: str, new_status: str, promoted_by: str = "manual",
+        self,
+        hypothesis_id: str,
+        new_status: str,
+        promoted_by: str = "manual",
+        *,
+        expected_status: Optional[str] = None,
     ) -> dict:
-        """Move a hypothesis to a new status."""
+        """Move a hypothesis to a new status.
+
+        SECURITY (audit C-7): when ``expected_status`` is supplied the UPDATE is
+        scoped with ``WHERE status = ?`` so two concurrent promoters can't both
+        succeed. Returns ``{"changed": False, ...}`` if the row was already moved
+        by another worker. ``expected_status=None`` keeps the legacy unconditional
+        UPDATE for callers that genuinely want to overwrite (manual admin patches).
+        """
         now = datetime.now(timezone.utc).isoformat()
         from tools.db_utils import execute_with_retry, commit_with_retry
+        if expected_status is not None:
+            cursor = await execute_with_retry(
+                self._db,
+                "UPDATE hypotheses SET status = ?, updated_at = ?, "
+                "promoted_at = ?, promoted_by = ? "
+                "WHERE hypothesis_id = ? AND status = ?",
+                (new_status, now, now, promoted_by, hypothesis_id, expected_status),
+                operation="hypothesis update_status (cas)",
+            )
+            await commit_with_retry(self._db, operation="hypothesis update_status (cas)")
+            changed = (cursor.rowcount or 0) > 0
+            if not changed:
+                logger.info(
+                    f"Hypothesis {hypothesis_id}: status CAS no-op — expected "
+                    f"{expected_status!r}, row already moved (concurrent promote race)"
+                )
+            else:
+                logger.info(
+                    f"Hypothesis {hypothesis_id} → {new_status} (by {promoted_by}, expected={expected_status!r})"
+                )
+            return {
+                "hypothesis_id": hypothesis_id,
+                "new_status": new_status,
+                "changed": changed,
+                "expected_status": expected_status,
+            }
         await execute_with_retry(
             self._db,
             "UPDATE hypotheses SET status = ?, updated_at = ?, "
@@ -481,7 +590,7 @@ class HypothesisManager:
         )
         await commit_with_retry(self._db, operation="hypothesis update_status")
         logger.info(f"Hypothesis {hypothesis_id} → {new_status} (by {promoted_by})")
-        return {"hypothesis_id": hypothesis_id, "new_status": new_status}
+        return {"hypothesis_id": hypothesis_id, "new_status": new_status, "changed": True}
 
     # ── STATISTICAL EVALUATION ──
 
@@ -800,11 +909,33 @@ class HypothesisManager:
                 f"Hypothesis {hypothesis_id}: adaptive p-value threshold "
                 f"{max_p:.2f} (base={base_p:.2f}, n={n})"
             )
+        # SECURITY (audit H-5): apply a Šidák family-wise correction across the
+        # ACTIVE corpus (hypotheses currently in backtesting or paper_trading).
+        # Without correction, with 4594 lifetime hypotheses we expect ~230 false
+        # positives at α=0.05. Correcting against the *active* set instead of the
+        # full corpus keeps it tractable and matches the pool of decisions actually
+        # being made right now. Floored at p=0.001 so the gate stays reachable.
+        try:
+            active_cur = await self._db.execute(
+                "SELECT COUNT(*) FROM hypotheses WHERE status IN ('backtesting','paper_trading')"
+            )
+            active_n = int((await active_cur.fetchone())[0] or 1)
+        except Exception:
+            active_n = 1
+        if active_n > 1:
+            sidak = 1.0 - (1.0 - max_p) ** (1.0 / active_n)
+            sidak = max(0.001, sidak)
+            corrected_p = min(max_p, sidak)
+            checks.append(
+                f"INFO: Šidák FWER correction over {active_n} active hypotheses → "
+                f"p threshold {corrected_p:.5f} (was {max_p:.4f})"
+            )
+            max_p = corrected_p
         if p > max_p:
-            checks.append(f"FAIL: p-value {p:.4f} > {max_p:.4f} (adaptive, base={base_p}, n={n})")
+            checks.append(f"FAIL: p-value {p:.4f} > {max_p:.5f} (adaptive+FWER, base={base_p}, n={n}, active={active_n})")
             ready = False
         else:
-            checks.append(f"PASS: p-value {p:.4f} <= {max_p:.4f} (adaptive, base={base_p}, n={n})")
+            checks.append(f"PASS: p-value {p:.4f} <= {max_p:.5f} (adaptive+FWER, base={base_p}, n={n}, active={active_n})")
 
         # CLV rate
         clv_rate = report.get("clv", {}).get("positive_clv_rate", 0)
@@ -1243,11 +1374,15 @@ class HypothesisManager:
                             )
                             readiness = await self.check_promotion_readiness(hypothesis_id)
                             if readiness.get("should_reject"):
-                                await self.update_status(hypothesis_id, "rejected", "auto")
+                                cas = await self.update_status(hypothesis_id, "rejected", "auto", expected_status=status)
+                                if not cas.get("changed"):
+                                    return {"action": "held", "reason": "Concurrent transition won; rejection skipped."}
                                 return {"action": "rejected", "reason": "Data actively disproves thesis after threshold adjustment."}
                             if readiness.get("ready"):
                                 next_stage = readiness["next_stage"]
-                                await self.update_status(hypothesis_id, next_stage, "auto")
+                                cas = await self.update_status(hypothesis_id, next_stage, "auto", expected_status=status)
+                                if not cas.get("changed"):
+                                    return {"action": "held", "reason": f"Concurrent promotion already moved row past {status!r}."}
                                 return {"action": "promoted", "new_status": next_stage}
                             return {
                                 "action": "threshold_adjusted",
@@ -1331,10 +1466,13 @@ class HypothesisManager:
                                 ),
                             }
 
-                        await self.update_status(
+                        cas = await self.update_status(
                             hypothesis_id, "rejected",
                             "auto:no_edge_after_backtest",
+                            expected_status=status,
                         )
+                        if not cas.get("changed"):
+                            return {"action": "held", "reason": "Concurrent transition won; rejection skipped."}
                         return {
                             "action": "rejected",
                             "reason": (
@@ -1359,10 +1497,13 @@ class HypothesisManager:
                                 ),
                             }
 
-                        await self.update_status(
+                        cas = await self.update_status(
                             hypothesis_id, "rejected",
                             "auto:no_backtest_data_after_5_cycles",
+                            expected_status=status,
                         )
+                        if not cas.get("changed"):
+                            return {"action": "held", "reason": "Concurrent transition won; rejection skipped."}
                         return {
                             "action": "rejected",
                             "reason": (
@@ -1452,7 +1593,9 @@ class HypothesisManager:
                         n_losses = sum(1 for r in returns if r < 0)
                         loss_rate = n_losses / n_resolved if n_resolved else 0
                         if n_resolved >= 7 and loss_rate >= 0.60:
-                            await self.update_status(hypothesis_id, "rejected", "auto")
+                            cas = await self.update_status(hypothesis_id, "rejected", "auto", expected_status=status)
+                            if not cas.get("changed"):
+                                return {"action": "held", "reason": "Concurrent transition won; rejection skipped."}
                             return {
                                 "action": "rejected",
                                 "reason": (
@@ -1495,7 +1638,11 @@ class HypothesisManager:
             bt_n = bt_report.get("sample_size", 0)
             bt_used_all = bt_report.get("used_all_events", False)
             if not bt_used_all and bt_p > 0.30 and bt_n > 30:
-                await self.update_status(hypothesis_id, "rejected", "auto")
+                # SECURITY (audit C-7): CAS on original status so a concurrent
+                # promoter can't double-transition the row.
+                cas = await self.update_status(hypothesis_id, "rejected", "auto", expected_status=status)
+                if not cas.get("changed"):
+                    return {"action": "held", "reason": "Concurrent transition won; this rejection is a no-op."}
                 return {
                     "action": "rejected",
                     "reason": (
@@ -1509,12 +1656,17 @@ class HypothesisManager:
         readiness = await self.check_promotion_readiness(hypothesis_id, stage_override=_stage_override)
 
         if readiness.get("should_reject"):
-            await self.update_status(hypothesis_id, "rejected", "auto")
+            cas = await self.update_status(hypothesis_id, "rejected", "auto", expected_status=status)
+            if not cas.get("changed"):
+                return {"action": "held", "reason": "Concurrent transition won; rejection skipped."}
             return {"action": "rejected", "reason": "Data actively disproves thesis."}
 
         if readiness.get("ready"):
             next_stage = readiness["next_stage"]
-            await self.update_status(hypothesis_id, next_stage, "auto")
+            cas = await self.update_status(hypothesis_id, next_stage, "auto", expected_status=status)
+            if not cas.get("changed"):
+                # Another worker already advanced this row; treat as success but report it.
+                return {"action": "held", "reason": f"Concurrent promotion already moved row past {status!r}."}
             return {"action": "promoted", "new_status": next_stage}
 
         return {"action": "held", "checks": readiness.get("checks", [])}

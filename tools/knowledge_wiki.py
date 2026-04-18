@@ -102,7 +102,9 @@ class KnowledgeWiki:
         """Create wiki tables if they don't exist."""
         if self._initialized:
             return
-        await db.executescript(WIKI_SCHEMA_SQL)
+        # SECURITY (audit C-6): per-statement DDL avoids EXCLUSIVE lock contention.
+        for stmt in (s.strip() for s in WIKI_SCHEMA_SQL.split(";") if s.strip()):
+            await db.execute(stmt)
         await db.commit()
         self._initialized = True
 

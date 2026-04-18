@@ -558,7 +558,7 @@ _fd_client: Optional[httpx.AsyncClient] = None
 def _get_fd_client() -> httpx.AsyncClient:
     global _fd_client
     if _fd_client is None or _fd_client.is_closed:
-        _fd_client = httpx.AsyncClient(timeout=15.0, headers=_HEADERS, follow_redirects=True)
+        _fd_client = httpx.AsyncClient(timeout=15.0, headers=_HEADERS, follow_redirects=True, max_redirects=5)
     return _fd_client
 
 
@@ -847,7 +847,7 @@ async def _mgm_rate_limited_get(url: str, params: dict) -> dict:
             "Accept": "application/json",
             "Referer": "https://sports.nj.betmgm.com/",
         }
-        async with httpx.AsyncClient(timeout=15.0, headers=_mgm_headers, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15.0, headers=_mgm_headers, follow_redirects=True, max_redirects=5) as client:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
             return resp.json()
@@ -1131,7 +1131,9 @@ async def ensure_prop_schema(db_path: str = DB_PATH) -> None:
     """Create prop_snapshots table if it doesn't exist."""
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA busy_timeout = 60000")
-        await db.executescript(PROP_SCHEMA_SQL)
+        # SECURITY (audit C-6): per-statement DDL avoids EXCLUSIVE lock contention.
+        for stmt in (s.strip() for s in PROP_SCHEMA_SQL.split(";") if s.strip()):
+            await db.execute(stmt)
         await db.commit()
     logger.info("Prop schema ensured")
 

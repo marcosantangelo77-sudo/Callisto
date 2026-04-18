@@ -39,7 +39,11 @@ SCREENSHOT_DIR = Path("memory/bet_screenshots")
 SESSION_DIR = Path("memory/dk_session")
 
 # --- Safety limits (configurable via env) ---
-MAX_BET_PCT = float(os.getenv("EXECUTOR_MAX_BET_PCT", "0.05"))       # 5% of bankroll
+MAX_BET_PCT = float(os.getenv("EXECUTOR_MAX_BET_PCT", "0.05"))       # 5% of bankroll per bet
+# SECURITY (audit H-1): hard ceiling on the SUM of all currently-pending stakes.
+# Per-bet caps don't prevent ruin when N concurrent bets clear simultaneously.
+# 25% bankroll exposed at any moment is the documented ceiling; raise via env.
+MAX_OPEN_EXPOSURE_PCT = float(os.getenv("EXECUTOR_MAX_OPEN_EXPOSURE_PCT", "0.25"))
 DAILY_LOSS_LIMIT_PCT = float(os.getenv("EXECUTOR_DAILY_LOSS_PCT", "0.20"))  # 20% of bankroll
 MIN_EDGE_TO_EXECUTE = float(os.getenv("EXECUTOR_MIN_EDGE", "0.02"))  # 2% minimum EV
 KELLY_FRACTION = float(os.getenv("EXECUTOR_KELLY_FRACTION", "0.25")) # Quarter Kelly
@@ -91,6 +95,11 @@ class BetExecutor:
         self._daily_pnl = 0.0
         self._daily_bets = 0
         self._last_reset = datetime.now(timezone.utc).date()
+        # SECURITY (audit H-4): serialize the read-bankroll → size-bet → write-bankroll
+        # sequence. Without this, two concurrent place_bet calls both read the same
+        # balance and both compute stakes against the full bankroll. See _record_bet
+        # and place_bet for the holders.
+        self._bankroll_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         """Initialize database connection and ensure directories exist."""
@@ -141,6 +150,19 @@ class BetExecutor:
         )
         row = await cursor.fetchone()
         return row[0] if row else 0.0
+
+    async def get_open_exposure(self) -> float:
+        """Total stake across all currently-pending bets.
+
+        SECURITY (audit H-1): used as the denominator of the portfolio cap that
+        keeps simultaneous bets from compounding past MAX_OPEN_EXPOSURE_PCT of
+        bankroll.
+        """
+        cursor = await self._db.execute(
+            "SELECT COALESCE(SUM(stake), 0) FROM bets WHERE result = 'pending'"
+        )
+        row = await cursor.fetchone()
+        return float(row[0]) if row else 0.0
 
     async def get_daily_losses(self) -> float:
         """Get net losses today (negative = losing)."""
@@ -575,14 +597,43 @@ class BetExecutor:
         Full bet execution pipeline: size → preflight → navigate → place → record.
 
         Returns execution result dict.
+
+        SECURITY (audit H-1, H-4): the read-bankroll → size → exposure-check → write
+        sequence is serialized by ``self._bankroll_lock`` so two concurrent placements
+        cannot both decide they have full bankroll available, and the portfolio cap
+        (``MAX_OPEN_EXPOSURE_PCT``) is evaluated against the *committed* sum of pending
+        stakes rather than a stale snapshot.
         """
         now = datetime.now(timezone.utc).isoformat()
-        bankroll = await self.get_bankroll()
+        async with self._bankroll_lock:
+            bankroll = await self.get_bankroll()
 
-        # Size the bet
-        stake = self.compute_stake(edge, odds, bankroll, confidence)
-        if stake <= 0:
-            return {"success": False, "reason": "Stake too small after Kelly sizing"}
+            # Size the bet
+            stake = self.compute_stake(edge, odds, bankroll, confidence)
+            if stake <= 0:
+                return {"success": False, "reason": "Stake too small after Kelly sizing"}
+
+            # Portfolio-level cap: refuse if this stake would push total open
+            # exposure past MAX_OPEN_EXPOSURE_PCT of bankroll.
+            open_exposure = await self.get_open_exposure()
+            exposure_cap = bankroll * MAX_OPEN_EXPOSURE_PCT
+            if open_exposure + stake > exposure_cap:
+                room = max(0.0, exposure_cap - open_exposure)
+                if room < MIN_BET_AMOUNT:
+                    await self._log_action(
+                        "EXPOSURE_CAP", sport, team, market, side, odds, stake, edge,
+                        hypothesis_id,
+                        reason=f"Open exposure ${open_exposure:.2f} + stake ${stake:.2f} > cap ${exposure_cap:.2f}",
+                    )
+                    return {
+                        "success": False,
+                        "reason": (
+                            f"Portfolio exposure cap hit: ${open_exposure:.2f} pending + "
+                            f"${stake:.2f} would exceed {MAX_OPEN_EXPOSURE_PCT:.0%} of bankroll"
+                        ),
+                    }
+                # Shrink stake to the remaining headroom rather than skipping outright.
+                stake = round(room, 2)
 
         # Preflight checks
         ok, reason = await self.preflight_check(sport, odds, edge, stake)
@@ -677,7 +728,9 @@ class BetExecutor:
     ) -> int:
         """Record bet in the bets table and update bankroll."""
         now = datetime.now(timezone.utc).isoformat()
-        implied = 1.0 - fair_prob + edge  # back-derive implied from fair - edge
+        # SECURITY/CORRECTNESS: implied = fair_prob - edge (audit C-3, 2026-04-18).
+        # Prior formula `1.0 - fair_prob + edge` was inverted, poisoning every CLV calc.
+        implied = max(0.0, min(1.0, fair_prob - edge))
 
         from tools.db_utils import execute_with_retry, commit_with_retry
 
@@ -719,17 +772,20 @@ class BetExecutor:
         )
         bet_id = cursor.lastrowid
 
-        # Update bankroll (deduct stake)
-        bankroll = await self.get_bankroll()
-        await execute_with_retry(
-            self._db,
-            "INSERT INTO bankroll (timestamp, balance, change, bet_id, description) VALUES (?, ?, ?, ?, ?)",
-            (now, bankroll - stake, -stake, bet_id, f"Auto bet #{bet_id}: {team} {market}"),
-            max_retries=10,
-            operation="executor record_bet bankroll",
-        )
+        # Update bankroll (deduct stake) under the same lock that gated sizing,
+        # so the read→write of bankroll is atomic across concurrent placements
+        # (audit H-4).
+        async with self._bankroll_lock:
+            bankroll = await self.get_bankroll()
+            await execute_with_retry(
+                self._db,
+                "INSERT INTO bankroll (timestamp, balance, change, bet_id, description) VALUES (?, ?, ?, ?, ?)",
+                (now, bankroll - stake, -stake, bet_id, f"Auto bet #{bet_id}: {team} {market}"),
+                max_retries=10,
+                operation="executor record_bet bankroll",
+            )
 
-        await commit_with_retry(self._db, max_retries=10, operation="executor record_bet")
+            await commit_with_retry(self._db, max_retries=10, operation="executor record_bet")
         return bet_id
 
     async def _log_action(

@@ -24,7 +24,19 @@ from tools.odds_api import calculate_implied_probability, calculate_ev
 logger = logging.getLogger("callisto.parlay_scanner")
 
 
-def parlay_odds_from_legs(legs: list[dict]) -> dict:
+def _legs_are_same_game(legs: list[dict]) -> Optional[str]:
+    """Return the shared game_id if every leg has the same one, else None."""
+    game_ids = {(leg.get("game_id") or leg.get("event_id")) for leg in legs}
+    game_ids.discard(None)
+    game_ids.discard("")
+    return next(iter(game_ids)) if len(game_ids) == 1 else None
+
+
+def parlay_odds_from_legs(
+    legs: list[dict],
+    sport: Optional[str] = None,
+    correlation_matrix: Optional[list[list[float]]] = None,
+) -> dict:
     """
     Calculate true parlay odds from individual legs.
 
@@ -32,8 +44,19 @@ def parlay_odds_from_legs(legs: list[dict]) -> dict:
     If legs are positively correlated, the true parlay probability is HIGHER
     than the book's price → the parlay is underpriced → +EV.
 
+    SECURITY (audit H-2): when legs come from the same game, assuming
+    independence is wrong and the bookmaker exploits it (SGPs price the
+    correlation in). If ``correlation_matrix`` is supplied we use it. Otherwise
+    if ``sport`` is given and the legs share a game_id we attempt to use
+    ``sgp.evaluate_sgp``'s correlation priors. Falling all the way through to
+    the independence path now adds a ``warnings`` entry rather than silently
+    misreporting the edge.
+
     Args:
-        legs: List of dicts with 'american_odds' and optionally 'true_probability'
+        legs: List of dicts with 'american_odds' and optionally 'true_probability',
+              'game_id'/'event_id', and 'type' (for sport-aware correlation lookup).
+        sport: Sport key (e.g., 'basketball_nba') — used to fetch correlation priors.
+        correlation_matrix: Optional explicit NxN correlation matrix. Overrides priors.
 
     Returns:
         Dict with parlay pricing analysis.
@@ -52,15 +75,66 @@ def parlay_odds_from_legs(legs: list[dict]) -> dict:
         true_prob = leg.get("true_probability", implied)
         true_probs.append(true_prob)
 
-    # Book's parlay probability = product of implied (assumes independence)
+    warnings: list[str] = []
+    correlation_source = "independent"
+    same_game = _legs_are_same_game(legs)
+
+    # If caller did not pass an explicit matrix, try to derive one from sgp priors
+    # for same-game legs. Otherwise assume independence and warn if same-game.
+    if correlation_matrix is None and same_game and sport:
+        try:
+            from tools.sgp import CORRELATION_PRIORS
+            priors = CORRELATION_PRIORS.get(sport.lower(), {})
+            n = len(legs)
+            mat = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+            had_prior = False
+            for i in range(n):
+                for j in range(i + 1, n):
+                    ti = legs[i].get("type", "")
+                    tj = legs[j].get("type", "")
+                    rho_range = priors.get((ti, tj)) or priors.get((tj, ti))
+                    if rho_range:
+                        # Use the lower bound for conservative go/no-go
+                        rho = rho_range[0] if isinstance(rho_range, (list, tuple)) else float(rho_range)
+                        mat[i][j] = mat[j][i] = rho
+                        had_prior = True
+            if had_prior:
+                correlation_matrix = mat
+                correlation_source = "sgp_priors_lower_bound"
+            else:
+                warnings.append(
+                    f"Same-game parlay ({same_game!r}) but no leg-type correlation prior "
+                    f"in sgp.CORRELATION_PRIORS — falling back to independence. "
+                    f"Edge may be understated; pass an explicit correlation_matrix."
+                )
+        except Exception as e:  # pragma: no cover - defensive
+            warnings.append(f"correlation prior lookup failed: {e}")
+
+    # Book's parlay probability = product of implied (book assumes independence)
     book_parlay_prob = 1.0
     for p in implied_probs:
         book_parlay_prob *= p
 
     # Our estimated true parlay probability
-    true_parlay_prob = 1.0
-    for p in true_probs:
-        true_parlay_prob *= p
+    if correlation_matrix is not None:
+        try:
+            from tools.sgp import correlated_parlay_prob
+            true_parlay_prob = correlated_parlay_prob(true_probs, correlation_matrix)
+        except Exception as e:  # pragma: no cover - defensive
+            warnings.append(f"correlated_parlay_prob failed ({e}); falling back to independence")
+            true_parlay_prob = 1.0
+            for p in true_probs:
+                true_parlay_prob *= p
+            correlation_source = "independent (copula failed)"
+    else:
+        true_parlay_prob = 1.0
+        for p in true_probs:
+            true_parlay_prob *= p
+        if same_game and not warnings:
+            warnings.append(
+                f"Same-game parlay ({same_game!r}) computed under INDEPENDENCE assumption — "
+                f"edge is unreliable. Pass `sport=` and ensure legs include `type=`."
+            )
 
     # Convert book parlay probability back to American odds
     if book_parlay_prob > 0:
@@ -90,6 +164,8 @@ def parlay_odds_from_legs(legs: list[dict]) -> dict:
         "edge": round(edge, 6),
         "edge_pct": round(edge * 100, 2),
         "ev_analysis": ev_result,
+        "correlation_source": correlation_source,
+        "warnings": warnings,
         "leg_details": [
             {
                 "odds": leg.get("american_odds"),

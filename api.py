@@ -9,6 +9,7 @@ import asyncio
 import gc
 import logging
 import os
+import secrets as _secrets
 import tracemalloc
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -16,8 +17,9 @@ from typing import Optional
 
 import aiosqlite
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, HTTPException, Request, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
 
 from agp import Domain
 from logging_config import setup_logging
@@ -50,6 +52,51 @@ logger = logging.getLogger("callisto.api")
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
 CALLISTO_PORT = int(os.getenv("CALLISTO_PORT", "8420"))
+# SECURITY (audit C-2 2026-04-18): default-bind to loopback. Override only with intent.
+CALLISTO_BIND_HOST = os.getenv("CALLISTO_BIND_HOST", "127.0.0.1")
+# Optional Bearer token for /admin/*, /debug/*, /context/sync, /research/*, /executor/*,
+# /admin/sql, and other state-changing or sensitive endpoints. When unset, those endpoints
+# return 503. Read-only IDOR-prone endpoints (/task/{id}, /session/{id}, /hypothesis/{id})
+# require the token only if it is configured (degrades to allow on loopback for dev).
+CALLISTO_ADMIN_TOKEN = os.getenv("CALLISTO_ADMIN_TOKEN", "").strip()
+
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def _client_is_loopback(request: Request) -> bool:
+    host = (request.client.host if request.client else "") or ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+async def require_admin(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(_bearer_scheme),
+) -> None:
+    """Hard-gate: require Bearer token. Fails closed if CALLISTO_ADMIN_TOKEN unset."""
+    if not CALLISTO_ADMIN_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="CALLISTO_ADMIN_TOKEN not configured; admin endpoint disabled",
+        )
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Bearer token required")
+    if not _secrets.compare_digest(credentials.credentials, CALLISTO_ADMIN_TOKEN):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+async def require_admin_or_loopback(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(_bearer_scheme),
+) -> None:
+    """Soft-gate for read endpoints. Allow loopback when token unset; otherwise require token."""
+    if not CALLISTO_ADMIN_TOKEN:
+        if _client_is_loopback(request):
+            return
+        raise HTTPException(status_code=403, detail="Loopback only when admin token unset")
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Bearer token required")
+    if not _secrets.compare_digest(credentials.credentials, CALLISTO_ADMIN_TOKEN):
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 # Shared state
 memory: Optional[MemoryStore] = None
@@ -426,6 +473,13 @@ async def lifespan(app: FastAPI):
             await worker_task
         except asyncio.CancelledError:
             pass
+    # Cancel orphaned restart task if shutdown beat it (audit H-14).
+    if _restart_task and not _restart_task.done():
+        _restart_task.cancel()
+        try:
+            await _restart_task
+        except (asyncio.CancelledError, Exception):
+            pass
     if data_collector:
         await data_collector.close()
     if hypothesis_generator:
@@ -511,8 +565,8 @@ async def _validation_exception_handler(request: Request, exc: RequestValidation
 
 
 class TaskSubmission(BaseModel):
-    query: str
-    priority: int = 0
+    query: str = Field(..., min_length=1, max_length=20000)
+    priority: int = Field(default=0, ge=-10, le=10)
 
 
 class TaskResponse(BaseModel):
@@ -531,7 +585,7 @@ async def submit_task(submission: TaskSubmission):
 
 
 @app.get("/task/{task_id}")
-async def get_task(task_id: int):
+async def get_task(task_id: int, _auth: None = Depends(require_admin_or_loopback)):
     """Get task status and result."""
     task = await queue.get_task(task_id)
     if task is None:
@@ -540,7 +594,7 @@ async def get_task(task_id: int):
 
 
 @app.get("/session/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, _auth: None = Depends(require_admin_or_loopback)):
     """Get a sealed AGP session with full provenance."""
     session = await memory.get_session(session_id)
     if session is None:
@@ -970,25 +1024,25 @@ async def get_learned_correlations():
 # --- Bet Tracking & CLV ---
 
 class BetSubmission(BaseModel):
-    sport: str
-    game_description: str
-    team: str
-    market: str
-    bookmaker: str
-    placement_odds: int
-    placement_point: Optional[float] = None
-    stake: float = 100
-    event_id: str = ""
-    edge_estimate: Optional[float] = None
-    notes: str = ""
+    sport: str = Field(..., min_length=1, max_length=64)
+    game_description: str = Field(..., min_length=1, max_length=512)
+    team: str = Field(..., min_length=1, max_length=128)
+    market: str = Field(..., min_length=1, max_length=64)
+    bookmaker: str = Field(..., min_length=1, max_length=64)
+    placement_odds: int = Field(..., ge=-10000, le=10000)
+    placement_point: Optional[float] = Field(default=None, ge=-1000, le=1000)
+    stake: float = Field(default=100, ge=0, le=1_000_000)
+    event_id: str = Field(default="", max_length=128)
+    edge_estimate: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    notes: str = Field(default="", max_length=2000)
 
 
 class BetResolution(BaseModel):
-    result: str  # won, lost, push
-    payout: Optional[float] = None
+    result: str = Field(..., pattern="^(won|lost|push)$")
+    payout: Optional[float] = Field(default=None, ge=0, le=10_000_000)
 
 
-@app.post("/bets/record")
+@app.post("/bets/record", dependencies=[Depends(require_admin)])
 async def record_bet(bet: BetSubmission):
     """Record a bet at placement time for CLV tracking."""
     bet_id = await clv_tracker.record_bet(
@@ -1007,7 +1061,7 @@ async def record_bet(bet: BetSubmission):
     return {"bet_id": bet_id}
 
 
-@app.post("/bets/{bet_id}/resolve")
+@app.post("/bets/{bet_id}/resolve", dependencies=[Depends(require_admin)])
 async def resolve_bet(bet_id: int, resolution: BetResolution):
     """Resolve a bet as won/lost/push."""
     return await clv_tracker.resolve_bet(bet_id, resolution.result, resolution.payout)
@@ -1031,9 +1085,11 @@ async def bankroll_history(limit: int = 50):
     return await clv_tracker.get_bankroll_history(limit=limit)
 
 
-@app.post("/bets/bankroll/init")
+@app.post("/bets/bankroll/init", dependencies=[Depends(require_admin)])
 async def init_bankroll(balance: float):
     """Set initial bankroll balance."""
+    if balance < 0 or balance > 100_000_000:
+        raise HTTPException(status_code=422, detail="balance out of range (0..100M)")
     await clv_tracker.set_initial_bankroll(balance)
     return {"balance": balance}
 
@@ -2038,15 +2094,15 @@ async def eval_boosted_parlay(req: BoostedParlayRequest):
 # --- Hypothesis Testing & Backtesting ---
 
 class HypothesisCreate(BaseModel):
-    name: str
-    thesis: str
-    sport: str
-    market_type: str
-    hypothesis_model_config: dict
-    edge_threshold: float = 0.02
-    min_sample_size: int = 1000
-    significance_level: float = 0.05
-    notes: str = ""
+    name: str = Field(..., min_length=1, max_length=256)
+    thesis: str = Field(..., min_length=1, max_length=10000)
+    sport: str = Field(..., min_length=1, max_length=50)
+    market_type: str = Field(..., min_length=1, max_length=100)
+    hypothesis_model_config: dict = Field(default_factory=dict)
+    edge_threshold: float = Field(default=0.02, ge=0.0, le=1.0)
+    min_sample_size: int = Field(default=1000, ge=1, le=10_000_000)
+    significance_level: float = Field(default=0.05, gt=0.0, lt=1.0)
+    notes: str = Field(default="", max_length=5000)
 
 
 class BacktestRequest(BaseModel):
@@ -2101,7 +2157,7 @@ async def hypothesis_significance(hypothesis_id: str, stage: str = "backtest"):
     return await hypothesis_manager.evaluate_significance(hypothesis_id, stage)
 
 
-@app.post("/hypothesis/{hypothesis_id}/promote")
+@app.post("/hypothesis/{hypothesis_id}/promote", dependencies=[Depends(require_admin)])
 async def promote_hypothesis(hypothesis_id: str):
     """Check readiness and promote to next stage if criteria are met."""
     readiness = await hypothesis_manager.check_promotion_readiness(hypothesis_id)
@@ -2111,7 +2167,7 @@ async def promote_hypothesis(hypothesis_id: str):
     return {"promoted": False, **readiness}
 
 
-@app.patch("/hypothesis/{hypothesis_id}")
+@app.patch("/hypothesis/{hypothesis_id}", dependencies=[Depends(require_admin)])
 async def update_hypothesis(hypothesis_id: str, request: Request):
     """Update hypothesis status, threshold, model_config, or notes.
 
@@ -2122,6 +2178,38 @@ async def update_hypothesis(hypothesis_id: str, request: Request):
     from tools.schema import open_db
 
     req = await request.json()
+    if not isinstance(req, dict):
+        raise HTTPException(status_code=422, detail="Body must be a JSON object")
+    # SECURITY (audit C-4 / P2 #25): allowlist top-level fields and validate model_config
+    # against a known schema. Refuses unknown keys to prevent silent passthrough that
+    # downstream code may interpret unsafely.
+    _ALLOWED_PATCH_KEYS = {
+        "status", "promoted_by", "force", "edge_threshold", "model_config", "notes",
+    }
+    unknown = set(req.keys()) - _ALLOWED_PATCH_KEYS
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown fields: {sorted(unknown)}")
+    if "model_config" in req:
+        mc = req["model_config"]
+        if not isinstance(mc, dict):
+            raise HTTPException(status_code=422, detail="model_config must be an object")
+        from tools.hypothesis import validate_model_config
+        try:
+            req["model_config"] = validate_model_config(mc)
+        except ValueError as ve:
+            raise HTTPException(status_code=422, detail=f"model_config: {ve}")
+    if "notes" in req:
+        if not isinstance(req["notes"], str) or len(req["notes"]) > 5000:
+            raise HTTPException(status_code=422, detail="notes must be string ≤5000 chars")
+    if "edge_threshold" in req:
+        try:
+            et = float(req["edge_threshold"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="edge_threshold must be numeric")
+        if not (0.0 <= et <= 1.0):
+            raise HTTPException(status_code=422, detail="edge_threshold out of [0,1]")
+        req["edge_threshold"] = et
+
     h = await hypothesis_manager.get_hypothesis(hypothesis_id)
     if not h:
         raise HTTPException(status_code=404, detail="Hypothesis not found")
@@ -2197,7 +2285,7 @@ async def update_hypothesis(hypothesis_id: str, request: Request):
     return {"hypothesis_id": hypothesis_id, "updated": results}
 
 
-@app.post("/backtest/run")
+@app.post("/backtest/run", dependencies=[Depends(require_admin)])
 async def run_backtest(req: BacktestRequest):
     """Start a backtest run on a hypothesis against historical data."""
     return await backtest_engine.run_backtest(
@@ -2226,7 +2314,7 @@ async def historical_cache_stats():
     return await historical_fetcher.get_cache_stats()
 
 
-@app.post("/historical/fetch")
+@app.post("/historical/fetch", dependencies=[Depends(require_admin)])
 async def fetch_historical(
     sport: str,
     start_date: str,
@@ -2252,7 +2340,7 @@ async def research_status():
     return research_loop.get_status()
 
 
-@app.post("/research/pause")
+@app.post("/research/pause", dependencies=[Depends(require_admin)])
 async def research_pause():
     """Pause the research loop."""
     if not research_loop:
@@ -2260,7 +2348,7 @@ async def research_pause():
     return await research_loop.pause()
 
 
-@app.post("/research/resume")
+@app.post("/research/resume", dependencies=[Depends(require_admin)])
 async def research_resume():
     """Resume the research loop."""
     if not research_loop:
@@ -2268,7 +2356,7 @@ async def research_resume():
     return await research_loop.resume()
 
 
-@app.post("/research/local-only")
+@app.post("/research/local-only", dependencies=[Depends(require_admin)])
 async def research_local_only(enabled: bool = True):
     """Toggle local-only mode (no Claude Code calls)."""
     if not research_loop:
@@ -2276,7 +2364,7 @@ async def research_local_only(enabled: bool = True):
     return research_loop.set_local_only(enabled)
 
 
-@app.post("/research/collect")
+@app.post("/research/collect", dependencies=[Depends(require_admin)])
 async def research_collect(sport: str = "basketball_nba", date: Optional[str] = None):
     """Manually trigger data collection for a sport."""
     if not data_collector:
@@ -2286,7 +2374,7 @@ async def research_collect(sport: str = "basketball_nba", date: Optional[str] = 
     return {"scores": scores, "box_scores": box}
 
 
-@app.post("/research/generate")
+@app.post("/research/generate", dependencies=[Depends(require_admin)])
 async def research_generate(sport: str = "basketball_nba", max_hypotheses: int = 20):
     """Manually trigger hypothesis generation."""
     if not hypothesis_generator:
@@ -2297,7 +2385,7 @@ async def research_generate(sport: str = "basketball_nba", max_hypotheses: int =
     return {"generated": len(created), "hypotheses": created}
 
 
-@app.post("/research/batch-reject")
+@app.post("/research/batch-reject", dependencies=[Depends(require_admin)])
 async def batch_reject_hypotheses(request: Request):
     """Batch-reject draft hypotheses matching regex patterns.
 
@@ -2495,7 +2583,7 @@ async def claude_status():
     return get_usage_stats()
 
 
-@app.post("/admin/claude/reset")
+@app.post("/admin/claude/reset", dependencies=[Depends(require_admin)])
 async def reset_claude_rate_limit():
     """Force-reset Claude Code rate limit state after hourly limit resets."""
     from tools.claude_code import reset_rate_limit
@@ -2651,14 +2739,16 @@ async def list_tasks(status: Optional[str] = None, limit: int = 10):
 
 
 class ContextSync(BaseModel):
-    session_summary: str
-    actionable_queries: list[str] = []
+    session_summary: str = Field(..., min_length=1, max_length=20000)
+    actionable_queries: list[str] = Field(default_factory=list, max_length=50)
 
 @app.post("/context/sync")
-async def sync_context(ctx: ContextSync):
+async def sync_context(ctx: ContextSync, _auth: None = Depends(require_admin)):
     """Receive context from a Claude Code session. Queues actionable items."""
     submitted = []
     for q in ctx.actionable_queries:
+        if not q or len(q) > 20000:
+            raise HTTPException(status_code=422, detail="actionable_queries entries must be 1-20000 chars")
         task_id = await queue.submit_task(q, priority=1)
         submitted.append(task_id)
     return {
@@ -2668,14 +2758,19 @@ async def sync_context(ctx: ContextSync):
     }
 
 
+_restart_task: Optional[asyncio.Task] = None
+
+
 @app.post("/admin/restart")
-async def admin_restart(confirm: str = ""):
+async def admin_restart(confirm: str = "", _auth: None = Depends(require_admin)):
     """Graceful restart — exits process, watchdog brings it back with new code.
 
     Requires confirm=YES to prevent accidental restarts.
     Without watchdog.bat running, this will KILL the system with no relaunch.
     """
-    if confirm != "YES":
+    # SECURITY: timing-safe equality (audit C-2). Token is "YES" — short, but pattern is
+    # what matters: never use `==` or `!=` on auth-adjacent strings.
+    if not _secrets.compare_digest(confirm, "YES"):
         return {"error": "Add ?confirm=YES to actually restart. WARNING: without watchdog, system will not relaunch."}
     logger.info("RESTART REQUESTED via /admin/restart — shutting down gracefully")
     send_msg = "Callisto restarting (code reload requested)"
@@ -2690,7 +2785,9 @@ async def admin_restart(confirm: str = ""):
         logger.info("Exiting for restart...")
         os._exit(0)
 
-    asyncio.create_task(_delayed_exit())
+    # Track task so shutdown handler can cancel it cleanly (audit H-14).
+    global _restart_task
+    _restart_task = asyncio.create_task(_delayed_exit())
     return {"status": "restarting", "message": "Watchdog will restart with new code in ~15 seconds"}
 
 
@@ -2698,7 +2795,7 @@ _tracemalloc_snapshot: Optional[tracemalloc.Snapshot] = None
 
 
 @app.get("/debug/memory")
-async def debug_memory():
+async def debug_memory(_auth: None = Depends(require_admin)):
     """tracemalloc snapshot comparison — identifies the top growing allocations.
 
     First call takes a baseline snapshot. Subsequent calls compare against
@@ -2763,7 +2860,7 @@ async def debug_memory():
 
 
 @app.get("/debug/memory/top-traces")
-async def debug_memory_traces(limit: int = 10):
+async def debug_memory_traces(limit: int = 10, _auth: None = Depends(require_admin)):
     """Show full stack traces for the top memory consumers."""
     if not tracemalloc.is_tracing():
         return {"error": "tracemalloc not active — set CALLISTO_TRACEMALLOC=1 and restart to enable"}
@@ -2786,7 +2883,7 @@ async def debug_memory_traces(limit: int = 10):
 
 
 @app.post("/debug/memory/gc")
-async def debug_gc():
+async def debug_gc(_auth: None = Depends(require_admin)):
     """Force garbage collection and report stats."""
     gc.collect()
     gc.collect()  # Second pass catches ref cycles
@@ -2805,7 +2902,7 @@ async def debug_gc():
 
 
 @app.post("/admin/sql")
-async def admin_sql(request: Request):
+async def admin_sql(request: Request, _auth: None = Depends(require_admin)):
     """Read-only SQL query against callisto.db for debugging.
 
     Only SELECT statements allowed. Useful for ad-hoc diagnostics
@@ -2831,9 +2928,16 @@ async def admin_sql(request: Request):
     if ";" in cleaned.strip().rstrip(";"):
         return {"error": "Multi-statement queries not allowed"}
 
-    # Block dangerous patterns (word-boundary to avoid false positives like CREATED_AT)
-    for forbidden in ("DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH"):
+    # Block dangerous patterns (word-boundary to avoid false positives like CREATED_AT).
+    # Also block ATTACH (cross-DB write/read) and EXPLAIN (can hide other operations downstream).
+    for forbidden in ("DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH", "DETACH", "REINDEX", "VACUUM", "REPLACE"):
         if _re.search(rf'\b{forbidden}\b', normalized):
+            return {"error": f"Forbidden keyword: {forbidden}"}
+    # SECURITY (audit C-2): defeat unicode-escape regex bypass by re-validating raw string
+    # against the same forbidden list after upper-casing the original (no comment-stripping).
+    raw_upper = sql.upper()
+    for forbidden in ("DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH"):
+        if _re.search(rf'\b{forbidden}\b', raw_upper):
             return {"error": f"Forbidden keyword: {forbidden}"}
 
     try:
@@ -2874,7 +2978,7 @@ async def executor_status():
     return await ex.status()
 
 
-@app.post("/executor/enable")
+@app.post("/executor/enable", dependencies=[Depends(require_admin)])
 async def executor_enable():
     """Enable the bet executor — live bets will be placed."""
     ex = await _get_executor()
@@ -2893,7 +2997,7 @@ async def executor_disable():
     return {"status": "disabled", "message": "Bet executor disabled — no bets will be placed"}
 
 
-@app.post("/executor/login")
+@app.post("/executor/login", dependencies=[Depends(require_admin)])
 async def executor_login():
     """Launch browser for DraftKings login. Browser opens visible for manual login."""
     ex = await _get_executor()
@@ -2919,7 +3023,7 @@ if __name__ == "__main__":
         try:
             test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            test_sock.bind(("0.0.0.0", CALLISTO_PORT))
+            test_sock.bind((CALLISTO_BIND_HOST, CALLISTO_PORT))
             test_sock.close()
             break  # Port is free
         except OSError:
@@ -2932,4 +3036,4 @@ if __name__ == "__main__":
                 import sys
                 sys.exit(1)
 
-    uvicorn.run("api:app", host="0.0.0.0", port=CALLISTO_PORT, reload=False)
+    uvicorn.run("api:app", host=CALLISTO_BIND_HOST, port=CALLISTO_PORT, reload=False)

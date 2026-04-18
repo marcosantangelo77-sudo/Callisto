@@ -144,9 +144,13 @@ CREATE TABLE IF NOT EXISTS masters_predictions (
 def ensure_masters_schema(db_path: str = DB_PATH) -> None:
     """Create Masters-specific tables if they don't exist."""
     conn = sqlite3.connect(db_path)
-    conn.executescript(MASTERS_SCHEMA)
-    conn.commit()
-    conn.close()
+    try:
+        # SECURITY (audit C-6): per-statement DDL avoids EXCLUSIVE lock contention.
+        for stmt in (s.strip() for s in MASTERS_SCHEMA.split(";") if s.strip()):
+            conn.execute(stmt)
+        conn.commit()
+    finally:
+        conn.close()
     logger.info("Masters schema ensured")
 
 

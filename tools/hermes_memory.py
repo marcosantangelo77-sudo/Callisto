@@ -63,8 +63,10 @@ class HermesMemory:
         """Create Hermes tables if they don't exist."""
         if self._db_initialized:
             return
-        await db.executescript("""
-            CREATE TABLE IF NOT EXISTS hermes_learnings (
+        # SECURITY (audit C-6): split executescript into individual execute() so we
+        # don't hold an EXCLUSIVE lock for the duration of multi-statement DDL.
+        for stmt in (
+            """CREATE TABLE IF NOT EXISTS hermes_learnings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 key TEXT NOT NULL UNIQUE,
                 value TEXT NOT NULL,
@@ -72,17 +74,65 @@ class HermesMemory:
                 confidence REAL DEFAULT 0.5,
                 occurrences INTEGER DEFAULT 1,
                 source TEXT DEFAULT 'claude'
-            );
-            CREATE TABLE IF NOT EXISTS hermes_messages (
+            )""",
+            """CREATE TABLE IF NOT EXISTS hermes_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
                 sender TEXT NOT NULL,
                 message TEXT NOT NULL,
                 read INTEGER DEFAULT 0
-            );
-        """)
+            )""",
+        ):
+            await db.execute(stmt)
         await db.commit()
         self._db_initialized = True
+
+    # SECURITY (audit C-4): sanitize values before storing so prompt-injection
+    # markers can't survive the round-trip through hermes_learnings → context
+    # → next Claude prompt. We neutralize tag-like metacharacters, code-fence
+    # markers, and common system-prompt sentinels, and cap the length.
+    @staticmethod
+    def _sanitize_learning_value(value: str) -> str:
+        if not isinstance(value, str):
+            value = str(value)
+        # Cap before substitution so attacker-supplied massive payload doesn't
+        # consume CPU re-stringifying. 4KB is plenty for a learning summary.
+        if len(value) > 4096:
+            value = value[:4096] + " …[truncated]"
+        # Neutralize HTML/XML-ish tags and code fences. We escape rather than
+        # strip so the original signal stays human-readable in audits.
+        value = (
+            value.replace("\u200b", "")  # zero-width space sometimes used to bypass filters
+                 .replace("<", "‹")
+                 .replace(">", "›")
+                 .replace("```", "ʼʼʼ")
+                 .replace("\x00", "")
+        )
+        # Strip common LLM jailbreak sentinels by escaping the leading bracket.
+        for sentinel in (
+            "[INST]", "[/INST]",
+            "[SYSTEM]", "[/SYSTEM]",
+            "{{system}}", "{{/system}}",
+            "<|im_start|>", "<|im_end|>",
+        ):
+            value = value.replace(sentinel, sentinel.replace("[", "(").replace("]", ")")
+                                  .replace("<", "‹").replace(">", "›")
+                                  .replace("{", "(").replace("}", ")"))
+        return value
+
+    @staticmethod
+    def _sanitize_learning_key(key: str) -> str:
+        """Keys must be short, ASCII-ish identifiers — they appear verbatim in prompts."""
+        if not isinstance(key, str):
+            key = str(key)
+        key = key.strip()
+        if not key:
+            raise ValueError("learning key must be non-empty")
+        if len(key) > 128:
+            key = key[:128]
+        # Permissive but no markup: letters, digits, underscore, dash, dot, colon, slash.
+        import re as _re
+        return _re.sub(r"[^A-Za-z0-9_\-\.:/]+", "_", key)
 
     # ──────────────────────────────────────────────────
     # READ: Build context for Claude calls
@@ -186,8 +236,21 @@ class HermesMemory:
           - "dk_h2h_lag_pinnacle" → "DraftKings h2h lines lag Pinnacle by ~12 min on NBA"
           - "cold_venue_under_edge" → "Unders at northern parks in April show +1.5% avg edge"
           - "backtest_13_same_game" → "13 MLB hypotheses all flagged same game — need better filtering"
+
+        SECURITY (audit C-4): value is sanitized to neutralize prompt-injection
+        sentinels because every learning is later re-injected verbatim into
+        Claude's prompt context.
         """
         try:
+            key = self._sanitize_learning_key(key)
+            value = self._sanitize_learning_value(value)
+            try:
+                confidence = float(confidence)
+            except (TypeError, ValueError):
+                confidence = 0.5
+            confidence = max(0.0, min(1.0, confidence))
+            if source not in ("claude", "callisto", "hermes", "agent", "human", "self_repair", "audit"):
+                source = "claude"
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute("PRAGMA busy_timeout = 60000")
                 await self._ensure_tables(db)

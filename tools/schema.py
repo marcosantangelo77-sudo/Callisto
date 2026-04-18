@@ -806,6 +806,22 @@ CREATE TABLE IF NOT EXISTS masters_predictions (
 async def ensure_schema(db_path: str = DB_PATH) -> None:
     """Create or upgrade all tables. Safe to call multiple times."""
     os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
+    # SECURITY (audit P2): warn loudly when the DB lives inside a OneDrive sync
+    # folder. OneDrive holds file handles open while syncing, which corrupts WAL
+    # writes and (with bankroll/bet data) replicates financial PII to Microsoft
+    # cloud. Marco's current install IS inside OneDrive, so this is a warning
+    # rather than a hard fail — but the path forward is to symlink the DB out.
+    # Set CALLISTO_SILENCE_ONEDRIVE_WARNING=1 to suppress.
+    if (
+        "OneDrive" in os.path.abspath(db_path)
+        and os.getenv("CALLISTO_SILENCE_ONEDRIVE_WARNING", "0") != "1"
+    ):
+        logger.warning(
+            f"DB path {db_path!r} is inside a OneDrive sync folder. WAL + cloud sync "
+            "can corrupt data; bankroll and bets replicate to Microsoft cloud. Move to "
+            "a non-synced location (e.g. C:/CallistoLocal/callisto.db) when feasible. "
+            "Set CALLISTO_SILENCE_ONEDRIVE_WARNING=1 to suppress this warning."
+        )
     async with aiosqlite.connect(db_path) as db:
         # Set PRAGMAs before schema creation — these persist for the connection
         await db.execute("PRAGMA busy_timeout = 120000")
@@ -813,6 +829,18 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         await db.execute("PRAGMA wal_autocheckpoint = 1000")
         await db.execute("PRAGMA journal_size_limit = 67108864")
         await db.execute("PRAGMA synchronous = NORMAL")  # Safe with WAL, reduces fsync
+        await db.commit()
+
+        # SECURITY (audit P2): schema_migrations table tracks which one-time
+        # migrations have been applied. Future migrations should INSERT a row
+        # here so a failed/skipped migration is detectable instead of silent.
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "  version INTEGER PRIMARY KEY,"
+            "  name TEXT NOT NULL,"
+            "  applied_at TEXT NOT NULL DEFAULT (datetime('now'))"
+            ")"
+        )
         await db.commit()
         # Run schema statements individually instead of executescript() to avoid
         # EXCLUSIVE lock. executescript() blocks ALL concurrent readers/writers;
@@ -870,6 +898,25 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
             except Exception:
                 pass  # Column already exists
 
+        # Migration (audit P2): add UNIQUE index on hypothesis_stats(hypothesis_id, stage)
+        # so concurrent backtest writes can't insert competing rows for the same
+        # hypothesis/stage. Existing duplicates (if any) are not removed here; the
+        # CREATE UNIQUE INDEX call will fail loudly if duplicates exist, prompting a
+        # one-time dedupe rather than silently masking the data corruption.
+        try:
+            await db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "idx_hypothesis_stats_unique ON hypothesis_stats(hypothesis_id, stage)"
+            )
+            await db.commit()
+        except Exception as e:
+            logger.error(
+                f"Could not create UNIQUE index on hypothesis_stats: {e}. "
+                "Existing duplicate rows must be deduplicated; run "
+                "`DELETE FROM hypothesis_stats WHERE id NOT IN (SELECT MIN(id) "
+                "FROM hypothesis_stats GROUP BY hypothesis_id, stage);` and retry."
+            )
+
         # Backfill: convert existing JSON embeddings to binary blobs
         await _backfill_embedding_blobs(db)
 
@@ -880,6 +927,29 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         await _backfill_regimes(db)
 
     logger.info("Schema ensured")
+
+
+async def vacuum_db(db_path: str = DB_PATH) -> dict:
+    """Run VACUUM + WAL checkpoint to reclaim space (audit P2).
+
+    Call from a periodic task (e.g. weekly). VACUUM rewrites the entire DB so it
+    holds an EXCLUSIVE lock — schedule it during a quiet window (overnight) and
+    after wait_for_drain() so backtest/line_monitor writers are paused.
+    """
+    import os as _os
+    before = _os.path.getsize(db_path) if _os.path.exists(db_path) else 0
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout = 300000")  # 5 min for VACUUM
+        await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        await db.execute("VACUUM")
+        await db.commit()
+    after = _os.path.getsize(db_path) if _os.path.exists(db_path) else 0
+    reclaimed = max(0, before - after)
+    logger.info(
+        f"VACUUM complete: {before/1e6:.1f}MB -> {after/1e6:.1f}MB "
+        f"(reclaimed {reclaimed/1e6:.1f}MB)"
+    )
+    return {"before_bytes": before, "after_bytes": after, "reclaimed_bytes": reclaimed}
 
 
 async def _backfill_embedding_blobs(db) -> None:
@@ -934,14 +1004,27 @@ async def _backfill_regimes(db) -> None:
     cursor = await db.execute("SELECT sport, regime_name, start_date, end_date FROM regime_rules")
     rules = await cursor.fetchall()
 
+    from tools.db_utils import safe_ident
     for sport, regime_name, start_date, end_date in rules:
         for tbl, date_col in [("game_results", "game_date"), ("historical_odds_cache", "snapshot_date")]:
-            end_clause = f"AND {date_col} <= '{end_date}'" if end_date else ""
-            await db.execute(
-                f"UPDATE {tbl} SET regime = ? "
-                f"WHERE sport = ? AND {date_col} >= ? {end_clause} AND regime IS NULL",
-                (regime_name, sport, start_date),
-            )
+            tbl_q = safe_ident(tbl)
+            col_q = safe_ident(date_col)
+            # SECURITY (audit C-5): parameterize end_date instead of inlining a quoted
+            # string literal. Even though end_date originates from regime_rules (an
+            # internal table), splicing a quoted string into SQL is the same anti-pattern
+            # the rest of the audit closed.
+            if end_date:
+                await db.execute(
+                    f"UPDATE {tbl_q} SET regime = ? "
+                    f"WHERE sport = ? AND {col_q} >= ? AND {col_q} <= ? AND regime IS NULL",
+                    (regime_name, sport, start_date, end_date),
+                )
+            else:
+                await db.execute(
+                    f"UPDATE {tbl_q} SET regime = ? "
+                    f"WHERE sport = ? AND {col_q} >= ? AND regime IS NULL",
+                    (regime_name, sport, start_date),
+                )
     await db.commit()
     logger.info(f"Backfilled regimes for {untagged} untagged rows")
 

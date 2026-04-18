@@ -15,11 +15,34 @@ silent data loss from lock contention.
 import asyncio
 import logging
 import random
+import re
 from typing import Optional
 
 import aiosqlite
 
 logger = logging.getLogger("callisto.db_utils")
+
+
+# SECURITY (audit C-5): SQLite identifiers (table / column / index names) cannot
+# be parameterized via ? placeholders. Anywhere we splice an identifier into a
+# query string, the splice MUST go through this validator. The check is strict
+# (ASCII letters / digits / underscore only, max 64 chars, no leading digit) and
+# rejects any other character — including quotes, semicolons, spaces, dashes,
+# unicode lookalikes, and dotted "schema.table" forms (use schema-qualified
+# logic at the caller instead).
+_SAFE_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
+
+def safe_ident(name: str) -> str:
+    """Return ``name`` if it is a safe SQLite identifier; raise ValueError otherwise.
+
+    Use as: ``f"SELECT COUNT(*) FROM {safe_ident(table)}"``.
+    The function never quotes — it asserts. Callers that want belt-and-braces can
+    additionally compare against an explicit allowlist set before passing in.
+    """
+    if not isinstance(name, str) or not _SAFE_IDENT_RE.match(name):
+        raise ValueError(f"unsafe SQL identifier: {name!r}")
+    return name
 
 # Shared write lock — all hot-path writers acquire this before bulk writes.
 # This eliminates writer-writer contention at the application level.
