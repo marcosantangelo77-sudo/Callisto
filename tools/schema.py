@@ -702,6 +702,358 @@ CREATE INDEX IF NOT EXISTS idx_mlb_players_name ON mlb_players(full_name);
 CREATE INDEX IF NOT EXISTS idx_mlb_players_team ON mlb_players(current_team_id);
 
 -- ──────────────────────────────────────────
+-- NBA PLAYERS: core metadata + NBA Draft Combine measurables where available.
+-- Source: stats.nba.com commonallplayers + commonplayerinfo (height, weight,
+-- jersey, position, experience), and draftcombineplayeranthro for wingspan
+-- and standing reach (available only for draft-class players since 2000).
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS nba_players (
+    player_id           INTEGER PRIMARY KEY,
+    full_name           TEXT NOT NULL,
+    first_name          TEXT,
+    last_name           TEXT,
+    position            TEXT,
+    height_in           INTEGER,
+    weight_lb           INTEGER,
+    wingspan_in         REAL,
+    standing_reach_in   REAL,
+    jersey_number       TEXT,
+    birth_date          DATE,
+    country             TEXT,
+    college             TEXT,
+    draft_year          INTEGER,
+    draft_round         INTEGER,
+    draft_pick          INTEGER,
+    years_pro           INTEGER,
+    current_team_id     INTEGER,
+    current_team_abbr   TEXT,
+    active              INTEGER DEFAULT 1,
+    updated_at          DATETIME DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_nba_players_name ON nba_players(full_name);
+CREATE INDEX IF NOT EXISTS idx_nba_players_team ON nba_players(current_team_id);
+
+-- ──────────────────────────────────────────
+-- NBA SHOT EVENTS: one row per shot attempt. Source: stats.nba.com
+-- shotchartdetail (free, requires UA header). Court coords in tenths of
+-- feet; origin at the hoop, +y toward midcourt, +x toward right sideline.
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS nba_shot_events (
+    game_id             TEXT NOT NULL,
+    event_num           INTEGER NOT NULL,
+    game_date           DATE NOT NULL,
+    player_id           INTEGER,
+    player_name         TEXT,
+    team_id             INTEGER,
+    team_abbr           TEXT,
+    period              INTEGER,
+    minutes_remaining   INTEGER,
+    seconds_remaining   INTEGER,
+    shot_type           TEXT,
+    action_type         TEXT,
+    shot_zone_basic     TEXT,
+    shot_zone_area      TEXT,
+    shot_zone_range     TEXT,
+    shot_distance       REAL,
+    loc_x               INTEGER,
+    loc_y               INTEGER,
+    made_flag           INTEGER,
+    htm                 TEXT,
+    vtm                 TEXT,
+    ingested_at         DATETIME DEFAULT (datetime('now')),
+    PRIMARY KEY (game_id, event_num)
+);
+CREATE INDEX IF NOT EXISTS idx_nba_shots_player_date ON nba_shot_events(player_id, game_date);
+CREATE INDEX IF NOT EXISTS idx_nba_shots_game ON nba_shot_events(game_id);
+CREATE INDEX IF NOT EXISTS idx_nba_shots_zone ON nba_shot_events(player_id, shot_zone_basic, made_flag);
+CREATE INDEX IF NOT EXISTS idx_nba_shots_type ON nba_shot_events(shot_type, made_flag);
+
+-- ──────────────────────────────────────────
+-- NFL PLAYERS: roster + scout-reported metadata. Source: nflfastR rosters
+-- CSV (free, weekly updates). gsis_id is the canonical player_id.
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS nfl_players (
+    player_id           TEXT PRIMARY KEY,
+    full_name           TEXT NOT NULL,
+    first_name          TEXT,
+    last_name           TEXT,
+    position            TEXT,
+    position_group      TEXT,
+    jersey_number       INTEGER,
+    height_in           INTEGER,
+    weight_lb           INTEGER,
+    birth_date          DATE,
+    college             TEXT,
+    draft_year          INTEGER,
+    draft_round         INTEGER,
+    draft_pick          INTEGER,
+    years_exp           INTEGER,
+    current_team        TEXT,
+    status              TEXT,
+    headshot_url        TEXT,
+    updated_at          DATETIME DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_nfl_players_name ON nfl_players(full_name);
+CREATE INDEX IF NOT EXISTS idx_nfl_players_team ON nfl_players(current_team);
+
+-- ──────────────────────────────────────────
+-- NFL COMBINE: measurables and drill results from the NFL Scouting Combine.
+-- Source: nflreadr combine CSV / Pro-Football-Reference. Public, free.
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS nfl_combine_results (
+    player_id           TEXT,
+    combine_year        INTEGER NOT NULL,
+    full_name           TEXT NOT NULL,
+    position            TEXT,
+    college             TEXT,
+    height_in           REAL,
+    weight_lb           INTEGER,
+    arm_length_in       REAL,
+    hand_size_in        REAL,
+    forty_yard          REAL,
+    bench_press_reps    INTEGER,
+    vertical_in         REAL,
+    broad_jump_in       INTEGER,
+    three_cone          REAL,
+    shuttle_20y         REAL,
+    draft_year          INTEGER,
+    draft_round         INTEGER,
+    draft_pick          INTEGER,
+    draft_team          TEXT,
+    PRIMARY KEY (combine_year, full_name, position)
+);
+CREATE INDEX IF NOT EXISTS idx_nfl_combine_player ON nfl_combine_results(player_id);
+CREATE INDEX IF NOT EXISTS idx_nfl_combine_name ON nfl_combine_results(full_name);
+
+-- ──────────────────────────────────────────
+-- NFL PLAY EVENTS: play-by-play per game. Source: nflfastR play_by_play
+-- per-season CSV on GitHub (free). High-signal fields kept.
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS nfl_play_events (
+    play_id             INTEGER NOT NULL,
+    game_id             TEXT NOT NULL,
+    game_date           DATE,
+    home_team           TEXT,
+    away_team           TEXT,
+    posteam             TEXT,
+    defteam             TEXT,
+    season              INTEGER,
+    week                INTEGER,
+    qtr                 INTEGER,
+    time                TEXT,
+    down                INTEGER,
+    ydstogo             INTEGER,
+    yrdln               TEXT,
+    yardline_100        INTEGER,
+    play_type           TEXT,
+    yards_gained        INTEGER,
+    epa                 REAL,
+    wpa                 REAL,
+    success             INTEGER,
+    passer_id           TEXT,
+    passer_name         TEXT,
+    receiver_id         TEXT,
+    receiver_name       TEXT,
+    air_yards           REAL,
+    yards_after_catch   REAL,
+    pass_length         TEXT,
+    pass_location       TEXT,
+    complete_pass       INTEGER,
+    incomplete_pass     INTEGER,
+    interception        INTEGER,
+    rusher_id           TEXT,
+    rusher_name         TEXT,
+    run_location        TEXT,
+    run_gap             TEXT,
+    sack                INTEGER,
+    qb_hit              INTEGER,
+    tackle_with_assist  INTEGER,
+    sack_player_id      TEXT,
+    touchdown           INTEGER,
+    td_player_id        TEXT,
+    field_goal_attempt  INTEGER,
+    field_goal_result   TEXT,
+    kick_distance       INTEGER,
+    score_differential  INTEGER,
+    PRIMARY KEY (game_id, play_id)
+);
+CREATE INDEX IF NOT EXISTS idx_nfl_plays_date ON nfl_play_events(game_date);
+CREATE INDEX IF NOT EXISTS idx_nfl_plays_passer ON nfl_play_events(passer_id, game_date);
+CREATE INDEX IF NOT EXISTS idx_nfl_plays_receiver ON nfl_play_events(receiver_id, game_date);
+CREATE INDEX IF NOT EXISTS idx_nfl_plays_rusher ON nfl_play_events(rusher_id, game_date);
+CREATE INDEX IF NOT EXISTS idx_nfl_plays_game ON nfl_play_events(game_id);
+CREATE INDEX IF NOT EXISTS idx_nfl_plays_type ON nfl_play_events(play_type, qtr);
+
+-- ──────────────────────────────────────────
+-- NHL PLAYERS: identity + physical + shooting/catching hand.
+-- Source: api.nhle.com (free, no key).
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS nhl_players (
+    player_id           INTEGER PRIMARY KEY,
+    full_name           TEXT NOT NULL,
+    first_name          TEXT,
+    last_name           TEXT,
+    position            TEXT,
+    shoots_catches      TEXT,
+    sweater_number      INTEGER,
+    height_in           INTEGER,
+    weight_lb           INTEGER,
+    birth_date          DATE,
+    birth_country       TEXT,
+    birth_city          TEXT,
+    draft_year          INTEGER,
+    draft_round         INTEGER,
+    draft_pick          INTEGER,
+    draft_team          TEXT,
+    current_team_id     INTEGER,
+    current_team_abbr   TEXT,
+    active              INTEGER DEFAULT 1,
+    updated_at          DATETIME DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_nhl_players_name ON nhl_players(full_name);
+CREATE INDEX IF NOT EXISTS idx_nhl_players_team ON nhl_players(current_team_id);
+
+-- ──────────────────────────────────────────
+-- NHL SHOT EVENTS: one row per shot attempt. Source: api.nhle.com
+-- /v1/gamecenter/{game}/play-by-play (free). Rink coords x in [-100, 100],
+-- y in [-42.5, 42.5]. zone_code is relative to the shooting team.
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS nhl_shot_events (
+    game_id             INTEGER NOT NULL,
+    event_id            INTEGER NOT NULL,
+    game_date           DATE,
+    period              INTEGER,
+    period_type         TEXT,
+    time_in_period      TEXT,
+    time_remaining      TEXT,
+    event_type          TEXT,
+    shot_type           TEXT,
+    situation_code      TEXT,
+    x_coord             REAL,
+    y_coord             REAL,
+    zone_code           TEXT,
+    shooting_team_id    INTEGER,
+    shooting_team_abbr  TEXT,
+    shooter_id          INTEGER,
+    goalie_id           INTEGER,
+    assist1_id          INTEGER,
+    assist2_id          INTEGER,
+    is_goal             INTEGER DEFAULT 0,
+    home_score          INTEGER,
+    away_score          INTEGER,
+    ingested_at         DATETIME DEFAULT (datetime('now')),
+    PRIMARY KEY (game_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_nhl_shots_shooter ON nhl_shot_events(shooter_id, game_date);
+CREATE INDEX IF NOT EXISTS idx_nhl_shots_goalie ON nhl_shot_events(goalie_id, game_date);
+CREATE INDEX IF NOT EXISTS idx_nhl_shots_matchup ON nhl_shot_events(shooter_id, goalie_id);
+CREATE INDEX IF NOT EXISTS idx_nhl_shots_game ON nhl_shot_events(game_id);
+CREATE INDEX IF NOT EXISTS idx_nhl_shots_goal ON nhl_shot_events(is_goal) WHERE is_goal = 1;
+
+-- ──────────────────────────────────────────
+-- NCAA BASKETBALL (M + W) PLAYERS: rosters with class / height / position.
+-- Source: ESPN college endpoints. `sport` discriminates M vs W.
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS ncaa_basketball_players (
+    sport               TEXT NOT NULL,
+    player_id           TEXT NOT NULL,
+    full_name           TEXT NOT NULL,
+    first_name          TEXT,
+    last_name           TEXT,
+    team_id             TEXT,
+    team_abbr           TEXT,
+    team_name           TEXT,
+    jersey_number       TEXT,
+    position            TEXT,
+    class               TEXT,
+    height_in           INTEGER,
+    weight_lb           INTEGER,
+    home_town           TEXT,
+    hand                TEXT,
+    active              INTEGER DEFAULT 1,
+    updated_at          DATETIME DEFAULT (datetime('now')),
+    PRIMARY KEY (sport, player_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ncaa_bball_players_name ON ncaa_basketball_players(full_name);
+CREATE INDEX IF NOT EXISTS idx_ncaa_bball_players_team ON ncaa_basketball_players(sport, team_id);
+
+-- ──────────────────────────────────────────
+-- NCAA BASKETBALL (M + W) GAME STATS: per-player per-game box + advanced.
+-- Source: ESPN boxscore.
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS ncaa_basketball_game_stats (
+    sport               TEXT NOT NULL,
+    game_id             TEXT NOT NULL,
+    game_date           DATE,
+    player_id           TEXT NOT NULL,
+    player_name         TEXT,
+    team_id             TEXT,
+    team_abbr           TEXT,
+    opponent_team_id    TEXT,
+    opponent_abbr       TEXT,
+    is_home             INTEGER,
+    started             INTEGER,
+    minutes             REAL,
+    points              INTEGER,
+    rebounds            INTEGER,
+    off_reb             INTEGER,
+    def_reb             INTEGER,
+    assists             INTEGER,
+    steals              INTEGER,
+    blocks              INTEGER,
+    turnovers           INTEGER,
+    personal_fouls      INTEGER,
+    fgm                 INTEGER,
+    fga                 INTEGER,
+    fg3m                INTEGER,
+    fg3a                INTEGER,
+    ftm                 INTEGER,
+    fta                 INTEGER,
+    plus_minus          INTEGER,
+    true_shooting_pct   REAL,
+    efg_pct             REAL,
+    PRIMARY KEY (sport, game_id, player_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ncaa_bball_stats_player ON ncaa_basketball_game_stats(sport, player_id, game_date);
+CREATE INDEX IF NOT EXISTS idx_ncaa_bball_stats_game ON ncaa_basketball_game_stats(sport, game_id);
+
+-- ──────────────────────────────────────────
+-- PGA PLAYER ROUNDS: round-level strokes-gained + core stats per event.
+-- Source: DataGolf public pages and/or official PGA Tour API when scrape-able.
+-- Complements the existing golf_masters tables for the Masters specifically.
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS golf_player_rounds (
+    player_id           TEXT NOT NULL,
+    player_name         TEXT NOT NULL,
+    event_id            TEXT NOT NULL,
+    event_name          TEXT,
+    course              TEXT,
+    season              INTEGER,
+    round_num           INTEGER NOT NULL,
+    round_date          DATE,
+    tee_time            TEXT,
+    score               INTEGER,
+    score_to_par        INTEGER,
+    thru                INTEGER,
+    sg_total            REAL,
+    sg_ott              REAL,
+    sg_app              REAL,
+    sg_arg              REAL,
+    sg_putt             REAL,
+    sg_t2g              REAL,
+    driving_distance    REAL,
+    driving_accuracy    REAL,
+    gir_pct             REAL,
+    scrambling_pct      REAL,
+    putts_per_round     REAL,
+    made_cut            INTEGER,
+    PRIMARY KEY (player_id, event_id, round_num)
+);
+CREATE INDEX IF NOT EXISTS idx_golf_rounds_player ON golf_player_rounds(player_id, round_date);
+CREATE INDEX IF NOT EXISTS idx_golf_rounds_event ON golf_player_rounds(event_id, round_num);
+CREATE INDEX IF NOT EXISTS idx_golf_rounds_course ON golf_player_rounds(course, round_date);
+
+-- ──────────────────────────────────────────
 -- GAME RESULTS: actual scores for backtest resolution
 -- ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS game_results (

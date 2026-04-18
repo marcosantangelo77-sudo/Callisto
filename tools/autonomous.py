@@ -3185,6 +3185,107 @@ class ResearchLoop:
             except Exception as e:
                 logger.warning(f"MLB player metadata refresh failed: {e}")
 
+        # ── NHL: shot-level play-by-play + player metadata ──
+        # Per-shot events land in nhl_shot_events (coords, shot type, situation,
+        # shooter/goalie); player metadata lands in nhl_players (height,
+        # weight, shoots, position, birth, draft). Free api-web.nhle.com.
+        if "icehockey_nhl" in RESEARCH_SPORTS:
+            try:
+                for dt in dates[:3]:
+                    await self.data_collector.collect_nhl_shots(dt.strftime("%Y-%m-%d"))
+            except Exception as e:
+                logger.warning(f"NHL shot collection failed: {e}")
+            try:
+                import time as _t
+                last = getattr(self, "_last_nhl_player_refresh", 0.0)
+                if _t.time() - last > 86400:
+                    await self.data_collector.collect_nhl_players()
+                    self._last_nhl_player_refresh = _t.time()
+            except Exception as e:
+                logger.warning(f"NHL player metadata refresh failed: {e}")
+
+        # ── NFL: play-by-play + roster + combine ──
+        # Per-season CSV fetches from nflverse. Season-active cadence: PBP
+        # refreshes daily during season (new plays land as weekly games
+        # complete); rosters refresh daily; combine is yearly so we gate on
+        # 7d cadence to stay polite to GitHub.
+        if "americanfootball_nfl" in RESEARCH_SPORTS:
+            try:
+                import time as _t
+                last_pbp = getattr(self, "_last_nfl_pbp_refresh", 0.0)
+                if _t.time() - last_pbp > 86400:
+                    await self.data_collector.collect_nfl_plays()
+                    self._last_nfl_pbp_refresh = _t.time()
+            except Exception as e:
+                logger.warning(f"NFL PBP collection failed: {e}")
+            try:
+                import time as _t
+                last_roster = getattr(self, "_last_nfl_roster_refresh", 0.0)
+                if _t.time() - last_roster > 86400:
+                    await self.data_collector.collect_nfl_players()
+                    self._last_nfl_roster_refresh = _t.time()
+            except Exception as e:
+                logger.warning(f"NFL roster refresh failed: {e}")
+            try:
+                import time as _t
+                last_combine = getattr(self, "_last_nfl_combine_refresh", 0.0)
+                if _t.time() - last_combine > 7 * 86400:
+                    await self.data_collector.collect_nfl_combine()
+                    self._last_nfl_combine_refresh = _t.time()
+            except Exception as e:
+                logger.warning(f"NFL combine refresh failed: {e}")
+
+        # ── NBA: shot chart + player metadata ──
+        # stats.nba.com throttles hard under burst load, so we pace with a
+        # 0.6s inter-request delay inside the collector and only fetch the
+        # last 3 days' shots. Player metadata refresh once per day.
+        if "basketball_nba" in RESEARCH_SPORTS:
+            try:
+                for dt in dates[:3]:
+                    await self.data_collector.collect_nba_shots(dt.strftime("%Y-%m-%d"))
+            except Exception as e:
+                logger.warning(f"NBA shot collection failed: {e}")
+            try:
+                import time as _t
+                last = getattr(self, "_last_nba_player_refresh", 0.0)
+                if _t.time() - last > 86400:
+                    await self.data_collector.collect_nba_players()
+                    self._last_nba_player_refresh = _t.time()
+            except Exception as e:
+                logger.warning(f"NBA player metadata refresh failed: {e}")
+
+        # ── NCAA MBB + WBB: player metadata + per-game box stats ──
+        for ncaa_sport in ("basketball_ncaab", "basketball_ncaaw"):
+            if ncaa_sport not in RESEARCH_SPORTS:
+                continue
+            try:
+                for dt in dates[:3]:
+                    await self.data_collector.collect_ncaa_basketball_game_stats(
+                        ncaa_sport, dt.strftime("%Y%m%d")
+                    )
+            except Exception as e:
+                logger.warning(f"{ncaa_sport} box stats failed: {e}")
+            try:
+                import time as _t
+                last_key = f"_last_{ncaa_sport}_player_refresh"
+                last = getattr(self, last_key, 0.0)
+                if _t.time() - last > 7 * 86400:  # rosters rarely change mid-season
+                    await self.data_collector.collect_ncaa_basketball_players(ncaa_sport)
+                    setattr(self, last_key, _t.time())
+            except Exception as e:
+                logger.warning(f"{ncaa_sport} roster refresh failed: {e}")
+
+        # ── PGA GOLF: per-round strokes-gained + core stats ──
+        if "golf_pga" in RESEARCH_SPORTS:
+            try:
+                import time as _t
+                last = getattr(self, "_last_golf_rounds_refresh", 0.0)
+                if _t.time() - last > 86400:
+                    await self.data_collector.collect_golf_player_rounds()
+                    self._last_golf_rounds_refresh = _t.time()
+            except Exception as e:
+                logger.warning(f"Golf rounds collection failed: {e}")
+
         # Collect pre-calculated value bets from Odds-API.io Pro
         # These are updated every 5 seconds with EV computed from consensus
         try:
