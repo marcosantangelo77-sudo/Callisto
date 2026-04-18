@@ -906,6 +906,21 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
             except Exception:
                 pass  # Column already exists
 
+        # Migration (2026-04-18): add `source` to ev_opportunities. Before this,
+        # line_monitor INSERTed with (game_id, bookmaker, team, edge) while
+        # autonomous.py attempted INSERTs with (event_id, book, side, ev_pct)
+        # against the same table — the autonomous writes silently dropped
+        # because the table had no such columns, producing recurring
+        # OperationalError("no column named event_id") in the WriteCoordinator.
+        # autonomous.py is now remapped onto the canonical column names and
+        # stamps `source` to distinguish signal provenance.
+        try:
+            await db.execute("ALTER TABLE ev_opportunities ADD COLUMN source TEXT DEFAULT 'line_movement'")
+            await db.commit()
+            logger.info("Added source column to ev_opportunities")
+        except Exception:
+            pass  # Column already exists
+
         # Migration (audit P2): add UNIQUE index on hypothesis_stats(hypothesis_id, stage)
         # so concurrent backtest writes can't insert competing rows for the same
         # hypothesis/stage. Existing duplicates (if any) are not removed here; the
