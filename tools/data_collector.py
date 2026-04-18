@@ -1906,6 +1906,1078 @@ class DataCollector:
             "players_upserted": stored,
         }
 
+    # ──────────────────────────────────────────
+    # NHL: player metadata + per-shot play-by-play
+    # Source: api.nhle.com (free, no key required).
+    # ──────────────────────────────────────────
+
+    NHL_API = "https://api-web.nhle.com/v1"
+
+    async def collect_nhl_players(self) -> dict:
+        """Refresh the nhl_players table from api.nhle.com.
+
+        For each of the 32 teams we pull /roster/{abbr}/current (active
+        players) and then /player/{id}/landing for bio fields (height,
+        weight, shoots, birth, draft). INSERT OR REPLACE keyed on player_id.
+        """
+        client = await _get_client()
+        try:
+            r = await client.get(
+                f"{self.NHL_API}/standings/now",
+                timeout=20.0, follow_redirects=True,
+            )
+            r.raise_for_status()
+            standings = r.json().get("standings", [])
+        except Exception as e:
+            logger.error(f"NHL standings fetch failed: {e}")
+            return {"error": str(e), "players": 0}
+
+        teams = []
+        for t in standings:
+            abbr = (t.get("teamAbbrev") or {}).get("default")
+            tid = t.get("teamId") or t.get("teamAbbrevId")
+            if abbr:
+                teams.append({"abbr": abbr, "team_id": tid})
+
+        player_ids: set[int] = set()
+        team_by_player: dict[int, tuple] = {}
+        for team in teams:
+            try:
+                r = await client.get(
+                    f"{self.NHL_API}/roster/{team['abbr']}/current",
+                    timeout=20.0, follow_redirects=True,
+                )
+                r.raise_for_status()
+                roster = r.json() or {}
+                for group in ("forwards", "defensemen", "goalies"):
+                    for p in roster.get(group, []) or []:
+                        pid = p.get("id")
+                        if pid:
+                            player_ids.add(pid)
+                            team_by_player[pid] = (team.get("team_id"), team["abbr"])
+            except Exception as e:
+                logger.debug(f"NHL roster {team['abbr']} failed: {e}")
+
+        player_rows: list[tuple] = []
+        from asyncio import sleep as _sleep
+        for pid in player_ids:
+            try:
+                r = await client.get(
+                    f"{self.NHL_API}/player/{pid}/landing",
+                    timeout=15.0, follow_redirects=True,
+                )
+                r.raise_for_status()
+                p = r.json() or {}
+            except Exception as e:
+                logger.debug(f"NHL player {pid} landing failed: {e}")
+                continue
+            team_id, team_abbr = team_by_player.get(pid, (None, None))
+            draft = p.get("draftDetails", {}) or {}
+            fname = (p.get("firstName") or {}).get("default", "")
+            lname = (p.get("lastName") or {}).get("default", "")
+            bcity = p.get("birthCity")
+            if isinstance(bcity, dict):
+                bcity = bcity.get("default")
+            player_rows.append((
+                pid,
+                f"{fname} {lname}".strip(),
+                fname or None,
+                lname or None,
+                p.get("position"),
+                p.get("shootsCatches"),
+                p.get("sweaterNumber"),
+                p.get("heightInInches"),
+                p.get("weightInPounds"),
+                p.get("birthDate"),
+                p.get("birthCountry"),
+                bcity,
+                draft.get("year"),
+                draft.get("round"),
+                draft.get("pickInRound"),
+                draft.get("teamAbbrev"),
+                team_id,
+                team_abbr,
+                1,
+            ))
+            await _sleep(0.05)
+
+        stored = 0
+        if player_rows:
+            try:
+                await self._db.executemany(
+                    "INSERT OR REPLACE INTO nhl_players ("
+                    "player_id, full_name, first_name, last_name, position, "
+                    "shoots_catches, sweater_number, height_in, weight_lb, "
+                    "birth_date, birth_country, birth_city, "
+                    "draft_year, draft_round, draft_pick, draft_team, "
+                    "current_team_id, current_team_abbr, active, updated_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+                    player_rows,
+                )
+                stored = len(player_rows)
+            except Exception as e:
+                logger.warning(f"nhl_players upsert failed: {e}")
+
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector collect_nhl_players")
+        logger.info(f"NHL players: refreshed {stored} across {len(teams)} teams")
+        return {"teams": len(teams), "players_upserted": stored}
+
+    async def collect_nhl_shots(self, date: Optional[str] = None) -> dict:
+        """Per-shot event ingestion from api-web.nhle.com for games on `date`.
+
+        Walks /schedule/{date}, then /gamecenter/{game_id}/play-by-play for
+        each completed game, extracts shot-on-goal / missed-shot /
+        blocked-shot / goal events, INSERT OR IGNORE on (game_id, event_id).
+        """
+        client = await _get_client()
+        if date is None:
+            date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            r = await client.get(
+                f"{self.NHL_API}/schedule/{date}",
+                timeout=20.0, follow_redirects=True,
+            )
+            r.raise_for_status()
+            sched = r.json() or {}
+        except Exception as e:
+            logger.error(f"NHL schedule {date} fetch failed: {e}")
+            return {"error": str(e), "games": 0, "shots": 0}
+
+        game_ids: list[int] = []
+        for week_day in sched.get("gameWeek", []):
+            if week_day.get("date") != date:
+                continue
+            for g in week_day.get("games", []):
+                state = g.get("gameState") or g.get("gameScheduleState")
+                if state in ("OFF", "FINAL"):
+                    gid = g.get("id")
+                    if gid:
+                        game_ids.append(gid)
+
+        all_shot_rows: list[tuple] = []
+        SHOT_EVENTS = {"shot-on-goal", "missed-shot", "blocked-shot", "goal"}
+        for gid in game_ids:
+            try:
+                r = await client.get(
+                    f"{self.NHL_API}/gamecenter/{gid}/play-by-play",
+                    timeout=30.0, follow_redirects=True,
+                )
+                r.raise_for_status()
+                pbp = r.json() or {}
+            except Exception as e:
+                logger.debug(f"NHL play-by-play {gid} failed: {e}")
+                continue
+            home_team = pbp.get("homeTeam") or {}
+            away_team = pbp.get("awayTeam") or {}
+            game_date = pbp.get("gameDate") or date
+            for play in pbp.get("plays", []) or []:
+                etype = play.get("typeDescKey") or ""
+                if etype not in SHOT_EVENTS:
+                    continue
+                pdesc = play.get("periodDescriptor") or {}
+                d = play.get("details") or {}
+                shooter_team_id = d.get("eventOwnerTeamId")
+                shooter_team_abbr = (
+                    home_team.get("abbrev") if shooter_team_id == home_team.get("id")
+                    else away_team.get("abbrev") if shooter_team_id == away_team.get("id")
+                    else None
+                )
+                all_shot_rows.append((
+                    gid,
+                    play.get("eventId"),
+                    game_date,
+                    pdesc.get("number"),
+                    pdesc.get("periodType"),
+                    play.get("timeInPeriod"),
+                    play.get("timeRemaining"),
+                    etype,
+                    d.get("shotType"),
+                    play.get("situationCode"),
+                    d.get("xCoord"),
+                    d.get("yCoord"),
+                    d.get("zoneCode"),
+                    shooter_team_id,
+                    shooter_team_abbr,
+                    d.get("shootingPlayerId") or d.get("scoringPlayerId"),
+                    d.get("goalieInNetId"),
+                    d.get("assist1PlayerId"),
+                    d.get("assist2PlayerId"),
+                    1 if etype == "goal" else 0,
+                    d.get("homeScore"),
+                    d.get("awayScore"),
+                ))
+
+        stored = 0
+        if all_shot_rows:
+            INSERT_SQL = (
+                "INSERT OR IGNORE INTO nhl_shot_events ("
+                "game_id, event_id, game_date, period, period_type, "
+                "time_in_period, time_remaining, event_type, shot_type, "
+                "situation_code, x_coord, y_coord, zone_code, "
+                "shooting_team_id, shooting_team_abbr, "
+                "shooter_id, goalie_id, assist1_id, assist2_id, "
+                "is_goal, home_score, away_score"
+                ") VALUES (" + ",".join(["?"] * 22) + ")"
+            )
+            CHUNK = 2000
+            for start in range(0, len(all_shot_rows), CHUNK):
+                try:
+                    await self._db.executemany(INSERT_SQL, all_shot_rows[start:start + CHUNK])
+                    stored += len(all_shot_rows[start:start + CHUNK])
+                except Exception as e:
+                    logger.warning(f"nhl_shot_events batch insert failed: {e}")
+
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector collect_nhl_shots")
+        logger.info(f"NHL shots {date}: {len(game_ids)} games → {stored} shot rows")
+        return {"date": date, "games": len(game_ids), "shots_stored": stored}
+
+    # ──────────────────────────────────────────
+    # NFL: roster, combine, play-by-play
+    # Source: nflverse-data release CSVs on GitHub (free, public).
+    # ──────────────────────────────────────────
+
+    NFLFASTR_BASE = "https://github.com/nflverse/nflverse-data/releases/download"
+
+    async def collect_nfl_players(self, season: Optional[int] = None) -> dict:
+        """Refresh nfl_players from nflverse seasonal roster CSV."""
+        import csv
+        import io as _io
+        if season is None:
+            season = datetime.now(timezone.utc).year
+        url = f"{self.NFLFASTR_BASE}/rosters/roster_{season}.csv"
+        client = await _get_client()
+        try:
+            r = await client.get(url, timeout=60.0, follow_redirects=True)
+            r.raise_for_status()
+        except Exception as e:
+            logger.error(f"NFL roster {season} fetch failed: {e}")
+            return {"error": str(e), "players": 0}
+
+        reader = csv.DictReader(_io.StringIO(r.text))
+        rows: list[tuple] = []
+        for row in reader:
+            pid = row.get("gsis_id") or row.get("player_id") or ""
+            if not pid:
+                continue
+            height_in = None
+            h = (row.get("height") or "").strip()
+            if h:
+                try:
+                    if "-" in h:
+                        ft, inc = h.split("-")
+                        height_in = int(ft) * 12 + int(inc)
+                    else:
+                        height_in = int(float(h))
+                except ValueError:
+                    height_in = None
+            try:
+                weight_lb = int(float(row.get("weight") or 0)) or None
+            except ValueError:
+                weight_lb = None
+            try:
+                jersey = int(float(row.get("jersey_number") or 0)) or None
+            except ValueError:
+                jersey = None
+            def _ival(k):
+                try:
+                    return int(float(row.get(k) or 0)) or None
+                except ValueError:
+                    return None
+            rows.append((
+                pid,
+                (row.get("full_name") or f"{row.get('first_name','')} {row.get('last_name','')}").strip(),
+                row.get("first_name") or None,
+                row.get("last_name") or None,
+                row.get("position") or None,
+                row.get("position_group") or None,
+                jersey,
+                height_in,
+                weight_lb,
+                row.get("birth_date") or None,
+                row.get("college") or None,
+                _ival("entry_year"),
+                _ival("draft_round"),
+                _ival("draft_number"),
+                _ival("years_exp"),
+                row.get("team") or None,
+                row.get("status") or None,
+                row.get("headshot_url") or None,
+            ))
+
+        stored = 0
+        if rows:
+            try:
+                await self._db.executemany(
+                    "INSERT OR REPLACE INTO nfl_players ("
+                    "player_id, full_name, first_name, last_name, position, "
+                    "position_group, jersey_number, height_in, weight_lb, "
+                    "birth_date, college, draft_year, draft_round, draft_pick, "
+                    "years_exp, current_team, status, headshot_url, updated_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+                    rows,
+                )
+                stored = len(rows)
+            except Exception as e:
+                logger.warning(f"nfl_players upsert failed: {e}")
+
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector collect_nfl_players")
+        logger.info(f"NFL roster {season}: {stored} players upserted")
+        return {"season": season, "players_upserted": stored}
+
+    async def collect_nfl_combine(self, start_year: int = 2000) -> dict:
+        """Refresh nfl_combine_results from nflverse combine CSV."""
+        import csv
+        import io as _io
+        url = f"{self.NFLFASTR_BASE}/combine/combine.csv"
+        client = await _get_client()
+        try:
+            r = await client.get(url, timeout=60.0, follow_redirects=True)
+            r.raise_for_status()
+        except Exception as e:
+            logger.error(f"NFL combine fetch failed: {e}")
+            return {"error": str(e), "rows": 0}
+
+        reader = csv.DictReader(_io.StringIO(r.text))
+
+        def _num(v, cast=float):
+            if v is None or v == "" or v == "NA":
+                return None
+            try:
+                return cast(float(v))
+            except (TypeError, ValueError):
+                return None
+
+        rows: list[tuple] = []
+        for row in reader:
+            try:
+                year = int(float(row.get("season") or row.get("year") or 0))
+            except ValueError:
+                continue
+            if year < start_year:
+                continue
+            full_name = (row.get("player_name") or row.get("full_name") or "").strip()
+            if not full_name:
+                continue
+            rows.append((
+                row.get("pfr_id") or row.get("gsis_id") or None,
+                year,
+                full_name,
+                row.get("pos") or row.get("position") or None,
+                row.get("school") or row.get("college") or None,
+                _num(row.get("ht") or row.get("height")),
+                _num(row.get("wt") or row.get("weight"), int),
+                _num(row.get("arm")),
+                _num(row.get("hand")),
+                _num(row.get("forty") or row.get("forty_yard")),
+                _num(row.get("bench") or row.get("bench_press"), int),
+                _num(row.get("vertical")),
+                _num(row.get("broad_jump"), int),
+                _num(row.get("cone") or row.get("three_cone")),
+                _num(row.get("shuttle")),
+                _num(row.get("draft_year"), int),
+                _num(row.get("draft_round"), int),
+                _num(row.get("draft_pick"), int),
+                row.get("draft_team") or None,
+            ))
+
+        stored = 0
+        if rows:
+            try:
+                await self._db.executemany(
+                    "INSERT OR REPLACE INTO nfl_combine_results ("
+                    "player_id, combine_year, full_name, position, college, "
+                    "height_in, weight_lb, arm_length_in, hand_size_in, "
+                    "forty_yard, bench_press_reps, vertical_in, broad_jump_in, "
+                    "three_cone, shuttle_20y, draft_year, draft_round, draft_pick, draft_team"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+                stored = len(rows)
+            except Exception as e:
+                logger.warning(f"nfl_combine_results upsert failed: {e}")
+
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector collect_nfl_combine")
+        logger.info(f"NFL combine: {stored} rows upserted (since {start_year})")
+        return {"rows_upserted": stored}
+
+    async def collect_nfl_plays(self, season: Optional[int] = None) -> dict:
+        """Stream-ingest nflfastR per-season play_by_play CSV into nfl_play_events."""
+        import csv
+        import io as _io
+        if season is None:
+            season = datetime.now(timezone.utc).year
+        url = f"{self.NFLFASTR_BASE}/pbp/play_by_play_{season}.csv"
+        client = await _get_client()
+        try:
+            r = await client.get(url, timeout=300.0, follow_redirects=True)
+            r.raise_for_status()
+        except Exception as e:
+            logger.error(f"NFL PBP {season} fetch failed: {e}")
+            return {"error": str(e), "plays": 0}
+
+        reader = csv.DictReader(_io.StringIO(r.text))
+
+        def _i(v):
+            if v is None or v == "" or v == "NA":
+                return None
+            try:
+                return int(float(v))
+            except (TypeError, ValueError):
+                return None
+
+        def _f(v):
+            if v is None or v == "" or v == "NA":
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        def _s(v):
+            if v is None:
+                return None
+            s = str(v).strip()
+            return s if s and s != "NA" else None
+
+        rows: list[tuple] = []
+        for row in reader:
+            pid = _i(row.get("play_id"))
+            gid = _s(row.get("game_id"))
+            if pid is None or gid is None:
+                continue
+            rows.append((
+                pid, gid,
+                _s(row.get("game_date")),
+                _s(row.get("home_team")), _s(row.get("away_team")),
+                _s(row.get("posteam")), _s(row.get("defteam")),
+                _i(row.get("season")), _i(row.get("week")), _i(row.get("qtr")),
+                _s(row.get("time")), _i(row.get("down")), _i(row.get("ydstogo")),
+                _s(row.get("yrdln")), _i(row.get("yardline_100")),
+                _s(row.get("play_type")), _i(row.get("yards_gained")),
+                _f(row.get("epa")), _f(row.get("wpa")), _i(row.get("success")),
+                _s(row.get("passer_id") or row.get("passer_player_id")),
+                _s(row.get("passer") or row.get("passer_player_name")),
+                _s(row.get("receiver_id") or row.get("receiver_player_id")),
+                _s(row.get("receiver") or row.get("receiver_player_name")),
+                _f(row.get("air_yards")), _f(row.get("yards_after_catch")),
+                _s(row.get("pass_length")), _s(row.get("pass_location")),
+                _i(row.get("complete_pass")), _i(row.get("incomplete_pass")),
+                _i(row.get("interception")),
+                _s(row.get("rusher_id") or row.get("rusher_player_id")),
+                _s(row.get("rusher") or row.get("rusher_player_name")),
+                _s(row.get("run_location")), _s(row.get("run_gap")),
+                _i(row.get("sack")), _i(row.get("qb_hit")),
+                _i(row.get("tackle_with_assist")),
+                _s(row.get("sack_player_id")),
+                _i(row.get("touchdown")), _s(row.get("td_player_id")),
+                _i(row.get("field_goal_attempt")),
+                _s(row.get("field_goal_result")),
+                _i(row.get("kick_distance")),
+                _i(row.get("score_differential")),
+            ))
+
+        stored = 0
+        if rows:
+            INSERT_SQL = (
+                "INSERT OR IGNORE INTO nfl_play_events ("
+                "play_id, game_id, game_date, home_team, away_team, posteam, "
+                "defteam, season, week, qtr, time, down, ydstogo, yrdln, "
+                "yardline_100, play_type, yards_gained, epa, wpa, success, "
+                "passer_id, passer_name, receiver_id, receiver_name, "
+                "air_yards, yards_after_catch, pass_length, pass_location, "
+                "complete_pass, incomplete_pass, interception, rusher_id, "
+                "rusher_name, run_location, run_gap, sack, qb_hit, "
+                "tackle_with_assist, sack_player_id, touchdown, td_player_id, "
+                "field_goal_attempt, field_goal_result, kick_distance, "
+                "score_differential"
+                ") VALUES (" + ",".join(["?"] * 45) + ")"
+            )
+            CHUNK = 2000
+            for start in range(0, len(rows), CHUNK):
+                try:
+                    await self._db.executemany(INSERT_SQL, rows[start:start + CHUNK])
+                    stored += len(rows[start:start + CHUNK])
+                except Exception as e:
+                    logger.warning(f"nfl_play_events batch insert failed: {e}")
+
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector collect_nfl_plays")
+        logger.info(f"NFL PBP {season}: {stored} plays stored")
+        return {"season": season, "plays_stored": stored}
+
+    # ──────────────────────────────────────────
+    # NBA: shot chart detail + roster
+    # Source: stats.nba.com (free, requires UA + x-nba-stats-origin headers).
+    # ──────────────────────────────────────────
+
+    NBA_STATS_BASE = "https://stats.nba.com/stats"
+    NBA_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Callisto/1.0",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://www.nba.com",
+        "Referer": "https://www.nba.com/",
+        "x-nba-stats-origin": "stats",
+        "x-nba-stats-token": "true",
+        "Connection": "keep-alive",
+    }
+
+    async def collect_nba_players(self, season: Optional[str] = None) -> dict:
+        """Refresh nba_players from stats.nba.com commonallplayers."""
+        import httpx as _httpx
+        client = _httpx.AsyncClient(
+            timeout=30.0, follow_redirects=True, max_redirects=5,
+            headers=self.NBA_HEADERS,
+        )
+        try:
+            if season is None:
+                now = datetime.now(timezone.utc)
+                y0 = now.year if now.month >= 10 else now.year - 1
+                season = f"{y0}-{str(y0 + 1)[-2:]}"
+            params = {"IsOnlyCurrentSeason": "1", "LeagueID": "00", "Season": season}
+            try:
+                r = await client.get(
+                    f"{self.NBA_STATS_BASE}/commonallplayers",
+                    params=params,
+                )
+                r.raise_for_status()
+                js = r.json()
+            except Exception as e:
+                logger.error(f"NBA commonallplayers fetch failed: {e}")
+                return {"error": str(e), "players": 0}
+            rs = (js.get("resultSets") or [{}])[0]
+            headers = rs.get("headers") or []
+            idx = {h: i for i, h in enumerate(headers)}
+            rows = rs.get("rowSet") or []
+
+            def _get(row, key):
+                i = idx.get(key)
+                return row[i] if i is not None and i < len(row) else None
+
+            player_rows: list[tuple] = []
+            for row in rows:
+                pid = _get(row, "PERSON_ID")
+                if pid is None:
+                    continue
+                full_name = (_get(row, "DISPLAY_FIRST_LAST") or "").strip()
+                player_rows.append((
+                    int(pid),
+                    full_name,
+                    None, None,
+                    None,
+                    None, None, None, None,
+                    None, None, None, None,
+                    None, None, None, None,
+                    _get(row, "TEAM_ID"),
+                    _get(row, "TEAM_ABBREVIATION"),
+                    1 if _get(row, "ROSTERSTATUS") == 1 else 0,
+                ))
+
+            stored = 0
+            if player_rows:
+                try:
+                    await self._db.executemany(
+                        "INSERT OR REPLACE INTO nba_players ("
+                        "player_id, full_name, first_name, last_name, position, "
+                        "height_in, weight_lb, wingspan_in, standing_reach_in, "
+                        "jersey_number, birth_date, country, college, "
+                        "draft_year, draft_round, draft_pick, years_pro, "
+                        "current_team_id, current_team_abbr, active, updated_at"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+                        player_rows,
+                    )
+                    stored = len(player_rows)
+                except Exception as e:
+                    logger.warning(f"nba_players upsert failed: {e}")
+
+            from tools.db_utils import commit_with_retry
+            await commit_with_retry(self._db, operation="data_collector collect_nba_players")
+            logger.info(f"NBA players {season}: {stored} upserted")
+            return {"season": season, "players_upserted": stored}
+        finally:
+            await client.aclose()
+
+    async def collect_nba_shots(self, date: Optional[str] = None) -> dict:
+        """Per-shot events from stats.nba.com shotchartdetail for games on `date`."""
+        import httpx as _httpx
+        from asyncio import sleep as _sleep
+        if date is None:
+            date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        client = _httpx.AsyncClient(
+            timeout=30.0, follow_redirects=True, max_redirects=5,
+            headers=self.NBA_HEADERS,
+        )
+        try:
+            try:
+                r = await client.get(
+                    f"{self.NBA_STATS_BASE}/scoreboardv3",
+                    params={"GameDate": date, "LeagueID": "00"},
+                )
+                r.raise_for_status()
+                sb = r.json()
+            except Exception as e:
+                logger.debug(f"NBA scoreboardv3 {date} failed: {e}")
+                return {"error": str(e), "games": 0, "shots": 0}
+
+            games = (sb.get("scoreboard") or {}).get("games") or []
+            game_ids = [
+                g.get("gameId") for g in games
+                if (g.get("gameStatus") == 3 and g.get("gameId"))
+            ]
+            season = (sb.get("scoreboard") or {}).get("seasonYear") or ""
+
+            all_rows: list[tuple] = []
+            for gid in game_ids:
+                await _sleep(0.6)
+                try:
+                    params = {
+                        "ContextMeasure": "FGA", "GameID": gid, "TeamID": "0",
+                        "PlayerID": "0", "Season": season,
+                        "SeasonType": "Regular Season", "LeagueID": "00",
+                    }
+                    r = await client.get(
+                        f"{self.NBA_STATS_BASE}/shotchartdetail", params=params,
+                    )
+                    r.raise_for_status()
+                    js = r.json()
+                except Exception as e:
+                    logger.debug(f"NBA shotchartdetail {gid} failed: {e}")
+                    continue
+
+                rs = (js.get("resultSets") or [{}])[0]
+                headers = rs.get("headers") or []
+                idx = {h: i for i, h in enumerate(headers)}
+                rows = rs.get("rowSet") or []
+
+                def _g(row, key):
+                    i = idx.get(key)
+                    return row[i] if i is not None and i < len(row) else None
+
+                for row in rows:
+                    all_rows.append((
+                        _g(row, "GAME_ID"),
+                        _g(row, "GAME_EVENT_ID"),
+                        date,
+                        _g(row, "PLAYER_ID"),
+                        _g(row, "PLAYER_NAME"),
+                        _g(row, "TEAM_ID"),
+                        _g(row, "TEAM_NAME"),
+                        _g(row, "PERIOD"),
+                        _g(row, "MINUTES_REMAINING"),
+                        _g(row, "SECONDS_REMAINING"),
+                        _g(row, "SHOT_TYPE"),
+                        _g(row, "ACTION_TYPE"),
+                        _g(row, "SHOT_ZONE_BASIC"),
+                        _g(row, "SHOT_ZONE_AREA"),
+                        _g(row, "SHOT_ZONE_RANGE"),
+                        _g(row, "SHOT_DISTANCE"),
+                        _g(row, "LOC_X"),
+                        _g(row, "LOC_Y"),
+                        _g(row, "SHOT_MADE_FLAG"),
+                        _g(row, "HTM"),
+                        _g(row, "VTM"),
+                    ))
+
+            stored = 0
+            if all_rows:
+                INSERT_SQL = (
+                    "INSERT OR IGNORE INTO nba_shot_events ("
+                    "game_id, event_num, game_date, player_id, player_name, "
+                    "team_id, team_abbr, period, minutes_remaining, "
+                    "seconds_remaining, shot_type, action_type, "
+                    "shot_zone_basic, shot_zone_area, shot_zone_range, "
+                    "shot_distance, loc_x, loc_y, made_flag, htm, vtm"
+                    ") VALUES (" + ",".join(["?"] * 21) + ")"
+                )
+                CHUNK = 2000
+                for start in range(0, len(all_rows), CHUNK):
+                    try:
+                        await self._db.executemany(INSERT_SQL, all_rows[start:start + CHUNK])
+                        stored += len(all_rows[start:start + CHUNK])
+                    except Exception as e:
+                        logger.warning(f"nba_shot_events batch insert failed: {e}")
+
+            from tools.db_utils import commit_with_retry
+            await commit_with_retry(self._db, operation="data_collector collect_nba_shots")
+            logger.info(f"NBA shots {date}: {len(game_ids)} games → {stored} shots")
+            return {"date": date, "games": len(game_ids), "shots_stored": stored}
+        finally:
+            await client.aclose()
+
+    # ──────────────────────────────────────────
+    # NCAA BASKETBALL (M + W): rosters + per-game box score stats
+    # Source: ESPN college endpoints.
+    # ──────────────────────────────────────────
+
+    NCAA_BBALL_LEAGUES = {
+        "basketball_ncaab": ("basketball", "mens-college-basketball"),
+        "basketball_ncaaw": ("basketball", "womens-college-basketball"),
+    }
+
+    async def collect_ncaa_basketball_players(self, sport: str) -> dict:
+        """Refresh ncaa_basketball_players for a given sport."""
+        if sport not in self.NCAA_BBALL_LEAGUES:
+            return {"error": f"unsupported sport: {sport}", "players": 0}
+        category, league = self.NCAA_BBALL_LEAGUES[sport]
+        client = await _get_client()
+
+        teams: list[dict] = []
+        for page in range(1, 25):
+            try:
+                r = await client.get(
+                    f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/teams",
+                    params={"limit": 400, "page": page},
+                    timeout=30.0, follow_redirects=True,
+                )
+                r.raise_for_status()
+                sports_obj = ((r.json().get("sports") or [{}])[0])
+                leagues_obj = (sports_obj.get("leagues") or [{}])[0]
+                page_teams = leagues_obj.get("teams") or []
+                if not page_teams:
+                    break
+                for t in page_teams:
+                    team = (t.get("team") or {})
+                    if team.get("id"):
+                        teams.append({
+                            "id": team.get("id"),
+                            "abbr": team.get("abbreviation"),
+                            "name": team.get("displayName"),
+                        })
+                if len(page_teams) < 400:
+                    break
+            except Exception as e:
+                logger.debug(f"NCAA {sport} team list page {page} failed: {e}")
+                break
+
+        def _height_to_inches(h) -> Optional[int]:
+            if not h:
+                return None
+            import re as _re
+            m = _re.match(r"\s*(\d+)\s*['′]\s*(\d+)", str(h))
+            if m:
+                return int(m.group(1)) * 12 + int(m.group(2))
+            return None
+
+        player_rows: list[tuple] = []
+        for team in teams:
+            try:
+                r = await client.get(
+                    f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/teams/{team['id']}/roster",
+                    timeout=20.0, follow_redirects=True,
+                )
+                r.raise_for_status()
+                roster = r.json().get("athletes") or []
+            except Exception as e:
+                logger.debug(f"NCAA {sport} roster {team['id']} failed: {e}")
+                continue
+            for a in roster:
+                pid = a.get("id")
+                if not pid:
+                    continue
+                pos = (a.get("position") or {}).get("abbreviation")
+                exp_abbr = (a.get("experience") or {}).get("abbreviation")
+                birthplace = a.get("birthPlace") or {}
+                player_rows.append((
+                    sport,
+                    str(pid),
+                    a.get("fullName") or a.get("displayName") or "",
+                    a.get("firstName") or None,
+                    a.get("lastName") or None,
+                    str(team["id"]),
+                    team.get("abbr"),
+                    team.get("name"),
+                    a.get("jersey") or None,
+                    pos,
+                    exp_abbr,
+                    _height_to_inches(a.get("displayHeight")),
+                    a.get("weight") or None,
+                    birthplace.get("displayText") if isinstance(birthplace, dict) else None,
+                    None,
+                    1,
+                ))
+
+        stored = 0
+        if player_rows:
+            try:
+                await self._db.executemany(
+                    "INSERT OR REPLACE INTO ncaa_basketball_players ("
+                    "sport, player_id, full_name, first_name, last_name, "
+                    "team_id, team_abbr, team_name, jersey_number, position, "
+                    "class, height_in, weight_lb, home_town, hand, active, updated_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+                    player_rows,
+                )
+                stored = len(player_rows)
+            except Exception as e:
+                logger.warning(f"ncaa_basketball_players upsert failed: {e}")
+
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector collect_ncaa_basketball_players")
+        logger.info(f"{sport}: {stored} players across {len(teams)} teams")
+        return {"sport": sport, "teams": len(teams), "players_upserted": stored}
+
+    async def collect_ncaa_basketball_game_stats(self, sport: str, date: Optional[str] = None) -> dict:
+        """Fetch ESPN boxscores for completed NCAA games on `date` and
+        upsert per-player per-game stats."""
+        if sport not in self.NCAA_BBALL_LEAGUES:
+            return {"error": f"unsupported sport: {sport}", "rows": 0}
+        category, league = self.NCAA_BBALL_LEAGUES[sport]
+        client = await _get_client()
+
+        if date is None:
+            date = datetime.now(timezone.utc).strftime("%Y%m%d")
+        date_compact = date.replace("-", "")
+        game_date_fmt = f"{date_compact[:4]}-{date_compact[4:6]}-{date_compact[6:8]}"
+
+        try:
+            r = await client.get(
+                f"{ESPN_BASE}/{category}/{league}/scoreboard",
+                params={"dates": date_compact, "limit": 500},
+                timeout=30.0, follow_redirects=True,
+            )
+            r.raise_for_status()
+            events = r.json().get("events", [])
+        except Exception as e:
+            logger.error(f"NCAA {sport} scoreboard {date} failed: {e}")
+            return {"error": str(e), "games": 0, "rows": 0}
+
+        completed = [
+            e for e in events
+            if (e.get("status", {}) or {}).get("type", {}).get("completed") is True
+        ]
+
+        def _int(v):
+            try:
+                return int(str(v).replace("-", "0"))
+            except (TypeError, ValueError):
+                return None
+
+        def _frac(v):
+            try:
+                m, a = str(v).split("-")
+                return int(m), int(a)
+            except (TypeError, ValueError):
+                return (None, None)
+
+        stat_rows: list[tuple] = []
+        for event in completed:
+            event_id = event.get("id")
+            if not event_id:
+                continue
+            try:
+                r = await client.get(
+                    f"https://site.api.espn.com/apis/site/v2/sports/{category}/{league}/summary",
+                    params={"event": event_id},
+                    timeout=30.0, follow_redirects=True,
+                )
+                r.raise_for_status()
+                sm = r.json() or {}
+            except Exception as e:
+                logger.debug(f"NCAA {sport} summary {event_id} failed: {e}")
+                continue
+
+            boxscore = sm.get("boxscore") or {}
+            teams = boxscore.get("players") or []
+            home_team_id, away_team_id = None, None
+            home_abbr, away_abbr = None, None
+            for competition in sm.get("header", {}).get("competitions", []):
+                for c in competition.get("competitors", []):
+                    tid = (c.get("team") or {}).get("id")
+                    tabbr = (c.get("team") or {}).get("abbreviation")
+                    if c.get("homeAway") == "home":
+                        home_team_id, home_abbr = tid, tabbr
+                    elif c.get("homeAway") == "away":
+                        away_team_id, away_abbr = tid, tabbr
+
+            for team_block in teams:
+                team = (team_block.get("team") or {})
+                team_id = team.get("id")
+                team_abbr = team.get("abbreviation")
+                is_home = 1 if str(team_id) == str(home_team_id) else 0
+                opp_id = away_team_id if is_home else home_team_id
+                opp_abbr = away_abbr if is_home else home_abbr
+
+                for group in team_block.get("statistics") or []:
+                    keys = group.get("keys") or []
+                    key_idx = {k: i for i, k in enumerate(keys)}
+
+                    def _val(stat_list, key):
+                        i = key_idx.get(key)
+                        return stat_list[i] if i is not None and i < len(stat_list) else None
+
+                    for athlete in group.get("athletes") or []:
+                        player = athlete.get("athlete") or {}
+                        pid = player.get("id")
+                        if not pid:
+                            continue
+                        stats = athlete.get("stats") or []
+                        fgm, fga = _frac(_val(stats, "fg"))
+                        fg3m, fg3a = _frac(_val(stats, "3pt") or _val(stats, "threePt"))
+                        ftm, fta = _frac(_val(stats, "ft"))
+                        mins = _val(stats, "min")
+                        try:
+                            mins_f = float(mins) if mins else None
+                        except ValueError:
+                            mins_f = None
+                        pts = _int(_val(stats, "pts"))
+                        reb = _int(_val(stats, "reb"))
+                        orb = _int(_val(stats, "oreb") or _val(stats, "offReb"))
+                        drb = _int(_val(stats, "dreb") or _val(stats, "defReb"))
+                        ast = _int(_val(stats, "ast"))
+                        stl = _int(_val(stats, "stl"))
+                        blk = _int(_val(stats, "blk"))
+                        tov = _int(_val(stats, "to") or _val(stats, "turnovers"))
+                        pf = _int(_val(stats, "pf") or _val(stats, "fouls"))
+                        plus_minus = _int(_val(stats, "+/-") or _val(stats, "plus_minus"))
+                        ts_pct = None
+                        efg_pct = None
+                        if fga and pts is not None and fta is not None:
+                            denom = 2.0 * (fga + 0.44 * fta)
+                            ts_pct = round(pts / denom, 4) if denom else None
+                        if fga and fgm is not None and fg3m is not None:
+                            efg_pct = round((fgm + 0.5 * fg3m) / fga, 4) if fga else None
+
+                        stat_rows.append((
+                            sport,
+                            str(event_id),
+                            game_date_fmt,
+                            str(pid),
+                            player.get("displayName"),
+                            str(team_id) if team_id else None,
+                            team_abbr,
+                            str(opp_id) if opp_id else None,
+                            opp_abbr,
+                            is_home,
+                            1 if (athlete.get("starter") is True) else 0,
+                            mins_f,
+                            pts, reb, orb, drb, ast, stl, blk, tov, pf,
+                            fgm, fga, fg3m, fg3a, ftm, fta,
+                            plus_minus, ts_pct, efg_pct,
+                        ))
+
+        stored = 0
+        if stat_rows:
+            try:
+                await self._db.executemany(
+                    "INSERT OR REPLACE INTO ncaa_basketball_game_stats ("
+                    "sport, game_id, game_date, player_id, player_name, "
+                    "team_id, team_abbr, opponent_team_id, opponent_abbr, "
+                    "is_home, started, minutes, points, rebounds, off_reb, "
+                    "def_reb, assists, steals, blocks, turnovers, "
+                    "personal_fouls, fgm, fga, fg3m, fg3a, ftm, fta, "
+                    "plus_minus, true_shooting_pct, efg_pct"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    stat_rows,
+                )
+                stored = len(stat_rows)
+            except Exception as e:
+                logger.warning(f"ncaa_basketball_game_stats upsert failed: {e}")
+
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector collect_ncaa_basketball_game_stats")
+        logger.info(
+            f"{sport} boxscores {date}: {len(completed)} games → {stored} rows"
+        )
+        return {"sport": sport, "games": len(completed), "rows_stored": stored}
+
+    # ──────────────────────────────────────────
+    # GOLF: round-level strokes-gained + core stats
+    # ──────────────────────────────────────────
+
+    async def collect_golf_player_rounds(self, season: Optional[int] = None) -> dict:
+        """Ingest per-round SG data for the PGA Tour via DataGolf public JSON.
+
+        Graceful on 403/404 — if the public feed is unreachable, log and
+        return 0 rows rather than raising; callers can retry later.
+        """
+        import httpx as _httpx
+        if season is None:
+            season = datetime.now(timezone.utc).year
+
+        rows: list[tuple] = []
+        async with _httpx.AsyncClient(
+            timeout=60.0, follow_redirects=True, max_redirects=5,
+            headers={"User-Agent": "Mozilla/5.0 (Callisto)"},
+        ) as c:
+            try:
+                r = await c.get(
+                    "https://feeds.datagolf.com/preds/archive",
+                    params={"tour": "pga", "year": season, "file_format": "json"},
+                )
+                r.raise_for_status()
+                archive = r.json()
+            except Exception as e:
+                logger.info(f"DataGolf archive {season} unreachable ({e})")
+                archive = []
+
+            for ev in archive or []:
+                event_id = str(ev.get("event_id") or ev.get("eventId") or "")
+                if not event_id:
+                    continue
+                event_name = ev.get("event_name") or ev.get("eventName")
+                course = ev.get("course") or ev.get("courseName")
+                for round_entry in ev.get("rounds", []) or []:
+                    round_num = round_entry.get("round_num") or round_entry.get("round")
+                    round_date = round_entry.get("round_date") or round_entry.get("date")
+                    for p in round_entry.get("players", []) or []:
+                        pid = str(p.get("dg_id") or p.get("player_id") or "")
+                        if not pid:
+                            continue
+                        rows.append((
+                            pid,
+                            p.get("player_name") or p.get("name") or "",
+                            event_id,
+                            event_name,
+                            course,
+                            season,
+                            round_num,
+                            round_date,
+                            p.get("tee_time"),
+                            p.get("score") or p.get("round_score"),
+                            p.get("score_to_par") or p.get("round_to_par"),
+                            p.get("thru"),
+                            p.get("sg_total"),
+                            p.get("sg_ott"),
+                            p.get("sg_app"),
+                            p.get("sg_arg"),
+                            p.get("sg_putt") or p.get("sg_putting"),
+                            p.get("sg_t2g"),
+                            p.get("driving_distance") or p.get("dd"),
+                            p.get("driving_accuracy") or p.get("da"),
+                            p.get("gir_pct") or p.get("gir"),
+                            p.get("scrambling_pct") or p.get("scrambling"),
+                            p.get("putts_per_round") or p.get("putts"),
+                            1 if p.get("made_cut") else 0,
+                        ))
+
+        stored = 0
+        if rows:
+            try:
+                await self._db.executemany(
+                    "INSERT OR REPLACE INTO golf_player_rounds ("
+                    "player_id, player_name, event_id, event_name, course, "
+                    "season, round_num, round_date, tee_time, score, "
+                    "score_to_par, thru, sg_total, sg_ott, sg_app, sg_arg, "
+                    "sg_putt, sg_t2g, driving_distance, driving_accuracy, "
+                    "gir_pct, scrambling_pct, putts_per_round, made_cut"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                    "?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+                stored = len(rows)
+            except Exception as e:
+                logger.warning(f"golf_player_rounds upsert failed: {e}")
+
+        from tools.db_utils import commit_with_retry
+        await commit_with_retry(self._db, operation="data_collector collect_golf_player_rounds")
+        logger.info(f"Golf rounds {season}: {stored} rows upserted")
+        return {"season": season, "rows_upserted": stored}
+
     # ── EMBEDDING PIPELINE ──
 
     async def get_unembedded_contexts(
