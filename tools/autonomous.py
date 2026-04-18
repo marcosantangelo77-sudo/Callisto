@@ -1421,7 +1421,13 @@ class ResearchLoop:
         await self._reject_anti_predictive()
         await self._reject_low_signal_rate()
         self._task = asyncio.create_task(self._loop())
+        # Quant scanner runs on a separate, faster cadence (~60s). It's the
+        # live pricing engine — consumes multi-book odds, emits ranked edges
+        # into live_edge_surface. Decoupled from the 5-minute research loop
+        # so recommendations refresh at market-appropriate speed.
+        self._quant_scan_task = asyncio.create_task(self._quant_scan_loop())
         logger.info("Research loop started — autonomous hypothesis machine online")
+        logger.info("Quant scanner started — live edge surface refreshing every 60s")
 
     async def _on_game_completed(self, event_data: dict) -> None:
         """Reactive handler: immediately collect data when a game completes."""
@@ -1926,6 +1932,14 @@ class ResearchLoop:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        # Cancel the quant scanner alongside the main loop.
+        qt = getattr(self, "_quant_scan_task", None)
+        if qt is not None and not qt.done():
+            qt.cancel()
+            try:
+                await qt
+            except (asyncio.CancelledError, Exception):
+                pass
         # Unsubscribe from event bus to prevent leaked references on restart
         try:
             from tools.event_bus import get_event_bus, EVENT_GAME_COMPLETED, EVENT_GAME_LINEUP_WINDOW
@@ -2221,6 +2235,57 @@ class ResearchLoop:
 
         except (json.JSONDecodeError, ValueError) as e:
             logger.debug(f"Deferred item {work_type} response not valid JSON: {e}")
+
+    async def _quant_scan_loop(self) -> None:
+        """Continuously refresh the live edge surface.
+
+        Every ``QUANT_SCAN_INTERVAL_S`` seconds, pull current odds for
+        every research sport, build per-market snapshots across all
+        available books, run the ranker, and persist the output. The
+        resulting table (``live_edge_surface``) is what the /edges/live
+        API endpoint reads, what the Telegram alerting can consume, and
+        what the bet_executor will read once it's enabled.
+
+        Runs independently of the main research cycle so the two
+        cadences don't fight each other. Research cycle is human-scale
+        (5 min, statistical work). Quant scan is market-scale (60s,
+        line movement and soft-book divergence).
+        """
+        import os as _os
+        interval = float(_os.getenv("CALLISTO_QUANT_SCAN_INTERVAL_S", "60"))
+        # Brief startup delay so the main loop wins initial DB contention
+        # and telemetry collectors have a chance to populate.
+        await asyncio.sleep(30)
+
+        from tools.quant import scan_all_sports
+        while self._running:
+            if self._paused:
+                await asyncio.sleep(min(interval, 15))
+                continue
+            try:
+                db = self.data_collector._db if self.data_collector else None
+                if db is None:
+                    await asyncio.sleep(interval)
+                    continue
+                result = await scan_all_sports(
+                    list(RESEARCH_SPORTS),
+                    db,
+                    placement_books={"draftkings", "fanatics"},
+                    min_recommend_edge=0.02,
+                    top_n_per_sport=25,
+                )
+                total = result.get("total_recommended", 0)
+                if total:
+                    logger.info(
+                        f"Quant scan: {total} recommended edges across "
+                        f"{sum(1 for r in result['per_sport'].values() if r.get('recommended'))} "
+                        f"sports"
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Quant scan loop iteration failed: {e}")
+            await asyncio.sleep(interval)
 
     async def _loop(self) -> None:
         """Main research cycle."""
