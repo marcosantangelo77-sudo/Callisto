@@ -592,12 +592,12 @@ CREATE INDEX IF NOT EXISTS idx_player_stats_lookup
     ON player_stats(sport, player_name, stat_type, game_date);
 
 -- ──────────────────────────────────────────
--- STATCAST PITCHES: pitch-level telemetry from Baseball Savant (MLB only)
--- One row per pitch. 40 fields carry the signal; the remaining ~80 columns
--- from the savant CSV are intentionally dropped as derivative or low-signal.
--- This table is THE input for pitcher-vs-batter prop modeling, pitch-mix
--- prediction, stuff-based ERA estimators, and hitter-quality-of-contact
--- baselines. Row count projects to ~1.9M pitches per MLB season.
+-- STATCAST PITCHES: pitch-level telemetry from Baseball Savant (MLB only).
+-- One row per pitch. 40 high-signal fields kept, the remaining ~80 CSV
+-- columns dropped as derivative or low-signal. This table is THE input
+-- for pitcher-vs-batter prop modeling, pitch-mix prediction, stuff-based
+-- ERA estimators, and hitter-quality-of-contact baselines. Row count
+-- projects to ~1.9M pitches per MLB season.
 -- ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS statcast_pitches (
     -- Identity
@@ -963,9 +963,21 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         # Run schema statements individually instead of executescript() to avoid
         # EXCLUSIVE lock. executescript() blocks ALL concurrent readers/writers;
         # individual execute() calls use WAL-mode write lock (readers can continue).
-        for stmt in SCHEMA_SQL.split(";"):
-            stmt = stmt.strip()
-            if stmt and not stmt.startswith("--"):
+        #
+        # The naive `startswith("--")` filter below would skip ANY statement
+        # whose first line happens to be a `-- header comment`, which silently
+        # eats the DDL that follows the comment in the same chunk (bitten by
+        # this 2026-04-18 with statcast_pitches + mlb_players). Strip leading
+        # comment lines from each chunk before the empty/comment-only check.
+        for raw in SCHEMA_SQL.split(";"):
+            lines = [ln for ln in raw.split("\n")]
+            # Drop leading comment-only and blank lines; keep anything from
+            # the first real SQL line onward (inline `-- ...` trailing comments
+            # on data lines are handled natively by SQLite).
+            while lines and (not lines[0].strip() or lines[0].lstrip().startswith("--")):
+                lines.pop(0)
+            stmt = "\n".join(lines).strip()
+            if stmt:
                 try:
                     await db.execute(stmt)
                 except Exception:
