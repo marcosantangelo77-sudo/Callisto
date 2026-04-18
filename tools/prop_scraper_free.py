@@ -1124,6 +1124,12 @@ CREATE INDEX IF NOT EXISTS idx_prop_snap_sport_time
     ON prop_snapshots(sport, snapshot_time);
 CREATE INDEX IF NOT EXISTS idx_prop_snap_event
     ON prop_snapshots(event_id, market, snapshot_time);
+-- Single-column time index for retention pruning. Without this, a
+-- `DELETE FROM prop_snapshots WHERE snapshot_time < ?` cannot use the
+-- compound (sport, snapshot_time) index (sport is the leading column)
+-- and degrades to a full-table scan (observed 45s on 522k rows).
+CREATE INDEX IF NOT EXISTS idx_prop_snap_time
+    ON prop_snapshots(snapshot_time);
 """
 
 

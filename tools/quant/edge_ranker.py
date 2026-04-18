@@ -286,6 +286,7 @@ async def persist_ranked_edges(
     ranked: list[RankedEdge],
     *,
     computed_at: Optional[str] = None,
+    chunk_size: int = 500,
 ) -> int:
     """Insert a batch of ranked edges into live_edge_surface.
 
@@ -293,6 +294,11 @@ async def persist_ranked_edges(
     ``WHERE computed_at = (SELECT MAX(computed_at) FROM live_edge_surface)``
     for the latest ranking or ``GROUP BY event_id, market, outcome`` to
     track edge persistence across snapshots.
+
+    Chunks at ``chunk_size`` rows per executemany so the WriteCoordinator
+    queue can interleave small writes (hermes learnings, hypothesis
+    updates, task-queue inserts) between chunks instead of stalling
+    behind one large batch.
     """
     import json as _json
     if not ranked:
@@ -313,14 +319,15 @@ async def persist_ranked_edges(
         )
         for e in ranked
     ]
-    await db.executemany(
+    sql = (
         "INSERT INTO live_edge_surface ("
         "computed_at, sport, event_id, market, outcome, "
         "placement_book, placement_implied, placement_fair, "
         "consensus_fair, consensus_std_err, "
         "raw_edge, effective_edge, penalty_total, penalty_breakdown, "
         "disagreement, n_books, outlier_books, decision, rank"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        rows,
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
+    for start in range(0, len(rows), chunk_size):
+        await db.executemany(sql, rows[start:start + chunk_size])
     return len(rows)
