@@ -32,6 +32,60 @@ logger = logging.getLogger("callisto.clv_tracker")
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
 
+# Raw implied-prob numbers from two books carry DIFFERENT vig loads, so you
+# cannot subtract them directly — a 1% gap may be entirely vig-difference,
+# not signal. These per-book half-vig estimates let the devig routine produce
+# a fair-probability estimate from a single leg. Values are rough field
+# averages on two-way MLB/NBA markets; tuned for bias-reduction, not precision.
+_BOOK_VIG_ESTIMATE: dict[str, float] = {
+    "pinnacle": 0.025,
+    "lowvig": 0.02,
+    "circa": 0.03,
+    "betfair_exchange": 0.02,
+    "draftkings": 0.05,
+    "fanduel": 0.05,
+    "betmgm": 0.06,
+    "caesars": 0.06,
+    "fanatics": 0.05,
+}
+
+# Sources whose closing number we trust as the "real" market close. Anything
+# else still gets logged, but close_reliable=False so analysis queries can
+# filter it out.
+_RELIABLE_CLOSE_SOURCES: frozenset[str] = frozenset(
+    {"pinnacle", "lowvig", "circa", "betfair_exchange"}
+)
+
+
+def _half_vig_devig(implied: Optional[float], vig: float) -> Optional[float]:
+    """Half-vig approximation: fair = implied / (1 + vig/2). Bounded to (0,1).
+
+    Returns the input untouched for non-positive or None values so call sites
+    can safely chain it without extra guards.
+    """
+    try:
+        if implied is None or implied <= 0:
+            return implied
+        return max(0.0, min(1.0, float(implied) / (1.0 + max(0.0, vig) / 2.0)))
+    except (TypeError, ValueError):
+        return implied
+
+
+def _american_to_decimal(odds: Optional[int]) -> Optional[float]:
+    """American → decimal odds. None/0 → None (can't convert)."""
+    if odds is None:
+        return None
+    try:
+        o = int(odds)
+    except (TypeError, ValueError):
+        return None
+    if o == 0:
+        return None
+    if o > 0:
+        return 1.0 + o / 100.0
+    return 1.0 + 100.0 / abs(o)
+
+
 class CLVTracker:
     """Track bets and measure CLV against closing lines."""
 
@@ -335,74 +389,32 @@ class CLVTracker:
         placement_odds = bet.get("placement_odds")
         closing_odds = bet.get("closing_odds")
         closing_implied = bet.get("closing_implied_prob")
-        stake = bet.get("stake", 100)
 
-        # Convert placement odds to decimal
-        if placement_odds and abs(placement_odds) > 0:
-            if placement_odds > 0:
-                our_decimal = 1 + placement_odds / 100
-            else:
-                our_decimal = 1 + 100 / abs(placement_odds)
-        else:
-            our_decimal = None
-
-        # SECURITY (audit H-3): the raw closing_implied / placement_implied probs
-        # both still contain their respective books' vig. Comparing them yields
-        # apples-to-oranges (DraftKings ~5% vig vs Pinnacle ~2.5%), biasing CLV
-        # downward. We devig BOTH sides to a fair probability estimate before
-        # computing the spread. Without both legs of the market in the row, we
-        # use a half-vig two-way approximation, which is conservative but stops
-        # the systematic bias.
-        _BOOK_VIG_ESTIMATE = {
-            "pinnacle": 0.025,
-            "lowvig": 0.02,
-            "circa": 0.03,
-            "betfair_exchange": 0.02,
-            "draftkings": 0.05,
-            "fanduel": 0.05,
-            "betmgm": 0.06,
-            "caesars": 0.06,
-            "fanatics": 0.05,
-        }
-
-        def _devig_one_side(implied: float, vig: float) -> float:
-            """Half-vig approximation: fair = implied / (1 + vig/2). Bounded to (0,1)."""
-            try:
-                if implied is None or implied <= 0:
-                    return implied
-                return max(0.0, min(1.0, float(implied) / (1.0 + max(0.0, vig) / 2.0)))
-            except (TypeError, ValueError):
-                return implied
+        our_decimal = _american_to_decimal(placement_odds)
 
         closing_source = (bet.get("closing_source") or "pinnacle").lower()
         bookmaker = (bet.get("bookmaker") or "").lower()
         closing_vig = _BOOK_VIG_ESTIMATE.get(closing_source, 0.025)
         placement_vig = _BOOK_VIG_ESTIMATE.get(bookmaker, 0.05)
 
-        # Compute Pinnacle closing fair probability (devigged)
-        pinnacle_fair_prob = _devig_one_side(closing_implied, closing_vig)
+        pinnacle_fair_prob = _half_vig_devig(closing_implied, closing_vig)
         pinnacle_fair_decimal = None
         if pinnacle_fair_prob and pinnacle_fair_prob > 0:
             pinnacle_fair_decimal = 1 / pinnacle_fair_prob
 
-        # CLV in cents: positive = we got a better number
         clv_cents = None
         if closing_odds is not None and placement_odds is not None:
-            # American-cents stays a useful first-order proxy and isn't biased by vig.
             clv_cents = placement_odds - closing_odds
         elif closing_implied is not None and our_decimal:
-            # Compute from devigged implied: fair-edge vs fair-closing
             raw_placement_implied = bet.get("placement_implied_prob", 0)
             if raw_placement_implied:
-                placement_fair = _devig_one_side(raw_placement_implied, placement_vig)
+                placement_fair = _half_vig_devig(raw_placement_implied, placement_vig)
                 clv_cents = round((pinnacle_fair_prob - placement_fair) * 10000, 1)
 
-        # Actual PnL
         actual_pnl = change
-
-        # Determine if closing line is reliable (from sharp source)
-        close_reliable = closing_odds is not None and bet.get("closing_source") in (
-            "pinnacle", "lowvig", "circa", "betfair_exchange"
+        close_reliable = (
+            closing_odds is not None
+            and closing_source in _RELIABLE_CLOSE_SOURCES
         )
 
         now = datetime.now(timezone.utc).isoformat()
@@ -441,6 +453,136 @@ class CLVTracker:
         except Exception as e:
             logger.warning(f"Failed to log CLV for bet #{bet_id}: {e}")
 
+    async def log_paper_trade_clv(self, trade: dict) -> bool:
+        """Write a resolved paper trade to ``clv_log`` — same schema as real bets.
+
+        Paper trades are Callisto's only bet-like data while the real executor
+        is disabled. Without this entry, the clv_log — our "permanent record
+        of signal quality" — stays empty and every promotion gate that
+        consults it has nothing to grade. bet_id is namespaced ``pt:<trade_id>``
+        so paper IDs never collide with real bet integer ids.
+
+        Returns True if a row was written, False if the trade lacked the
+        minimum inputs (no signal implied prob, or no actual_result).
+        """
+        if not trade.get("actual_result"):
+            return False
+        signal_imp = trade.get("signal_implied_prob")
+        if signal_imp is None:
+            return False
+
+        trade_id = trade.get("trade_id")
+        if not trade_id:
+            return False
+        bet_key = f"pt:{trade_id}"
+
+        signal_odds = trade.get("signal_odds_american")
+        closing_odds = trade.get("closing_odds")
+        closing_implied = trade.get("closing_implied")
+        bookmaker = (trade.get("book") or "").lower()
+
+        our_decimal = _american_to_decimal(signal_odds)
+
+        # Paper trades don't store which book supplied the close — the
+        # backfill in data_collector prefers Pinnacle/LowVig, so treat
+        # closing_implied as already close to fair and use a sharp-tier vig.
+        placement_vig = _BOOK_VIG_ESTIMATE.get(bookmaker, 0.05)
+        closing_vig = 0.025
+
+        signal_fair = _half_vig_devig(signal_imp, placement_vig)
+        close_fair = _half_vig_devig(closing_implied, closing_vig)
+        close_fair_decimal = (1 / close_fair) if close_fair and close_fair > 0 else None
+
+        clv_cents = None
+        if closing_odds is not None and signal_odds is not None:
+            clv_cents = signal_odds - closing_odds
+        elif close_fair is not None and signal_fair is not None:
+            clv_cents = round((close_fair - signal_fair) * 10000, 1)
+
+        # We don't know the closing source for paper trades, only that the
+        # backfill prefers sharp books when available. Mark reliable iff a
+        # closing number was actually matched — this mirrors how downstream
+        # queries treat "unknown but present" close data.
+        close_reliable = closing_odds is not None or closing_implied is not None
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        try:
+            from tools.db_utils import execute_with_retry
+            await execute_with_retry(
+                self._db,
+                "INSERT OR REPLACE INTO clv_log "
+                "(bet_id, event, outcome, point, book, our_odds_decimal, "
+                "pinnacle_close_fair_prob, pinnacle_close_fair_decimal, "
+                "clv_cents, actual_result, actual_pnl, close_reliable, logged_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    bet_key,
+                    trade.get("event_id", ""),
+                    trade.get("side", ""),
+                    trade.get("line"),
+                    bookmaker,
+                    our_decimal,
+                    close_fair,
+                    close_fair_decimal,
+                    clv_cents,
+                    trade.get("actual_result"),
+                    trade.get("hypothetical_pnl"),
+                    close_reliable,
+                    now,
+                ),
+                max_retries=10,
+                operation="clv_tracker log_paper_trade_clv",
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to log paper-trade CLV for {trade_id}: {e}")
+            return False
+
+    async def sync_paper_trades_to_clv_log(self, limit: Optional[int] = None) -> int:
+        """Idempotent: copy every resolved paper_trade missing from clv_log.
+
+        Finds rows where ``actual_result`` is populated but the corresponding
+        ``clv_log`` entry (``pt:<trade_id>``) doesn't exist. Safe to call on
+        every resolution pass — the anti-join skips already-logged trades and
+        the INSERT uses INSERT OR REPLACE as a final safeguard.
+
+        Returns the count of clv_log rows written.
+        """
+        sql = (
+            "SELECT pt.* FROM paper_trades pt "
+            "WHERE pt.actual_result IS NOT NULL "
+            "AND pt.signal_implied_prob IS NOT NULL "
+            "AND NOT EXISTS ("
+            "    SELECT 1 FROM clv_log cl WHERE cl.bet_id = 'pt:' || pt.trade_id"
+            ")"
+        )
+        if limit and limit > 0:
+            sql += f" LIMIT {int(limit)}"
+
+        cursor = await self._db.execute(sql)
+        rows = await cursor.fetchall()
+        cols = [d[0] for d in cursor.description]
+
+        written = 0
+        for row in rows:
+            trade = dict(zip(cols, row))
+            if await self.log_paper_trade_clv(trade):
+                written += 1
+
+        if written > 0:
+            from tools.db_utils import commit_with_retry
+            await commit_with_retry(
+                self._db,
+                max_retries=10,
+                operation="clv_tracker sync_paper_trades_to_clv_log",
+            )
+            logger.info(
+                f"clv_log sync: wrote {written} paper-trade entries "
+                f"(of {len(rows)} candidates)"
+            )
+        return written
+
     async def backfill_clv_log(self) -> int:
         """
         Backfill clv_log for all resolved bets that don't have entries.
@@ -471,8 +613,16 @@ class CLVTracker:
 
         from tools.db_utils import commit_with_retry
         await commit_with_retry(self._db, max_retries=10, operation="clv_tracker backfill_clv_log")
-        logger.info(f"Backfilled CLV log for {count} resolved bets")
-        return count
+
+        # Paper trades are the dominant source of bet-like data today (real
+        # executor is off). Sweep them in the same pass so a single call to
+        # backfill_clv_log leaves clv_log fully caught up.
+        paper_written = await self.sync_paper_trades_to_clv_log()
+
+        logger.info(
+            f"Backfilled CLV log: {count} real bets, {paper_written} paper trades"
+        )
+        return count + paper_written
 
     async def get_clv_report(self, sport: Optional[str] = None, days: int = 30) -> dict:
         """
