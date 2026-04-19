@@ -49,8 +49,17 @@ def _snapshot_rows_from_games(
         home = game.get("home_team") or ""
         away = game.get("away_team") or ""
 
-        # Pivot into (market_key, outcome_name) -> {book: BookLine}
-        books_by_market: dict[tuple[str, str], dict[str, BookLine]] = {}
+        # Pivot into (market_key, outcome_name, point) -> {book: BookLine}.
+        # ``point`` is critical: DK's "Cleveland -1.5" and Pinnacle's
+        # "Cleveland -2.5" are DIFFERENT bets. Grouping them together
+        # feeds the consensus engine apples-vs-oranges and manufactures
+        # impossible 10-25% edges on liquid markets. For h2h markets
+        # every outcome has point=None, which collapses to the old
+        # behavior. For spreads/totals each alt-line gets its own
+        # bucket, as it should.
+        books_by_market: dict[
+            tuple[str, str, Optional[float]], dict[str, BookLine]
+        ] = {}
         for bm in game.get("bookmakers", []) or []:
             book = (bm.get("key") or bm.get("title") or "").lower()
             if not book:
@@ -63,36 +72,49 @@ def _snapshot_rows_from_games(
                     # Only two-way markets supported for now; spreads with
                     # alt-lines come as separate two-way pairs anyway.
                     continue
-                prices = {}
+                parsed: list[tuple[str, float, Optional[float]]] = []
                 for o in outcomes:
                     name = o.get("name") or ""
                     price = o.get("price")
-                    if name and price:
-                        prices[name] = price
-                if len(prices) != 2:
+                    point = o.get("point")
+                    if not name or price is None:
+                        continue
+                    point_f: Optional[float]
+                    try:
+                        point_f = float(point) if point is not None else None
+                    except (TypeError, ValueError):
+                        point_f = None
+                    try:
+                        imp_p = calculate_implied_probability(price)
+                    except Exception:
+                        continue
+                    parsed.append((name, imp_p, point_f))
+                if len(parsed) != 2:
                     continue
-                names = list(prices.keys())
-                try:
-                    imp = {n: calculate_implied_probability(prices[n]) for n in names}
-                except Exception:
-                    continue
-                for n in names:
-                    sibling = [s for s in names if s != n][0]
-                    key = (mkey, n)
+                for idx in range(2):
+                    name, imp_p, point_f = parsed[idx]
+                    _, sib_imp, _ = parsed[1 - idx]
+                    key = (mkey, name, point_f)
                     entry = books_by_market.setdefault(key, {})
                     entry[book] = BookLine(
                         book=book,
-                        implied_prob=imp[n],
-                        paired_implied_prob=imp[sibling],
+                        implied_prob=imp_p,
+                        paired_implied_prob=sib_imp,
                         updated_at=updated_at,
                     )
 
-        # Emit one MarketSnapshot per placement book per (market, outcome)
-        # — but only when we also have at least one OTHER book to build
-        # a consensus against.
-        for (mkey, outcome_name), book_lines in books_by_market.items():
+        # Emit one MarketSnapshot per placement book per (market, outcome,
+        # point) — but only when we also have at least one OTHER book to
+        # build a consensus against.
+        for (mkey, outcome_name, point_f), book_lines in books_by_market.items():
             if len(book_lines) < 2:
                 continue
+            outcome_label = outcome_name
+            if point_f is not None:
+                if mkey == "spreads":
+                    outcome_label = f"{outcome_name} {point_f:+g}"
+                else:
+                    outcome_label = f"{outcome_name} {point_f:g}"
             for placement_book in placement_books:
                 if placement_book not in book_lines:
                     continue
@@ -100,7 +122,7 @@ def _snapshot_rows_from_games(
                     sport=sport,
                     event_id=event_id,
                     market=mkey,
-                    outcome=f"{away} @ {home} | {outcome_name}",
+                    outcome=f"{away} @ {home} | {outcome_label}",
                     placement_line=book_lines[placement_book],
                     all_lines=list(book_lines.values()),
                     commence_time=(
