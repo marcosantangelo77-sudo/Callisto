@@ -925,13 +925,27 @@ class DataCollector:
 
         from tools.db_utils import commit_with_retry
         await commit_with_retry(self._db, operation="data_collector resolve_paper_trades")
-        logger.info(f"Resolved {resolved}/{len(trades)} paper trades for {sport} on {game_date}")
+
+        clv_written = 0
+        try:
+            from tools.clv_tracker import CLVTracker
+            _clv = CLVTracker(self.db_path)
+            _clv._db = self._db
+            clv_written = await _clv.sync_paper_trades_to_clv_log()
+        except Exception as e:
+            logger.warning(f"clv_log player-prop sync failed ({sport} {game_date}): {e}")
+
+        logger.info(
+            f"Resolved {resolved}/{len(trades)} paper trades for {sport} "
+            f"on {game_date} (clv_log +{clv_written})"
+        )
 
         return {
             "sport": sport,
             "game_date": game_date,
             "total_pending": len(trades),
             "resolved": resolved,
+            "clv_log_written": clv_written,
         }
 
     # ── GAME-LEVEL RESOLUTION ──
@@ -1215,9 +1229,23 @@ class DataCollector:
                 f"({sport} {game_date})"
             )
 
+        # Promote every freshly-resolved paper trade into clv_log — this is
+        # the permanent signal-quality ledger. Without this call, paper_trade
+        # wins/losses never reach the CLV analysis surface. Idempotent: the
+        # sync method only touches rows missing a matching clv_log entry.
+        clv_written = 0
+        try:
+            from tools.clv_tracker import CLVTracker
+            _clv = CLVTracker(self.db_path)
+            _clv._db = self._db  # reuse the caller's connection for the same tx
+            clv_written = await _clv.sync_paper_trades_to_clv_log()
+        except Exception as e:
+            logger.warning(f"clv_log paper-trade sync failed ({sport} {game_date}): {e}")
+
         logger.info(
             f"Resolved {resolved}/{len(trades)} game-level paper trades "
-            f"for {sport} on {game_date} ({unmatched} unmatched)"
+            f"for {sport} on {game_date} ({unmatched} unmatched, "
+            f"clv_log +{clv_written})"
         )
 
         return {
@@ -1226,6 +1254,7 @@ class DataCollector:
             "total_pending": len(trades),
             "resolved": resolved,
             "unmatched": unmatched,
+            "clv_log_written": clv_written,
         }
 
     async def _closing_from_snapshot(
