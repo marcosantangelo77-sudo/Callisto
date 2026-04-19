@@ -152,6 +152,36 @@ def test_steam_ignores_mixed_direction_cluster():
     assert sigs == []
 
 
+def test_steam_catches_opposite_direction_overlap():
+    """Previously a bug: after emitting an UP-steam the scanner jumped past
+    the whole window, silently dropping any DOWN-steam anchored later in
+    the same window. This test pins the fix: both directions reaching
+    min_books in overlapping windows must emit their own signals.
+    """
+    ticks = [
+        # 6 baseline flat ticks
+        _tick("pinnacle", 0, 0.500),
+        _tick("draftkings", 0, 0.500),
+        _tick("fanduel", 0, 0.500),
+        _tick("caesars", 0, 0.500),
+        _tick("betmgm", 0, 0.500),
+        _tick("circa", 0, 0.500),
+        # UP steam anchored at t=10 (3 books reach min_books by t=30)
+        _tick("pinnacle", 10, 0.520),
+        _tick("draftkings", 20, 0.520),
+        _tick("fanduel", 30, 0.520),
+        # DOWN steam anchored AT t=40 WITHIN the 60s window from t=10
+        _tick("caesars", 40, 0.480),
+        _tick("betmgm", 50, 0.480),
+        _tick("circa", 55, 0.480),
+    ]
+    sigs = detect_steam_event(ticks, min_move=0.005, window_s=60, min_books=3)
+    directions = sorted(s.direction for s in sigs)
+    # Both an UP (+1) and a DOWN (-1) steam should emit.
+    assert len(sigs) == 2, f"expected 2 signals (up+down), got {len(sigs)}: {sigs}"
+    assert directions == [-1, 1], f"expected both directions, got {directions}"
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Reverse line movement
 # ──────────────────────────────────────────────────────────────────────
