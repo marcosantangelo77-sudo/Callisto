@@ -619,8 +619,16 @@ class TaskResponse(BaseModel):
 
 
 @app.post("/task", response_model=TaskResponse)
-async def submit_task(submission: TaskSubmission):
-    """Submit a query for AGP session processing."""
+async def submit_task(
+    submission: TaskSubmission,
+    _auth: None = Depends(require_admin_or_loopback),
+):
+    """Submit a query for AGP session processing.
+
+    Writes are auth-gated: without this, a caller could queue arbitrary LLM
+    work against the billing account. GET /task/{id} is already gated, so
+    writes must match.
+    """
     try:
         task_id = await queue.submit_task(submission.query, submission.priority)
         return TaskResponse(task_id=task_id)

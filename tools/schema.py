@@ -310,6 +310,9 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     max_drawdown REAL,
     kelly_growth REAL,
     is_significant BOOLEAN DEFAULT FALSE,
+    sortino_ratio_val REAL,
+    brier_score REAL,
+    information_coefficient REAL,
     run_config TEXT,
     started_at DATETIME NOT NULL,
     completed_at DATETIME,
@@ -416,6 +419,9 @@ CREATE TABLE IF NOT EXISTS hypothesis_stats (
     max_drawdown REAL,
     p_value REAL,
     is_significant BOOLEAN DEFAULT FALSE,
+    sortino REAL,
+    brier_score REAL,
+    information_coefficient REAL,
     FOREIGN KEY (hypothesis_id) REFERENCES hypotheses(hypothesis_id)
 );
 
@@ -1308,6 +1314,36 @@ CREATE TABLE IF NOT EXISTS masters_predictions (
 """
 
 
+async def _safe_add_column(
+    db, table: str, column: str, coltype: str
+) -> None:
+    """Idempotent ADD COLUMN that distinguishes "already exists" from real errors.
+
+    SQLite reports the already-exists case with a specific substring in the
+    error message; anything else (permission denied, disk full, invalid type,
+    missing table) is a real problem and must reach the logs instead of
+    being swallowed as `except: pass` — that pattern silently leaves the
+    schema incomplete and downstream writers fail with "no such column"
+    hours later, far from the root cause.
+    """
+    from tools.db_utils import safe_ident
+    tbl = safe_ident(table)
+    col = safe_ident(column)
+    try:
+        await db.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {coltype}")
+        await db.commit()
+        logger.info(f"Added {column} column to {table}")
+    except Exception as e:
+        msg = str(e).lower()
+        if "duplicate column" in msg or "already exists" in msg:
+            # Expected on second+ runs; not worth logging at INFO level.
+            return
+        logger.warning(
+            f"Failed to ADD COLUMN {column} {coltype} to {table}: {e!r}. "
+            "Schema may be incomplete — check underlying cause before restarting."
+        )
+
+
 async def ensure_schema(db_path: str = DB_PATH) -> None:
     """Create or upgrade all tables. Safe to call multiple times."""
     os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
@@ -1383,39 +1419,20 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
                 pass  # Column already exists
 
         # Migration: add binary embedding blob column for numpy storage
-        try:
-            await db.execute("ALTER TABLE embeddings ADD COLUMN embedding_blob BLOB")
-            await db.commit()
-            logger.info("Added embedding_blob column to embeddings table")
-        except Exception:
-            pass  # Column already exists
+        await _safe_add_column(db, "embeddings", "embedding_blob", "BLOB")
 
-        # Migration: add microstructure metric columns to hypothesis_stats
+        # Migration: add microstructure metric columns to hypothesis_stats.
+        # (Baseline schema now includes these; migration stays for old DBs.)
         for col in ("sortino", "brier_score", "information_coefficient"):
-            try:
-                await db.execute(f"ALTER TABLE hypothesis_stats ADD COLUMN {col} REAL")
-                await db.commit()
-                logger.info(f"Added {col} column to hypothesis_stats")
-            except Exception:
-                pass  # Column already exists
+            await _safe_add_column(db, "hypothesis_stats", col, "REAL")
 
-        # Migration: add microstructure metric columns to backtest_runs
+        # Migration: add microstructure metric columns to backtest_runs.
         for col in ("sortino_ratio_val", "brier_score", "information_coefficient"):
-            try:
-                await db.execute(f"ALTER TABLE backtest_runs ADD COLUMN {col} REAL")
-                await db.commit()
-                logger.info(f"Added {col} column to backtest_runs")
-            except Exception:
-                pass  # Column already exists
+            await _safe_add_column(db, "backtest_runs", col, "REAL")
 
         # Migration: add home_team/away_team to paper_trades for resolution matching
         for col in ("home_team", "away_team"):
-            try:
-                await db.execute(f"ALTER TABLE paper_trades ADD COLUMN {col} TEXT")
-                await db.commit()
-                logger.info(f"Added {col} column to paper_trades")
-            except Exception:
-                pass  # Column already exists
+            await _safe_add_column(db, "paper_trades", col, "TEXT")
 
         # Migration (2026-04-18): add `source` to ev_opportunities. Before this,
         # line_monitor INSERTed with (game_id, bookmaker, team, edge) while
@@ -1425,12 +1442,9 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         # OperationalError("no column named event_id") in the WriteCoordinator.
         # autonomous.py is now remapped onto the canonical column names and
         # stamps `source` to distinguish signal provenance.
-        try:
-            await db.execute("ALTER TABLE ev_opportunities ADD COLUMN source TEXT DEFAULT 'line_movement'")
-            await db.commit()
-            logger.info("Added source column to ev_opportunities")
-        except Exception:
-            pass  # Column already exists
+        await _safe_add_column(
+            db, "ev_opportunities", "source", "TEXT DEFAULT 'line_movement'"
+        )
 
         # Migration (audit P2): add UNIQUE index on hypothesis_stats(hypothesis_id, stage)
         # so concurrent backtest writes can't insert competing rows for the same

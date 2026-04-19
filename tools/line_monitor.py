@@ -971,6 +971,12 @@ class LineMonitor:
                                 if price is None:
                                     continue
 
+                                # Normalize source identifier to the key-style used by
+                                # _RELIABLE_CLOSE_SOURCES in clv_tracker (lowercase, no
+                                # spaces). Odds-api-io returns titles like "Pinnacle",
+                                # "Betfair Exchange", "BetOnline.ag"; stored mixed-case,
+                                # every reliable book later tests as unreliable.
+                                src_key = (book_name or "").lower().replace(" ", "_")
                                 try:
                                     await _clv.record_closing_line(
                                         event_id=event_id,
@@ -978,7 +984,7 @@ class LineMonitor:
                                         team=team,
                                         closing_odds=int(price),
                                         closing_point=float(point) if point is not None else None,
-                                        source=book_name,
+                                        source=src_key,
                                         sport=sport,
                                     )
                                     closing_count += 1

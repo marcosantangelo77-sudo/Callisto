@@ -10,8 +10,12 @@ from tools.boost_evaluator import (
     evaluate_free_bet,
     calculate_hedge,
     find_optimal_boost_target,
-    _american_to_decimal,
-    _prob_to_american,
+)
+# boost_evaluator now delegates to math_utils; these aliases preserve the
+# older test naming while pointing at the real public functions.
+from tools.math_utils import (
+    american_to_decimal as _american_to_decimal,
+    fair_prob_to_american as _prob_to_american,
 )
 
 

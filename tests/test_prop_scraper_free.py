@@ -19,8 +19,25 @@ import os
 import sys
 import tempfile
 
+import pytest
+
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+# These tests hit live sportsbook endpoints (DraftKings, FanDuel, BetMGM)
+# and depend on the scraper infrastructure being up. Without the gate they
+# failed 8 tests on every CI run with either network errors or async-fixture
+# misconfiguration, drowning real regressions in noise. Run them explicitly:
+#
+#   CALLISTO_SCRAPER_TESTS=1 python -m pytest tests/test_prop_scraper_free.py -v
+pytestmark = [
+    pytest.mark.skipif(
+        os.environ.get("CALLISTO_SCRAPER_TESTS") != "1",
+        reason="network-hitting integration tests — set CALLISTO_SCRAPER_TESTS=1 to run",
+    ),
+    pytest.mark.asyncio,
+]
 
 
 async def test_dk_props():

@@ -249,7 +249,11 @@ class CLVTracker:
             operation="clv_tracker record_closing_line insert",
         )
 
-        # Update any pending bets for this event
+        # Update any pending bets for this event. LOWER()-based team match —
+        # closing-line capture speaks odds-api-io's casing ("Pinnacle",
+        # "Boston Celtics"), bet_executor wrote the team string as received
+        # from whoever called it, and a single-letter case difference silently
+        # drops every CLV update. Without this, bets stay NULL-closed forever.
         await execute_with_retry(
             self._db,
             "UPDATE bets SET "
@@ -257,7 +261,8 @@ class CLVTracker:
             "closing_source = ?, "
             "clv_odds = placement_odds - ?, "
             "clv_implied = ? - placement_implied_prob "
-            "WHERE event_id = ? AND market = ? AND team = ? AND result = 'pending'",
+            "WHERE event_id = ? AND market = ? "
+            "AND LOWER(team) = LOWER(?) AND result = 'pending'",
             (closing_odds, closing_point, round(implied, 4), source,
              closing_odds, round(implied, 4),
              event_id, market, team),
@@ -265,13 +270,15 @@ class CLVTracker:
             operation="clv_tracker record_closing_line update",
         )
 
-        # Update any pending paper trades for this event
+        # Same LOWER() match for paper trades so their CLV backfill stays
+        # in sync with the real-bet path.
         await execute_with_retry(
             self._db,
             "UPDATE paper_trades SET "
             "closing_odds = ?, closing_implied = ?, "
             "clv_implied = ? - signal_implied_prob "
-            "WHERE event_id = ? AND market = ? AND side = ? "
+            "WHERE event_id = ? AND market = ? "
+            "AND LOWER(side) = LOWER(?) "
             "AND signal_implied_prob IS NOT NULL",
             (closing_odds, round(implied, 4),
              round(implied, 4),

@@ -211,20 +211,35 @@ def detect_steam_event(
         while j < len(events) and events[j][1] - cluster[0][1] <= window:
             cluster.append(events[j])
             j += 1
-        same_dir = [c for c in cluster if c[3] == cluster[0][3]]
-        unique_books = {c[0] for c in same_dir}
-        if len(unique_books) >= min_books:
-            signals.append(SharpSignal(
-                kind="steam",
-                market_key=ticks[0].market_key,
-                direction=cluster[0][3],
-                participating_books=tuple(sorted(unique_books)),
-                magnitude=statistics.mean(c[2] for c in same_dir),
-                ts_start=same_dir[0][1],
-                ts_end=same_dir[-1][1],
-                note=f"{len(unique_books)} books moved within {window_s}s",
-            ))
-            i = j                     # don't re-flag overlapping clusters
+        # Evaluate BOTH directions in this window. The previous implementation
+        # only checked cluster[0]'s direction, so a three-book DOWN steam that
+        # happened inside the same window as an anchor UP event was silently
+        # dropped. Each direction reaching min_books emits its own signal.
+        last_matched_ts = None
+        for direction in (cluster[0][3], -cluster[0][3]):
+            same_dir = [c for c in cluster if c[3] == direction]
+            unique_books = {c[0] for c in same_dir}
+            if len(unique_books) >= min_books:
+                signals.append(SharpSignal(
+                    kind="steam",
+                    market_key=ticks[0].market_key,
+                    direction=direction,
+                    participating_books=tuple(sorted(unique_books)),
+                    magnitude=statistics.mean(c[2] for c in same_dir),
+                    ts_start=same_dir[0][1],
+                    ts_end=same_dir[-1][1],
+                    note=f"{len(unique_books)} books moved within {window_s}s",
+                ))
+                # Track the MAX end-ts across all emitted directions — we need
+                # to advance past ALL matched events to avoid re-emitting the
+                # same cluster as anchor on the next iteration.
+                if last_matched_ts is None or same_dir[-1][1] > last_matched_ts:
+                    last_matched_ts = same_dir[-1][1]
+        if last_matched_ts is not None:
+            k = i + 1
+            while k < len(events) and events[k][1] <= last_matched_ts:
+                k += 1
+            i = max(k, i + 1)
         else:
             i += 1
     return signals
