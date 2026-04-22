@@ -23,6 +23,8 @@ from typing import Optional
 
 import httpx
 
+from tools.ingestion_tracking import tracked_ingestion
+
 logger = logging.getLogger("callisto.contextual_data")
 
 _client: Optional[httpx.AsyncClient] = None
@@ -60,6 +62,10 @@ SPORT_MAP = {
 }
 
 
+@tracked_ingestion(
+    source=lambda sport="basketball_ncaab", **_: f"espn.injuries.{sport}",
+    sla_seconds=1800,
+)
 async def get_injuries(sport: str = "basketball_ncaab") -> dict:
     """
     Get current injury report from ESPN.
@@ -165,6 +171,10 @@ async def _get_injuries_from_scoreboard(sport: str) -> dict:
         return {"error": str(e), "injuries": []}
 
 
+@tracked_ingestion(
+    source=lambda sport, team_id, **_: f"espn.roster.{sport}",
+    sla_seconds=3600,
+)
 async def get_team_roster(sport: str, team_id: str) -> dict:
     """Get team roster with player stats from ESPN."""
     espn = SPORT_MAP.get(sport)
@@ -228,6 +238,10 @@ async def get_team_roster(sport: str, team_id: str) -> dict:
         return {"error": str(e)}
 
 
+@tracked_ingestion(
+    source=lambda sport="basketball_ncaab", **_: f"espn.scoreboard_light.{sport}",
+    sla_seconds=600,
+)
 async def get_scoreboard(sport: str = "basketball_ncaab") -> dict:
     """
     Get today's scoreboard — live scores, game status, and basic stats.
@@ -310,6 +324,10 @@ VENUE_COORDS = {
 }
 
 
+@tracked_ingestion(
+    source=lambda latitude, longitude, venue_name="", **_: "openmeteo.weather",
+    sla_seconds=3600,
+)
 async def get_weather(
     latitude: float,
     longitude: float,
@@ -388,7 +406,12 @@ async def get_weather(
         }
 
     except Exception as e:
-        logger.warning(f"get_weather failed for venue={venue}: {e}")
+        # BUGFIX (2026-04-21): previously referenced `venue` which is not
+        # defined in this scope (the parameter is `venue_name`). Hitting the
+        # except branch therefore raised NameError from INSIDE the handler,
+        # masking the real error and appearing as a cryptic unhandled
+        # exception upstream. Fixed to use venue_name.
+        logger.warning(f"get_weather failed for venue={venue_name!r}: {e}")
         return {"error": str(e)}
 
 

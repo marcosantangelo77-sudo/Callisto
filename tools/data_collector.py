@@ -30,6 +30,8 @@ import aiosqlite
 import httpx
 from dotenv import load_dotenv
 
+from tools.ingestion_tracking import tracked_ingestion
+
 load_dotenv()
 
 logger = logging.getLogger("callisto.data_collector")
@@ -183,6 +185,10 @@ class DataCollector:
 
     # ── ESPN SCOREBOARD ──
 
+    @tracked_ingestion(
+        source=lambda self, sport, date=None, **_: f"espn.scoreboard.{sport}",
+        sla_seconds=600,  # scoreboards should refresh every 10 min
+    )
     async def collect_scores(
         self,
         sport: str,
@@ -421,6 +427,10 @@ class DataCollector:
 
     # ── ESPN BOX SCORES ──
 
+    @tracked_ingestion(
+        source=lambda self, sport, date=None, **_: f"espn.boxscore.{sport}",
+        sla_seconds=900,  # box scores post within 15 min of completion
+    )
     async def collect_box_scores(
         self,
         sport: str,
@@ -661,6 +671,10 @@ class DataCollector:
         "golf_pga": ("golf", "pga"),
     }
 
+    @tracked_ingestion(
+        source=lambda self, sport, event_ids=None, **_: f"espn.odds.{sport}",
+        sla_seconds=900,
+    )
     async def collect_espn_odds(
         self,
         sport: str,
@@ -1316,6 +1330,10 @@ class DataCollector:
 
     # ── ESPN PLAY-BY-PLAY ──
 
+    @tracked_ingestion(
+        source=lambda self, sport, date=None, **_: f"espn.pbp.{sport}",
+        sla_seconds=1800,
+    )
     async def collect_play_by_play(
         self,
         sport: str,
@@ -1523,6 +1541,7 @@ class DataCollector:
 
     # ── BASEBALL SAVANT / STATCAST ──
 
+    @tracked_ingestion(source="statcast.savant.pitches", sla_seconds=3600)
     async def collect_statcast(
         self,
         start_date: str,
@@ -1781,6 +1800,7 @@ class DataCollector:
 
     # ── MLB PLAYER METADATA ──
 
+    @tracked_ingestion(source="mlb_stats.players", sla_seconds=86400)
     async def collect_mlb_players(self) -> dict:
         """
         Refresh the mlb_players table from the free MLB Stats API.
@@ -1942,6 +1962,7 @@ class DataCollector:
 
     NHL_API = "https://api-web.nhle.com/v1"
 
+    @tracked_ingestion(source="nhl_api.players", sla_seconds=86400)
     async def collect_nhl_players(self) -> dict:
         """Refresh the nhl_players table from api.nhle.com.
 
@@ -2052,6 +2073,7 @@ class DataCollector:
         logger.info(f"NHL players: refreshed {stored} across {len(teams)} teams")
         return {"teams": len(teams), "players_upserted": stored}
 
+    @tracked_ingestion(source="nhl_api.shots", sla_seconds=3600)
     async def collect_nhl_shots(self, date: Optional[str] = None) -> dict:
         """Per-shot event ingestion from api-web.nhle.com for games on `date`.
 
@@ -2169,6 +2191,7 @@ class DataCollector:
 
     NFLFASTR_BASE = "https://github.com/nflverse/nflverse-data/releases/download"
 
+    @tracked_ingestion(source="nflverse.players", sla_seconds=86400)
     async def collect_nfl_players(self, season: Optional[int] = None) -> dict:
         """Refresh nfl_players from nflverse seasonal roster CSV."""
         import csv
@@ -2256,6 +2279,7 @@ class DataCollector:
         logger.info(f"NFL roster {season}: {stored} players upserted")
         return {"season": season, "players_upserted": stored}
 
+    @tracked_ingestion(source="nflverse.combine", sla_seconds=604800)
     async def collect_nfl_combine(self, start_year: int = 2000) -> dict:
         """Refresh nfl_combine_results from nflverse combine CSV."""
         import csv
@@ -2333,6 +2357,7 @@ class DataCollector:
         logger.info(f"NFL combine: {stored} rows upserted (since {start_year})")
         return {"rows_upserted": stored}
 
+    @tracked_ingestion(source="nflverse.plays", sla_seconds=3600)
     async def collect_nfl_plays(self, season: Optional[int] = None) -> dict:
         """Stream-ingest nflfastR per-season play_by_play CSV into nfl_play_events."""
         import csv
@@ -2455,6 +2480,7 @@ class DataCollector:
         "Connection": "keep-alive",
     }
 
+    @tracked_ingestion(source="nba_api.players", sla_seconds=86400)
     async def collect_nba_players(self, season: Optional[str] = None) -> dict:
         """Refresh nba_players from stats.nba.com commonallplayers."""
         import httpx as _httpx
@@ -2530,6 +2556,7 @@ class DataCollector:
         finally:
             await client.aclose()
 
+    @tracked_ingestion(source="nba_api.shots", sla_seconds=3600)
     async def collect_nba_shots(self, date: Optional[str] = None) -> dict:
         """Per-shot events from stats.nba.com shotchartdetail for games on `date`."""
         import httpx as _httpx
@@ -2647,6 +2674,10 @@ class DataCollector:
         "basketball_ncaaw": ("basketball", "womens-college-basketball"),
     }
 
+    @tracked_ingestion(
+        source=lambda self, sport, **_: f"espn.ncaa_hoops.players.{sport}",
+        sla_seconds=86400,
+    )
     async def collect_ncaa_basketball_players(self, sport: str) -> dict:
         """Refresh ncaa_basketball_players for a given sport."""
         if sport not in self.NCAA_BBALL_LEAGUES:
@@ -2749,6 +2780,10 @@ class DataCollector:
         logger.info(f"{sport}: {stored} players across {len(teams)} teams")
         return {"sport": sport, "teams": len(teams), "players_upserted": stored}
 
+    @tracked_ingestion(
+        source=lambda self, sport, date=None, **_: f"espn.ncaa_hoops.boxscore.{sport}",
+        sla_seconds=900,
+    )
     async def collect_ncaa_basketball_game_stats(self, sport: str, date: Optional[str] = None) -> dict:
         """Fetch ESPN boxscores for completed NCAA games on `date` and
         upsert per-player per-game stats."""
@@ -2918,6 +2953,7 @@ class DataCollector:
     # GOLF: round-level strokes-gained + core stats
     # ──────────────────────────────────────────
 
+    @tracked_ingestion(source="espn.golf.rounds", sla_seconds=3600)
     async def collect_golf_player_rounds(self, season: Optional[int] = None) -> dict:
         """Ingest per-round SG data for the PGA Tour via DataGolf public JSON.
 

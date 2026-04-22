@@ -35,6 +35,8 @@ from typing import Optional
 import httpx
 from dotenv import load_dotenv
 
+from tools.ingestion_tracking import tracked_ingestion
+
 load_dotenv()
 
 logger = logging.getLogger("callisto.odds_api_io")
@@ -214,9 +216,40 @@ def _check_budget(cost: int = 1) -> Optional[str]:
 # Core API helper
 # ---------------------------------------------------------------------------
 
+# Backoff config — 429 handling. Prior behavior: single call, return
+# {"error": "rate limit"} on first 429. Problem: the next five retries in the
+# scheduler all tripped the same 429 one second apart and produced 429 storms
+# against odds-api.io that counted toward the hourly quota. With exponential
+# backoff + Retry-After honoring, a 429 costs one sleep and (typically) one
+# retry instead of six wasted calls.
+_BACKOFF_BASE_SECONDS = 1.0
+_BACKOFF_MAX_SECONDS = 16.0
+_BACKOFF_MAX_RETRIES = 3
+
+
+def _compute_backoff(attempt: int, retry_after: Optional[str]) -> float:
+    """Return sleep duration in seconds for this retry attempt."""
+    import random
+    if retry_after:
+        # Retry-After is either an integer-seconds value or an HTTP date.
+        try:
+            return min(_BACKOFF_MAX_SECONDS, float(retry_after))
+        except (TypeError, ValueError):
+            pass
+    # Exponential with jitter: 1, 2, 4, 8, 16 (cap)
+    base = min(_BACKOFF_MAX_SECONDS, _BACKOFF_BASE_SECONDS * (2 ** attempt))
+    return base + random.uniform(0, min(1.0, base * 0.1))
+
+
 async def _api_get(endpoint: str, params: Optional[dict] = None) -> dict | list:
     """
-    Make an authenticated GET request to Odds-API.io.
+    Make an authenticated GET request to Odds-API.io with 429 backoff.
+
+    429 responses trigger exponential backoff (honoring Retry-After) up to
+    _BACKOFF_MAX_RETRIES attempts. After exhausting retries the call returns
+    an {"error": "rate limit ..."} sentinel — the @tracked_ingestion
+    decorator recognizes this pattern and logs status='rate_limited' so the
+    health check can differentiate quota exhaustion from real failures.
 
     Returns parsed JSON (dict or list) on success.
     Returns {"error": "..."} on failure.
@@ -230,32 +263,51 @@ async def _api_get(endpoint: str, params: Optional[dict] = None) -> dict | list:
     client = _get_client()
 
     url = f"{ODDS_API_IO_BASE}{endpoint}"
-    try:
-        resp = await client.get(url, params=params)
-        resp.raise_for_status()
-        _increment_usage()
-        return resp.json()
-    except httpx.HTTPStatusError as e:
-        status = e.response.status_code
-        body = ""
+
+    for attempt in range(_BACKOFF_MAX_RETRIES + 1):
         try:
-            body = e.response.text[:300]
-        except Exception:
-            pass
-        logger.error(f"Odds-API.io HTTP {status} on {endpoint}: {body}")
-        if status == 401:
-            return {"error": "Invalid ODDS_API_IO_KEY — check your API key"}
-        if status == 429:
-            return {"error": "Odds-API.io rate limit hit (100/hr). Wait and retry."}
-        if status == 403:
-            return {"error": f"Access denied (bookmaker limit?): {body}"}
-        return {"error": f"HTTP {status}: {body or 'Unknown error'}"}
-    except httpx.TimeoutException:
-        logger.error(f"Odds-API.io timeout on {endpoint}")
-        return {"error": "Request timeout — odds-api.io did not respond in 20s"}
-    except Exception as e:
-        logger.error(f"Odds-API.io error on {endpoint}: {e}")
-        return {"error": str(e)}
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            _increment_usage()
+            return resp.json()
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            body = ""
+            try:
+                body = e.response.text[:300]
+            except Exception:
+                pass
+
+            if status == 429 and attempt < _BACKOFF_MAX_RETRIES:
+                retry_after = e.response.headers.get("Retry-After")
+                sleep_s = _compute_backoff(attempt, retry_after)
+                logger.warning(
+                    f"Odds-API.io 429 on {endpoint} (attempt {attempt + 1}/"
+                    f"{_BACKOFF_MAX_RETRIES + 1}); sleeping {sleep_s:.2f}s"
+                )
+                await asyncio.sleep(sleep_s)
+                continue
+
+            # Non-retryable or retries exhausted
+            logger.error(f"Odds-API.io HTTP {status} on {endpoint}: {body}")
+            if status == 401:
+                return {"error": "Invalid ODDS_API_IO_KEY — check your API key"}
+            if status == 429:
+                # Retries exhausted — return rate_limited sentinel so
+                # @tracked_ingestion tags the run correctly.
+                return {"error": f"rate limit: exhausted {_BACKOFF_MAX_RETRIES} retries on {endpoint}"}
+            if status == 403:
+                return {"error": f"Access denied (bookmaker limit?): {body}"}
+            return {"error": f"HTTP {status}: {body or 'Unknown error'}"}
+        except httpx.TimeoutException:
+            logger.error(f"Odds-API.io timeout on {endpoint}")
+            return {"error": "Request timeout — odds-api.io did not respond in 20s"}
+        except Exception as e:
+            logger.error(f"Odds-API.io error on {endpoint}: {e}")
+            return {"error": str(e)}
+
+    # Should be unreachable — loop always returns or retries
+    return {"error": "rate limit: backoff loop exited unexpectedly"}
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +327,7 @@ def _decimal_to_american(dec: float) -> int:
 # Public API functions
 # ---------------------------------------------------------------------------
 
+@tracked_ingestion(source="odds_api_io.v3.sports", sla_seconds=3600)
 async def get_sports() -> list[dict]:
     """
     List all available sports on Odds-API.io.
@@ -289,6 +342,10 @@ async def get_sports() -> list[dict]:
     return [data]
 
 
+@tracked_ingestion(
+    source=lambda sport, **_: f"odds_api_io.v3.events.{sport}",
+    sla_seconds=600,
+)
 async def get_events(sport: str) -> dict:
     """
     List upcoming events/games for a sport.
@@ -338,6 +395,10 @@ async def get_events(sport: str) -> dict:
     }
 
 
+@tracked_ingestion(
+    source=lambda sport="basketball_nba", **_: f"odds_api_io.v3.odds.{sport}",
+    sla_seconds=300,
+)
 async def get_odds(
     sport: str = "basketball_nba",
     regions: str = "us",
@@ -455,6 +516,10 @@ async def _fetch_event_odds(event_id: str, event_info: dict, sport: str) -> Opti
     return _normalize_event_odds(data, event_info, sport)
 
 
+@tracked_ingestion(
+    source=lambda sport, event_id, **_: f"odds_api_io.v3.event_odds.{sport}",
+    sla_seconds=600,
+)
 async def get_event_odds(
     sport: str,
     event_id: str,
@@ -490,6 +555,10 @@ async def get_event_odds(
     return result if result else {"error": f"No odds for event {event_id}"}
 
 
+@tracked_ingestion(
+    source=lambda sport="basketball_nba", **_: f"odds_api_io.v3.scores.{sport}",
+    sla_seconds=600,
+)
 async def get_scores(
     sport: str = "basketball_nba",
     days_from: int = 1,
@@ -912,6 +981,7 @@ async def get_odds_multi(event_ids: list[str | int], bookmakers: str = "") -> li
     return results
 
 
+@tracked_ingestion(source="odds_api_io.v3.odds.updated", sla_seconds=300)
 async def get_odds_updated(since_unix: int, sport: str = "", bookmaker: str = "") -> dict:
     """
     Get incremental odds changes since a unix timestamp (max 60s ago).
@@ -1027,6 +1097,10 @@ async def get_odds_movements(
     return data if isinstance(data, dict) else {"data": data}
 
 
+@tracked_ingestion(
+    source=lambda sport="", **_: f"odds_api_io.v3.live_events.{sport or 'all'}",
+    sla_seconds=300,
+)
 async def get_live_events(sport: str = "") -> dict:
     """Get currently live (in-play) events."""
     budget_err = _check_budget(1)

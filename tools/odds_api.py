@@ -20,6 +20,8 @@ from typing import Optional
 import httpx
 from dotenv import load_dotenv
 
+from tools.ingestion_tracking import tracked_ingestion
+
 load_dotenv()
 
 logger = logging.getLogger("callisto.odds_api")
@@ -80,6 +82,7 @@ def get_credit_status() -> dict:
     }
 
 
+@tracked_ingestion(source="odds_api.v4.sports", sla_seconds=3600)
 async def get_sports() -> list[dict]:
     """List available sports. FREE — costs 0 credits."""
     if not ODDS_API_KEY:
@@ -99,6 +102,10 @@ async def get_sports() -> list[dict]:
         return [{"error": str(e)}]
 
 
+@tracked_ingestion(
+    source=lambda sport="basketball_ncaab", **_: f"odds_api.v4.odds.{sport}",
+    sla_seconds=300,
+)
 async def get_odds(
     sport: str = "basketball_ncaab",
     regions: str = "us",
@@ -157,6 +164,10 @@ async def get_odds(
         return {"error": str(e), "games": []}
 
 
+@tracked_ingestion(
+    source=lambda sport="basketball_ncaab", **_: f"odds_api.v4.scores.{sport}",
+    sla_seconds=600,
+)
 async def get_scores(
     sport: str = "basketball_ncaab",
     days_from: int = 1,
@@ -196,6 +207,10 @@ async def get_scores(
         return {"error": str(e), "games": []}
 
 
+@tracked_ingestion(
+    source=lambda sport, event_id, **_: f"odds_api.v4.event_odds.{sport}",
+    sla_seconds=600,
+)
 async def get_event_odds(
     sport: str,
     event_id: str,
@@ -236,6 +251,10 @@ async def get_event_odds(
         return {"error": str(e)}
 
 
+@tracked_ingestion(
+    source=lambda sport, event_id, **_: f"odds_api.v4.alt_lines.{sport}",
+    sla_seconds=900,
+)
 async def get_alternate_lines(
     sport: str,
     event_id: str,
@@ -287,6 +306,10 @@ async def get_alternate_lines(
         return {"error": str(e)}
 
 
+@tracked_ingestion(
+    source=lambda sport, event_id, **_: f"odds_api.v4.player_props.{sport}",
+    sla_seconds=900,
+)
 async def get_player_props(
     sport: str,
     event_id: str,
