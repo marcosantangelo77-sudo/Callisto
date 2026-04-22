@@ -14,15 +14,24 @@ import time
 from typing import Optional
 
 from agp import (
+    AGPSealRefused,
     AGPSession,
     AGPViolation,
     Contradiction,
     Domain,
+    EMPTY_SYNTHESIS_MARKER,
     Evidence,
     SessionStep,
     SessionSummary,
     SourceClass,
     ConfidenceTier,
+)
+from agp.thresholds import (
+    CONTRADICTION_PENALTY,
+    DB_CONFIDENCE_FLOOR,
+    ESCALATION_THRESHOLD,
+    MAX_CONFIDENCE_BY_SOURCE,
+    MAX_CONFIDENCE_NO_TOOL,
 )
 from inference import get_architect, get_manager, get_sentinel, execute_function_call, _parse_json_response
 from memory import MemoryStore
@@ -89,16 +98,10 @@ WEB_SEARCH_TOOL = {
     },
 }
 
-# Confidence ceilings enforced in code — not policy, not negotiable.
-MAX_CONFIDENCE_BY_SOURCE = {
-    "PRIMARY": 1.0,       # VERIFIED — direct analysis of primary documents
-    "SECONDARY": 0.75,    # CORROBORATED — web search, third-party reports
-    "SIGNAL": 0.55,       # PROBABLE — signals without primary corroboration
-    "INFERRED": 0.55,     # PROBABLE — training data, no real-time verification
-}
-MAX_CONFIDENCE_NO_TOOL = 0.55
+# Confidence ceilings + escalation threshold live in agp.thresholds
+# (imported above). MAX_CONFIDENCE_BY_SOURCE, MAX_CONFIDENCE_NO_TOOL, and
+# ESCALATION_THRESHOLD are re-exported from that module.
 MAX_TOOL_CALL_ROUNDS = 3
-ESCALATION_THRESHOLD = 0.60  # Below this, escalate to Claude Code if available
 
 # Claude Code tool schema for Ollama native tool calling
 CLAUDE_CODE_TOOL = {
@@ -715,6 +718,20 @@ def _best_source_class(evidence: list, used_tools: bool) -> str:
     return best
 
 
+def _response_cites_urls(text: str) -> bool:
+    """Does the Claude Code response contain at least one URL citation?
+
+    Used to decide whether Claude's synthesis is grounded enough to be tiered
+    as SECONDARY (web-corroborated) vs INFERRED (pure reasoning). A response
+    that merely restates a conclusion without any source link is INFERRED —
+    the 0.75 CORROBORATED ceiling is not available to it.
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    return ("http://" in lowered) or ("https://" in lowered)
+
+
 def _dedup_search_results(results: list[dict]) -> list[dict]:
     """Deduplicate search results by URL, keeping the first occurrence."""
     seen_urls = set()
@@ -863,7 +880,21 @@ class Orchestrator:
 
             # Step 7: Session Close — seal and store
             session.advance_to(SessionStep.SESSION_CLOSE)
-            seal_hash = session.seal()
+            try:
+                seal_hash = session.seal()
+            except AGPSealRefused as e:
+                # Seal refused — garbage synthesis, empty evidence, or mostly
+                # filtered. Do NOT write a SPECULATIVE row to DB; return an
+                # error shape so callers know the result is unsealed/unstored.
+                logger.warning(
+                    f"Session {session.session_id}: seal refused: {e}"
+                )
+                out = session.to_dict()
+                out["stored"] = False
+                out["sealed"] = False
+                out["seal_refused_reason"] = str(e)
+                out["error"] = "seal_refused"
+                return out
             logger.info(f"Session {session.session_id}: step 7 — sealed {seal_hash[:16]}...")
 
             # Persist to memory
@@ -873,7 +904,10 @@ class Orchestrator:
 
             total = time.monotonic() - t0
             logger.info(f"Session {session.session_id}: complete in {total:.1f}s")
-            return session.to_dict()
+            out = session.to_dict()
+            out["stored"] = True
+            out["sealed"] = True
+            return out
 
         except AGPViolation as e:
             logger.error(f"Session {session.session_id}: AGP violation: {e}")
@@ -1356,11 +1390,86 @@ class Orchestrator:
         return execute_function_call(name, arguments)
 
     async def _step_check_contradictions(self, session: AGPSession) -> list[Contradiction]:
-        """Architect actively searches for contradictions."""
+        """Architect actively searches for contradictions.
+
+        Claude Code is the PRIMARY reasoning engine (mirrors _step_synthesize).
+        This step's entire purpose is rigor — using the weakest model for it
+        was the original silent-failure pattern.
+        """
         if not session.evidence:
             return []
 
         evidence_compact = _json_compact([e.to_dict() for e in session.evidence])
+
+        def _parse_contradictions(parsed: Optional[dict]) -> list[Contradiction]:
+            found: list[Contradiction] = []
+            if parsed and "contradictions" in parsed:
+                for item in parsed["contradictions"]:
+                    try:
+                        found.append(Contradiction(
+                            claim_a=item.get("claim_a", ""),
+                            claim_b=item.get("claim_b", ""),
+                            source_a=item.get("source_a", ""),
+                            source_b=item.get("source_b", ""),
+                            severity=item.get("severity", "MINOR"),
+                            resolution=item.get("resolution", ""),
+                        ))
+                    except (ValueError, KeyError) as e:
+                        logger.warning(f"Skipping malformed contradiction: {e}")
+            return found
+
+        # ── Claude Code PRIMARY path ──
+        if claude_available():
+            logger.info(
+                f"Session {session.session_id}: step 5 contradictions using Claude Code (primary)"
+            )
+            claude_prompt = (
+                f"Audit the following evidence for contradictions.\n"
+                f"Domain: {session.domain.value} | Scope: {session.scope}\n"
+                f"Evidence ({len(session.evidence)}):\n{evidence_compact}\n\n"
+                f"Find pairwise contradictions. Each contradiction must name the exact "
+                f"claims and sources. Rate severity honestly:\n"
+                f"  CRITICAL = outcome-changing, conclusion cannot hold\n"
+                f"  MAJOR    = meaningfully weakens conclusion\n"
+                f"  MINOR    = definitional / scope / phrasing disagreement\n"
+                f"Absence of contradictions in conflicting-looking evidence is itself a flag.\n"
+                f'Respond with JSON: {{"contradictions":[{{"claim_a":"...","claim_b":"...",'
+                f'"source_a":"...","source_b":"...","severity":"CRITICAL|MAJOR|MINOR",'
+                f'"resolution":"..."}}],"notes":"..."}}'
+            )
+            claude_context = (
+                "You are the contradiction-check agent in an AGP (Agentic Governance "
+                "Protocol) session. Your output directly penalizes session confidence — "
+                "CRITICAL = -0.15, MAJOR = -0.05. Be accurate: overcalling severity "
+                "wastes confidence, undercalling hides real conflicts."
+            )
+            try:
+                result = await claude_code_query(
+                    claude_prompt, system_context=claude_context, timeout=120
+                )
+                if not result.get("error") and not result.get("rate_limited"):
+                    content = result.get("content", "")
+                    parsed = _parse_json_response(content) if content else None
+                    contradictions = _parse_contradictions(parsed)
+                    logger.info(
+                        f"Session {session.session_id}: Claude Code found "
+                        f"{len(contradictions)} contradictions"
+                    )
+                    return contradictions
+                logger.info(
+                    f"Session {session.session_id}: Claude Code unavailable for "
+                    f"contradictions (error={result.get('error')}), falling back to local"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Session {session.session_id}: Claude Code contradiction check "
+                    f"raised {type(e).__name__}: {e}; falling back to local"
+                )
+
+        # ── Local model FALLBACK path ──
+        logger.info(
+            f"Session {session.session_id}: step 5 contradictions using local model (fallback)"
+        )
         messages = [
             {"role": "system", "content": self._architect_system_prompt()},
             {"role": "user", "content": (
@@ -1374,21 +1483,7 @@ class Orchestrator:
         ]
         response = await self.architect.achat(messages, options={"num_predict": 512})
         parsed = _safe_parse(response)
-        contradictions = []
-        if parsed and "contradictions" in parsed:
-            for item in parsed["contradictions"]:
-                try:
-                    contradictions.append(Contradiction(
-                        claim_a=item.get("claim_a", ""),
-                        claim_b=item.get("claim_b", ""),
-                        source_a=item.get("source_a", ""),
-                        source_b=item.get("source_b", ""),
-                        severity=item.get("severity", "MINOR"),
-                        resolution=item.get("resolution", ""),
-                    ))
-                except (ValueError, KeyError) as e:
-                    logger.warning(f"Skipping malformed contradiction: {e}")
-        return contradictions
+        return _parse_contradictions(parsed)
 
     async def _step_synthesize(self, session: AGPSession, used_tools: bool) -> SessionSummary:
         """Architect synthesizes evidence into a conclusion.
@@ -1425,8 +1520,8 @@ class Orchestrator:
                 content = result.get("content", "")
                 parsed = _parse_json_response(content) if content else None
 
-                conclusion = "No synthesis produced."
-                confidence = 0.30
+                conclusion = EMPTY_SYNTHESIS_MARKER
+                confidence = DB_CONFIDENCE_FLOOR
                 if parsed and isinstance(parsed, dict):
                     conclusion = parsed.get("conclusion", conclusion)
                     confidence = float(parsed.get("confidence_score", confidence))
@@ -1470,8 +1565,8 @@ class Orchestrator:
         response = await self.architect.achat(messages)
         parsed = _safe_parse(response)
 
-        conclusion = "No synthesis produced."
-        confidence = 0.30
+        conclusion = EMPTY_SYNTHESIS_MARKER
+        confidence = DB_CONFIDENCE_FLOOR
         if parsed:
             conclusion = parsed.get("conclusion", conclusion)
             confidence = float(parsed.get("confidence_score", confidence))
@@ -1553,45 +1648,65 @@ class Orchestrator:
         parsed = _parse_json_response(content) if content else None
 
         if parsed and isinstance(parsed, dict):
-            # Claude Code is reasoning/synthesis, not primary documents → SECONDARY
-            # (PRIMARY requires direct analysis of ground-truth data)
+            # Claude Code is reasoning/synthesis, not primary documents.
+            # Default tier: INFERRED (ceiling 0.55). Only upgrade to SECONDARY
+            # (ceiling 0.75) when the response actually cites URLs that ground
+            # the synthesis — a response without citations is pure reasoning.
+            conclusion_text = parsed.get("conclusion", content[:500])
+            cited = _response_cites_urls(content) or _response_cites_urls(conclusion_text)
+            tier = SourceClass.SECONDARY if cited else SourceClass.INFERRED
+            source_name = (
+                f"Claude Code ({result['model']})"
+                + (" [cited]" if cited else " [uncited]")
+            )
             claude_evidence = Evidence(
-                content=parsed.get("conclusion", content[:500]),
-                source_class=SourceClass.SECONDARY,
+                content=conclusion_text,
+                source_class=tier,
                 confidence_score=_clamp_confidence(
-                    float(parsed.get("confidence_score", 0.85)), "SECONDARY"
+                    float(parsed.get("confidence_score", 0.85)), tier.value
                 ),
                 domain=session.domain,
                 origin_agent="claude_code",
-                source_name=f"Claude Code ({result['model']})",
+                source_name=source_name,
             )
             session.add_evidence(claude_evidence)
 
-            # Update summary with Claude's analysis
+            # Update summary with Claude's analysis — clamped to the tier
+            # the response actually earned (cited → SECONDARY, else INFERRED)
             summary.conclusion = parsed.get("conclusion", summary.conclusion)
             new_confidence = _clamp_confidence(
-                float(parsed.get("confidence_score", 0.85)), "SECONDARY"
+                float(parsed.get("confidence_score", 0.85)), tier.value
             )
             summary.confidence_score = new_confidence
             summary.evidence_count = len(session.evidence)
             logger.info(
-                f"Claude Code enhancement → confidence={new_confidence}"
+                f"Claude Code enhancement ({tier.value}, cited={cited}) "
+                f"→ confidence={new_confidence}"
             )
         else:
-            # Couldn't parse JSON — still use raw text as SECONDARY evidence
+            # Couldn't parse JSON — use raw text, tier by citation presence
+            cited = _response_cites_urls(content)
+            tier = SourceClass.SECONDARY if cited else SourceClass.INFERRED
+            ceiling = MAX_CONFIDENCE_BY_SOURCE[tier.value]
             claude_evidence = Evidence(
                 content=content[:500],
-                source_class=SourceClass.SECONDARY,
-                confidence_score=0.75,
+                source_class=tier,
+                confidence_score=ceiling,
                 domain=session.domain,
                 origin_agent="claude_code",
-                source_name=f"Claude Code ({result['model']})",
+                source_name=(
+                    f"Claude Code ({result['model']})"
+                    + (" [cited]" if cited else " [uncited]")
+                ),
             )
             session.add_evidence(claude_evidence)
             summary.conclusion = content[:1000]
-            summary.confidence_score = 0.80
+            summary.confidence_score = ceiling
             summary.evidence_count = len(session.evidence)
-            logger.info("Claude Code enhancement used raw text (JSON parse failed)")
+            logger.info(
+                f"Claude Code enhancement used raw text ({tier.value}, "
+                f"cited={cited}, conf={ceiling})"
+            )
 
         return summary, True
 
@@ -1641,5 +1756,35 @@ class Orchestrator:
 
         # Final hard enforcement — code, not policy
         summary.confidence_score = _clamp_confidence(summary.confidence_score, best_sc)
+
+        # ── Contradiction penalty pass ──
+        # Applied AFTER _clamp_confidence, BEFORE seal(). Previously
+        # contradictions were passed to the LLM prompt as a count string
+        # and had zero code-path effect on confidence. That made the
+        # "contradiction-checked" claim cosmetic.
+        pre_penalty = summary.confidence_score
+        critical = sum(
+            1 for c in session.contradictions if c.severity.upper() == "CRITICAL"
+        )
+        major = sum(
+            1 for c in session.contradictions if c.severity.upper() == "MAJOR"
+        )
+        penalty = (
+            critical * CONTRADICTION_PENALTY["CRITICAL"]
+            + major * CONTRADICTION_PENALTY["MAJOR"]
+        )
+        if penalty > 0:
+            penalized = max(DB_CONFIDENCE_FLOOR, round(pre_penalty - penalty, 2))
+            logger.info(
+                f"Session {session.session_id}: contradiction penalty "
+                f"(CRITICAL={critical}, MAJOR={major}) → "
+                f"confidence {pre_penalty} - {round(penalty, 2)} = {penalized}"
+            )
+            summary.confidence_score = penalized
+        else:
+            logger.info(
+                f"Session {session.session_id}: no contradiction penalty "
+                f"(CRITICAL=0, MAJOR=0, confidence={pre_penalty})"
+            )
 
         return summary

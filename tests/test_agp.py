@@ -119,16 +119,30 @@ class TestAGPSession:
         with pytest.raises(AGPViolation, match="summary"):
             s.seal()
 
+    def _good_evidence(self, domain=Domain.GENERAL):
+        return Evidence(
+            content="supporting fact", source_class=SourceClass.SECONDARY,
+            confidence_score=0.7, domain=domain, origin_agent="test",
+        )
+
     def test_full_session_seals(self):
         s = AGPSession("test")
         s.domain = Domain.TECHNICAL
-        for step in list(SessionStep)[1:]:
-            s.advance_to(step)
+        # Walk through all steps; add real evidence so seal() accepts it.
+        # Post-rigor upgrade, seal() refuses empty-evidence/empty-conclusion
+        # sessions — see tests/test_agp_seal.py for the refuse-to-seal tests.
+        s.advance_to(SessionStep.ASSIGN_DOMAIN)
+        s.advance_to(SessionStep.SOURCE_ENUMERATION)
+        s.advance_to(SessionStep.PRIMARY_COLLECTION)
+        s.add_evidence(self._good_evidence(Domain.TECHNICAL))
+        s.advance_to(SessionStep.CONTRADICTION_CHECK)
+        s.advance_to(SessionStep.SYNTHESIS)
         s.summary = SessionSummary(
             scope="test", domain=Domain.TECHNICAL,
             conclusion="result", confidence_score=0.6,
             evidence_count=1, contradiction_count=0,
         )
+        s.advance_to(SessionStep.SESSION_CLOSE)
         seal = s.seal()
         assert len(seal) == 64  # SHA-256 hex
         assert s.sealed_at is not None
@@ -136,13 +150,18 @@ class TestAGPSession:
     def test_cannot_modify_sealed_session(self):
         s = AGPSession("test")
         s.domain = Domain.GENERAL
-        for step in list(SessionStep)[1:]:
-            s.advance_to(step)
+        s.advance_to(SessionStep.ASSIGN_DOMAIN)
+        s.advance_to(SessionStep.SOURCE_ENUMERATION)
+        s.advance_to(SessionStep.PRIMARY_COLLECTION)
+        s.add_evidence(self._good_evidence())
+        s.advance_to(SessionStep.CONTRADICTION_CHECK)
+        s.advance_to(SessionStep.SYNTHESIS)
         s.summary = SessionSummary(
             scope="test", domain=Domain.GENERAL,
             conclusion="done", confidence_score=0.5,
-            evidence_count=0, contradiction_count=0,
+            evidence_count=1, contradiction_count=0,
         )
+        s.advance_to(SessionStep.SESSION_CLOSE)
         s.seal()
         with pytest.raises(AGPViolation, match="sealed"):
             s.add_evidence(Evidence(
@@ -153,13 +172,18 @@ class TestAGPSession:
     def test_double_seal_rejected(self):
         s = AGPSession("test")
         s.domain = Domain.GENERAL
-        for step in list(SessionStep)[1:]:
-            s.advance_to(step)
+        s.advance_to(SessionStep.ASSIGN_DOMAIN)
+        s.advance_to(SessionStep.SOURCE_ENUMERATION)
+        s.advance_to(SessionStep.PRIMARY_COLLECTION)
+        s.add_evidence(self._good_evidence())
+        s.advance_to(SessionStep.CONTRADICTION_CHECK)
+        s.advance_to(SessionStep.SYNTHESIS)
         s.summary = SessionSummary(
             scope="test", domain=Domain.GENERAL,
             conclusion="done", confidence_score=0.5,
-            evidence_count=0, contradiction_count=0,
+            evidence_count=1, contradiction_count=0,
         )
+        s.advance_to(SessionStep.SESSION_CLOSE)
         s.seal()
         with pytest.raises(AGPViolation, match="already sealed"):
             s.seal()

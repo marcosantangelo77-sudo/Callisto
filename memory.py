@@ -6,6 +6,7 @@ Views provide per-domain world access. Cross-domain reads are permanently logged
 """
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional
@@ -14,24 +15,30 @@ import aiosqlite
 from dotenv import load_dotenv
 
 from agp import (
+    AGPSealTampered,
+    AGPSession,
     ConfidenceTier,
     Domain,
     Evidence,
-    AGPSession,
 )
+from agp.thresholds import DB_CONFIDENCE_FLOOR
+
+logger = logging.getLogger("callisto.memory")
 
 load_dotenv()
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
-SCHEMA_SQL = """
+# Schema's CHECK(confidence_score >= N) must match agp.thresholds.DB_CONFIDENCE_FLOOR.
+# We format it in at module load rather than hard-coding "0.30" in two places.
+SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS catalogue (
     entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
     origin_agent TEXT NOT NULL,
     content TEXT NOT NULL,
     source_class TEXT NOT NULL CHECK(source_class IN ('PRIMARY', 'SECONDARY', 'SIGNAL', 'INFERRED')),
-    confidence_score REAL NOT NULL CHECK(confidence_score >= 0.30),
+    confidence_score REAL NOT NULL CHECK(confidence_score >= {DB_CONFIDENCE_FLOOR}),
     confidence_tier TEXT NOT NULL CHECK(confidence_tier IN ('VERIFIED', 'CORROBORATED', 'PROBABLE', 'SPECULATIVE')),
     domain TEXT NOT NULL CHECK(domain IN ('FINANCIAL', 'TECHNICAL', 'SIGNAL', 'SYNTHESIS', 'GENERAL')),
     source_name TEXT DEFAULT '',
@@ -236,12 +243,46 @@ class MemoryStore:
         await self._db.commit()
         return results
 
-    async def get_session(self, session_id: str) -> Optional[dict]:
-        """Retrieve a sealed session by ID."""
+    async def get_session(
+        self, session_id: str, verify: bool = True
+    ) -> Optional[dict]:
+        """Retrieve a sealed session by ID.
+
+        When verify=True (default), recomputes the SHA-256 seal over the stored
+        canonical payload and compares against the stored seal_hash. On mismatch,
+        raises AGPSealTampered.
+
+        Legacy sessions without a seal_hash (pre-verify era) are returned but
+        logged at WARNING — callers should treat them as untrusted.
+
+        Pass verify=False ONLY for the tamper-audit dry-run tool, never for
+        live consumption of session data.
+        """
         row = await self._db.execute_fetchall(
             "SELECT full_session FROM sessions WHERE session_id = ?",
             (session_id,),
         )
-        if row:
-            return json.loads(row[0][0])
-        return None
+        if not row:
+            return None
+        data = json.loads(row[0][0])
+        if not verify:
+            return data
+
+        stored_hash = data.get("seal_hash")
+        if not stored_hash:
+            logger.warning(
+                "get_session(%s): no seal_hash on stored session (legacy/pre-verify)",
+                session_id,
+            )
+            return data
+
+        if not AGPSession.verify_seal(data):
+            logger.error(
+                "SEAL TAMPERED for session %s — stored hash %s does not match recomputed",
+                session_id,
+                stored_hash[:16],
+            )
+            raise AGPSealTampered(
+                f"Session {session_id} failed seal verification"
+            )
+        return data
