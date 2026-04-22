@@ -2629,18 +2629,100 @@ async def data_collection_stats():
     return await data_collector.get_collection_stats()
 
 
-@app.get("/health")
-async def health_check():
+def _evaluate_health_signals(report: dict) -> tuple[bool, str, list[str]]:
     """
-    Comprehensive health check — Layer 2.
-    Returns all subsystem statuses, circuit breaker states, error rates,
-    and pipeline integrity (is the system producing expected output).
-    The sentinel (Layer 3) and watchdog poll this to detect problems.
+    Audit the assembled health report for real degradation signals.
 
-    A system with broken pipelines should NOT report "ok" — the pipeline
-    integrity checker downgrades the healthy flag if critical issues exist.
+    Returns (healthy, severity, reasons). `healthy=False` if any signal trips;
+    severity escalates "warning" -> "critical". `reasons` enumerates every
+    concrete reason for downstream debugging.
+
+    Demotion matrix:
+      write_coordinators[*].writes_failed / writes_total > 1%  -> warning
+      write_coordinators[*].queue_depth > 100                  -> warning
+      watchdog_monitoring.last_ping_ago_seconds > 60           -> critical
+      task_queue.depth > 50 OR oldest_pending_seconds > 600    -> warning
+      stalled_phases nonempty                                   -> warning
+      pipeline_integrity.healthy == False                       -> critical
+      subsystems[*].is_open == True                             -> critical
     """
-    # Track watchdog/sentinel pings for self-monitoring
+    reasons: list[str] = []
+    severity = "ok"
+
+    def _bump(new: str) -> None:
+        nonlocal severity
+        order = {"ok": 0, "warning": 1, "critical": 2}
+        if order[new] > order[severity]:
+            severity = new
+
+    # --- WriteCoordinator signals ---
+    for wc in report.get("write_coordinators") or []:
+        if not isinstance(wc, dict):
+            continue
+        name = wc.get("db_path") or wc.get("name") or "writer"
+        total = wc.get("writes_total") or 0
+        failed = wc.get("writes_failed") or 0
+        if total > 0 and (failed / max(total, 1)) > 0.01:
+            pct = (failed / total) * 100
+            reasons.append(
+                f"writes_failed_rate[{name}]: {failed}/{total} ({pct:.2f}%)"
+            )
+            _bump("warning")
+        qd = wc.get("queue_depth") or 0
+        if qd > 100:
+            reasons.append(f"writer_queue_depth[{name}]: {qd}")
+            _bump("warning")
+
+    # --- Watchdog liveness ---
+    wm = report.get("watchdog_monitoring") or {}
+    last_ping = wm.get("last_ping_ago_seconds")
+    total_pings = wm.get("total_pings") or 0
+    # Don't flag during the first few checks after boot (no external pinger yet)
+    if isinstance(last_ping, (int, float)) and last_ping > 60 and total_pings > 5:
+        reasons.append(f"watchdog_last_ping_ago: {last_ping:.0f}s")
+        _bump("critical")
+
+    # --- Task queue backlog ---
+    tq = report.get("task_queue") or {}
+    depth = tq.get("depth") or 0
+    oldest = tq.get("oldest_pending_seconds")
+    if depth > 50:
+        reasons.append(f"task_queue_depth: {depth}")
+        _bump("warning")
+    if isinstance(oldest, (int, float)) and oldest > 600:
+        reasons.append(
+            f"task_queue_oldest_pending: {oldest/60:.1f}min"
+        )
+        _bump("warning")
+
+    # --- Stalled research phases ---
+    stalled = report.get("stalled_phases") or []
+    if stalled:
+        reasons.append(f"stalled_phases: {','.join(sorted(stalled))}")
+        _bump("warning")
+
+    # --- Pipeline integrity (already degrades healthy) ---
+    pi = report.get("pipeline_integrity") or {}
+    if isinstance(pi, dict) and pi.get("healthy") is False:
+        issues = pi.get("issues") or pi.get("critical_issues") or []
+        if issues:
+            reasons.append(f"pipeline_broken: {len(issues)} critical issue(s)")
+        else:
+            reasons.append("pipeline_broken: integrity check failed")
+        _bump("critical")
+
+    # --- Tripped subsystem breakers ---
+    for name, sub in (report.get("subsystems") or {}).items():
+        if isinstance(sub, dict) and sub.get("is_open"):
+            err = (sub.get("last_error") or "")[:100]
+            reasons.append(f"breaker_open[{name}]: {err}")
+            _bump("critical")
+
+    return (severity == "ok", severity, reasons)
+
+
+async def _build_health_report() -> dict:
+    """Assemble the full /health payload. Shared by /health and /readyz."""
     import time as _time
     if not hasattr(app.state, "_last_health_ping"):
         app.state._last_health_ping = _time.time()
@@ -2649,7 +2731,12 @@ async def health_check():
     app.state._health_ping_count += 1
 
     if not system_health:
-        return {"healthy": False, "error": "Health monitor not initialized"}
+        return {
+            "healthy": False,
+            "severity": "critical",
+            "reasons": ["system_health monitor not initialized"],
+            "error": "Health monitor not initialized",
+        }
     report = system_health.get_full_report()
 
     # Pipeline integrity — use cached results from the last run (fast)
@@ -2657,9 +2744,7 @@ async def health_check():
         checker = get_integrity_checker()
         integrity = checker.get_latest_report()
         report["pipeline_integrity"] = integrity
-        # Degrade overall healthy flag if pipeline has critical issues
         if not integrity.get("healthy", True):
-            report["healthy"] = False
             report["pipeline_broken"] = True
     except Exception as e:
         logger.error(f"Pipeline integrity report failed: {e}", exc_info=True)
@@ -2668,8 +2753,7 @@ async def health_check():
             "error": f"integrity check failed: {e}",
         }
 
-    # Watchdog self-monitoring: if no one has pinged us in 5 min, that's a warning
-    import time as _time
+    # Watchdog self-monitoring
     _health_gap = _time.time() - getattr(app.state, "_last_health_ping", _time.time())
     if _health_gap > 300 and getattr(app.state, "_health_ping_count", 0) > 5:
         logger.warning(
@@ -2681,15 +2765,134 @@ async def health_check():
         "total_pings": getattr(app.state, "_health_ping_count", 0),
     }
 
-    # WriteCoordinator stats — exposed on /health for at-a-glance lock visibility.
+    # WriteCoordinator stats
     try:
         from tools.db_writer import all_stats as _writer_stats
         report["write_coordinators"] = _writer_stats()
     except Exception:
         report["write_coordinators"] = []
 
+    # Task queue depth + oldest pending (cheap: indexed scan)
+    try:
+        if queue is not None and getattr(queue, "_db", None) is not None:
+            try:
+                await queue._db.commit()
+            except Exception:
+                pass
+            row = await queue._db.execute_fetchall(
+                """SELECT COUNT(*),
+                          COALESCE(MIN(created_at), 0)
+                     FROM task_queue
+                    WHERE status = 'PENDING'"""
+            )
+            depth = 0
+            oldest_s: Optional[float] = None
+            if row:
+                depth = int(row[0][0] or 0)
+                oldest_epoch = row[0][1]
+                if oldest_epoch:
+                    try:
+                        oldest_s = max(0.0, _time.time() - float(oldest_epoch))
+                    except (TypeError, ValueError):
+                        oldest_s = None
+            report["task_queue"] = {
+                "depth": depth,
+                "oldest_pending_seconds": round(oldest_s, 1) if oldest_s is not None else None,
+            }
+    except Exception as e:
+        report["task_queue"] = {"error": str(e)}
+
+    # Now evaluate demotion signals and stamp reasons
+    healthy, severity, reasons = _evaluate_health_signals(report)
+    # Only downgrade — the subsystem loop already sets healthy=False on breakers.
+    if not healthy:
+        report["healthy"] = False
+    report["severity"] = severity if not healthy else "ok"
+    report["reasons"] = reasons
+    return report
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Comprehensive health check — Layer 2.
+    Returns all subsystem statuses, circuit breaker states, error rates,
+    and pipeline integrity (is the system producing expected output).
+    The sentinel (Layer 3) and watchdog poll this to detect problems.
+
+    `healthy` is demoted based on concrete signals:
+      - WriteCoordinator failure rate / queue depth
+      - Watchdog ping staleness
+      - Task queue backlog / oldest pending
+      - Stalled research phases
+      - Pipeline integrity failures
+      - Tripped subsystem circuit breakers
+    See `reasons[]` in the response for every specific cause.
+    """
+    report = await _build_health_report()
     # Write health file for sentinel to read if HTTP is down
-    system_health.write_health_file()
+    if system_health:
+        system_health.write_health_file()
+    return report
+
+
+@app.get("/health/livez")
+async def health_livez():
+    """k8s-style liveness: process is up and responsive.
+    Always 200 unless the event loop is deadlocked (in which case this
+    handler wouldn't respond at all)."""
+    import time as _time
+    return {"alive": True, "ts": _time.time()}
+
+
+@app.get("/health/readyz")
+async def health_readyz():
+    """k8s-style readiness: ready to serve traffic.
+    Returns 503 if any demotion condition is met."""
+    report = await _build_health_report()
+    if not report.get("healthy", False):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "ready": False,
+                "severity": report.get("severity", "critical"),
+                "reasons": report.get("reasons", []),
+            },
+        )
+    return {
+        "ready": True,
+        "severity": "ok",
+        "uptime_seconds": report.get("uptime_seconds"),
+    }
+
+
+@app.get("/health/detailed")
+async def health_detailed():
+    """
+    Everything /health returns, plus per-source ingestion SLAs and
+    per-subsystem trip history. For external observability tools.
+    """
+    report = await _build_health_report()
+
+    # Per-subsystem trip history (added by SystemHealth.get_full_report)
+    report["trip_history"] = report.get("trip_history", [])
+
+    # Per-source ingestion SLAs — best-effort; don't fail the endpoint if
+    # the observability module isn't installed yet.
+    sla_report: dict = {}
+    try:
+        from tools import ingestion_observability  # type: ignore
+        fn = getattr(ingestion_observability, "get_sla_report", None)
+        if callable(fn):
+            maybe = fn()
+            if asyncio.iscoroutine(maybe):
+                sla_report = await maybe
+            else:
+                sla_report = maybe or {}
+    except Exception as e:
+        sla_report = {"unavailable": str(e)}
+    report["ingestion_sla"] = sla_report
+
     return report
 
 
