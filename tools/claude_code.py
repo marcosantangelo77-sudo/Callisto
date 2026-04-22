@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -58,6 +59,13 @@ RATE_LIMIT_PATTERNS = [
 _call_count = 0
 _last_reset = time.monotonic()
 _TRACKING_WINDOW = 3600  # 1 hour
+
+# Lock protecting _call_count / _last_reset against parallel ladder
+# escalations. Without this lock, N concurrent threads all read
+# _call_count == MAX-1 and each increment to MAX, causing the soft
+# hourly cap to be breached. The lock is tiny-scope (just the counter
+# bump + window roll) so it never blocks real work.
+_call_count_lock = threading.Lock()
 
 # Availability state — persisted to disk so restarts don't bypass cooldown
 _COOLDOWN_FILE = os.path.join(os.path.dirname(DB_PATH), "claude_cooldown.json")
@@ -124,14 +132,39 @@ _restore_cooldown()
 
 
 def _track_call() -> int:
-    """Track call count within the current window. Returns current count."""
+    """Track call count within the current window. Returns current count.
+
+    Locked so parallel ladder escalations can't race the soft cap.
+    """
     global _call_count, _last_reset
-    now = time.monotonic()
-    if now - _last_reset > _TRACKING_WINDOW:
-        _call_count = 0
-        _last_reset = now
-    _call_count += 1
-    return _call_count
+    with _call_count_lock:
+        now = time.monotonic()
+        if now - _last_reset > _TRACKING_WINDOW:
+            _call_count = 0
+            _last_reset = now
+        _call_count += 1
+        return _call_count
+
+
+def _try_reserve_call_slot() -> Optional[int]:
+    """Atomically reserve a slot in the hourly window.
+
+    Returns the new call count on success, or None if the hourly cap
+    has already been reached. This is the race-free replacement for
+    the old 'check is_available(), then call _track_call()' pattern —
+    50 threads that all see count==34 can no longer each increment to
+    35+ simultaneously; exactly one wins per slot.
+    """
+    global _call_count, _last_reset
+    with _call_count_lock:
+        now = time.monotonic()
+        if now - _last_reset > _TRACKING_WINDOW:
+            _call_count = 0
+            _last_reset = now
+        if _call_count >= MAX_CALLS_PER_HOUR:
+            return None
+        _call_count += 1
+        return _call_count
 
 
 def _is_rate_limited(error_msg: str) -> bool:
@@ -197,14 +230,16 @@ def is_available() -> bool:
     # call count check, otherwise the counter stays stuck at max and
     # no new calls are ever attempted (which also prevents _track_call
     # from running and resetting the window).
-    now = time.monotonic()
-    if now - _last_reset > _TRACKING_WINDOW:
-        _call_count = 0
-        _last_reset = now
+    with _call_count_lock:
+        now = time.monotonic()
+        if now - _last_reset > _TRACKING_WINDOW:
+            _call_count = 0
+            _last_reset = now
+        at_cap = _call_count >= MAX_CALLS_PER_HOUR
 
     if _available:
         # Soft cap: don't exceed hourly call limit
-        if _call_count >= MAX_CALLS_PER_HOUR:
+        if at_cap:
             return False
         return True
 
@@ -290,6 +325,23 @@ async def claude_code_query(
         Dict with "content", "source_class", "model", "call_number",
         "error", and "rate_limited" (if applicable).
     """
+    # HARD KILL SWITCH — enforced unconditionally, before any branch.
+    # CALLISTO_LOCAL_ONLY=1 forbids every Claude subprocess spawn,
+    # regardless of skip_availability_check, hermes_caller, or any
+    # other flag a caller might set. This is the single choke point
+    # that guarantees no cloud calls happen in local-only mode.
+    if os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes"):
+        logger.info("Claude Code blocked by CALLISTO_LOCAL_ONLY kill switch")
+        return {
+            "content": "",
+            "source_class": "PRIMARY",
+            "model": CLAUDE_MODEL,
+            "call_number": 0,
+            "error": "blocked_by_local_only",
+            "rate_limited": False,
+            "quality": "none",
+        }
+
     # Pre-flight availability check
     if not skip_availability_check and not is_available():
         remaining = get_cooldown_remaining()
@@ -467,7 +519,26 @@ async def claude_code_available() -> bool:
 
 
 def claude_code_sync(prompt: str, system_context: str = "") -> dict:
-    """Synchronous wrapper for Hermes function registry compatibility."""
+    """Synchronous wrapper for Hermes function registry compatibility.
+
+    Respects the CALLISTO_LOCAL_ONLY kill switch before spawning any
+    thread / subprocess — required because this is registered in
+    inference.FUNCTION_REGISTRY under 'claude_code' and the
+    orchestrator routes tool calls straight through it.
+    """
+    # HARD KILL SWITCH — same guarantee as claude_code_query above.
+    if os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes"):
+        logger.info("claude_code_sync blocked by CALLISTO_LOCAL_ONLY kill switch")
+        return {
+            "content": "",
+            "source_class": "PRIMARY",
+            "model": CLAUDE_MODEL,
+            "call_number": 0,
+            "error": "blocked_by_local_only",
+            "rate_limited": False,
+            "quality": "none",
+        }
+
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

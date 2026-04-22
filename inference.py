@@ -11,6 +11,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
 logger = logging.getLogger("callisto.inference")
@@ -248,30 +249,149 @@ def _get_inference(model: str) -> "OllamaInference":
     return _inference_cache[model]
 
 
+# ── Time-of-day routing ─────────────────────────────────────────────────
+# Claude Max subscription has a tight 5h weekly budget; the bulk of
+# interactive Claude usage happens 8am-2pm ET per user workflow. Outside
+# that window we demote Claude to the last rung of the ladder so the
+# autonomous loop spends the credit-window where it matters most.
+# Override: CALLISTO_CLAUDE_HOURS="8-14" (inclusive start, exclusive end,
+# ET hours on a 24h clock). Set CALLISTO_CLAUDE_HOURS="*" to disable
+# demotion (always keep Claude at its default ladder position).
+
+# ET = UTC-5 (EST) / UTC-4 (EDT). We don't run zoneinfo for the stdlib
+# cross-platform headache; fixed -5 offset is fine for a coarse gate
+# since the window is 6h wide and DST only shifts by 1h.
+_ET_OFFSET_HOURS = -5
+
+
+def _current_et_hour() -> int:
+    """Current hour in ET (0-23), using a fixed -5 UTC offset."""
+    et = datetime.now(timezone.utc) + timedelta(hours=_ET_OFFSET_HOURS)
+    return et.hour
+
+
+def _claude_hours_window() -> Optional[tuple[int, int]]:
+    """Parse CALLISTO_CLAUDE_HOURS env var.
+
+    Returns (start_hour, end_hour) on inclusive-start / exclusive-end
+    semantics, or None to disable demotion (always allow Claude).
+    Default: (8, 14) == 8am-2pm ET.
+    """
+    raw = os.getenv("CALLISTO_CLAUDE_HOURS", "8-14").strip()
+    if raw in ("*", "any", "always"):
+        return None
+    try:
+        start_s, end_s = raw.split("-", 1)
+        start, end = int(start_s), int(end_s)
+        if 0 <= start <= 24 and 0 <= end <= 24 and start != end:
+            return start, end
+    except (ValueError, TypeError):
+        pass
+    logger.warning(
+        f"Invalid CALLISTO_CLAUDE_HOURS={raw!r} — falling back to 8-14"
+    )
+    return 8, 14
+
+
+def _in_claude_hours(now_et_hour: Optional[int] = None) -> bool:
+    """True iff we are currently inside the Claude Max credit window."""
+    window = _claude_hours_window()
+    if window is None:
+        return True
+    start, end = window
+    h = now_et_hour if now_et_hour is not None else _current_et_hour()
+    if start < end:
+        return start <= h < end
+    # Wrap-around window (e.g. 22-6): late-night into morning.
+    return h >= start or h < end
+
+
+def _demote_claude_in_ladder(ladder: list[dict]) -> list[dict]:
+    """
+    Move every 'claude_code' rung to the end of the ladder, preserving
+    the relative order of other rungs. If the ladder has ANY local
+    alternative ahead of Claude after the move, Claude effectively
+    becomes a fallback of last resort. Called when we're outside the
+    Claude Max hours to preserve credits for interactive use.
+    """
+    non_claude = [c for c in ladder if c.get("model") != "claude_code"]
+    claude_rungs = [c for c in ladder if c.get("model") == "claude_code"]
+    if not claude_rungs:
+        return ladder
+    return non_claude + claude_rungs
+
+
+# ── Bridge output validation for hypothesis_gen ─────────────────────────
+# When hypothesis_gen is routed through the local CC bridge (or any
+# local model) we expect a JSON list of hypothesis dicts with at least
+# these keys. If the output doesn't match, we degrade the quality tier
+# so the ladder can escalate instead of silently returning garbage.
+_HYPOTHESIS_REQUIRED_KEYS = frozenset({"name", "market", "edge_logic", "min_signals"})
+
+
+def _validate_hypothesis_gen_output(content: str) -> bool:
+    """
+    Loose shape check: content parses to a list of dicts, each with
+    the required hypothesis keys. We don't enforce value types beyond
+    that — the consumer does richer validation downstream. A single
+    well-formed dict (not wrapped in a list) also passes, to match
+    historical tolerance.
+    """
+    parsed = _parse_json_response(content)
+    if parsed is None:
+        return False
+    items = parsed if isinstance(parsed, list) else [parsed]
+    if not items:
+        return False
+    for item in items:
+        if not isinstance(item, dict):
+            return False
+        if not _HYPOTHESIS_REQUIRED_KEYS.issubset(item.keys()):
+            return False
+    return True
+
+
 async def escalate_with_ladder(
     prompt: str,
     system_context: str = "",
     task_type: str = "reasoning",
     timeout: Optional[int] = None,
+    **kwargs: Any,
 ) -> dict:
     """
     Try models in quality order for a given task type.
 
     Returns first successful result with metadata about which model was used.
     Claude Code is attempted first when available; local models provide fallback.
+    Outside the Claude Max hours window (CALLISTO_CLAUDE_HOURS, default 8-14 ET),
+    Claude is demoted to the last rung so the subscription budget is preserved
+    for interactive use.
 
     Args:
         prompt: the task prompt
         system_context: optional system context (for Claude or system prompt)
         task_type: one of MODEL_LADDER keys (reasoning, classification, review, etc.)
         timeout: override timeout (uses ladder default if None)
+        **kwargs: forward-compat extras. Recognized:
+            - hermes_caller: passed through to claude_code_query (default "default")
 
     Returns:
         dict with keys: content, model_used, quality, ladder_step, error (if all failed)
     """
     from tools.claude_code import claude_code_query, is_available as claude_available
 
+    hermes_caller = kwargs.get("hermes_caller", "default")
+
     ladder = MODEL_LADDER.get(task_type, MODEL_LADDER["reasoning"])
+    # Preserve Claude credits outside the Max hours window.
+    if not _in_claude_hours():
+        demoted = _demote_claude_in_ladder(ladder)
+        if demoted is not ladder:
+            logger.debug(
+                f"Ladder: outside Claude hours (ET hour={_current_et_hour()}) — "
+                f"Claude demoted to last rung for task_type={task_type}"
+            )
+            ladder = demoted
 
     # ── Local CC bridge (CALLISTO_LOCAL_ONLY only) ──
     # When the nuclear kill switch is on, Claude paths are dead but we
@@ -295,18 +415,29 @@ async def escalate_with_ladder(
             )
             bridge_content = bridge_res.get("content", "")
             if bridge_content and not bridge_res.get("error"):
-                logger.info(
-                    f"Local CC bridge succeeded for task_type={task_type} "
-                    f"(model={bridge_res.get('model_used')}, "
-                    f"{len(bridge_content)} chars) — skipping direct Ollama ladder"
-                )
-                return {
-                    "content": bridge_content,
-                    "model_used": bridge_res.get("model_used", "local_cc"),
-                    "quality": bridge_res.get("quality", "high"),
-                    "ladder_step": -2,  # sentinel: bridge path, pre-ladder
-                    "path": "local_cc_bridge",
-                }
+                # Shape-validate hypothesis_gen output before accepting.
+                # On malformed schema, mark quality=low and fall through
+                # so the ladder can escalate instead of shipping garbage.
+                if task_type == "hypothesis_gen" and not _validate_hypothesis_gen_output(bridge_content):
+                    logger.warning(
+                        "Local CC bridge returned hypothesis_gen output that "
+                        "does not match the required schema "
+                        f"{sorted(_HYPOTHESIS_REQUIRED_KEYS)} — escalating"
+                    )
+                    # Fall through to ladder rather than returning low-quality.
+                else:
+                    logger.info(
+                        f"Local CC bridge succeeded for task_type={task_type} "
+                        f"(model={bridge_res.get('model_used')}, "
+                        f"{len(bridge_content)} chars) — skipping direct Ollama ladder"
+                    )
+                    return {
+                        "content": bridge_content,
+                        "model_used": bridge_res.get("model_used", "local_cc"),
+                        "quality": bridge_res.get("quality", "high"),
+                        "ladder_step": -2,  # sentinel: bridge path, pre-ladder
+                        "path": "local_cc_bridge",
+                    }
             logger.info(
                 f"Local CC bridge unavailable / failed "
                 f"(error={bridge_res.get('error')!r}, "
@@ -327,16 +458,27 @@ async def escalate_with_ladder(
                     logger.debug(f"Ladder step {step}: Claude unavailable, skipping")
                     continue
                 result = await claude_code_query(
-                    prompt, system_context, timeout=model_timeout
+                    prompt,
+                    system_context,
+                    timeout=model_timeout,
+                    hermes_caller=hermes_caller,
                 )
                 content = result.get("content", "")
                 if content and not result.get("error"):
+                    # Schema-validate hypothesis_gen output before accepting.
+                    if task_type == "hypothesis_gen" and not _validate_hypothesis_gen_output(content):
+                        logger.warning(
+                            f"Ladder step {step}: Claude hypothesis_gen output "
+                            f"failed schema check — falling through"
+                        )
+                        continue
                     logger.info(f"Ladder step {step}: Claude Code succeeded")
                     return {
                         "content": content,
                         "model_used": "claude_code",
                         "quality": config["quality"],
                         "ladder_step": step,
+                        "raw": result,
                     }
                 logger.warning(f"Ladder step {step}: Claude returned error or empty")
                 continue
@@ -353,6 +495,13 @@ async def escalate_with_ladder(
             )
             content = response.get("content", "")
             if content:
+                # Schema-validate hypothesis_gen output from local models too.
+                if task_type == "hypothesis_gen" and not _validate_hypothesis_gen_output(content):
+                    logger.warning(
+                        f"Ladder step {step}: {model} hypothesis_gen output "
+                        f"failed schema check — falling through"
+                    )
+                    continue
                 logger.info(f"Ladder step {step}: {model} succeeded ({len(content)} chars)")
                 return {
                     "content": content,
