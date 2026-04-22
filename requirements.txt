@@ -20,6 +20,11 @@ polars==1.39.3
 beautifulsoup4==4.14.3
 jsonschema==4.26.0
 
+# SQL parsing — used by /admin/sql for AST-level allowlist validation
+# (rejects PRAGMA writable_schema=1 and multi-statement bypasses that keyword
+# filtering cannot safely catch).
+sqlparse>=0.5,<1.0
+
 # MCP server that wraps Callisto's HTTP API as MCP tools
 # (tools/callisto_mcp_server.py). Pulls in pydantic-settings, sse-starlette,
 # python-multipart, httpx-sse, pyjwt, cryptography, pywin32 transitively.

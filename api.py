@@ -63,10 +63,28 @@ CALLISTO_ADMIN_TOKEN = os.getenv("CALLISTO_ADMIN_TOKEN", "").strip()
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
+# Dedicated logger for auth events so probing is visible in a separate stream.
+_auth_logger = logging.getLogger("callisto.api.auth")
+
 
 def _client_is_loopback(request: Request) -> bool:
+    """Return True iff the request originated from the local loopback interface.
+
+    Only trusts `request.client.host` — never X-Forwarded-For — because Callisto
+    binds to 127.0.0.1 by default and does not sit behind a trusted proxy. If
+    someone puts it behind one, loopback-trust must be revisited.
+    """
     host = (request.client.host if request.client else "") or ""
     return host in ("127.0.0.1", "::1", "localhost")
+
+
+def _log_auth_denied(request: Request, reason: str, status: int) -> None:
+    """Emit a WARNING for every 401/403 so probing is visible in logs."""
+    host = (request.client.host if request.client else "?") or "?"
+    _auth_logger.warning(
+        "AUTH_DENIED host=%s method=%s path=%s status=%d reason=%s",
+        host, request.method, request.url.path, status, reason,
+    )
 
 
 async def require_admin(
@@ -75,13 +93,16 @@ async def require_admin(
 ) -> None:
     """Hard-gate: require Bearer token. Fails closed if CALLISTO_ADMIN_TOKEN unset."""
     if not CALLISTO_ADMIN_TOKEN:
+        _log_auth_denied(request, "admin_token_unset", 503)
         raise HTTPException(
             status_code=503,
             detail="CALLISTO_ADMIN_TOKEN not configured; admin endpoint disabled",
         )
     if credentials is None or credentials.scheme.lower() != "bearer":
+        _log_auth_denied(request, "missing_bearer", 401)
         raise HTTPException(status_code=401, detail="Bearer token required")
     if not _secrets.compare_digest(credentials.credentials, CALLISTO_ADMIN_TOKEN):
+        _log_auth_denied(request, "bad_token", 403)
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
@@ -93,11 +114,41 @@ async def require_admin_or_loopback(
     if not CALLISTO_ADMIN_TOKEN:
         if _client_is_loopback(request):
             return
+        _log_auth_denied(request, "non_loopback_no_token", 403)
         raise HTTPException(status_code=403, detail="Loopback only when admin token unset")
     if credentials is None or credentials.scheme.lower() != "bearer":
+        # Loopback path short-circuit even when a token is set: MCP server and
+        # local research loop don't send Authorization headers. They still need
+        # to self-consume the API. Non-loopback callers must authenticate.
+        if _client_is_loopback(request):
+            return
+        _log_auth_denied(request, "missing_bearer", 401)
         raise HTTPException(status_code=401, detail="Bearer token required")
     if not _secrets.compare_digest(credentials.credentials, CALLISTO_ADMIN_TOKEN):
+        _log_auth_denied(request, "bad_token", 403)
         raise HTTPException(status_code=403, detail="Forbidden")
+
+
+# ---------------------------------------------------------------------------
+# Default-secure write-gate
+# ---------------------------------------------------------------------------
+# Everything that mutates state (POST/PATCH/PUT/DELETE) gets auth by default.
+# To expose a write endpoint publicly, register it via `public_endpoint(...)`.
+# The middleware `_default_secure_middleware` enforces this below.
+#
+# Keep this list SHORT — public writes should be rare and deliberate.
+# ---------------------------------------------------------------------------
+_WRITE_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
+_PUBLIC_WRITE_ENDPOINTS: set[tuple[str, str]] = set()
+
+
+def public_endpoint(method: str, path: str) -> None:
+    """Opt a write endpoint OUT of the default-secure middleware.
+
+    Adds (METHOD, path) to the public registry. `path` must match
+    `request.url.path` exactly (no pattern matching).
+    """
+    _PUBLIC_WRITE_ENDPOINTS.add((method.upper(), path))
 
 # Shared state
 memory: Optional[MemoryStore] = None
@@ -763,6 +814,64 @@ async def _validation_exception_handler(request: Request, exc: RequestValidation
     )
 
 
+# ---------------------------------------------------------------------------
+# Default-secure middleware
+# ---------------------------------------------------------------------------
+# Runs BEFORE any endpoint dispatch. If the method is a write and the path
+# isn't on the public allowlist, the request must satisfy
+# `require_admin_or_loopback`. This is the primary gate — per-endpoint
+# `dependencies=[Depends(require_admin_or_loopback)]` are defense in depth.
+#
+# Endpoints may still be explicitly gated with `require_admin` (hard token
+# requirement) via per-endpoint dependencies; the middleware only enforces
+# the floor, never relaxes it.
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def _default_secure_middleware(request: Request, call_next):
+    method = request.method.upper()
+    if method in _WRITE_METHODS:
+        path = request.url.path
+        if (method, path) not in _PUBLIC_WRITE_ENDPOINTS:
+            # Inline the token/loopback check so we can return JSON rather
+            # than let HTTPException bubble up before routing.
+            if _client_is_loopback(request):
+                # Loopback always allowed — MCP server & research loop path.
+                pass
+            else:
+                auth_header = request.headers.get("authorization", "")
+                if not CALLISTO_ADMIN_TOKEN:
+                    _log_auth_denied(request, "non_loopback_no_token", 403)
+                    return JSONResponse(
+                        status_code=403,
+                        content={"error": "Loopback only when admin token unset", "status": 403},
+                    )
+                if not auth_header.lower().startswith("bearer "):
+                    _log_auth_denied(request, "missing_bearer", 401)
+                    return JSONResponse(
+                        status_code=401,
+                        content={"error": "Bearer token required", "status": 401},
+                    )
+                provided = auth_header.split(" ", 1)[1].strip()
+                if not _secrets.compare_digest(provided, CALLISTO_ADMIN_TOKEN):
+                    _log_auth_denied(request, "bad_token", 403)
+                    return JSONResponse(
+                        status_code=403,
+                        content={"error": "Forbidden", "status": 403},
+                    )
+    return await call_next(request)
+
+
+# Explicit public write allowlist — EVERY entry is deliberate.
+# - POST /task: AGP research submission. MCP server + CC sessions use this.
+# - POST /context/sync: already hard-gated via require_admin; listed here so
+#   the middleware doesn't double-check (the endpoint's own require_admin
+#   remains the real gate, stricter than the loopback default).
+# Keep this list minimal; prefer moving endpoints off it over adding to it.
+public_endpoint("POST", "/task")
+public_endpoint("POST", "/context/sync")
+
+
 class TaskSubmission(BaseModel):
     query: str = Field(..., min_length=1, max_length=20000)
     priority: int = Field(default=0, ge=-10, le=10)
@@ -826,10 +935,18 @@ async def query_world(
     keyword: Optional[str] = None,
     min_confidence: Optional[float] = None,
     limit: int = 50,
+    _auth: None = Depends(require_admin_or_loopback),
 ):
     """Query a domain world. When ``keyword`` is present, retrieval is
     SEMANTIC (vector similarity) with a keyword-LIKE fallback; otherwise
     the recent-first ordering is used.
+
+    Loopback-or-admin gated: world memory can contain tagged research
+    (financial, signal, synthesis) we don't want to leak to unauth'd callers
+    if CALLISTO_BIND_HOST is ever set non-loopback.
+
+    SECURITY (audit 2026-04-21): `limit` is hard-capped at 500 to prevent
+    memory-exhaustion via `?limit=1000000`.
     """
     try:
         domain_enum = Domain(domain.upper())
@@ -838,10 +955,10 @@ async def query_world(
             status_code=400,
             detail=f"Invalid domain. Must be one of: {[d.value for d in Domain]}",
         )
-    # Hard cap on limit so ?limit=1000000 can't blow the API's memory.
-    if limit < 1:
-        limit = 1
-    limit = min(limit, 500)
+    # Cap limit defensively — anything beyond 500 materialises gigabytes on
+    # well-populated domains and is almost never a legitimate query.
+    # Also coerces limit to int to reject `?limit=foo`.
+    limit = max(1, min(int(limit), 500))
     results = await memory.query_world(
         domain_enum, keyword=keyword, min_confidence=min_confidence, limit=limit
     )
@@ -929,7 +1046,7 @@ async def get_snapshots(sport: str, limit: int = 10):
     return {"sport": sport, "count": len(snaps), "snapshots": snaps}
 
 
-@app.post("/odds/snapshot/{sport}")
+@app.post("/odds/snapshot/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def force_snapshot(sport: str):
     """Force an immediate odds snapshot for a sport."""
     result = await line_monitor.force_snapshot(sport)
@@ -1092,7 +1209,7 @@ async def get_kl_metrics(sport: Optional[str] = None, limit: int = 50):
     }
 
 
-@app.post("/odds/parlay-scan/{sport}")
+@app.post("/odds/parlay-scan/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def parlay_scan(sport: str):
     """Scan for correlated parlay edges on a sport. Pulls odds + alternates.
 
@@ -1775,7 +1892,7 @@ class SimulationRequest(BaseModel):
     event_id: str = ""
 
 
-@app.post("/simulate/basketball")
+@app.post("/simulate/basketball", dependencies=[Depends(require_admin_or_loopback)])
 async def simulate_basketball_game(req: SimulationRequest):
     """Run Monte Carlo simulation and compare against market odds."""
     from tools.simulation import simulate_basketball, compare_to_market, TeamProfile
@@ -1831,7 +1948,7 @@ class PoissonRequest(BaseModel):
     event_id: str = ""
 
 
-@app.post("/simulate/poisson")
+@app.post("/simulate/poisson", dependencies=[Depends(require_admin_or_loopback)])
 async def simulate_poisson_game(req: PoissonRequest):
     """Run Poisson simulation for low-scoring sports."""
     from tools.simulation import simulate_poisson
@@ -2303,7 +2420,7 @@ class DevigRequest(BaseModel):
     odds_b: int
 
 
-@app.post("/boosts/evaluate-fixed")
+@app.post("/boosts/evaluate-fixed", dependencies=[Depends(require_admin_or_loopback)])
 async def eval_fixed_boost(req: FixedBoostRequest):
     """Evaluate a fixed profit boost — devig, compare to fair, calculate edge."""
     from tools.boost_evaluator import evaluate_fixed_boost, devig_multiplicative
@@ -2321,7 +2438,7 @@ async def eval_fixed_boost(req: FixedBoostRequest):
     )
 
 
-@app.post("/boosts/evaluate-percentage")
+@app.post("/boosts/evaluate-percentage", dependencies=[Depends(require_admin_or_loopback)])
 async def eval_pct_boost(req: PctBoostRequest):
     """Evaluate a percentage profit boost token."""
     from tools.boost_evaluator import evaluate_percentage_boost, devig_multiplicative
@@ -2340,7 +2457,7 @@ async def eval_pct_boost(req: PctBoostRequest):
     )
 
 
-@app.post("/boosts/evaluate-free-bet")
+@app.post("/boosts/evaluate-free-bet", dependencies=[Depends(require_admin_or_loopback)])
 async def eval_free_bet(req: FreeBetRequest):
     """Evaluate a free bet or no-sweat bet."""
     from tools.boost_evaluator import evaluate_free_bet, devig_multiplicative
@@ -2359,7 +2476,7 @@ async def eval_free_bet(req: FreeBetRequest):
     )
 
 
-@app.post("/boosts/hedge")
+@app.post("/boosts/hedge", dependencies=[Depends(require_admin_or_loopback)])
 async def hedge_calc(req: HedgeRequest):
     """Calculate optimal hedge for guaranteed profit."""
     from tools.boost_evaluator import calculate_hedge
@@ -2372,7 +2489,7 @@ async def hedge_calc(req: HedgeRequest):
     )
 
 
-@app.post("/boosts/devig")
+@app.post("/boosts/devig", dependencies=[Depends(require_admin_or_loopback)])
 async def devig(req: DevigRequest):
     """Devig a two-way market using multiplicative method."""
     from tools.boost_evaluator import devig_multiplicative, devig_additive
@@ -2387,7 +2504,7 @@ async def devig(req: DevigRequest):
     }
 
 
-@app.post("/boosts/evaluate-parlay")
+@app.post("/boosts/evaluate-parlay", dependencies=[Depends(require_admin_or_loopback)])
 async def eval_boosted_parlay(req: BoostedParlayRequest):
     """Evaluate a boosted parlay using correlation-adjusted fair odds.
 
@@ -2429,7 +2546,7 @@ class BacktestRequest(BaseModel):
     credit_budget: int = 50
 
 
-@app.post("/hypothesis")
+@app.post("/hypothesis", dependencies=[Depends(require_admin_or_loopback)])
 async def create_hypothesis(req: HypothesisCreate):
     """Create a new testable betting hypothesis."""
     hid = await hypothesis_manager.create_hypothesis(
@@ -2619,7 +2736,7 @@ async def get_backtest_results(run_id: str):
     return await backtest_engine.get_run_results(run_id)
 
 
-@app.post("/backtest/resolve/{run_id}")
+@app.post("/backtest/resolve/{run_id}", dependencies=[Depends(require_admin_or_loopback)])
 async def resolve_backtest(run_id: str, sport: str = "basketball_nba"):
     """Resolve backtest events against actual game results."""
     return await backtest_engine.resolve_with_scores(run_id, sport)
@@ -2781,7 +2898,7 @@ async def embedding_stats(collection: Optional[str] = None):
     return await vector_store.get_collection_stats(collection)
 
 
-@app.post("/embeddings/search")
+@app.post("/embeddings/search", dependencies=[Depends(require_admin_or_loopback)])
 async def embedding_search(
     collection: str,
     query: str,
@@ -3250,13 +3367,23 @@ async def full_system_status():
 # ---------------------------------------------------------------------------
 
 @app.get("/tasks")
-async def list_tasks(status: Optional[str] = None, limit: int = 10):
-    """List recent tasks from the queue."""
+async def list_tasks(
+    status: Optional[str] = None,
+    limit: int = 10,
+    _auth: None = Depends(require_admin_or_loopback),
+):
+    """List recent tasks from the queue.
+
+    Loopback-or-admin gated: task rows embed the original user query text and
+    session_ids, which leak conversation content if reachable non-loopback.
+    `/task/{id}` was already gated; this brings the bulk listing in line.
+    """
     # Refresh WAL snapshot to see externally-committed rows
     try:
         await queue._db.commit()
     except Exception:
         pass
+    limit = max(1, min(int(limit), 500))
     rows = await queue._db.execute_fetchall(
         """SELECT task_id, query, status, priority, session_id,
                   created_at, started_at, completed_at
@@ -3441,50 +3568,172 @@ async def debug_gc(_auth: None = Depends(require_admin)):
     return result
 
 
+# PRAGMA allowlist for /admin/sql — read-only diagnostic pragmas only.
+# ANY other PRAGMA (writable_schema=1, journal_mode=OFF, foreign_keys=OFF, etc.)
+# is rejected. Value assignment to even allowed PRAGMAs is rejected.
+_ALLOWED_PRAGMAS = frozenset({
+    "integrity_check",
+    "quick_check",
+    "page_count",
+    "page_size",
+    "wal_autocheckpoint",
+    "wal_checkpoint",
+    "schema_version",
+    "user_version",
+    "cache_size",
+    "freelist_count",
+    "journal_mode",      # read-only query form
+    "database_list",
+    "table_info",
+    "index_list",
+    "index_info",
+    "foreign_key_list",
+    "compile_options",
+})
+
+
+def _validate_admin_sql(sql: str) -> Optional[str]:
+    """AST-validate a /admin/sql query. Return None if OK, else error string.
+
+    Rules:
+      * exactly one statement (sqlparse must parse to exactly one non-empty stmt)
+      * must be SELECT or a whitelisted read-only PRAGMA
+      * PRAGMA forbidden if it assigns a value or is not in _ALLOWED_PRAGMAS
+      * rejects CTEs whose body contains INSERT/UPDATE/DELETE (write-CTEs)
+    """
+    try:
+        import sqlparse
+        from sqlparse.sql import Statement
+    except ImportError:
+        # Degraded-mode fallback: sqlparse isn't installed. Be extra strict —
+        # accept only simple SELECTs with no semicolons and no PRAGMA at all.
+        normalized = sql.strip().rstrip(";")
+        if ";" in normalized:
+            return "Multi-statement queries not allowed"
+        if not normalized.upper().startswith("SELECT"):
+            return "sqlparse unavailable; only single SELECT allowed in degraded mode"
+        forbidden = ("PRAGMA", "DROP", "DELETE", "INSERT", "UPDATE", "ALTER",
+                     "CREATE", "ATTACH", "DETACH", "REINDEX", "VACUUM", "REPLACE")
+        upper = normalized.upper()
+        import re as _re
+        for kw in forbidden:
+            if _re.search(rf"\b{kw}\b", upper):
+                return f"Forbidden keyword: {kw}"
+        return None
+
+    parsed = sqlparse.parse(sql)
+    # sqlparse may return empty statements for trailing semicolons — filter them.
+    real_stmts = [
+        s for s in parsed
+        if isinstance(s, Statement) and s.tokens and str(s).strip().rstrip(";").strip()
+    ]
+    if len(real_stmts) == 0:
+        return "Empty statement"
+    if len(real_stmts) > 1:
+        return "Multi-statement queries not allowed"
+    stmt = real_stmts[0]
+    stmt_type = stmt.get_type()  # 'SELECT', 'PRAGMA', 'UPDATE', 'UNKNOWN', etc.
+
+    # Check for write-verbs anywhere (e.g., hidden inside a WITH ... DELETE CTE).
+    # sqlparse doesn't flag these via get_type() when wrapped in a CTE.
+    upper_sql = str(stmt).upper()
+    import re as _re
+    for kw in ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE",
+               "ATTACH", "DETACH", "REINDEX", "VACUUM", "REPLACE"):
+        if _re.search(rf"\b{kw}\b", upper_sql):
+            return f"Forbidden keyword: {kw}"
+
+    if stmt_type == "SELECT":
+        return None
+
+    # PRAGMA handling — sqlparse classifies the whole "PRAGMA name[=value]"
+    # as a single Identifier token under an UNKNOWN statement type, so we
+    # prefix-sniff the raw upper-cased text instead.
+    stripped_upper = upper_sql.strip().rstrip(";").strip()
+    if stripped_upper.startswith("PRAGMA"):
+        # Extract PRAGMA body + check for assignment.
+        #   Allowed:  PRAGMA integrity_check;   PRAGMA page_count;
+        #   Rejected: PRAGMA writable_schema=1; PRAGMA journal_mode=OFF;
+        #             PRAGMA foreign_keys=OFF;
+        body = stripped_upper[len("PRAGMA"):].strip()
+        if not body:
+            return "Empty PRAGMA"
+        # Reject any assignment syntax
+        if "=" in body:
+            return "PRAGMA value assignment not allowed"
+        # Reject function-call style with args beyond the trivial form,
+        # e.g. PRAGMA wal_checkpoint(TRUNCATE) — keep it very conservative.
+        if "(" in body:
+            name = body.split("(", 1)[0].strip().lower()
+        else:
+            name = body.strip().lower()
+        if name not in _ALLOWED_PRAGMAS:
+            return f"PRAGMA '{name}' not in allowlist"
+        return None
+
+    if stmt_type == "UNKNOWN":
+        return "Unrecognized statement type; only SELECT and whitelisted PRAGMA allowed"
+    return f"Statement type '{stmt_type}' not allowed"
+
+
 @app.post("/admin/sql")
 async def admin_sql(request: Request, _auth: None = Depends(require_admin)):
     """Read-only SQL query against callisto.db for debugging.
 
-    Only SELECT statements allowed. Useful for ad-hoc diagnostics
-    without needing a separate sqlite3 client.
+    AST-validated: parses via sqlparse, rejects multi-statement queries,
+    write-verbs (even inside CTEs), and any PRAGMA outside a small read-only
+    allowlist. Also runs under `PRAGMA query_only = ON` and a 10s timeout.
     """
     body = await request.json()
-    sql = body.get("sql", "").strip()
-
+    sql = (body.get("sql") or "").strip()
     if not sql:
         return {"error": "No SQL provided"}
 
-    # Safety: only allow SELECT statements
-    # Strip SQL comments first to prevent bypass via -- or /* */
-    import re as _re
-    cleaned = _re.sub(r'--[^\n]*', '', sql)  # Remove single-line comments
-    cleaned = _re.sub(r'/\*.*?\*/', '', cleaned, flags=_re.DOTALL)  # Remove block comments
-    normalized = cleaned.upper().strip()
+    err = _validate_admin_sql(sql)
+    if err:
+        _auth_logger.warning(
+            "AUTH_ADMIN_SQL_REJECTED host=%s reason=%s sql=%r",
+            (request.client.host if request.client else "?"),
+            err,
+            sql[:300],
+        )
+        return {"error": err}
 
-    if not normalized.startswith("SELECT") and not normalized.startswith("PRAGMA"):
-        return {"error": "Only SELECT and PRAGMA statements allowed"}
+    # 10-second execution budget. sqlite3's progress handler fires every N
+    # opcodes; returning non-zero aborts the query cleanly.
+    import time as _time
+    import sqlite3 as _sqlite3
+    start = _time.monotonic()
 
-    # Block multi-statement queries (semicolons followed by more SQL)
-    if ";" in cleaned.strip().rstrip(";"):
-        return {"error": "Multi-statement queries not allowed"}
-
-    # Block dangerous patterns (word-boundary to avoid false positives like CREATED_AT).
-    # Also block ATTACH (cross-DB write/read) and EXPLAIN (can hide other operations downstream).
-    for forbidden in ("DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH", "DETACH", "REINDEX", "VACUUM", "REPLACE"):
-        if _re.search(rf'\b{forbidden}\b', normalized):
-            return {"error": f"Forbidden keyword: {forbidden}"}
-    # SECURITY (audit C-2): defeat unicode-escape regex bypass by re-validating raw string
-    # against the same forbidden list after upper-casing the original (no comment-stripping).
-    raw_upper = sql.upper()
-    for forbidden in ("DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH"):
-        if _re.search(rf'\b{forbidden}\b', raw_upper):
-            return {"error": f"Forbidden keyword: {forbidden}"}
+    def _timeout_handler():
+        if _time.monotonic() - start > 10.0:
+            return 1  # abort
+        return 0
 
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("PRAGMA query_only = ON")
-            cursor = await db.execute(sql)
-            rows = await cursor.fetchall()
+            # Attach progress handler on the underlying sqlite3 connection.
+            # aiosqlite exposes it via `db._conn`; fall back to leaving it off.
+            try:
+                raw_conn = getattr(db, "_conn", None)
+                if raw_conn is not None:
+                    raw_conn.set_progress_handler(_timeout_handler, 10_000)
+            except Exception:
+                pass
+            try:
+                cursor = await db.execute(sql)
+                rows = await cursor.fetchall()
+            except _sqlite3.OperationalError as oe:
+                if "interrupted" in str(oe).lower() or "abort" in str(oe).lower():
+                    return {"error": "Query exceeded 10s timeout"}
+                raise
+            finally:
+                try:
+                    if raw_conn is not None:
+                        raw_conn.set_progress_handler(None, 0)
+                except Exception:
+                    pass
             cols = [d[0] for d in cursor.description] if cursor.description else []
             return {
                 "columns": cols,
@@ -3529,7 +3778,7 @@ async def executor_enable():
     return {"status": "enabled", "message": "Bet executor is now LIVE — bets will be placed automatically"}
 
 
-@app.post("/executor/disable")
+@app.post("/executor/disable", dependencies=[Depends(require_admin_or_loopback)])
 async def executor_disable():
     """Disable the bet executor — no bets will be placed."""
     ex = await _get_executor()
