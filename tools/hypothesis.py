@@ -3,11 +3,24 @@ Hypothesis lifecycle manager — define, test, promote, or reject betting theses
 
 Pipeline:  draft → backtesting → paper_trading → live → retired
            ↘ rejected (at any stage if data actively disproves)
+           ↘ paused   (LIVE hypothesis underperforming — demotable)
 
-Every promotion gate requires:
-  - Minimum sample size met
-  - Statistical significance (p < threshold)
-  - Positive CLV rate
+Promotion gates (post-audit 2026-04-21):
+  backtesting → paper_trading
+    - min_signals, adaptive p-value, min_positive_edge_rate, max_brier, min_ic
+  paper_trading → live
+    - min_paper_trades (HARD): ≥ MIN_PAPER_TRADES resolved paper trades required
+    - min_days (HARD):         ≥ MIN_DAYS_PAPER days since promoted_at
+    - min_clv_rate (HARD):     ≥ MIN_CLV_RATE positive-CLV rate (env-overridable)
+    - Backtest evidence is NO LONGER an escape hatch for the live gate.
+
+LIVE-stage demotion loop:
+  review_live_hypotheses() evaluates rolling window of paper_trades / clv_log;
+  negative CLV, sub-break-even hit rate, or drawdown > threshold → 'paused'.
+
+Env-overridable gate knobs:
+  CALLISTO_MIN_DAYS_PAPER, CALLISTO_MIN_PAPER_TRADES,
+  CALLISTO_MIN_CLV_RATE,   CALLISTO_LIVE_REVIEW_WINDOW_DAYS.
 
 No scipy dependency — all statistical tests implemented in pure Python.
 """
@@ -17,7 +30,7 @@ import logging
 import math
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import aiosqlite
@@ -35,10 +48,40 @@ logger = logging.getLogger("callisto.hypothesis")
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
+
+def _env_float(name: str, default: float) -> float:
+    """Parse env var as float, fall back to default on invalid input."""
+    try:
+        raw = os.getenv(name)
+        return float(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    """Parse env var as int, fall back to default on invalid input."""
+    try:
+        raw = os.getenv(name)
+        return int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+# ── ENV-OVERRIDABLE GATE THRESHOLDS ──
+# Marco tightens/loosens without code changes:
+#   CALLISTO_MIN_DAYS_PAPER        — min days in paper_trading before live promotion
+#   CALLISTO_MIN_PAPER_TRADES      — min resolved paper trades before live promotion
+#   CALLISTO_MIN_CLV_RATE          — min positive-CLV rate for paper→live
+#   CALLISTO_LIVE_REVIEW_WINDOW_DAYS — rolling window for LIVE demotion review
+MIN_DAYS_PAPER = _env_int("CALLISTO_MIN_DAYS_PAPER", 7)
+MIN_PAPER_TRADES = _env_int("CALLISTO_MIN_PAPER_TRADES", 10)
+MIN_CLV_RATE = _env_float("CALLISTO_MIN_CLV_RATE", 0.005)  # 0.5% floor; CLV measurement unit bug tracked separately
+LIVE_REVIEW_WINDOW_DAYS = _env_int("CALLISTO_LIVE_REVIEW_WINDOW_DAYS", 14)
+
 # Promotion gates: {transition: {min_n, max_p, min_clv_rate, extras}}
 # Note: max_p_value is the BASE threshold. Actual threshold is adaptive via
 # get_adaptive_p_value_threshold() — relaxed at small n, tightens as data grows.
-# Paper→live gate is the real quality filter (CLV, drawdown, 14-day duration).
+# Paper→live gate is the real quality filter (CLV, drawdown, duration, paper-trade sample).
 PROMOTION_GATES = {
     "backtesting→paper_trading": {
         "min_signals": 5,              # lowered from 10: early-stage data can't reach 10 signals
@@ -50,11 +93,12 @@ PROMOTION_GATES = {
         "min_ic": -0.05,              # block anti-predictive models (IC < -0.05 = inversely correlated)
     },
     "paper_trading→live": {
-        "min_signals": 5,              # match backtesting→paper gate: p-value gate provides quality filter
+        "min_signals": 5,              # minimum distinct signals (overlaps with min_paper_trades)
+        "min_paper_trades": MIN_PAPER_TRADES,  # HARD gate: resolved paper trades required for LIVE
         "max_p_value": 0.10,           # base threshold; adaptive: 0.15 at n<25, 0.10 at n<40
-        "min_clv_rate": 0.0,           # disabled: CLV capture not yet operational (all CLV=0.0)
+        "min_clv_rate": MIN_CLV_RATE,  # floor (env-overridable); was 0.0 pre-audit
         "max_drawdown": 0.30,
-        "min_days": 7,                 # lowered from 14: 1 week sufficient with backtest evidence
+        "min_days": MIN_DAYS_PAPER,    # MUST spend this many days in paper_trading
         "min_sortino": 0.0,            # disabled: can't compute meaningful Sortino with sparse paper trades
         "min_ic": -0.05,              # block anti-predictive only, not zero-IC
         "max_brier": 0.30,             # slightly relaxed: small-sample brier is noisy
@@ -550,14 +594,25 @@ class HypothesisManager:
     ) -> dict:
         """Move a hypothesis to a new status.
 
-        SECURITY (audit C-7): when ``expected_status`` is supplied the UPDATE is
-        scoped with ``WHERE status = ?`` so two concurrent promoters can't both
-        succeed. Returns ``{"changed": False, ...}`` if the row was already moved
-        by another worker. ``expected_status=None`` keeps the legacy unconditional
-        UPDATE for callers that genuinely want to overwrite (manual admin patches).
+        SECURITY (audit C-7 + 2026-04-21): ``expected_status`` enables CAS —
+        the UPDATE is scoped with ``WHERE status = ?`` so two concurrent
+        promoters can't both succeed. Returns ``{"changed": False, ...}`` if the
+        row was already moved by another worker.
+
+        As of 2026-04-21 the ``expected_status=None`` legacy path still works
+        but logs a WARNING on every call — all autonomous-loop callers have
+        been migrated to CAS. Manual admin patches may still use None
+        intentionally; audit the log to find any stragglers.
         """
         now = datetime.now(timezone.utc).isoformat()
         from tools.db_utils import execute_with_retry, commit_with_retry
+        if expected_status is None:
+            logger.warning(
+                f"update_status called WITHOUT expected_status for "
+                f"{hypothesis_id} → {new_status} (by {promoted_by}). "
+                f"Concurrent promoters may overwrite each other. "
+                f"Migrate caller to CAS by passing expected_status=<current>."
+            )
         if expected_status is not None:
             cursor = await execute_with_retry(
                 self._db,
@@ -891,6 +946,83 @@ class HypothesisManager:
 
         checks = []
         ready = True
+
+        # ── HARD GATE: min_days in current stage ──
+        # Enforces time-in-stage before any promotion advances. Previously the
+        # gate key existed in PROMOTION_GATES but was never read, letting rapid
+        # promotions reach LIVE in minutes. Audit finding hypothesis.py:57.
+        if "min_days" in gate:
+            promoted_at = h.get("promoted_at") or h.get("created_at")
+            days_in_stage = None
+            if promoted_at:
+                try:
+                    ts = promoted_at
+                    if isinstance(ts, str):
+                        # Accept both ISO-with-tz and naive ISO strings
+                        _norm = ts.replace("Z", "+00:00")
+                        try:
+                            promoted_dt = datetime.fromisoformat(_norm)
+                        except ValueError:
+                            # SQLite CURRENT_TIMESTAMP is "YYYY-MM-DD HH:MM:SS"
+                            promoted_dt = datetime.strptime(
+                                ts.split(".")[0], "%Y-%m-%d %H:%M:%S"
+                            )
+                    else:
+                        promoted_dt = ts
+                    if promoted_dt.tzinfo is None:
+                        promoted_dt = promoted_dt.replace(tzinfo=timezone.utc)
+                    days_in_stage = (
+                        datetime.now(timezone.utc) - promoted_dt
+                    ).total_seconds() / 86400.0
+                except Exception as e:
+                    logger.warning(
+                        f"Hypothesis {hypothesis_id}: could not parse promoted_at "
+                        f"({promoted_at!r}): {e}"
+                    )
+            if days_in_stage is None:
+                checks.append(
+                    f"FAIL: insufficient_time_in_stage — promoted_at is null, "
+                    f"cannot verify {gate['min_days']}-day minimum"
+                )
+                ready = False
+            elif days_in_stage < gate["min_days"]:
+                checks.append(
+                    f"FAIL: insufficient_time_in_stage — {days_in_stage:.1f}d < "
+                    f"{gate['min_days']}d required"
+                )
+                ready = False
+            else:
+                checks.append(
+                    f"PASS: time-in-stage {days_in_stage:.1f}d >= {gate['min_days']}d"
+                )
+
+        # ── HARD GATE: min_paper_trades for paper_trading→live ──
+        # A hypothesis cannot promote to LIVE on backtest evidence alone. The
+        # stage_override="backtest" escape hatch was removed in auto_promote —
+        # this gate ensures readiness also rejects direct LIVE promotion when
+        # paper_trade sample is insufficient. Audit finding hypothesis.py:1613.
+        if "min_paper_trades" in gate:
+            required_trades = gate["min_paper_trades"]
+            try:
+                trade_cur = await self._db.execute(
+                    "SELECT COUNT(*) FROM paper_trades "
+                    "WHERE hypothesis_id = ? AND actual_result IN ('won','lost','push')",
+                    (hypothesis_id,),
+                )
+                resolved_paper_trades = int((await trade_cur.fetchone())[0] or 0)
+            except Exception as e:
+                logger.warning(f"paper_trade count failed for {hypothesis_id}: {e}")
+                resolved_paper_trades = 0
+            if resolved_paper_trades < required_trades:
+                checks.append(
+                    f"FAIL: paper_trade_sample_insufficient — "
+                    f"{resolved_paper_trades}/{required_trades} resolved paper trades"
+                )
+                ready = False
+            else:
+                checks.append(
+                    f"PASS: {resolved_paper_trades}/{required_trades} resolved paper trades"
+                )
 
         # Sample size
         n = report.get("sample_size", 0)
@@ -1246,9 +1378,11 @@ class HypothesisManager:
         Hard gates (cannot be bypassed by statistical tests):
           - backtesting → paper_trading: backtest_events MUST exist for this hypothesis
             AND meet min_signals with adaptive p-value threshold (see PROMOTION_GATES)
-          - paper_trading → live: paper_trades with positive ROI, OR if 0 paper
-            trades exist (rare-condition hypotheses), backtest evidence with
-            sufficient signals meeting paper_trading→live statistical gates
+          - paper_trading → live: ALL of the following are required (audit 2026-04-21):
+              * ≥ min_paper_trades resolved paper trades
+              * ≥ min_days since promoted_at
+              * CLV positive-rate ≥ min_clv_rate
+              * Backtest-only evidence is NO LONGER a valid path to LIVE.
 
         Auto-rejection:
           - If a hypothesis has been in 'backtesting' through 10+ evaluate cycles
@@ -1611,25 +1745,24 @@ class HypothesisManager:
                             "reason": f"Paper trade ROI is {roi:.2%} — need positive ROI for live promotion.",
                         }
             else:
-                # No resolved paper trades — use backtest evidence for promotion.
-                # Unresolved paper trade records should not block a hypothesis
-                # with strong backtest signals from advancing.
-                backtest_signals = await self._get_backtest_signals(hypothesis_id)
-                if not backtest_signals or len(backtest_signals) < PROMOTION_GATES["paper_trading→live"]["min_signals"]:
-                    return {
-                        "action": "held",
-                        "reason": (
-                            f"0 resolved paper trades and only {len(backtest_signals) if backtest_signals else 0} "
-                            f"backtest signals (need {PROMOTION_GATES['paper_trading→live']['min_signals']}). "
-                            f"Waiting for more data."
-                        ),
-                    }
-                logger.info(
-                    f"Hypothesis {hypothesis_id}: 0 resolved paper trades but "
-                    f"{len(backtest_signals)} backtest signals — evaluating "
-                    f"promotion using backtest evidence"
+                # AUDIT FIX 2026-04-21 (hypothesis.py:1613 escape hatch removed):
+                # Previously, a paper_trading hypothesis with zero resolved paper
+                # trades would fall back to backtest evidence and promote to LIVE
+                # on historical data alone — the #1 money-loss risk identified
+                # by the lifecycle audit. LIVE promotion now HARD-requires
+                # `min_paper_trades` resolved paper trades. No fallback.
+                min_req = PROMOTION_GATES["paper_trading→live"].get(
+                    "min_paper_trades", MIN_PAPER_TRADES
                 )
-                _use_backtest_evidence = True
+                return {
+                    "action": "held",
+                    "reason": (
+                        f"paper_trade_sample_insufficient — 0 resolved paper "
+                        f"trades (need {min_req}). LIVE promotion requires "
+                        f"forward-tested evidence; backtest-only escape hatch "
+                        f"was removed in the 2026-04-21 audit."
+                    ),
+                }
 
         # ── Backtest-based rejection gate for paper_trading hypotheses ──
         # Paper trade n is usually tiny, so the standard auto-reject (p>0.15, n>=30)
@@ -1655,6 +1788,11 @@ class HypothesisManager:
                 }
 
         # ── Standard readiness check (statistical significance, gates, etc.) ──
+        # AUDIT FIX 2026-04-21: stage_override="backtest" removed from paper→live
+        # path. The only remaining use would be for paper-stage hypotheses with
+        # 0 paper trades, which now return "held" above rather than reach here.
+        # `_use_backtest_evidence` is retained as a guard for future callers but
+        # is never set True in the current flow.
         _stage_override = "backtest" if _use_backtest_evidence else None
         readiness = await self.check_promotion_readiness(hypothesis_id, stage_override=_stage_override)
 
@@ -1673,6 +1811,218 @@ class HypothesisManager:
             return {"action": "promoted", "new_status": next_stage}
 
         return {"action": "held", "checks": readiness.get("checks", [])}
+
+    # ──────────────────────────────────────────────────────────────────
+    # LIVE-STAGE REVIEW + DEMOTION (audit 2026-04-21)
+    # ──────────────────────────────────────────────────────────────────
+
+    async def review_live_hypotheses(
+        self,
+        *,
+        window_days: Optional[int] = None,
+        hit_rate_floor: float = 0.45,
+        max_drawdown: float = 0.40,
+        min_resolved: int = 10,
+        clv_negative_threshold: float = 0.0,
+    ) -> list[dict]:
+        """Review all LIVE hypotheses and demote underperformers to 'paused'.
+
+        Pulls the trailing `window_days` of resolved bets from paper_trades
+        (and clv_log as supplementary CLV evidence), computes rolling hit-rate,
+        ROI, Sharpe, and max drawdown, and demotes when:
+
+          * hit_rate < hit_rate_floor         (sub-break-even)
+          * max_drawdown > max_drawdown       (excessive drawdown)
+          * avg CLV < clv_negative_threshold  (betting bad prices)
+
+        Returns a list of per-hypothesis outcome dicts.
+        """
+        from tools.math_utils import american_to_decimal
+        from tools.market_microstructure import sortino_ratio as _sortino
+
+        window = window_days if window_days is not None else LIVE_REVIEW_WINDOW_DAYS
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window)).isoformat()
+
+        live_rows = await self.list_hypotheses(status="live")
+        results: list[dict] = []
+
+        for h in live_rows:
+            hid = h["hypothesis_id"]
+            # ── Pull resolved bets within window from paper_trades ──
+            trade_cur = await self._db.execute(
+                "SELECT signal_odds_american, actual_result, clv_implied, "
+                "signal_implied_prob, game_date "
+                "FROM paper_trades "
+                "WHERE hypothesis_id = ? "
+                "  AND actual_result IN ('won','lost','push') "
+                "  AND (created_at >= ? OR game_date >= ?) "
+                "ORDER BY game_date",
+                (hid, cutoff, cutoff[:10]),
+            )
+            rows = await trade_cur.fetchall()
+
+            # Supplementary CLV from clv_log (the signal-quality ledger). We
+            # don't require a hypothesis_id match here — clv_log is not always
+            # tagged — so this is a best-effort supplement only.
+            clv_values: list[float] = []
+            for row in rows:
+                clv = row[2]
+                imp = row[3]
+                if clv is not None and imp is not None:
+                    # Positive = model priced above close (got the better price).
+                    clv_values.append(float(clv) - float(imp))
+
+            returns: list[float] = []
+            wins = losses = pushes = 0
+            for odds_american, actual_result, _clv, _imp, _gd in rows:
+                if actual_result == "won":
+                    try:
+                        dec = american_to_decimal(int(odds_american))
+                        returns.append(dec - 1.0)
+                    except Exception:
+                        returns.append(0.0)
+                    wins += 1
+                elif actual_result == "lost":
+                    returns.append(-1.0)
+                    losses += 1
+                elif actual_result == "push":
+                    returns.append(0.0)
+                    pushes += 1
+
+            n_resolved = wins + losses  # pushes don't count toward hit rate
+            hit_rate = wins / n_resolved if n_resolved else 0.0
+            roi = sum(returns) / len(returns) if returns else 0.0
+            # Drawdown
+            mdd = 0.0
+            if returns:
+                equity = 0.0
+                peak = 0.0
+                for r in returns:
+                    equity += r
+                    if equity > peak:
+                        peak = equity
+                    dd = (peak - equity) / (abs(peak) + 1.0)
+                    if dd > mdd:
+                        mdd = dd
+            sortino = _sortino(returns) if returns else None
+            avg_clv = sum(clv_values) / len(clv_values) if clv_values else None
+
+            outcome: dict = {
+                "hypothesis_id": hid,
+                "name": h.get("name"),
+                "window_days": window,
+                "n_resolved": n_resolved,
+                "wins": wins,
+                "losses": losses,
+                "pushes": pushes,
+                "hit_rate": round(hit_rate, 4),
+                "roi": round(roi, 4),
+                "max_drawdown": round(mdd, 4),
+                "sortino": round(sortino, 4) if sortino is not None else None,
+                "avg_clv": round(avg_clv, 4) if avg_clv is not None else None,
+                "demoted": False,
+                "reasons": [],
+            }
+
+            # Don't demote with insufficient data — a 2-game losing streak
+            # should not pause a freshly-promoted hypothesis.
+            if n_resolved < min_resolved:
+                outcome["decision"] = "hold_insufficient_sample"
+                results.append(outcome)
+                continue
+
+            reasons = []
+            if hit_rate < hit_rate_floor:
+                reasons.append(
+                    f"hit_rate {hit_rate:.1%} < {hit_rate_floor:.0%} floor"
+                )
+            if mdd > max_drawdown:
+                reasons.append(
+                    f"drawdown {mdd:.1%} > {max_drawdown:.0%} threshold"
+                )
+            if avg_clv is not None and avg_clv < clv_negative_threshold:
+                reasons.append(
+                    f"avg CLV {avg_clv:.4f} < {clv_negative_threshold}"
+                )
+
+            if not reasons:
+                outcome["decision"] = "hold_healthy"
+                results.append(outcome)
+                continue
+
+            # Demote → 'paused'. CAS on 'live' so a concurrent retirement
+            # doesn't race us.
+            reason_str = "auto:live_underperform — " + "; ".join(reasons)
+            cas = await self.update_status(
+                hid, "paused", reason_str, expected_status="live",
+            )
+            outcome["reasons"] = reasons
+            outcome["demoted"] = bool(cas.get("changed"))
+            outcome["decision"] = (
+                "demoted_to_paused" if cas.get("changed") else "cas_noop"
+            )
+
+            # Log the demotion into hypothesis_stats for visibility. Best-effort
+            # — we don't block demotion on the logging call.
+            try:
+                from tools.db_utils import execute_with_retry, commit_with_retry
+                await execute_with_retry(
+                    self._db,
+                    "INSERT INTO hypothesis_stats "
+                    "(hypothesis_id, stage, computed_at, total_n, signals_n, "
+                    " win, loss, push_, hit_rate, avg_clv, "
+                    " positive_clv_rate, roi_pct, max_drawdown, sortino, is_significant) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        hid,
+                        "live_review",
+                        datetime.now(timezone.utc).isoformat(),
+                        n_resolved + pushes,
+                        n_resolved,
+                        wins,
+                        losses,
+                        pushes,
+                        hit_rate,
+                        avg_clv,
+                        None,
+                        roi * 100.0,
+                        mdd,
+                        sortino,
+                        False,
+                    ),
+                    operation="live_review insert stats",
+                )
+                await commit_with_retry(self._db, operation="live_review stats")
+            except Exception as e:
+                logger.warning(f"live_review stats insert failed for {hid}: {e}")
+
+            # Best-effort: attach a compact wiki article so demotions appear in
+            # the research trail, not just logs. Fails silently if wiki tables
+            # don't exist on this install.
+            try:
+                from tools.db_utils import execute_with_retry, commit_with_retry
+                await execute_with_retry(
+                    self._db,
+                    "INSERT OR IGNORE INTO wiki_articles "
+                    "(article_id, title, body, domain, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        f"live_review_{hid}_{int(datetime.now(timezone.utc).timestamp())}",
+                        f"LIVE demotion: {h.get('name', hid)}",
+                        reason_str + f" | n={n_resolved} hit={hit_rate:.1%} "
+                        f"roi={roi:.2%} mdd={mdd:.1%} clv={avg_clv}",
+                        "SIGNAL",
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                    operation="live_review wiki insert",
+                )
+                await commit_with_retry(self._db, operation="live_review wiki")
+            except Exception:
+                pass  # wiki_articles may not exist / schema may differ
+
+            results.append(outcome)
+
+        return results
 
     # ── DATA ACCESSORS ──
 

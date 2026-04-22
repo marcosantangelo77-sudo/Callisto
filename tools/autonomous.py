@@ -2480,6 +2480,20 @@ class ResearchLoop:
                 if not self._running:
                     break
 
+                # Phase 6b2: LIVE-stage review — demote underperforming LIVE
+                # hypotheses to 'paused' (audit 2026-04-21). Cycle-gated inside
+                # the phase itself (every N cycles), so the wait_for here is
+                # tight — the no-op path returns immediately.
+                try:
+                    await asyncio.wait_for(self._phase_review_live(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("Phase review_live timed out after 120s — skipping")
+                except Exception as e:
+                    logger.warning(f"Phase review_live failed (non-fatal): {e}")
+
+                if not self._running:
+                    break
+
                 # Phase 6c: Narrative edge detection (milestones, role changes, revenge)
                 try:
                     await asyncio.wait_for(self._phase_narrative_edges(), timeout=120)
@@ -5169,7 +5183,8 @@ class ResearchLoop:
                     )
                     await self.hypothesis_manager.update_status(
                         h["hypothesis_id"], "rejected",
-                        f"auto:temporal_overlap — {overlap_err}"
+                        f"auto:temporal_overlap — {overlap_err}",
+                        expected_status=h.get("status", "backtesting"),
                     )
                     self._rejections += 1
                     continue
@@ -5210,7 +5225,8 @@ class ResearchLoop:
                     )
                     await self.hypothesis_manager.update_status(
                         h["hypothesis_id"], "draft",
-                        "auto:needs_unique_data — stale backtest with duplicate event set"
+                        "auto:needs_unique_data — stale backtest with duplicate event set",
+                        expected_status=h.get("status", "backtesting"),
                     )
                     continue
 
@@ -5235,7 +5251,8 @@ class ResearchLoop:
                         await self.hypothesis_manager.update_status(
                             h["hypothesis_id"], "rejected",
                             f"auto:untestable_context — demoted {demotion_count}x, "
-                            f"ctx_coverage={ctx_coverage:.0%}"
+                            f"ctx_coverage={ctx_coverage:.0%}",
+                            expected_status=h.get("status", "backtesting"),
                         )
                         self._rejections += 1
                     else:
@@ -5247,7 +5264,8 @@ class ResearchLoop:
                         await self.hypothesis_manager.update_status(
                             h["hypothesis_id"], "draft",
                             f"auto:low_context_coverage ({ctx_coverage:.0%}) — "
-                            f"needs game context enrichment (demotion {demotion_count}/2)"
+                            f"needs game context enrichment (demotion {demotion_count}/2)",
+                            expected_status=h.get("status", "backtesting"),
                         )
                     continue
 
@@ -5817,6 +5835,49 @@ class ResearchLoop:
         except Exception as e:
             logger.warning(f"Claude backtest interpretation failed: {e}")
 
+    async def _phase_review_live(self) -> None:
+        """Review LIVE hypotheses for underperformance; demote to 'paused'.
+
+        Audit 2026-04-21: Callisto previously had NO demotion path from LIVE.
+        Losing hypotheses stayed live until manually retired. This phase runs
+        the rolling-window review and calls `review_live_hypotheses()` to
+        quantify performance and demote underperformers.
+
+        Cycle-gated: runs once every 4 hours worth of cycles (~every 24 cycles
+        at a 10-minute cadence) to avoid thrashing on noisy short windows.
+        Can be overridden by setting `_force_live_review` on the instance.
+        """
+        # Cycle gate: approx every 4 hours. A typical cycle is ~10 minutes, so
+        # every 24 cycles ≈ 4 hours. Use modulo so the schedule drifts with
+        # actual cycle cadence.
+        review_interval = int(os.getenv("CALLISTO_LIVE_REVIEW_EVERY_N_CYCLES", "24"))
+        if not getattr(self, "_force_live_review", False):
+            if self._cycles == 0 or (self._cycles % max(1, review_interval)) != 0:
+                return
+
+        try:
+            results = await self.hypothesis_manager.review_live_hypotheses()
+        except Exception as e:
+            logger.warning(f"_phase_review_live: review failed: {e}")
+            return
+
+        if not results:
+            return
+
+        demoted = [r for r in results if r.get("demoted")]
+        held = [r for r in results if not r.get("demoted")]
+        logger.info(
+            f"_phase_review_live: reviewed {len(results)} LIVE hypotheses — "
+            f"demoted {len(demoted)}, held {len(held)}"
+        )
+        for r in demoted:
+            logger.warning(
+                f"LIVE DEMOTION: {r.get('name') or r['hypothesis_id']} → paused. "
+                f"n={r['n_resolved']} hit={r['hit_rate']:.1%} "
+                f"roi={r['roi']:.2%} mdd={r['max_drawdown']:.1%} "
+                f"clv={r['avg_clv']} reasons={r['reasons']}"
+            )
+
     async def _phase_paper_trade(self) -> None:
         """Generate paper trade signals for promoted hypotheses.
 
@@ -5840,12 +5901,30 @@ class ResearchLoop:
         for h in paper:
             try:
                 db = self.data_collector._db
+                # AUDIT FIX 2026-04-21 (autonomous.py:5820 stale read):
+                # Previously fetched the FIRST row for a hypothesis with no
+                # stage filter and no ORDER BY — non-deterministic, sometimes
+                # returning stale backtest stats even when fresh paper_trade
+                # stats existed. Pin to latest paper_trade row.
                 cursor = await db.execute(
-                    "SELECT information_coefficient, signals_n FROM hypothesis_stats "
-                    "WHERE hypothesis_id = ?",
+                    "SELECT information_coefficient, signals_n "
+                    "FROM hypothesis_stats "
+                    "WHERE hypothesis_id = ? AND stage = 'paper_trade' "
+                    "ORDER BY computed_at DESC LIMIT 1",
                     (h["hypothesis_id"],),
                 )
                 row = await cursor.fetchone()
+                if not row:
+                    # No paper_trade stats yet — fall back to backtest stats so
+                    # anti-predictive gate still has a signal to work with.
+                    cursor = await db.execute(
+                        "SELECT information_coefficient, signals_n "
+                        "FROM hypothesis_stats "
+                        "WHERE hypothesis_id = ? AND stage = 'backtest' "
+                        "ORDER BY computed_at DESC LIMIT 1",
+                        (h["hypothesis_id"],),
+                    )
+                    row = await cursor.fetchone()
                 ic = row[0] if row else None
                 n_signals = row[1] if row else 0
             except Exception:
@@ -5857,7 +5936,8 @@ class ResearchLoop:
                 )
                 await self.hypothesis_manager.update_status(
                     h["hypothesis_id"], "rejected",
-                    f"auto:anti_predictive_paper_trading — IC={ic:.3f} < -0.10 (n={n_signals})"
+                    f"auto:anti_predictive_paper_trading — IC={ic:.3f} < -0.10 (n={n_signals})",
+                    expected_status=h.get("status", "paper_trading"),
                 )
                 self._rejections += 1
             elif ic is not None and ic < -0.10 and n_signals < 20:
@@ -6131,8 +6211,15 @@ class ResearchLoop:
                 rejected = 0
                 for hid in actions.get("reject_ids", []):
                     try:
+                        # Fetch current status for CAS — concurrent promoters
+                        # can move this row under us.
+                        _h = await self.hypothesis_manager.get_hypothesis(hid)
+                        _curr = (_h or {}).get("status")
+                        if not _curr or _curr in ("rejected", "retired"):
+                            continue
                         await self.hypothesis_manager.update_status(
-                            hid, "rejected", "local_fallback_deep_work"
+                            hid, "rejected", "local_fallback_deep_work",
+                            expected_status=_curr,
                         )
                         rejected += 1
                         self._rejections += 1
