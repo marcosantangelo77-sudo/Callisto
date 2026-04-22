@@ -16,6 +16,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
+from tools.state_paths import restart_signal_path  # noqa: E402
 
 SPORTS = ['nba', 'nhl', 'nfl', 'mls', 'ncaam', 'ncaaw', 'nwsl', 'ufl', 'ahl', 'mlb', 'gleague', 'usl']
 
@@ -42,12 +44,12 @@ for sport in SPORTS:
     except Exception as e:
         print(f"  {sport.upper()}: ERROR ({e})", flush=True)
 
-# Phase 2: Signal restart
+# Phase 2: Signal restart (off-OneDrive state dir)
 print("\n[Phase 2] Signaling Callisto restart...")
-restart_file = PROJECT_ROOT / "memory" / "restart_requested"
-with open(restart_file, "w") as f:
+restart_file = restart_signal_path()
+with open(restart_file, "w", encoding="utf-8") as f:
     f.write(f"overnight_setup complete — all imports done, restart API")
-print("  Restart signal written. Watchdog will start the API.")
+print(f"  Restart signal written to {restart_file}. Watchdog will start the API.")
 
 # Phase 3: Start API directly (in case watchdog isn't running)
 print("\n[Phase 3] Starting Callisto API...")

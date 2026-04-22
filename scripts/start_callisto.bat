@@ -62,10 +62,17 @@ if %ERRORLEVEL%==0 (
 )
 
 REM --- 3. Check if watchdog already running ---
-REM The Python watchdog enforces single instance via PID file,
-REM but we also check here to avoid opening duplicate windows.
-if exist "memory\watchdog.pid" (
-    set /p WD_PID=<memory\watchdog.pid
+REM The Python watchdog enforces single instance via PID file + lock +
+REM heartbeat.  PID file now lives off OneDrive at %LOCALAPPDATA%\Callisto
+REM (override with CALLISTO_STATE_DIR).  We only use it here to skip opening
+REM a duplicate window — the watchdog does the real singleton enforcement.
+if defined CALLISTO_STATE_DIR (
+    set "WD_STATE_DIR=%CALLISTO_STATE_DIR%"
+) else (
+    set "WD_STATE_DIR=%LOCALAPPDATA%\Callisto"
+)
+if exist "%WD_STATE_DIR%\watchdog.pid" (
+    set /p WD_PID=<"%WD_STATE_DIR%\watchdog.pid"
     tasklist /FI "PID eq %WD_PID%" /FO CSV /NH 2>NUL | find "python" >NUL
     if %ERRORLEVEL%==0 (
         echo [OK] Watchdog already running (PID %WD_PID%)

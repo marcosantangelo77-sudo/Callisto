@@ -44,10 +44,14 @@ from pathlib import Path
 # ── Configuration ──
 
 CALLISTO_DIR = Path(__file__).parent.parent.resolve()
+sys.path.insert(0, str(CALLISTO_DIR))
+from tools.state_paths import restart_signal_path  # noqa: E402
+
 API_URL = "http://localhost:8420"
 HEALTH_ENDPOINT = f"{API_URL}/health"
 HEALTH_FILE = CALLISTO_DIR / "memory" / "health.json"
-RESTART_SIGNAL = CALLISTO_DIR / "memory" / "restart_requested"
+# Signal file lives off OneDrive to avoid oplock-induced freezes.
+RESTART_SIGNAL = restart_signal_path()
 LOG_DIR = CALLISTO_DIR / "logs"
 SENTINEL_LOG = CALLISTO_DIR / "logs" / "sentinel.log"
 

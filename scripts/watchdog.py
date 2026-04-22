@@ -37,11 +37,42 @@ from pathlib import Path
 # ── Configuration ──
 
 CALLISTO_DIR = Path(__file__).parent.parent.resolve()
+
+# Import the off-OneDrive state resolver.  Fall back to a local vendored copy
+# if tools/ isn't importable (watchdog is designed to run even when the main
+# venv is broken).
+_sys_path_added = False
+try:
+    from tools.state_paths import (  # type: ignore[import-not-found]
+        state_dir,
+        state_log_dir,
+        restart_signal_path,
+        watchdog_pid_path,
+        watchdog_lock_path,
+        watchdog_heartbeat_path,
+        watchdog_log_path,
+    )
+except ImportError:
+    sys.path.insert(0, str(CALLISTO_DIR))
+    _sys_path_added = True
+    from tools.state_paths import (  # type: ignore[import-not-found]
+        state_dir,
+        state_log_dir,
+        restart_signal_path,
+        watchdog_pid_path,
+        watchdog_lock_path,
+        watchdog_heartbeat_path,
+        watchdog_log_path,
+    )
+
 API_URL = "http://localhost:8420"
 HEALTH_ENDPOINT = f"{API_URL}/health"
+# API-side log dir stays on OneDrive (api_stdout_*/api_stderr_* are useful
+# cross-machine diagnostics and are only touched at restart time).
 LOG_DIR = CALLISTO_DIR / "logs"
-WATCHDOG_LOG = LOG_DIR / "watchdog.log"
-RESTART_SIGNAL = CALLISTO_DIR / "memory" / "restart_requested"
+# Watchdog's OWN log lives off OneDrive — every .flush() hit the oplock.
+WATCHDOG_LOG = watchdog_log_path()
+RESTART_SIGNAL = restart_signal_path()
 API_SCRIPT = CALLISTO_DIR / "api.py"
 
 # Timing
@@ -54,7 +85,9 @@ PORT = 8420
 
 # ── Logging ──
 
+# LOG_DIR is used for API stdout/stderr; WATCHDOG_LOG is off OneDrive.
 os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(WATCHDOG_LOG.parent, exist_ok=True)
 
 # Rotating-style log: truncate if > 5MB
 if WATCHDOG_LOG.exists() and WATCHDOG_LOG.stat().st_size > 5 * 1024 * 1024:
@@ -87,52 +120,186 @@ def log_flush():
         handler.flush()
 
 
-# ── PID file for single-instance enforcement ──
+# ── PID / lock / heartbeat files (state_dir, off OneDrive) ──
 
-PID_FILE = CALLISTO_DIR / "memory" / "watchdog.pid"
+PID_FILE = watchdog_pid_path()
+LOCK_FILE = watchdog_lock_path()
+HEARTBEAT_FILE = watchdog_heartbeat_path()
 
+# Staleness threshold — if the heartbeat from an existing watchdog is older
+# than this many seconds we treat it as frozen and take over.  Set above the
+# poll interval (15s) plus the API startup grace period (30s) plus slack.
+STALE_HEARTBEAT_SECONDS = 90
 
-LOCK_FILE = CALLISTO_DIR / "memory" / "watchdog.lock"
 _lock_fh = None  # Keep file handle alive for the process lifetime
+
+
+def _safe_taskkill(pid: int, reason: str = "") -> bool:
+    """Fire-and-forget taskkill on Windows.  Returns True if we believe the
+    kill succeeded (or the process was already gone).
+
+    The old implementation used `subprocess.run(..., capture_output=True,
+    timeout=5)` which can hang past the stated timeout on Windows whenever
+    the target owns grandchildren or a locked handle — the inherited stdout
+    pipe stays open as long as ANY descendant is alive.  We use Popen with
+    no output capture and a hard .kill() on timeout instead.
+    """
+    if sys.platform == "win32":
+        try:
+            proc = subprocess.Popen(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                rc = proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                logger.warning(f"taskkill PID {pid} timed out; force-killed taskkill itself ({reason})")
+                return False
+            return rc == 0 or rc == 128  # 128 = "process not found" — good enough
+        except Exception as e:
+            logger.warning(f"taskkill PID {pid} failed ({reason}): {e}")
+            return False
+    else:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            return True
+        except ProcessLookupError:
+            return True
+        except Exception as e:
+            logger.warning(f"kill PID {pid} failed ({reason}): {e}")
+            return False
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort 'is this PID still running' check."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        try:
+            proc = subprocess.Popen(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            try:
+                out, _ = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return False  # Assume dead if tasklist itself hung
+            return str(pid) in (out or "")
+        except Exception:
+            return False
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            return False
+        except Exception:
+            return False
+
+
+def _read_heartbeat_age() -> float:
+    """Return seconds since last watchdog_heartbeat.json write; +inf if absent/broken."""
+    try:
+        data = json.loads(HEARTBEAT_FILE.read_text(encoding="utf-8"))
+        ts = float(data.get("wall_ts", 0))
+        return max(0.0, time.time() - ts)
+    except Exception:
+        return float("inf")
+
+
+def write_heartbeat(api_last_ok: float = 0.0) -> None:
+    """Write a heartbeat record; called every loop iteration.
+
+    Schema:
+        pid          — this watchdog's OS PID
+        monotonic_ts — time.monotonic() at write
+        wall_ts      — time.time() at write (what staleness is judged against)
+        api_last_ok  — last time.time() the API was verified healthy
+    """
+    try:
+        payload = {
+            "pid": os.getpid(),
+            "monotonic_ts": time.monotonic(),
+            "wall_ts": time.time(),
+            "api_last_ok": api_last_ok,
+        }
+        # Atomic-ish write: stage then rename.
+        tmp = HEARTBEAT_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(HEARTBEAT_FILE)
+    except Exception as e:
+        # Heartbeat is best-effort — never fatal.
+        logger.debug(f"Heartbeat write failed (non-fatal): {e}")
+
+
+def _release_stale_lock() -> None:
+    """Drop a leftover watchdog.lock from a dead process.
+
+    We can't actually break an OS lock held by a running process.  But if the
+    previous watchdog's process is gone, the lock is already released by the
+    kernel — deleting the file removes the last physical artefact so the new
+    open() is clean.
+    """
+    try:
+        if LOCK_FILE.exists():
+            LOCK_FILE.unlink()
+    except Exception as e:
+        logger.debug(f"Could not remove stale lock file: {e}")
 
 
 def check_single_instance():
     """Ensure only one watchdog runs using an exclusive file lock.
 
-    On Windows uses msvcrt.locking, on Unix uses fcntl.flock.
-    The lock is held for the entire process lifetime — if a second watchdog
-    starts, it will fail to acquire the lock and exit immediately.
+    On Windows uses msvcrt.locking, on Unix uses fcntl.flock.  The lock is
+    held for the entire process lifetime — if a second watchdog starts, it
+    either (a) finds a fresh heartbeat and exits, or (b) detects a frozen
+    primary and evicts it.
     """
     global _lock_fh
 
-    # Step 1: Kill any watchdog registered in the PID file (handles pre-lock stale instances)
+    # ── Step 1: Self-recovery from a frozen primary ──
     if PID_FILE.exists():
         try:
-            old_pid = int(PID_FILE.read_text().strip())
-            if old_pid != os.getpid():
-                if sys.platform == "win32":
-                    try:
-                        result = subprocess.run(
-                            ["taskkill", "/F", "/PID", str(old_pid)],
-                            capture_output=True, text=True, timeout=5,
-                        )
-                        if result.returncode == 0:
-                            logger.warning(f"Killed old watchdog PID {old_pid}")
-                            time.sleep(2)
-                    except subprocess.TimeoutExpired:
-                        pass
-                else:
-                    try:
-                        os.kill(old_pid, 0)
-                        logger.warning(f"Killing old watchdog PID {old_pid}")
-                        os.kill(old_pid, signal.SIGTERM)
-                        time.sleep(2)
-                    except ProcessLookupError:
-                        pass
+            old_pid = int(PID_FILE.read_text(encoding="utf-8").strip())
         except (ValueError, OSError):
-            pass
+            old_pid = 0
 
-    # Step 2: Acquire exclusive file lock — this is the real singleton gate
+        if old_pid > 0 and old_pid != os.getpid():
+            alive = _pid_alive(old_pid)
+            hb_age = _read_heartbeat_age()
+            if alive and hb_age <= STALE_HEARTBEAT_SECONDS:
+                # Primary is genuinely healthy — new instance defers.
+                logger.info(
+                    f"Another watchdog PID {old_pid} is alive with fresh heartbeat "
+                    f"({hb_age:.0f}s old). Exiting."
+                )
+                sys.exit(42)
+            if alive and hb_age > STALE_HEARTBEAT_SECONDS:
+                logger.warning(
+                    f"Watchdog PID {old_pid} alive but heartbeat stale "
+                    f"({hb_age:.0f}s > {STALE_HEARTBEAT_SECONDS}s) — assuming frozen, evicting."
+                )
+                _safe_taskkill(old_pid, reason="stale heartbeat")
+                time.sleep(2)
+            elif not alive:
+                logger.info(f"Stale PID file references dead watchdog {old_pid}; clearing.")
+            # In all eviction/stale paths we release the lock file too.
+            _release_stale_lock()
+
+    # ── Step 2: Acquire the exclusive lock ──
     try:
         _lock_fh = open(LOCK_FILE, "w", encoding="utf-8")
         if sys.platform == "win32":
@@ -147,11 +314,13 @@ def check_single_instance():
         logger.error(f"Another watchdog is already running (lock held). Exiting. ({e})")
         sys.exit(42)  # Distinct code: lock held = another instance running
 
-    # Step 3: Write PID file for diagnostic purposes
+    # ── Step 3: Record PID + initial heartbeat for diagnostic / next-start eviction ──
     try:
-        PID_FILE.write_text(str(os.getpid()))
+        PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
     except Exception as e:
         logger.warning(f"Could not write PID file: {e}")
+
+    write_heartbeat()
 
 
 # ── Health check ──
@@ -190,11 +359,8 @@ def kill_port_8420():
                     parts = line.strip().split()
                     pid = parts[-1]
                     if pid.isdigit() and pid not in killed:
-                        subprocess.run(
-                            ["taskkill", "/F", "/PID", pid],
-                            capture_output=True, timeout=10,
-                        )
-                        logger.info(f"Killed PID {pid} on port {PORT}")
+                        if _safe_taskkill(int(pid), reason=f"port {PORT}"):
+                            logger.info(f"Killed PID {pid} on port {PORT}")
                         killed.add(pid)
             if killed:
                 time.sleep(3)  # Let the port release
@@ -352,6 +518,8 @@ def main():
     logger.info(f"  Threshold: {FAILURE_THRESHOLD} consecutive failures")
     logger.info(f"  API script: {API_SCRIPT}")
     logger.info(f"  Log:       {WATCHDOG_LOG}")
+    logger.info(f"  State dir: {state_dir()}")
+    logger.info(f"  Heartbeat: {HEARTBEAT_FILE}")
     logger.info("=" * 60)
     log_flush()
 
@@ -367,6 +535,11 @@ def main():
 
     while True:
         try:
+            # ── Heartbeat: write BEFORE doing any work this tick so a
+            # subsequent freeze leaves a recent timestamp that still
+            # triggers eviction once stale.
+            write_heartbeat(api_last_ok=last_healthy_time)
+
             # ── Check for restart signal ──
             if check_restart_signal():
                 logger.info("Restart requested — killing API for reload")

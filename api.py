@@ -43,6 +43,7 @@ from tools.health import SystemHealth
 from tools.pipeline_integrity import get_checker as get_integrity_checker, initialize as init_integrity
 from tools.learned_correlations import LearnedCorrelationStore
 from tools.correlation import set_learned_store, SPORT_CORRELATIONS
+from tools.state_paths import restart_signal_path
 
 load_dotenv()
 
@@ -118,6 +119,7 @@ system_health: Optional[SystemHealth] = None
 learned_correlation_store: Optional[LearnedCorrelationStore] = None
 worker_task: Optional[asyncio.Task] = None
 wal_checkpoint_task: Optional[asyncio.Task] = None
+restart_signal_task: Optional[asyncio.Task] = None
 
 
 def _is_internal_query(query: str) -> bool:
@@ -191,11 +193,9 @@ async def wal_checkpoint_loop():
                         f"MEMORY GUARDIAN: RSS={rss_mb:.0f}MB > {MEMORY_RESTART_MB}MB — "
                         f"requesting graceful restart to prevent OOM crash"
                     )
-                    # Signal the watchdog to restart us
-                    restart_file = os.path.join(
-                        os.path.dirname(__file__), "memory", "restart_requested"
-                    )
-                    with open(restart_file, "w") as f:
+                    # Signal the watchdog to restart us (off-OneDrive state dir)
+                    restart_file = restart_signal_path()
+                    with open(restart_file, "w", encoding="utf-8") as f:
                         f.write(f"memory_guardian: RSS={rss_mb:.0f}MB at {datetime.now()}")
                     # Give the signal file a moment to be detected, then exit cleanly
                     await asyncio.sleep(2)
@@ -239,6 +239,38 @@ async def wal_checkpoint_loop():
             break
         except Exception as e:
             logger.warning(f"WAL checkpoint failed (non-fatal): {e}")
+
+
+async def restart_signal_watcher():
+    """Poll the off-OneDrive restart-signal file and exit cleanly when found.
+
+    The watchdog also polls this file and will restart the API.  Having the
+    API self-consume the signal (via os._exit(0)) decouples restart from
+    watchdog liveness — if the watchdog is frozen, the API still cycles
+    itself, and the *restarted* watchdog reclaims oversight on the next spawn.
+    """
+    signal_path = restart_signal_path()
+    while True:
+        try:
+            await asyncio.sleep(10)
+            if signal_path.exists():
+                try:
+                    reason = signal_path.read_text(encoding="utf-8").strip()
+                except Exception:
+                    reason = "(unreadable)"
+                logger.warning(
+                    f"RESTART SIGNAL detected at {signal_path} — exiting process. Reason: {reason!r}"
+                )
+                # We do NOT unlink the file here — the watchdog also consumes
+                # it, and whichever component starts first after exit will
+                # clear it.  Unlinking here would race with the watchdog's
+                # own restart flow.
+                await asyncio.sleep(0.5)
+                os._exit(0)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.debug(f"restart_signal_watcher tick failed (non-fatal): {e}")
 
 
 # Per-task hard timeout. AGP sessions that route through Claude Code
@@ -326,7 +358,7 @@ async def task_worker():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle manager."""
-    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task
+    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task
 
     # Start memory profiling only when explicitly requested — tracemalloc tracks every
     # allocation in C-level metadata (~50-100 bytes each), which adds 55-110 MB of invisible
@@ -471,7 +503,12 @@ async def lifespan(app: FastAPI):
 
     worker_task = asyncio.create_task(task_worker())
     wal_checkpoint_task = asyncio.create_task(wal_checkpoint_loop())
-    logger.info(f"Callisto API started on port {CALLISTO_PORT} (WAL checkpoint every 5m)")
+    # Signal-file consumer — decouples restart from watchdog liveness.
+    restart_signal_task = asyncio.create_task(restart_signal_watcher())
+    logger.info(
+        f"Callisto API started on port {CALLISTO_PORT} "
+        f"(WAL checkpoint every 5m, restart-signal watcher active)"
+    )
 
     # Notify on Telegram
     sports = (await line_monitor.get_status()).get("monitored_sports", [])
@@ -509,6 +546,12 @@ async def lifespan(app: FastAPI):
         worker_task.cancel()
         try:
             await worker_task
+        except asyncio.CancelledError:
+            pass
+    if restart_signal_task:
+        restart_signal_task.cancel()
+        try:
+            await restart_signal_task
         except asyncio.CancelledError:
             pass
     # Cancel orphaned restart task if shutdown beat it (audit H-14).
@@ -2921,11 +2964,17 @@ _restart_task: Optional[asyncio.Task] = None
 
 
 @app.post("/admin/restart")
-async def admin_restart(confirm: str = "", _auth: None = Depends(require_admin)):
+async def admin_restart(confirm: str = "", _auth: None = Depends(require_admin_or_loopback)):
     """Graceful restart — exits process, watchdog brings it back with new code.
 
     Requires confirm=YES to prevent accidental restarts.
     Without watchdog.bat running, this will KILL the system with no relaunch.
+
+    Auth: admin-token OR loopback.  Previously required CALLISTO_ADMIN_TOKEN
+    unconditionally, which meant localhost scripts (and the human using curl)
+    had no restart path when the token was unset — forcing reliance on the
+    signal file and the watchdog picking it up.  Loopback-allowed restores
+    an in-process restart path even with the token unset.
     """
     # SECURITY: timing-safe equality (audit C-2). Token is "YES" — short, but pattern is
     # what matters: never use `==` or `!=` on auth-adjacent strings.

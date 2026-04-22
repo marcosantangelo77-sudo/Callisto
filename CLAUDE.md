@@ -23,21 +23,24 @@ curl -X POST http://localhost:8420/context/sync -H "Content-Type: application/js
 ## After Code Changes — Trigger Restart
 When you modify Callisto source files (tools/, api.py, orchestrator.py, etc.), the running process needs to reload. Do this EVERY TIME after committing code changes:
 ```bash
-# Method 1: Signal file (works always — watchdog picks it up in ≤15 seconds)
-echo "code reload after commit $(git rev-parse --short HEAD)" > memory/restart_requested
+# Method 1: Signal file (works always — API + watchdog both pick it up in ≤15s)
+bash scripts/request_restart.sh "code reload after commit $(git rev-parse --short HEAD)"
 
-# Method 2: HTTP endpoint (works when API is still responding)
-curl -s -X POST http://localhost:8420/admin/restart
+# Method 2: HTTP endpoint (loopback-allowed; no token required on localhost)
+curl -s -X POST "http://localhost:8420/admin/restart?confirm=YES"
 ```
-The watchdog (scripts/watchdog.py) runs as a separate process, checks the signal file every 15s, kills the API, and restarts it with new code. Do NOT skip this step — uncommitted code that isn't reloaded is invisible to the live system.
+State files live OFF OneDrive to avoid oplock-induced freezes — see `tools/state_paths.py`. Signal file is at `%LOCALAPPDATA%\Callisto\restart_requested` on Windows (or `~/.local/state/callisto/restart_requested` on Unix; override with `CALLISTO_STATE_DIR`). Both the API's `restart_signal_watcher` and `scripts/watchdog.py` poll this file every ~10s.
 
 ## Watchdog Architecture
 The API auto-restart system has three layers:
-1. **watchdog.py** — Python process that health-checks every 15s, restarts API with full error logging, never gives up (exponential backoff, not surrender)
+1. **watchdog.py** — Python process that health-checks every 15s, writes a heartbeat each loop, restarts API with full error logging, never gives up (exponential backoff, not surrender). Self-recovers from a frozen primary: on startup, if an existing watchdog's heartbeat is >90s stale it evicts and takes over.
 2. **watchdog.bat** — Batch loop that restarts watchdog.py if IT crashes
 3. **Windows Task Scheduler** — Starts watchdog.bat at login, restarts on failure (install via `scripts/install_watchdog.bat` as admin)
 
-Logs: `logs/watchdog.log`, `logs/api_stderr_*.log`
+State files (off OneDrive, `$STATE_DIR = %LOCALAPPDATA%\Callisto` by default):
+- `watchdog.pid`, `watchdog.lock`, `watchdog_heartbeat.json`, `restart_requested`, `logs/watchdog.log`
+
+API logs stay on OneDrive for cross-machine diagnostics: `logs/api_stdout_*.log`, `logs/api_stderr_*.log`.
 
 ## API Quick Reference (localhost:8420)
 - `GET /health` — agent status, odds credits, monitors
