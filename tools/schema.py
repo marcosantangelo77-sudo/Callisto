@@ -272,8 +272,11 @@ CREATE TABLE IF NOT EXISTS hypotheses (
     market_type TEXT NOT NULL,
     model_config TEXT NOT NULL,
     edge_threshold REAL NOT NULL DEFAULT 0.01,
+    -- 'paused' added 2026-04-21: demotion state from LIVE for underperforming
+    -- hypotheses (see tools.hypothesis.review_live_hypotheses). Not retired:
+    -- can be un-paused once stats recover.
     status TEXT NOT NULL DEFAULT 'draft'
-        CHECK(status IN ('draft','backtesting','paper_trading','live','retired','rejected')),
+        CHECK(status IN ('draft','backtesting','paper_trading','live','paused','retired','rejected')),
     min_sample_size INTEGER NOT NULL DEFAULT 50,
     significance_level REAL NOT NULL DEFAULT 0.05,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -1445,6 +1448,79 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         await _safe_add_column(
             db, "ev_opportunities", "source", "TEXT DEFAULT 'line_movement'"
         )
+
+        # Migration (audit 2026-04-21): allow 'paused' status for LIVE-hypothesis
+        # demotion loop. Older DBs have a CHECK constraint that rejects 'paused';
+        # SQLite cannot alter a CHECK in place so we rebuild the table.
+        try:
+            cur = await db.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 20260421"
+            )
+            if not await cur.fetchone():
+                cur = await db.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='hypotheses'"
+                )
+                row = await cur.fetchone()
+                table_sql = row[0] if row else ""
+                if table_sql and "'paused'" not in table_sql:
+                    logger.info("Migration 20260421: rebuilding hypotheses table to add 'paused' status")
+                    await db.execute("BEGIN")
+                    try:
+                        await db.execute("ALTER TABLE hypotheses RENAME TO hypotheses_old_20260421")
+                        await db.execute("""
+                            CREATE TABLE hypotheses (
+                                hypothesis_id TEXT PRIMARY KEY,
+                                name TEXT NOT NULL,
+                                thesis TEXT NOT NULL,
+                                sport TEXT NOT NULL,
+                                market_type TEXT NOT NULL,
+                                model_config TEXT NOT NULL,
+                                edge_threshold REAL NOT NULL DEFAULT 0.01,
+                                status TEXT NOT NULL DEFAULT 'draft'
+                                    CHECK(status IN ('draft','backtesting','paper_trading','live','paused','retired','rejected')),
+                                min_sample_size INTEGER NOT NULL DEFAULT 50,
+                                significance_level REAL NOT NULL DEFAULT 0.05,
+                                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                promoted_at DATETIME,
+                                promoted_by TEXT,
+                                notes TEXT
+                            )
+                        """)
+                        # Copy all existing rows (unchanged data).
+                        await db.execute(
+                            "INSERT INTO hypotheses "
+                            "(hypothesis_id, name, thesis, sport, market_type, "
+                            " model_config, edge_threshold, status, min_sample_size, "
+                            " significance_level, created_at, updated_at, "
+                            " promoted_at, promoted_by, notes) "
+                            "SELECT hypothesis_id, name, thesis, sport, market_type, "
+                            " model_config, edge_threshold, status, min_sample_size, "
+                            " significance_level, created_at, updated_at, "
+                            " promoted_at, promoted_by, notes "
+                            "FROM hypotheses_old_20260421"
+                        )
+                        await db.execute("DROP TABLE hypotheses_old_20260421")
+                        await db.execute(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS idx_hypotheses_name ON hypotheses(name)"
+                        )
+                        await db.execute(
+                            "INSERT INTO schema_migrations (version, name) VALUES (20260421, 'add_paused_status')"
+                        )
+                        await db.commit()
+                        logger.info("Migration 20260421 complete: 'paused' status now allowed")
+                    except Exception as mig_err:
+                        await db.rollback()
+                        logger.error(f"Migration 20260421 failed: {mig_err}")
+                else:
+                    # Table already has 'paused' — record migration as complete.
+                    await db.execute(
+                        "INSERT OR IGNORE INTO schema_migrations (version, name) "
+                        "VALUES (20260421, 'add_paused_status')"
+                    )
+                    await db.commit()
+        except Exception as e:
+            logger.warning(f"Could not evaluate migration 20260421: {e}")
 
         # Migration (audit P2): add UNIQUE index on hypothesis_stats(hypothesis_id, stage)
         # so concurrent backtest writes can't insert competing rows for the same
