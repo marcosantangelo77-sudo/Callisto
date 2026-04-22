@@ -1272,7 +1272,16 @@ class DataCollector:
             )
             rows = await cursor.fetchall()
 
-            sharp_books = {"pinnacle", "lowvig.ag", "betfair exchange", "sharp"}
+            # Canonicalize the sharp-books allowlist so "Betfair Exchange"
+            # (odds-api.com title casing with space) and "betfair_exchange"
+            # (odds-api.io key) both resolve. Before this fix, the literal
+            # space-form vs underscore-form meant odds-api.io snapshots
+            # never matched and the function silently returned soft-book
+            # closes — making close_reliable=False for most paper trades.
+            from tools.book_keys import canonicalize_book, canonicalize_book_set
+            sharp_books = canonicalize_book_set(
+                {"pinnacle", "lowvig.ag", "betfair_exchange", "circa", "sharp"}
+            )
             for row in rows:
                 try:
                     data = json.loads(row[0])
@@ -1288,7 +1297,7 @@ class DataCollector:
                     is_sharp = False
 
                     for bm in game.get("bookmakers", []):
-                        book = (bm.get("title") or bm.get("key") or "").lower()
+                        book = canonicalize_book(bm.get("title") or bm.get("key") or "")
                         for mkt in bm.get("markets", []):
                             if mkt.get("key") != market:
                                 continue

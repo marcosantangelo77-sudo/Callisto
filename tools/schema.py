@@ -1446,6 +1446,41 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
             db, "ev_opportunities", "source", "TEXT DEFAULT 'line_movement'"
         )
 
+        # Migration (odds-freshness audit): add ingestion-time stamp to
+        # odds_snapshots so downstream consumers can compute freshness-weighted
+        # consensus. The existing `timestamp` column records the row's write
+        # time; `fetched_at` records when we *fetched* the odds (may differ if
+        # a snapshot is re-processed, replayed from WS, or backfilled).
+        # Books themselves emit `last_update` inside snapshot_json — that's
+        # the book's own stamp and cannot be trusted for our freshness model.
+        await _safe_add_column(db, "odds_snapshots", "fetched_at", "TEXT")
+
+        # Migration (odds-freshness audit): event source so we can distinguish
+        # scheduled snapshots (interval=15m), WebSocket deltas, and
+        # incremental /odds/updated polls. Used for telemetry and for
+        # replaying only the fresh slice.
+        await _safe_add_column(
+            db, "odds_snapshots", "source", "TEXT DEFAULT 'interval'"
+        )
+
+        # Migration (odds-freshness audit): add prob-basis-point CLV column
+        # alongside legacy clv_cents (which was a mix of American cents and
+        # prob×10000 depending on which code path wrote it — see
+        # clv_tracker.py:414 vs :419). Going forward writers populate
+        # clv_prob_bp unambiguously; readers should prefer it and treat
+        # clv_cents as deprecated/mixed-units.
+        await _safe_add_column(db, "clv_log", "clv_prob_bp", "REAL")
+
+        # Migration (odds-freshness audit): gate flag for ev_opportunities.
+        # An ev_opportunity with steam_only=1 means the row was surfaced by
+        # line-movement consensus alone, NOT ratified by an independent model
+        # (pace, props, sim). Kept so downstream filters can exclude
+        # steam-only rows from Telegram alerts without losing them from
+        # research backfill.
+        await _safe_add_column(
+            db, "ev_opportunities", "steam_only", "INTEGER DEFAULT 0"
+        )
+
         # Migration (audit P2): add UNIQUE index on hypothesis_stats(hypothesis_id, stage)
         # so concurrent backtest writes can't insert competing rows for the same
         # hypothesis/stage. Existing duplicates (if any) are not removed here; the
