@@ -46,10 +46,22 @@ DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 # Health check interval
 CHECK_INTERVAL = 120  # 2 minutes
 
-# Circuit breaker thresholds
+# Circuit breaker thresholds (default / "slow" path)
 BREAKER_FAIL_THRESHOLD = 5      # Consecutive failures to trip
 BREAKER_COOLDOWN = 600           # 10 min cooldown before retry
 MAX_ERRORS_PER_HOUR = 50         # Error rate limit per subsystem
+
+# Fast-path thresholds for infrastructure checks where rapid signal matters.
+# A subsystem configured with fast_threshold can trip in ~1 minute rather than
+# waiting the full slow window. Applied per-subsystem via SUBSYSTEM_BREAKER_CFG.
+FAST_BREAKER_FAIL_THRESHOLD = 3
+FAST_BREAKER_MIN_INTERVAL_S = 20  # Require failures within 60s total window
+
+# Network check caching — transient Wi-Fi flakiness shouldn't silence
+# higher-layer alerting. Cache ESPN/odds-api results for 5 minutes; only
+# escalate from "warning" to failure if the outage persists.
+NETWORK_CACHE_TTL_S = 300
+NETWORK_ESCALATE_AFTER_S = 600  # 10 minutes of continuous failure → real failure
 
 # Resource thresholds
 MIN_DISK_GB = 2.0                # Alert below 2GB free
@@ -142,32 +154,93 @@ def resolve_sla_seconds(source: str) -> int:
     return 7200
 
 
-class CircuitBreaker:
-    """Per-subsystem circuit breaker."""
+# Per-subsystem breaker configuration. "fast" = fast-path thresholds so
+# infrastructure subsystems trip quickly (~1 min) when failures cluster.
+# Subsystems not listed use the slow/default thresholds.
+SUBSYSTEM_BREAKER_CFG: dict[str, dict] = {
+    "sqlite": {"fast": True},
+    "ollama": {"fast": True},
+    "disk":   {"fast": True},
+    # network/memory keep slow thresholds — they're noisy by nature.
+}
 
-    def __init__(self, name: str, fail_threshold: int = BREAKER_FAIL_THRESHOLD):
+
+class CircuitBreaker:
+    """Per-subsystem circuit breaker.
+
+    Supports both a "slow" path (default BREAKER_FAIL_THRESHOLD × CHECK_INTERVAL)
+    and a "fast" path for infrastructure checks where rapid signal matters.
+    The fast path trips when fast_fail_threshold failures occur within a short
+    window, independent of the slow counter.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        fail_threshold: int = BREAKER_FAIL_THRESHOLD,
+        fast: bool = False,
+        fast_fail_threshold: int = FAST_BREAKER_FAIL_THRESHOLD,
+        fast_min_interval_s: float = FAST_BREAKER_MIN_INTERVAL_S,
+    ):
         self.name = name
         self.fail_threshold = fail_threshold
+        self.fast_enabled = fast
+        self.fast_fail_threshold = fast_fail_threshold
+        self.fast_min_interval_s = fast_min_interval_s
         self.consecutive_failures = 0
         self.is_open = False  # open = disabled
         self.opened_at = 0.0
         self.last_error = ""
         self.total_trips = 0
+        # Fast-path: track timestamps of recent consecutive failures
+        self._recent_failure_times: list[float] = []
 
     def record_success(self) -> None:
         self.consecutive_failures = 0
+        self._recent_failure_times = []
         if self.is_open:
             self.is_open = False
             logger.info(f"Circuit breaker CLOSED for {self.name} — recovered")
+
+    def record_intermediate(self) -> None:
+        """Neither success nor failure — e.g. memory 'warning' state.
+
+        Does NOT reset the consecutive_failures counter (so a genuinely
+        degrading subsystem can still trip) but also does NOT increment it.
+        """
+        return
 
     def record_failure(self, error: str) -> bool:
         """Record failure. Returns True if breaker just tripped."""
         self.consecutive_failures += 1
         self.last_error = error
+        now = time.monotonic()
+
+        # Fast-path: keep a short rolling window of failure timestamps.
+        if self.fast_enabled:
+            window = self.fast_min_interval_s * self.fast_fail_threshold
+            self._recent_failure_times.append(now)
+            self._recent_failure_times = [
+                t for t in self._recent_failure_times if now - t <= window
+            ]
+            if (
+                not self.is_open
+                and len(self._recent_failure_times) >= self.fast_fail_threshold
+            ):
+                self.is_open = True
+                self.opened_at = now
+                self.total_trips += 1
+                logger.error(
+                    f"Circuit breaker OPEN (fast-path) for {self.name} — "
+                    f"{len(self._recent_failure_times)} failures in "
+                    f"{window:.0f}s. Disabling for {BREAKER_COOLDOWN}s. "
+                    f"Error: {error}"
+                )
+                return True
 
         if not self.is_open and self.consecutive_failures >= self.fail_threshold:
             self.is_open = True
-            self.opened_at = time.monotonic()
+            self.opened_at = now
             self.total_trips += 1
             logger.error(
                 f"Circuit breaker OPEN for {self.name} — "
@@ -199,6 +272,8 @@ class CircuitBreaker:
             "cooldown_remaining": max(
                 0, BREAKER_COOLDOWN - (time.monotonic() - self.opened_at)
             ) if self.is_open else 0,
+            "fast_path": self.fast_enabled,
+            "fast_window_failures": len(self._recent_failure_times),
         }
 
 
@@ -247,7 +322,13 @@ class SystemHealth:
     """
 
     def __init__(self):
-        self._breakers = {name: CircuitBreaker(name) for name in SUBSYSTEMS}
+        self._breakers: dict[str, CircuitBreaker] = {}
+        for name in SUBSYSTEMS:
+            cfg = SUBSYSTEM_BREAKER_CFG.get(name, {})
+            self._breakers[name] = CircuitBreaker(
+                name,
+                fast=bool(cfg.get("fast", False)),
+            )
         self._errors = ErrorTracker()
         self._running = False
         self._task: Optional[asyncio.Task] = None
@@ -256,6 +337,12 @@ class SystemHealth:
         self._last_check: dict[str, dict] = {}
         self._memory_samples: list[tuple[float, float]] = []  # (timestamp, rss_mb)
         self._stalled_phases: set[str] = set()
+        # Network check caching / escalation state
+        self._network_cache: Optional[dict] = None
+        self._network_cache_ts: float = 0.0
+        self._network_first_failure_ts: Optional[float] = None
+        # Subsystem trip history: list of {name, opened_at, error, reopened_s}
+        self._trip_history: list[dict] = []
 
         # External references (set after initialization)
         self.research_loop = None
@@ -319,10 +406,20 @@ class SystemHealth:
                 self._last_check[name] = result
 
                 status = result.get("status", "ok")
-                if status in ("ok", "warning"):
-                    # "warning" = informational (e.g. memory leak suspected
-                    # but RSS still under limit). Don't trip the breaker.
+                if status == "ok":
                     breaker.record_success()
+                elif status == "warning":
+                    # Intermediate state — e.g. memory leak suspected but RSS
+                    # still under limit, or transient network hiccup. Don't
+                    # trip the breaker, but DON'T reset the consecutive-failure
+                    # counter either: a sustained warning should eventually
+                    # escalate on its own terms (network cache, memory growth,
+                    # etc). This is the fix for silent suppression where
+                    # "warning" acted as success and hid real degradation.
+                    breaker.record_intermediate()
+                    self._errors.record(
+                        name, result.get("warning", result.get("message", "warning"))
+                    )
                 else:
                     error_msg = result.get("error", result.get("message", "unknown"))
                     tripped = breaker.record_failure(error_msg)
@@ -515,7 +612,23 @@ class SystemHealth:
             return {"status": "error", "error": str(e)}
 
     async def _check_network(self) -> dict:
-        """Check network connectivity to key services."""
+        """Check network connectivity to key services.
+
+        Caches results for NETWORK_CACHE_TTL_S (5 min) to avoid two live HTTP
+        requests every 2 minutes. Transient Wi-Fi flakiness demotes to
+        "warning" rather than "error" — only escalates to real failure if the
+        outage persists past NETWORK_ESCALATE_AFTER_S (10 min).
+        """
+        now = time.monotonic()
+        if (
+            self._network_cache is not None
+            and (now - self._network_cache_ts) < NETWORK_CACHE_TTL_S
+        ):
+            cached = dict(self._network_cache)
+            cached["cached"] = True
+            cached["cache_age_s"] = round(now - self._network_cache_ts, 1)
+            return cached
+
         results = {}
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -541,13 +654,39 @@ class SystemHealth:
                     results["odds_api"] = f"error: {e}"
 
         except Exception as e:
-            return {"status": "error", "error": f"Network check failed: {e}"}
+            # Transient — classify as warning unless persistent.
+            if self._network_first_failure_ts is None:
+                self._network_first_failure_ts = now
+            elapsed = now - self._network_first_failure_ts
+            status = "critical" if elapsed > NETWORK_ESCALATE_AFTER_S else "warning"
+            out = {
+                "status": status,
+                "error": f"Network check failed: {e}",
+                "failing_for_seconds": round(elapsed, 1),
+            }
+            self._network_cache = out
+            self._network_cache_ts = now
+            return out
 
         all_ok = all(v == "ok" for v in results.values())
-        return {
-            "status": "ok" if all_ok else "degraded",
-            "services": results,
-        }
+        if all_ok:
+            self._network_first_failure_ts = None
+            out = {"status": "ok", "services": results, "cached": False}
+        else:
+            if self._network_first_failure_ts is None:
+                self._network_first_failure_ts = now
+            elapsed = now - self._network_first_failure_ts
+            # Demote to warning first; only escalate if the outage persists.
+            status = "critical" if elapsed > NETWORK_ESCALATE_AFTER_S else "warning"
+            out = {
+                "status": status,
+                "services": results,
+                "failing_for_seconds": round(elapsed, 1),
+                "cached": False,
+            }
+        self._network_cache = out
+        self._network_cache_ts = now
+        return out
 
     async def _check_data_collector(self) -> dict:
         """
@@ -678,6 +817,15 @@ class SystemHealth:
     async def _on_breaker_trip(self, subsystem: str, error: str) -> None:
         """Called when a circuit breaker trips. Take corrective action."""
         logger.error(f"Breaker tripped for {subsystem}: {error}")
+        # Record trip history for /health/detailed visibility
+        self._trip_history.append({
+            "name": subsystem,
+            "opened_at": datetime.now(timezone.utc).isoformat(),
+            "error": error[:500],
+        })
+        # Keep last 50 trips
+        if len(self._trip_history) > 50:
+            self._trip_history = self._trip_history[-50:]
 
         # Try Telegram alert
         try:
@@ -746,6 +894,7 @@ class SystemHealth:
             "error_rates": self._errors.get_summary(),
             "last_checks": self._last_check,
             "stalled_phases": list(self._stalled_phases),
+            "trip_history": list(self._trip_history),
         }
 
     def write_health_file(self) -> None:
