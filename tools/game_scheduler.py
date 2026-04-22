@@ -28,6 +28,7 @@ from tools.event_bus import (
     EVENT_GAME_LINEUP_WINDOW,
     get_event_bus,
 )
+from tools.ingestion_tracking import tracked_ingestion
 
 logger = logging.getLogger("callisto.game_scheduler")
 
@@ -89,6 +90,7 @@ class GameScheduler:
             except asyncio.CancelledError:
                 pass
 
+    @tracked_ingestion(source="game_scheduler.refresh_calendar", sla_seconds=3600)
     async def refresh_calendar(self) -> int:
         """
         Load upcoming games from markets table.

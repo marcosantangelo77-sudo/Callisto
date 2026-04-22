@@ -273,6 +273,96 @@ async def restart_signal_watcher():
             logger.debug(f"restart_signal_watcher tick failed (non-fatal): {e}")
 
 
+# ──────────────────────────────────────────────────────────────
+# Ingestion SLA watchdog — self-healing observability
+# ──────────────────────────────────────────────────────────────
+# Every 5 minutes, check tools/health.py::resolve_sla_seconds + the
+# ingestion_runs ledger for sources past 3x SLA. When we find one,
+# self-submit a research task asking Callisto to investigate. This
+# turns a silent data drop into a first-class research query — the
+# AGP pipeline will pull evidence, contradictions, and form a finding.
+#
+# The set `_sla_alerted_sources` dedupes — one alert per source until
+# it recovers. If we didn't dedupe, a 6-hour ESPN outage would flood
+# the task queue with 72 identical tasks and starve real work.
+_sla_alerted_sources: set[str] = set()
+INGESTION_SLA_CHECK_INTERVAL_S = 300  # 5 min
+
+
+async def ingestion_sla_watchdog_loop():
+    """Periodic SLA audit. Self-submits /task queries on breach."""
+    from tools.health import resolve_sla_seconds, CRITICAL_MULTIPLIER
+
+    while True:
+        try:
+            await asyncio.sleep(INGESTION_SLA_CHECK_INTERVAL_S)
+
+            try:
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute("PRAGMA busy_timeout = 10000")
+                    cursor = await db.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type='table' AND name='ingestion_runs'"
+                    )
+                    if not await cursor.fetchone():
+                        continue
+
+                    cursor = await db.execute(
+                        "SELECT source, status, "
+                        "  (julianday('now') - julianday(finished_at)) * 86400 AS age_s "
+                        "FROM ingestion_runs "
+                        "WHERE finished_at IS NOT NULL "
+                        "  AND id IN ("
+                        "    SELECT MAX(id) FROM ingestion_runs "
+                        "    WHERE finished_at IS NOT NULL GROUP BY source"
+                        "  )"
+                    )
+                    rows = await cursor.fetchall()
+            except Exception as e:
+                logger.debug(f"SLA watchdog query failed: {e}")
+                continue
+
+            still_stale: set[str] = set()
+            for source, last_status, age_s in rows:
+                if age_s is None:
+                    continue
+                sla = resolve_sla_seconds(source)
+                if float(age_s) > sla * CRITICAL_MULTIPLIER:
+                    still_stale.add(source)
+                    if source in _sla_alerted_sources:
+                        continue  # already filed
+                    minutes = int(float(age_s) / 60)
+                    query = (
+                        f"investigate: ingestion source '{source}' has not "
+                        f"successfully ingested for {minutes} minutes "
+                        f"(SLA: {sla}s, last_status: {last_status}). "
+                        f"Check whether this is a credential / URL / upstream "
+                        f"outage, an off-season lull, or a schema drift. "
+                        f"Propose a remediation."
+                    )
+                    try:
+                        await queue.submit_task(query, priority=2)
+                        _sla_alerted_sources.add(source)
+                        logger.warning(
+                            f"SLA watchdog: filed investigation task for {source} "
+                            f"({minutes} min stale)"
+                        )
+                    except Exception as e:
+                        logger.warning(f"SLA watchdog: submit_task failed: {e}")
+
+            # Recovery: drop sources that have recovered so a future breach
+            # re-files.
+            recovered = _sla_alerted_sources - still_stale
+            for src in recovered:
+                _sla_alerted_sources.discard(src)
+                logger.info(f"SLA watchdog: {src} recovered, re-arming alert")
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"SLA watchdog loop error (non-fatal): {e}")
+
+
 # Per-task hard timeout. AGP sessions that route through Claude Code
 # occasionally run 7+ minutes (observed 419s on task 484, 2026-04-18),
 # and the worker processes tasks serially — one slow session stalls every
@@ -519,9 +609,10 @@ async def lifespan(app: FastAPI):
     wal_checkpoint_task = asyncio.create_task(wal_checkpoint_loop())
     # Signal-file consumer — decouples restart from watchdog liveness.
     restart_signal_task = asyncio.create_task(restart_signal_watcher())
+    sla_watchdog_task = asyncio.create_task(ingestion_sla_watchdog_loop())
     logger.info(
         f"Callisto API started on port {CALLISTO_PORT} "
-        f"(WAL checkpoint every 5m, restart-signal watcher active)"
+        f"(WAL ckpt 5m, restart-signal watcher active, ingestion SLA watchdog 5m)"
     )
 
     # Notify on Telegram
@@ -554,6 +645,12 @@ async def lifespan(app: FastAPI):
         wal_checkpoint_task.cancel()
         try:
             await wal_checkpoint_task
+        except asyncio.CancelledError:
+            pass
+    if sla_watchdog_task:
+        sla_watchdog_task.cancel()
+        try:
+            await sla_watchdog_task
         except asyncio.CancelledError:
             pass
     if worker_task:

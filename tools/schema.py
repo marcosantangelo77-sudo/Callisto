@@ -1323,6 +1323,38 @@ CREATE TABLE IF NOT EXISTS masters_predictions (
     computed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(hypothesis_id, year, player)
 );
+
+-- ──────────────────────────────────────────
+-- INGESTION OBSERVABILITY: per-source run ledger
+-- ──────────────────────────────────────────
+-- Populated by @tracked_ingestion (tools/ingestion_tracking.py). Each call to
+-- a wrapped ingestion function writes one row on entry (status='running') and
+-- updates it on exit with the final status, duration, and row count.
+--
+-- Source tags are hierarchical (e.g. 'espn.scoreboard.mlb',
+-- 'odds_api_io.v3.odds.updated') and STABLE — changing them loses history
+-- for SLA evaluation.
+--
+-- Read by tools/health.py::_check_data_collector which compares each source's
+-- most-recent `finished_at` against the SLA table and trips the breaker when
+-- runs go stale. This is how Callisto notices that ESPN has been 500-looping
+-- for six hours — something we previously had ZERO visibility into.
+CREATE TABLE IF NOT EXISTS ingestion_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    started_at TIMESTAMP NOT NULL,
+    finished_at TIMESTAMP,
+    status TEXT NOT NULL,
+    rows_ingested INTEGER DEFAULT 0,
+    error_class TEXT,
+    error_message TEXT,
+    duration_ms INTEGER,
+    extra_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ingestion_runs_source_finished
+    ON ingestion_runs(source, finished_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ingestion_runs_status
+    ON ingestion_runs(status, finished_at DESC);
 """
 
 

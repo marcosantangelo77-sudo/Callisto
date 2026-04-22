@@ -66,6 +66,81 @@ SUBSYSTEMS = [
     "research_loop", "embedding", "data_collector",
 ]
 
+# ── Data collector SLA configuration ──
+# Per-source maximum age (seconds) between successful ingestion runs before
+# the source is considered stale. Two tiers:
+#   * WARN tier  — logged; surfaced in /health but does not trip the breaker
+#   * CRITICAL tier = 3x warn — trips the circuit breaker
+#
+# Source tags are hierarchical (`<api>.<resource>.<sport>`) — see
+# tools/ingestion_tracking.py. When a source name isn't listed explicitly
+# we fall back to SOURCE_SLA_DEFAULTS matched by prefix.
+#
+# These SLAs are tuned to the observed cadence of the callers (line_monitor
+# polls scoreboards ~every 5 min; box scores hit ~15 min post-game). Tighten
+# them after observing real throughput; loosening is safer than tightening.
+SOURCE_SLAS: dict[str, int] = {
+    # Scoreboards — frequent polling expected
+    "odds_api_io.v3.odds.updated": 600,          # WebSocket-adjacent, 10 min
+    "odds_api_io.v3.live_events.all": 900,
+    "odds_api.v4.odds.basketball_nba": 900,
+    # Game-day ESPN scrapes
+    "espn.scoreboard.baseball_mlb": 900,         # 15 min — active day
+    "espn.scoreboard.basketball_nba": 900,
+    "espn.scoreboard.icehockey_nhl": 900,
+    "espn.scoreboard.americanfootball_nfl": 900,
+    # Box scores — post-game, more lenient
+    "espn.boxscore.baseball_mlb": 1800,
+    "espn.boxscore.basketball_nba": 1800,
+    # Roster / injuries — daily cadence
+    "espn.injuries.baseball_mlb": 21600,         # 6 hr
+    "espn.injuries.basketball_nba": 21600,
+    "mlb_stats.players": 172800,                 # 2 days
+    "nhl_api.players": 172800,
+    "nflverse.players": 172800,
+    "nba_api.players": 172800,
+    # Historical / backfill
+    "nflverse.combine": 2592000,                 # 30 days
+    # Calendar refresh
+    "game_scheduler.refresh_calendar": 7200,     # 2 hr
+}
+
+# Prefix-based fallback for sources not explicitly listed.
+SOURCE_SLA_DEFAULTS: list[tuple[str, int]] = [
+    ("odds_api_io.", 900),
+    ("odds_api.",    900),
+    ("espn.scoreboard.", 1800),
+    ("espn.boxscore.", 3600),
+    ("espn.pbp.", 3600),
+    ("espn.roster.", 21600),
+    ("espn.injuries.", 21600),
+    ("espn.odds.", 1800),
+    ("espn.ncaa_hoops.", 3600),
+    ("espn.golf.", 7200),
+    ("nhl_api.", 3600),
+    ("nba_api.", 3600),
+    ("nflverse.", 3600),
+    ("mlb_stats.", 86400),
+    ("statcast.", 21600),
+    ("openmeteo.", 3600),
+    ("game_scheduler.", 7200),
+]
+
+# Critical-tier multiplier: source is CRITICAL (breaker trips) if
+# last_success older than SLA * CRITICAL_MULTIPLIER.
+CRITICAL_MULTIPLIER = 3
+
+
+def resolve_sla_seconds(source: str) -> int:
+    """Return the SLA (max age since last successful run) for a source tag."""
+    if source in SOURCE_SLAS:
+        return SOURCE_SLAS[source]
+    for prefix, sla in SOURCE_SLA_DEFAULTS:
+        if source.startswith(prefix):
+            return sla
+    # Unknown source — generous default so we don't false-alarm
+    return 7200
+
 
 class CircuitBreaker:
     """Per-subsystem circuit breaker."""
@@ -226,6 +301,7 @@ class SystemHealth:
             ("disk", self._check_disk),
             ("memory", self._check_memory),
             ("network", self._check_network),
+            ("data_collector", self._check_data_collector),
         ]
 
         for name, check_fn in checks:
@@ -471,6 +547,130 @@ class SystemHealth:
         return {
             "status": "ok" if all_ok else "degraded",
             "services": results,
+        }
+
+    async def _check_data_collector(self) -> dict:
+        """
+        Check data collector freshness via the `ingestion_runs` ledger.
+
+        WHY THIS EXISTS
+        ---------------
+        SUBSYSTEMS has listed "data_collector" since day one but the probe was
+        never implemented — meaning the breaker could never trip even when
+        ESPN / NHL / nflverse had been silently failing for hours. The audit
+        classified this as a P1 silent-failure class because empty returns
+        look identical to "no games today" in every downstream consumer.
+
+        WHAT THIS DOES
+        --------------
+        For every source we have ever written a tracking row for, find the
+        most-recent FINISHED run (not 'running' — those could be hung). Call
+        a source stale if:
+          • last_success_age > SLA (warning)
+          • last_success_age > SLA * CRITICAL_MULTIPLIER (critical)
+
+        Rate-limited runs count as semi-stale — they show the source CAN be
+        reached but is being throttled; we surface them distinctly rather
+        than treat them as successes.
+
+        Returns a dict shaped for the standard check-result contract:
+        status = 'ok' | 'warning' | 'critical' | 'error'
+        plus diagnostic fields for /health.
+        """
+        if not os.path.exists(DB_PATH):
+            return {"status": "error", "error": f"DB not found: {DB_PATH}"}
+
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
+                # Confirm table exists — if this is a fresh DB that hasn't
+                # run ensure_schema() yet, warn instead of crashing.
+                cursor = await db.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name='ingestion_runs'"
+                )
+                if not await cursor.fetchone():
+                    return {
+                        "status": "warning",
+                        "message": "ingestion_runs table does not exist yet — migration pending",
+                    }
+
+                # Get most-recent finished run per source.
+                cursor = await db.execute(
+                    "SELECT source, status, finished_at, "
+                    "  (julianday('now') - julianday(finished_at)) * 86400 AS age_s "
+                    "FROM ingestion_runs "
+                    "WHERE finished_at IS NOT NULL "
+                    "  AND id IN ("
+                    "    SELECT MAX(id) FROM ingestion_runs "
+                    "    WHERE finished_at IS NOT NULL "
+                    "    GROUP BY source"
+                    "  )"
+                )
+                rows = await cursor.fetchall()
+        except Exception as e:
+            return {"status": "error", "error": f"ingestion_runs query failed: {e}"}
+
+        if not rows:
+            return {
+                "status": "warning",
+                "message": "No ingestion runs recorded yet — either Callisto just started or the decorator isn't being hit",
+                "sources": 0,
+            }
+
+        stale_warn: list[dict] = []
+        stale_critical: list[dict] = []
+        rate_limited: list[dict] = []
+        healthy = 0
+        total_sources = 0
+
+        for source, last_status, finished_at, age_s in rows:
+            total_sources += 1
+            sla = resolve_sla_seconds(source)
+            age = float(age_s) if age_s is not None else 0.0
+
+            entry = {
+                "source": source,
+                "last_status": last_status,
+                "last_finished_at": finished_at,
+                "age_seconds": round(age, 0),
+                "sla_seconds": sla,
+            }
+
+            if last_status == "rate_limited":
+                rate_limited.append(entry)
+                continue
+
+            if age > sla * CRITICAL_MULTIPLIER:
+                stale_critical.append(entry)
+            elif age > sla:
+                stale_warn.append(entry)
+            elif last_status in ("ok", "partial"):
+                healthy += 1
+            else:
+                # Most recent terminal run was 'failed' but within SLA window
+                # (retry may still land). Surface as warning.
+                stale_warn.append({**entry, "note": "last run failed, within SLA window"})
+
+        if stale_critical:
+            status = "critical"
+        elif stale_warn or rate_limited:
+            status = "warning"
+        else:
+            status = "ok"
+
+        return {
+            "status": status,
+            "sources_total": total_sources,
+            "healthy": healthy,
+            "stale_warn": stale_warn[:20],
+            "stale_critical": stale_critical[:20],
+            "rate_limited": rate_limited[:10],
+            "error": (
+                f"{len(stale_critical)} source(s) past 3x SLA: "
+                + ", ".join(e["source"] for e in stale_critical[:5])
+                if stale_critical else None
+            ),
         }
 
     # ── Corrective actions ──
