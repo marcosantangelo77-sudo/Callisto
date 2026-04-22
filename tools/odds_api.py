@@ -386,6 +386,17 @@ def find_best_line(game: dict, market: str = "spreads", team: str = "") -> dict:
                     "price": outcome.get("price", 0),
                     "point": outcome.get("point"),
                     "last_update": bm.get("last_update", ""),
+                    # Our own ingest timestamp — set by
+                    # line_monitor._stamp_snapshot_fetched_at. When present
+                    # this is what edge_scanner uses for freshness decay
+                    # (strictly more meaningful than the book's
+                    # self-reported last_update). Falls back to bm.last_update
+                    # on legacy snapshots.
+                    "fetched_at": (
+                        outcome.get("fetched_at")
+                        or bm.get("fetched_at")
+                        or bm.get("last_update", "")
+                    ),
                 }
                 if not team or team.lower() in outcome.get("name", "").lower():
                     bookmaker_lines.append(entry)

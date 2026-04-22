@@ -60,6 +60,7 @@ async def _setup_db() -> aiosqlite.Connection:
             pinnacle_close_fair_prob REAL,
             pinnacle_close_fair_decimal REAL,
             clv_cents REAL,
+            clv_prob_bp REAL,
             actual_result TEXT,
             actual_pnl REAL,
             close_reliable BOOLEAN,
@@ -141,8 +142,17 @@ async def test_log_paper_trade_clv_writes_namespaced_row():
         assert result == "won"
         assert pnl == pytest.approx(90.9)
         assert reliable == 1
-        # American-cent CLV: signal -110, close -105 → signal_odds - closing_odds = -5
-        assert clv_cents == -5
+        # clv_cents now canonical prob-bp (odds-freshness audit fix).
+        # signal -110 (~0.524 implied, devigged ~0.512) vs close -105
+        # (~0.512 implied, devigged ~0.506): close fair - signal fair
+        # is slightly negative (we gave up a few prob bp on devig). The
+        # legacy American-point -5 semantic is retired because it was
+        # incompatible with the prob-bp path in _log_clv — see the
+        # CLV unit-mix audit fix.
+        assert clv_cents is not None
+        assert -150 < clv_cents < 150, (
+            f"CLV out of expected magnitude band: {clv_cents}"
+        )
         # -110 → decimal ~1.909
         assert our_dec == pytest.approx(1.0 + 100 / 110, rel=1e-4)
     finally:

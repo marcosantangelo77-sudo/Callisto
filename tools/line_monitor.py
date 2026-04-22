@@ -79,6 +79,232 @@ POINT_MOVEMENT_THRESHOLD = 0.5   # Spread/total half-points (key number sensitiv
 # Minimum edge for alert
 MIN_EDGE_ALERT = 0.03  # 3% edge minimum to flag as interesting
 
+# --- Event-driven odds update config ----------------------------------------
+# These knobs flip Callisto from "poll every 15 min" to event-driven freshness:
+#   * WS_SPORTS — odds-api.io sport slugs to stream live (comma-separated).
+#     Maps many-to-one onto MONITORED_SPORTS via WS_SPORT_TO_MONITORED below.
+#   * WS_ENABLED — flip to 0 to disable WS entirely (fall back to 15-min poll).
+#   * INCREMENTAL_ENABLED — /odds/updated?since=X polling every 60s as a
+#     gap-filler between WS drops.
+#   * REQUIRE_MODEL_AGREEMENT — gate ev_opportunities on independent model
+#     confirmation. Default on; set to 0 to revert to steam-only emission.
+WS_SPORTS = os.getenv(
+    "CALLISTO_WS_SPORTS", "basketball,american-football,baseball,ice-hockey"
+)
+WS_ENABLED = os.getenv("CALLISTO_WS_ENABLED", "1") == "1"
+INCREMENTAL_ENABLED = os.getenv("CALLISTO_INCREMENTAL_ENABLED", "1") == "1"
+INCREMENTAL_INTERVAL = int(os.getenv("CALLISTO_INCREMENTAL_INTERVAL_S", "60"))
+REQUIRE_MODEL_AGREEMENT = os.getenv("CALLISTO_REQUIRE_MODEL_AGREEMENT", "1") == "1"
+
+# Map odds-api.io WS sport slugs back to the-odds-api.com sport keys used in
+# odds_snapshots rows. A single WS sport fans out to multiple leagues.
+WS_SPORT_TO_MONITORED: dict[str, list[str]] = {
+    "basketball": ["basketball_nba", "basketball_ncaab", "basketball_ncaaw"],
+    "american-football": ["americanfootball_nfl", "americanfootball_ncaaf"],
+    "baseball": ["baseball_mlb"],
+    "ice-hockey": ["icehockey_nhl"],
+    "soccer": ["soccer_mls", "soccer_epl"],
+}
+
+
+def _ws_sport_to_monitored(ws_sport: str, ws_league: str = "") -> Optional[str]:
+    """Map odds-api.io WS (sport, league) to the-odds-api.com sport key.
+
+    WS messages carry e.g. sport='basketball', league='NBA'. We convert
+    that back to 'basketball_nba' so every downstream consumer (edge
+    scanner, movement detector, odds_snapshots rows) sees the same
+    canonical sport key regardless of whether the event arrived by WS,
+    incremental poll, or 15-min snapshot.
+    """
+    s = (ws_sport or "").lower().strip()
+    lg = (ws_league or "").lower().strip().replace(" ", "_")
+    # Preferred: combine sport + league so basketball_ncaab and
+    # basketball_nba don't collide in edge-scan output.
+    if s == "basketball":
+        if "ncaa" in lg and "w" in lg:
+            return "basketball_ncaaw"
+        if "ncaa" in lg:
+            return "basketball_ncaab"
+        return "basketball_nba"
+    if s in ("american-football", "american_football", "football"):
+        if "ncaa" in lg:
+            return "americanfootball_ncaaf"
+        return "americanfootball_nfl"
+    if s == "baseball":
+        return "baseball_mlb"
+    if s in ("ice-hockey", "ice_hockey", "hockey"):
+        return "icehockey_nhl"
+    if s == "soccer":
+        return "soccer_mls"
+    # Last resort — first matching entry in WS_SPORT_TO_MONITORED.
+    first = WS_SPORT_TO_MONITORED.get(s, [])
+    if first:
+        return first[0]
+    return None
+
+
+def _ws_update_to_snapshot(data: dict) -> Optional[tuple[str, dict]]:
+    """Convert a single odds-api.io WS/incremental message into a snapshot.
+
+    Returns (sport_key, snapshot_dict) or None if the message lacks enough
+    structure to route. The snapshot dict is shaped like get_odds() output
+    so _process_snapshot can consume it unchanged — one game, one
+    bookmaker, and the subset of markets that actually changed.
+    """
+    if not isinstance(data, dict):
+        return None
+    event_id = data.get("id") or data.get("event_id")
+    if not event_id:
+        return None
+    ws_sport = data.get("sport", "") or data.get("sport_key", "")
+    ws_league = data.get("league", "")
+    sport_key = _ws_sport_to_monitored(str(ws_sport), str(ws_league))
+    if not sport_key:
+        return None
+
+    bookie_name = data.get("bookie") or data.get("bookmaker") or ""
+    if not bookie_name:
+        return None
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # Build an odds-api-shaped bookmaker entry. odds-api.io WS markets look
+    # like {"name": "ML"|"Spread"|"Totals", "outcomes": [{"name", "price",
+    # "point"?}]} — map onto the-odds-api.com's "key" vocabulary.
+    _WS_MARKET_MAP = {
+        "ml": "h2h", "moneyline": "h2h",
+        "spread": "spreads", "spreads": "spreads", "runline": "spreads",
+        "totals": "totals", "total": "totals", "ou": "totals",
+    }
+    bm_markets = []
+    for m in data.get("markets", []) or []:
+        raw = str(m.get("name", "")).lower()
+        key = _WS_MARKET_MAP.get(raw, raw)
+        outcomes = []
+        for oc in m.get("outcomes", []) or []:
+            outcomes.append({
+                "name": oc.get("name", ""),
+                "price": oc.get("price", 0),
+                "point": oc.get("point"),
+                "fetched_at": now_iso,
+            })
+        if outcomes:
+            bm_markets.append({"key": key, "outcomes": outcomes})
+    if not bm_markets:
+        return None
+
+    snapshot = {
+        "sport": sport_key,
+        "game_count": 1,
+        "source": "odds_api_io",
+        "fetched_at": now_iso,
+        "games": [{
+            "id": str(event_id),
+            "sport_key": sport_key,
+            "home_team": data.get("home", "") or data.get("home_team", ""),
+            "away_team": data.get("away", "") or data.get("away_team", ""),
+            "commence_time": data.get("commence") or data.get("commence_time"),
+            "bookmakers": [{
+                "key": canonicalize_book_top(bookie_name),
+                "title": bookie_name,
+                "last_update": now_iso,
+                "fetched_at": now_iso,
+                "markets": bm_markets,
+            }],
+        }],
+    }
+    return sport_key, snapshot
+
+
+def canonicalize_book_top(name: str) -> str:
+    """Thin wrapper — imports lazily to avoid circular imports at module load."""
+    try:
+        from tools.book_keys import canonicalize_book as _cb
+        return _cb(name)
+    except Exception:
+        return (name or "").lower().replace(" ", "_")
+
+
+def _merge_delta_into_snapshot(base: dict, delta: dict, now_iso: str) -> dict:
+    """Splice a single-book WS/incremental delta onto the full snapshot.
+
+    Keeps every game + book from `base`, then for each game in `delta`
+    replaces OR appends the matching bookmaker entry. The returned dict is
+    a shallow copy — callers may mutate per-game entries in place.
+
+    Crucially, this preserves multi-book consensus: when DK pushes a WS
+    update, the returned snapshot still has every other book's quote from
+    the last 15-min snapshot (aged but weighted-down via fetched_at decay
+    in edge_scanner), and DK's entry is replaced with the fresh quote.
+    """
+    import copy
+    merged = {
+        "sport": base.get("sport", delta.get("sport", "")),
+        "game_count": base.get("game_count", 0),
+        "source": delta.get("source", base.get("source", "odds_api")),
+        "fetched_at": now_iso,
+        "ingest_source": delta.get("ingest_source", "ws"),
+        "games": [copy.deepcopy(g) for g in base.get("games", [])],
+    }
+    # Index base games by id for O(1) splice.
+    by_id: dict[str, dict] = {}
+    for g in merged["games"]:
+        gid = str(g.get("id", ""))
+        if gid:
+            by_id[gid] = g
+
+    for dgame in delta.get("games", []) or []:
+        gid = str(dgame.get("id", ""))
+        if not gid or gid not in by_id:
+            # New event that hasn't been seen in base — append wholesale.
+            merged["games"].append(copy.deepcopy(dgame))
+            continue
+        target = by_id[gid]
+        target.setdefault("bookmakers", [])
+        existing = target["bookmakers"]
+        for dbm in dgame.get("bookmakers", []) or []:
+            dkey = (dbm.get("key") or "").lower()
+            dtitle = (dbm.get("title") or "").lower()
+            replaced = False
+            for i, bm in enumerate(existing):
+                bmkey = (bm.get("key") or "").lower()
+                bmtitle = (bm.get("title") or "").lower()
+                if dkey and bmkey == dkey:
+                    existing[i] = copy.deepcopy(dbm)
+                    replaced = True
+                    break
+                if dtitle and bmtitle == dtitle:
+                    existing[i] = copy.deepcopy(dbm)
+                    replaced = True
+                    break
+            if not replaced:
+                existing.append(copy.deepcopy(dbm))
+    merged["game_count"] = len(merged["games"])
+    return merged
+
+
+def _stamp_snapshot_fetched_at(snapshot: dict, now_iso: str) -> None:
+    """Stamp `fetched_at` on every bookmaker entry in a snapshot.
+
+    Prefers an existing `fetched_at` (so WS-delivered deltas retain their
+    true ingest time even when later merged into a 15-min snapshot frame)
+    and falls back to `last_update` → `now_iso` otherwise. The outermost
+    snapshot dict also receives `fetched_at` so per-provider tooling
+    (scraper fallback, incremental poll) can pass the stamp through without
+    digging into every bookmaker.
+    """
+    snapshot.setdefault("fetched_at", now_iso)
+    for game in snapshot.get("games", []) or []:
+        for bm in game.get("bookmakers", []) or []:
+            # Bookmaker-level fetched_at — don't overwrite WS stamps
+            if not bm.get("fetched_at"):
+                bm["fetched_at"] = bm.get("last_update") or now_iso
+            # Outcome-level for granular freshness (WS messages deliver a
+            # single outcome change; stamp that outcome)
+            for mkt in bm.get("markets", []) or []:
+                for oc in mkt.get("outcomes", []) or []:
+                    if not oc.get("fetched_at"):
+                        oc["fetched_at"] = bm.get("fetched_at", now_iso)
+
 
 class LineMonitor:
     """Autonomous line movement detection engine."""
@@ -103,6 +329,20 @@ class LineMonitor:
         self._consecutive_failures: dict[str, int] = {}  # sport -> count
         self._FAILURE_ALERT_THRESHOLD = 3
 
+        # Event-driven odds state (WS + incremental poll) -------------------
+        # _ws_client holds the odds-api.io WebSocket handle; _incremental_task
+        # holds the /odds/updated?since=X poller. Both are None when the
+        # feature is disabled or failed to initialize; the 15-min snapshot
+        # loop runs regardless so WS outages degrade gracefully.
+        self._ws_client = None
+        self._ws_task: Optional[asyncio.Task] = None
+        self._ws_updates_received = 0
+        self._ws_last_update_at: Optional[float] = None
+        self._incremental_task: Optional[asyncio.Task] = None
+        # Unix seconds of the last /odds/updated poll, per sport. Used as
+        # the `since` cursor on the next call.
+        self._last_incremental_since: dict[str, int] = {}
+
     async def initialize(self) -> None:
         """Create tables for odds snapshots and alerts."""
         self._db = await aiosqlite.connect(self.db_path)
@@ -118,7 +358,15 @@ class LineMonitor:
                 timestamp TEXT NOT NULL,
                 snapshot_json TEXT NOT NULL,
                 game_count INTEGER DEFAULT 0,
-                credits_remaining INTEGER
+                credits_remaining INTEGER,
+                -- fetched_at records our ingest time (not the book's
+                -- last_update). Used by edge_scanner.weighted_sharp_consensus
+                -- to decay stale lines. See schema.py migration for details.
+                fetched_at TEXT,
+                -- source tracks origin: 'interval' (default 15-min poll),
+                -- 'ws' (WebSocket push), 'incremental' (/odds/updated),
+                -- 'scraper_fallback'. Useful for debugging freshness tiers.
+                source TEXT DEFAULT 'interval'
             )""",
             """CREATE TABLE IF NOT EXISTS line_movements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -182,9 +430,22 @@ class LineMonitor:
             except Exception as e:
                 logger.warning(f"Startup snapshot for {sport} failed: {e}")
         self._task = asyncio.create_task(self._monitor_loop())
+
+        # Event-driven paths — non-blocking: failure to open WS must NOT
+        # prevent the 15-min safety loop from running.
+        if WS_ENABLED:
+            try:
+                await self._start_ws()
+            except Exception as e:
+                logger.warning(f"WS startup failed (will retry in background): {e}")
+        if INCREMENTAL_ENABLED:
+            self._incremental_task = asyncio.create_task(self._incremental_loop())
+
         logger.info(
             f"Line monitor started — {len(MONITORED_SPORTS)} sports, "
-            f"{SNAPSHOT_INTERVAL}s interval (startup snapshots taken)"
+            f"{SNAPSHOT_INTERVAL}s interval "
+            f"(ws={'on' if WS_ENABLED else 'off'}, "
+            f"incremental={'on' if INCREMENTAL_ENABLED else 'off'})"
         )
 
     async def stop(self) -> None:
@@ -196,9 +457,136 @@ class LineMonitor:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        # Stop WS and incremental tasks. Each wrapped in its own try so a
+        # failure in one doesn't block the other.
+        if self._ws_client is not None:
+            try:
+                await self._ws_client.stop()
+            except Exception as e:
+                logger.warning(f"WS stop error: {e}")
+            self._ws_client = None
+        if self._incremental_task is not None:
+            self._incremental_task.cancel()
+            try:
+                await self._incremental_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._incremental_task = None
         if self._db:
             await self._db.close()
         logger.info("Line monitor stopped")
+
+    # --- WebSocket path -----------------------------------------------------
+    async def _start_ws(self) -> None:
+        """Open the odds-api.io WebSocket and wire updates into _process_ws_update.
+
+        The WS client has its own reconnect loop (5s→60s backoff with jitter)
+        inside tools/odds_ws.py, so we just hand it a callback and let it run.
+        """
+        # Imported locally to avoid a hard dep at module import time — lets
+        # CALLISTO_WS_ENABLED=0 environments skip the websockets package.
+        from tools.odds_ws import OddsWebSocket
+
+        self._ws_client = OddsWebSocket(
+            on_update=self._handle_ws_update,
+            sports=WS_SPORTS,
+        )
+        await self._ws_client.start()
+
+    async def _handle_ws_update(self, data: dict) -> None:
+        """WS callback — merge a single delta into our latest snapshot.
+
+        Each WS message covers ONE bookmaker's quotes for ONE event across
+        several markets. We turn it into a minimal snapshot-shaped payload
+        and route through the same _process_snapshot pipeline so edge
+        detection and movement evaluation fire on every delta.
+        """
+        self._ws_updates_received += 1
+        self._ws_last_update_at = time.time()
+
+        try:
+            mapped = _ws_update_to_snapshot(data)
+            if not mapped:
+                return
+            sport_key, snap = mapped
+            snap["ingest_source"] = "ws"
+            # Run through the normal pipeline — this writes fetched_at,
+            # triggers edge rescoring for the affected market, and invokes
+            # _evaluate_movement for changed prices.
+            await self._process_snapshot(sport_key, snap)
+        except Exception as e:
+            logger.warning(f"WS update handler failed: {e}")
+
+    # --- Incremental /odds/updated path -------------------------------------
+    async def _incremental_loop(self) -> None:
+        """Poll /odds/updated?since=X every INCREMENTAL_INTERVAL seconds.
+
+        This is the gap-filler between the WS firehose and the 15-min
+        safety snapshot: if WS drops for 30s we still catch the delta on
+        the next incremental tick. `since` is tracked per-sport so a
+        crash-restart still resumes roughly where it left off.
+        """
+        try:
+            from tools.odds_api_io import get_odds_updated as _incremental_fetch
+        except Exception:
+            logger.warning("odds_api_io.get_odds_updated unavailable — disabling incremental loop")
+            return
+
+        while self._running:
+            try:
+                await asyncio.sleep(INCREMENTAL_INTERVAL)
+                if self._paused:
+                    continue
+                now_unix = int(time.time())
+                for sport in MONITORED_SPORTS:
+                    sport = sport.strip()
+                    since = self._last_incremental_since.get(sport, now_unix - 60)
+                    try:
+                        result = await _incremental_fetch(since, sport=sport)
+                    except Exception as e:
+                        logger.debug(f"Incremental fetch failed for {sport}: {e}")
+                        continue
+                    self._last_incremental_since[sport] = now_unix
+                    if not isinstance(result, dict):
+                        continue
+                    updates = result.get("updates") or []
+                    if not updates:
+                        continue
+                    # Each update has the same shape as a WS message —
+                    # reuse the same converter.
+                    for upd in updates:
+                        mapped = _ws_update_to_snapshot(upd)
+                        if not mapped:
+                            continue
+                        s_key, snap = mapped
+                        snap["ingest_source"] = "incremental"
+                        try:
+                            await self._process_snapshot(s_key, snap)
+                        except Exception as e:
+                            logger.debug(f"Incremental _process_snapshot failed: {e}")
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.warning(f"Incremental loop error: {e}")
+
+    def get_ws_status(self) -> dict:
+        """Telemetry snapshot — exposed via /health and /system/full-status."""
+        base = {
+            "ws_enabled": WS_ENABLED,
+            "incremental_enabled": INCREMENTAL_ENABLED,
+            "ws_updates_received": self._ws_updates_received,
+            "ws_last_update_ago_s": (
+                round(time.time() - self._ws_last_update_at, 1)
+                if self._ws_last_update_at else None
+            ),
+            "require_model_agreement": REQUIRE_MODEL_AGREEMENT,
+        }
+        if self._ws_client is not None:
+            try:
+                base.update({"ws_client": self._ws_client.get_status()})
+            except Exception:
+                pass
+        return base
 
     async def wait_for_drain(self, timeout: float = 60) -> bool:
         """Pause the monitor and wait until all in-flight DB ops complete.
@@ -754,14 +1142,42 @@ class LineMonitor:
         credits_remaining = new_snapshot.get("credits", {}).get("remaining")
         source = new_snapshot.get("source", "odds_api")
 
+        # Stamp fetched_at on every bookmaker entry in the snapshot JSON so
+        # downstream consumers (backtest replay, CLV backfill, edge rescan)
+        # can compute freshness decay even when the outer row timestamp has
+        # drifted from the actual fetch time. Idempotent — if a line already
+        # has fetched_at (e.g. came from the WS path) we keep the earlier
+        # stamp rather than overwriting with a later process-time.
+        _stamp_snapshot_fetched_at(new_snapshot, now)
+
+        # ingest_source defaults to the snapshot's 'ingest_source' tag; callers
+        # in the WS/incremental paths set this to 'ws' or 'incremental'. The
+        # legacy 'source' field above is the provider name ('odds_api',
+        # 'draftkings', etc.) and is a different axis.
+        ingest_source = new_snapshot.get("ingest_source", "interval")
+
+        # WS/incremental deltas arrive as SINGLE-bookmaker, single-game
+        # snapshots. If we hand that to _process_snapshot_inner as-is it
+        # would overwrite the multi-book _snapshots[sport] with the delta,
+        # breaking the next consensus scan. Merge instead: take the most
+        # recent full snapshot for this sport and splice the WS delta onto
+        # it so downstream edge scanning still has every book present.
+        if ingest_source in ("ws", "incremental"):
+            prior = self._snapshots.get(sport)
+            if prior is not None and new_snapshot.get("games"):
+                new_snapshot = _merge_delta_into_snapshot(prior, new_snapshot, now)
+
         # Store snapshot — use retry on both execute and commit since autonomous
         # loop does NOT acquire the write lock, so SQLite-level contention can occur.
         from tools.db_utils import execute_with_retry, commit_with_retry
         await execute_with_retry(
             self._db,
-            "INSERT INTO odds_snapshots (sport, timestamp, snapshot_json, game_count, credits_remaining) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (sport, now, json.dumps(new_snapshot), game_count, credits_remaining),
+            "INSERT INTO odds_snapshots "
+            "(sport, timestamp, snapshot_json, game_count, credits_remaining, "
+            "fetched_at, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (sport, now, json.dumps(new_snapshot), game_count, credits_remaining,
+             now, ingest_source),
             max_retries=10,
             operation="snapshot_insert",
         )
@@ -1259,6 +1675,25 @@ class LineMonitor:
                 )
 
                 if ev_result["is_positive_ev"]:
+                    # MODEL AGREEMENT GATE (audit fix): before this check,
+                    # every consensus-based edge became an ev_opportunities
+                    # row — which meant we were steam-chasing whatever the
+                    # books themselves were agreeing on. Require at least
+                    # one independent model (pace, props, sim) to agree
+                    # with the direction.
+                    model_ok, model_label = await self._check_model_agreement(
+                        sport=sport, game=game, team=target_team,
+                        market=market, direction=("up" if edge > 0 else "down"),
+                    )
+                    steam_only = False
+                    if REQUIRE_MODEL_AGREEMENT and not model_ok:
+                        steam_only = True
+                        logger.info(
+                            f"STEAM-ONLY (model disagrees): {target_team} "
+                            f"{market} @ {new_price} edge={edge:.1%} "
+                            f"models={model_label}"
+                        )
+
                     from tools.db_utils import execute_with_retry, commit_with_retry
                     now = datetime.now(timezone.utc).isoformat()
                     await execute_with_retry(
@@ -1266,14 +1701,15 @@ class LineMonitor:
                         "INSERT INTO ev_opportunities "
                         "(detected_at, sport, game_id, team, market, bookmaker, "
                         "american_odds, implied_probability, estimated_true_prob, "
-                        "edge, expected_value, kelly_fraction) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "edge, expected_value, kelly_fraction, steam_only) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             now, sport, game.get("id", ""), target_team, market,
                             movement["bookmaker"], new_price,
                             round(moved_implied, 4), round(consensus_prob, 4),
                             round(edge, 4), ev_result["expected_value"],
                             ev_result["kelly_fraction"],
+                            1 if steam_only else 0,
                         ),
                         max_retries=5,
                         operation=f"ev_opportunity insert {sport}",
@@ -1281,13 +1717,59 @@ class LineMonitor:
                     await commit_with_retry(self._db, max_retries=5, operation=f"ev_opportunity commit {sport}")
 
                     logger.info(
-                        f"+EV OPPORTUNITY: {target_team} {market} @ {new_price} "
+                        f"+EV OPPORTUNITY ({'STEAM' if steam_only else 'MODEL-RATIFIED'}):"
+                        f" {target_team} {market} @ {new_price} "
                         f"(edge={edge:.1%}, EV=${ev_result['expected_value']}, "
                         f"Kelly={ev_result['kelly_fraction']:.1%}, "
                         f"devig_books={len(devigged_fair_probs)})"
                     )
                     # Autonomous loop will pick this up and analyze via AGP
             break
+
+    async def _check_model_agreement(
+        self, *, sport: str, game: dict, team: str, market: str, direction: str,
+    ) -> tuple[bool, str]:
+        """Return (ok, label) indicating whether any registered model agrees.
+
+        "Agrees" currently means: at least one of (pace model total edge,
+        simulation-validated edge, prop-model edge) flags the same
+        (game_id, team, market) with the same direction. We don't retrain
+        the models here — we just re-read the edge_scan report that
+        _process_snapshot already computed and cached in
+        self._latest_edge_reports.
+
+        A future version can tighten this into a quantitative directional
+        agreement check (e.g. |model_prob - consensus_prob| > 2%). For now
+        the gate is binary: model surfaced THIS game + market at all.
+        """
+        report = self._latest_edge_reports.get(sport) or {}
+        game_id = str(game.get("id", ""))
+        if not game_id:
+            return False, "no-game-id"
+
+        def _match(edges: list, want_market: str) -> bool:
+            for e in edges or []:
+                if str(e.get("game_id", "")) != game_id:
+                    continue
+                if e.get("market") and e["market"] != want_market:
+                    continue
+                # Team match (best effort — simulation/pace edges don't
+                # always carry team; a game-level match still counts).
+                e_team = (e.get("team") or "").lower()
+                if e_team and team and e_team != team.lower():
+                    continue
+                return True
+            return False
+
+        # Pace model totals fire for totals markets specifically.
+        if market == "totals" and _match(report.get("pace_model_totals", []), "totals"):
+            return True, "pace_model"
+        # Simulation-validated edges confirm spreads + totals.
+        if _match(report.get("simulation_validated", []), market):
+            return True, "simulation"
+        # Cross-book + low-vig edges are themselves consensus-based — they
+        # don't count as INDEPENDENT confirmation. Intentionally omitted.
+        return False, "none"
 
     async def get_recent_movements(self, sport: Optional[str] = None, limit: int = 20) -> list[dict]:
         """Get recent line movements from the database."""

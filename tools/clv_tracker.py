@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 
 from tools.odds_api import calculate_implied_probability, calculate_ev
 from tools import telegram
+from tools.book_keys import canonicalize_book, canonicalize_book_set
 
 load_dotenv()
 
@@ -51,9 +52,12 @@ _BOOK_VIG_ESTIMATE: dict[str, float] = {
 
 # Sources whose closing number we trust as the "real" market close. Anything
 # else still gets logged, but close_reliable=False so analysis queries can
-# filter it out.
-_RELIABLE_CLOSE_SOURCES: frozenset[str] = frozenset(
-    {"pinnacle", "lowvig", "circa", "betfair_exchange"}
+# filter it out. Stored as canonical keys; callers MUST canonicalize the
+# incoming `closing_source` before membership-testing here — otherwise
+# "Pinnacle", "pinnacle ", and "pinnacle" are three different values and
+# close_reliable will be wrong for two of them.
+_RELIABLE_CLOSE_SOURCES: frozenset[str] = canonicalize_book_set(
+    {"pinnacle", "lowvig.ag", "circa", "betfair_exchange", "Betfair Exchange"}
 )
 
 
@@ -399,8 +403,12 @@ class CLVTracker:
 
         our_decimal = _american_to_decimal(placement_odds)
 
-        closing_source = (bet.get("closing_source") or "pinnacle").lower()
-        bookmaker = (bet.get("bookmaker") or "").lower()
+        # Canonicalize books BEFORE any lookup — 'Betfair Exchange',
+        # 'betfair exchange', 'betfair_exchange' must all collapse onto
+        # one key. Previously `closing_source.lower()` left spaces
+        # intact and dropped matches with the odds-api.io underscore form.
+        closing_source = canonicalize_book(bet.get("closing_source") or "pinnacle")
+        bookmaker = canonicalize_book(bet.get("bookmaker") or "")
         closing_vig = _BOOK_VIG_ESTIMATE.get(closing_source, 0.025)
         placement_vig = _BOOK_VIG_ESTIMATE.get(bookmaker, 0.05)
 
@@ -409,14 +417,28 @@ class CLVTracker:
         if pinnacle_fair_prob and pinnacle_fair_prob > 0:
             pinnacle_fair_decimal = 1 / pinnacle_fair_prob
 
-        clv_cents = None
-        if closing_odds is not None and placement_odds is not None:
-            clv_cents = placement_odds - closing_odds
-        elif closing_implied is not None and our_decimal:
-            raw_placement_implied = bet.get("placement_implied_prob", 0)
-            if raw_placement_implied:
-                placement_fair = _half_vig_devig(raw_placement_implied, placement_vig)
-                clv_cents = round((pinnacle_fair_prob - placement_fair) * 10000, 1)
+        # CANONICAL CLV UNIT: probability-basis-points.
+        #   clv_prob_bp = (closing_implied_prob - placement_implied_prob) * 10000
+        # Positive = we got a better implied price than the close.
+        # This is the ONLY supported unit going forward. The legacy
+        # clv_cents column is preserved for backward-compat readers but
+        # marked deprecated — it previously held American-point deltas
+        # on one path (line 414) and prob×10000 on another (line 419),
+        # producing a column with mixed units that silently poisoned
+        # every aggregate.
+        raw_placement_implied = bet.get("placement_implied_prob", 0)
+        placement_fair = (
+            _half_vig_devig(raw_placement_implied, placement_vig)
+            if raw_placement_implied else None
+        )
+
+        clv_prob_bp = None
+        if pinnacle_fair_prob is not None and placement_fair is not None:
+            clv_prob_bp = round((pinnacle_fair_prob - placement_fair) * 10000, 1)
+
+        # Legacy clv_cents: populate with prob-bp for NEW rows so mixed-units
+        # data stops accruing. Historical rows keep whatever they have.
+        clv_cents = clv_prob_bp
 
         actual_pnl = change
         close_reliable = (
@@ -433,18 +455,22 @@ class CLVTracker:
                 "INSERT OR REPLACE INTO clv_log "
                 "(bet_id, event, outcome, point, book, our_odds_decimal, "
                 "pinnacle_close_fair_prob, pinnacle_close_fair_decimal, "
-                "clv_cents, actual_result, actual_pnl, close_reliable, logged_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "clv_cents, clv_prob_bp, actual_result, actual_pnl, "
+                "close_reliable, logged_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     str(bet_id),
                     bet.get("event_id", ""),
                     bet.get("team", ""),
                     bet.get("placement_point"),
-                    bet.get("bookmaker", ""),
+                    # Store canonicalized bookmaker so downstream group-by
+                    # queries don't fragment on casing.
+                    canonicalize_book(bet.get("bookmaker", "")),
                     our_decimal,
                     pinnacle_fair_prob,
                     pinnacle_fair_decimal,
                     clv_cents,
+                    clv_prob_bp,
                     result,
                     actual_pnl,
                     close_reliable,
@@ -454,7 +480,7 @@ class CLVTracker:
                 operation="clv_tracker log_clv",
             )
             logger.info(
-                f"CLV logged: bet #{bet_id}, clv_cents={clv_cents}, "
+                f"CLV logged: bet #{bet_id}, clv_prob_bp={clv_prob_bp}, "
                 f"result={result}, pnl={actual_pnl}, reliable={close_reliable}"
             )
         except Exception as e:
@@ -486,7 +512,7 @@ class CLVTracker:
         signal_odds = trade.get("signal_odds_american")
         closing_odds = trade.get("closing_odds")
         closing_implied = trade.get("closing_implied")
-        bookmaker = (trade.get("book") or "").lower()
+        bookmaker = canonicalize_book(trade.get("book") or "")
 
         our_decimal = _american_to_decimal(signal_odds)
 
@@ -500,11 +526,15 @@ class CLVTracker:
         close_fair = _half_vig_devig(closing_implied, closing_vig)
         close_fair_decimal = (1 / close_fair) if close_fair and close_fair > 0 else None
 
-        clv_cents = None
-        if closing_odds is not None and signal_odds is not None:
-            clv_cents = signal_odds - closing_odds
-        elif close_fair is not None and signal_fair is not None:
-            clv_cents = round((close_fair - signal_fair) * 10000, 1)
+        # CANONICAL CLV UNIT: prob-basis-points. See _log_clv for rationale.
+        # The legacy American-points path (signal_odds - closing_odds) is
+        # intentionally removed: it made clv_cents incompatible with the
+        # other write path and silently poisoned every aggregate that
+        # grouped over bet_id.
+        clv_prob_bp = None
+        if close_fair is not None and signal_fair is not None:
+            clv_prob_bp = round((close_fair - signal_fair) * 10000, 1)
+        clv_cents = clv_prob_bp
 
         # We don't know the closing source for paper trades, only that the
         # backfill prefers sharp books when available. Mark reliable iff a
@@ -521,8 +551,9 @@ class CLVTracker:
                 "INSERT OR REPLACE INTO clv_log "
                 "(bet_id, event, outcome, point, book, our_odds_decimal, "
                 "pinnacle_close_fair_prob, pinnacle_close_fair_decimal, "
-                "clv_cents, actual_result, actual_pnl, close_reliable, logged_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "clv_cents, clv_prob_bp, actual_result, actual_pnl, "
+                "close_reliable, logged_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     bet_key,
                     trade.get("event_id", ""),
@@ -533,6 +564,7 @@ class CLVTracker:
                     close_fair,
                     close_fair_decimal,
                     clv_cents,
+                    clv_prob_bp,
                     trade.get("actual_result"),
                     trade.get("hypothetical_pnl"),
                     close_reliable,
