@@ -283,12 +283,29 @@ class WriteCoordinator:
                 "tools.schema.vacuum_db() which opens a dedicated autocommit "
                 "connection. See tools/db_writer.py _WRITE_RE comment."
             )
+        # DDL guard: ALTER/CREATE/DROP/TRUNCATE/REINDEX/ATTACH/DETACH must
+        # reach the coordinator only if something upstream bypassed the
+        # migration framework. Fail loud so the caller sees which statement
+        # escaped instead of it hiding as ``writes_failed += 1``.
+        if op_type in ("execute", "executemany") and _is_ddl_sql(sql):
+            raise RuntimeError(
+                f"DDL statement {sql.strip().split()[0].upper()!r} cannot run "
+                f"through the WriteCoordinator. Move it into "
+                f"tools/migrations/NNN_*.py and call apply_pending_migrations() "
+                f"at startup. Offending SQL: {sql[:200]!r}"
+            )
         if op_type == "transaction":
             for _s, _p in (payload or []):
                 if _is_vacuum_sql(_s):
                     raise RuntimeError(
                         "VACUUM cannot appear inside a WriteCoordinator "
                         "transaction — use tools.schema.vacuum_db()."
+                    )
+                if _is_ddl_sql(_s):
+                    raise RuntimeError(
+                        f"DDL inside a WriteCoordinator transaction is "
+                        f"forbidden. Move into tools/migrations/. "
+                        f"Offending SQL: {_s[:200]!r}"
                     )
         if op_type == "execute":
             cursor = await self._db.execute(sql, payload or ())
@@ -412,21 +429,40 @@ _INSTALLED = False
 # Heuristic: detect SQL statements that take the writer lock. Anything that
 # isn't clearly a SELECT/PRAGMA-read/EXPLAIN we treat as a write to be safe.
 #
-# NOTE: VACUUM is deliberately EXCLUDED. SQLite refuses to VACUUM from within
-# a transaction, and aiosqlite's default isolation level opens an implicit
-# transaction around every execute(). Routing VACUUM through the coordinator
-# therefore fails with ``OperationalError: cannot VACUUM from within a
-# transaction``. VACUUM must run on a dedicated autocommit connection — see
-# ``tools.schema.vacuum_db`` for the correct call path. If VACUUM is ever
-# submitted to the coordinator despite this, ``_apply`` raises a loud error
-# (silent failure → loud failure upgrade).
+# DDL IS DELIBERATELY EXCLUDED. VACUUM, ALTER, CREATE TABLE/INDEX, DROP,
+# REINDEX, TRUNCATE, ATTACH/DETACH must NEVER route through the coordinator:
+#
+#   * VACUUM: SQLite refuses "VACUUM from within a transaction"; aiosqlite's
+#     default isolation opens an implicit tx around every execute().
+#   * ALTER TABLE ADD COLUMN: idempotent callers (cache_manager.rotate_caches,
+#     ensure_schema._safe_add_column fallback) run ALTER every startup. The
+#     second run fails with "duplicate column name"; the coordinator ate the
+#     exception and incremented writes_failed. Accounted for 23 of 28,394
+#     silent failures in the data-layer audit window. DDL now lives in
+#     ``tools/migrations/*.py`` and runs on a dedicated autocommit stdlib
+#     connection (see ``apply_pending_migrations``).
+#   * CREATE/DROP TABLE/INDEX: same reasoning — belongs in a migration.
+#
+# INSERT/UPDATE/DELETE/REPLACE are the ONLY things that should hit the
+# writer queue. Everything else — transaction boundaries (BEGIN/COMMIT/…)
+# is controlled by the coordinator itself and must also be excluded.
+#
+# If DDL is ever submitted through this path, ``_apply`` raises loudly rather
+# than letting it hide as ``writes_failed += 1`` (silent-failure → loud-
+# failure upgrade).
 import re as _re_writer
 _WRITE_RE = _re_writer.compile(
-    r"^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|TRUNCATE|"
-    r"REINDEX|ATTACH|DETACH|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b",
+    r"^\s*(INSERT|UPDATE|DELETE|REPLACE)\b",
     _re_writer.IGNORECASE,
 )
 _VACUUM_RE = _re_writer.compile(r"^\s*VACUUM\b", _re_writer.IGNORECASE)
+# DDL statements that must bypass the coordinator completely. Used by
+# ``_apply`` as a loud-failure guard: if one of these ever reaches the
+# drain loop, something re-enabled DDL routing and must be fixed upstream.
+_DDL_RE = _re_writer.compile(
+    r"^\s*(ALTER|CREATE|DROP|TRUNCATE|REINDEX|ATTACH|DETACH)\b",
+    _re_writer.IGNORECASE,
+)
 
 
 def _is_write_sql(sql) -> bool:
@@ -439,6 +475,12 @@ def _is_vacuum_sql(sql) -> bool:
     if not isinstance(sql, str):
         return False
     return bool(_VACUUM_RE.match(sql))
+
+
+def _is_ddl_sql(sql) -> bool:
+    if not isinstance(sql, str):
+        return False
+    return bool(_DDL_RE.match(sql))
 
 
 def install_aiosqlite_routing() -> None:

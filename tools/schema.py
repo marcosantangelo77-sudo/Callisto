@@ -38,6 +38,15 @@ async def open_db(db_path: str = None) -> aiosqlite.Connection:
     await db.execute("PRAGMA journal_size_limit = 67108864")  # 64MB WAL cap — SQLite tries harder to checkpoint
     await db.execute("PRAGMA cache_size = -512")        # 512KB page cache (default -2000 = 2MB) — reduces RSS per conn
     await db.execute("PRAGMA mmap_size = 0")           # Disable mmap — prevents WAL from being memory-mapped into RSS
+    # Foreign keys are a per-connection pragma in SQLite. Enabling here
+    # makes FOREIGN KEY declarations in SCHEMA_SQL actually enforced for
+    # inserts/updates/deletes via this connection. Audit found 1 orphan
+    # row in hypothesis_stats pre-fix; migration 004 cleans existing
+    # orphans so turning this on doesn't retroactively break writes.
+    # Set CALLISTO_DISABLE_FK=1 to opt out (useful during bulk imports
+    # that must temporarily bypass cascades).
+    if os.getenv("CALLISTO_DISABLE_FK", "0") != "1":
+        await db.execute("PRAGMA foreign_keys = ON")
     return db
 
 logger = logging.getLogger("callisto.schema")
@@ -1402,11 +1411,30 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         cleaned = _re_schema.sub(r"--[^\n]*", "", SCHEMA_SQL)
         for raw in cleaned.split(";"):
             stmt = raw.strip()
-            if stmt:
-                try:
-                    await db.execute(stmt)
-                except Exception:
-                    pass  # IF NOT EXISTS / OR IGNORE handles duplicates
+            if not stmt:
+                continue
+            try:
+                await db.execute(stmt)
+            except Exception as e:
+                # Pre-fix this was ``except Exception: pass`` which silently
+                # dropped any DDL failure — including typos, wrong column
+                # counts, referenced-but-missing tables. Downstream writes
+                # then exploded hours later with confusing "no such column"
+                # errors. Log the failing statement and the root cause;
+                # IF NOT EXISTS / OR IGNORE duplicates are still tolerated
+                # because SQLite reports them with a recognisable message.
+                msg = str(e).lower()
+                if (
+                    "already exists" in msg
+                    or "duplicate column" in msg
+                ):
+                    continue
+                first_line = stmt.splitlines()[0][:140] if stmt else "<empty>"
+                logger.error(
+                    f"ensure_schema statement failed: {e!r} — "
+                    f"first line: {first_line!r}. Downstream writers that "
+                    f"depend on this table/column will fail."
+                )
         await db.commit()
 
         # Migrations: add regime columns (safe if already exists)

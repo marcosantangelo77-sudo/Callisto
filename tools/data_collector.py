@@ -171,6 +171,11 @@ class DataCollector:
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
         self._db: Optional[aiosqlite.Connection] = None
+        # Counter for silent player-stat insert failures. Pre-fix these
+        # logged at INFO (invisible in production) and the drift was
+        # undetectable. Now bumped at WARNING + exposed via
+        # ``get_collection_stats()`` so drift shows up in /health.
+        self._player_stat_insert_failures: int = 0
 
     async def initialize(self) -> None:
         from tools.schema import open_db
@@ -600,7 +605,14 @@ class DataCollector:
                         )
                         count += 1
                     except Exception as e:
-                        logger.info(f"Player stat insert failed for {player_name}/{stat_type}: {e}")
+                        # WARNING (not INFO) + counter so drift is visible.
+                        self._player_stat_insert_failures += 1
+                        logger.warning(
+                            f"Player stat insert failed for "
+                            f"{player_name}/{stat_type}: {e!r} "
+                            f"(total insert failures: "
+                            f"{self._player_stat_insert_failures})"
+                        )
 
             # Composite: PRA
             pts = float(stat_map.get("PTS", 0) or 0)
@@ -622,7 +634,12 @@ class DataCollector:
                     )
                     count += 1
                 except Exception as e:
-                    logger.info(f"PRA composite insert failed for {player_name}: {e}")
+                    self._player_stat_insert_failures += 1
+                    logger.warning(
+                        f"PRA composite insert failed for {player_name}: "
+                        f"{e!r} (total insert failures: "
+                        f"{self._player_stat_insert_failures})"
+                    )
 
         # Football stat mapping
         elif category == "football":
@@ -644,7 +661,13 @@ class DataCollector:
                         )
                         count += 1
                     except Exception as e:
-                        logger.info(f"Football stat insert failed for {player_name}/{key}: {e}")
+                        self._player_stat_insert_failures += 1
+                        logger.warning(
+                            f"Football stat insert failed for "
+                            f"{player_name}/{key}: {e!r} "
+                            f"(total insert failures: "
+                            f"{self._player_stat_insert_failures})"
+                        )
 
         return count
 
@@ -3067,5 +3090,11 @@ class DataCollector:
             "SELECT COUNT(*) FROM game_contexts WHERE embedded = FALSE"
         )
         stats["unembedded_contexts"] = (await cursor.fetchone())[0]
+
+        # Silent-drift visibility: player stat insert failures should be 0
+        # in steady state. Non-zero means WARNING-log spam worth chasing —
+        # usually a schema mismatch (see audit finding on player_stats
+        # INFO-level logs that hid drift for weeks).
+        stats["player_stat_insert_failures"] = self._player_stat_insert_failures
 
         return stats

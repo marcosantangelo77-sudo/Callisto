@@ -484,13 +484,13 @@ async def rotate_caches(db_path: str = DB_PATH, warm_days: int = 30):
             await db.execute("PRAGMA busy_timeout = 60000")
             cutoff = (datetime.now(timezone.utc) - timedelta(days=warm_days)).isoformat()
 
-            # Ensure archived column exists on key tables
-            from tools.db_utils import safe_ident
-            for table in ["bets", "ev_opportunities", "line_movements", "odds_snapshots"]:
-                try:
-                    await db.execute(f"ALTER TABLE {safe_ident(table)} ADD COLUMN archived BOOLEAN DEFAULT 0")
-                except Exception:
-                    pass  # Expected: column already exists (ALTER TABLE doesn't have IF NOT EXISTS)
+            # ``archived`` column is created once by migration 002
+            # (``tools/migrations/002_add_archived_columns.py``) when the DB
+            # is upgraded, never at runtime. Pre-fix, this block re-ran
+            # ALTER TABLE every rotation cycle, got routed through the
+            # write coordinator, failed with "duplicate column name", and
+            # silently bumped writes_failed. See db_writer._WRITE_RE note.
+            from tools.db_utils import safe_ident  # kept for UPDATE/safe_ident use below
 
             # Archive old entries
             for table in ["ev_opportunities", "line_movements", "odds_snapshots"]:
