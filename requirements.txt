@@ -20,6 +20,11 @@ polars==1.39.3
 beautifulsoup4==4.14.3
 jsonschema==4.26.0
 
+# MCP server that wraps Callisto's HTTP API as MCP tools
+# (tools/callisto_mcp_server.py). Pulls in pydantic-settings, sse-starlette,
+# python-multipart, httpx-sse, pyjwt, cryptography, pywin32 transitively.
+mcp>=1.20,<2
+
 # Optional / lazy-loaded (kept upper-bounded so a `pip install -r` doesn't pull
 # a major-version surprise; remove from requirements entirely if unused).
 langchain>=0.1,<0.4
