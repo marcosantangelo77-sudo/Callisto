@@ -1449,6 +1449,17 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         # Migration: add binary embedding blob column for numpy storage
         await _safe_add_column(db, "embeddings", "embedding_blob", "BLOB")
 
+        # Migration (2026-04-21): add model_name to embeddings so we don't mix
+        # vectors from different embed models when the EMBED_MODEL env var
+        # changes. Old rows default to NULL — retrieval treats NULL as "unknown,
+        # logged-and-excluded" rather than silently comparing cross-model.
+        await _safe_add_column(db, "embeddings", "model_name", "TEXT")
+
+        # Migration (2026-04-21): wiki_articles gains source_task_id so
+        # file_task_result can join back to the task_queue instead of minting
+        # a fake "task_{int(time.time())}" id that can't be traced.
+        await _safe_add_column(db, "wiki_articles", "source_task_id", "TEXT")
+
         # Migration: add microstructure metric columns to hypothesis_stats.
         # (Baseline schema now includes these; migration stays for old DBs.)
         for col in ("sortino", "brier_score", "information_coefficient"):

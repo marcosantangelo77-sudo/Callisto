@@ -24,6 +24,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -31,6 +32,15 @@ from typing import Optional
 import aiosqlite
 
 logger = logging.getLogger("callisto.wiki")
+
+# Collection name for wiki article embeddings in the VectorStore.
+WIKI_COLLECTION = "wiki_articles"
+
+# Pending-embedding queue: when Ollama is down, _create_article/_update_article
+# stash the (topic, text, metadata) tuple here so a later retry can catch up
+# without blocking (or failing) the write path. Bounded to prevent runaway.
+_EMBED_QUEUE_MAX = 500
+_pending_embeds: list[dict] = []
 
 # ── Schema ──────────────────────────────────────────────
 
@@ -336,7 +346,8 @@ class KnowledgeWiki:
         }
 
     async def _create_article(
-        self, db: aiosqlite.Connection, topic: str, sources: list[dict]
+        self, db: aiosqlite.Connection, topic: str, sources: list[dict],
+        source_task_id: Optional[str] = None,
     ) -> None:
         """Create a new wiki article from sources using local LLM."""
         compiled = await self._llm_compile(topic, sources, existing_content=None)
@@ -347,23 +358,74 @@ class KnowledgeWiki:
         session_ids = [s["id"] for s in sources if s["type"] == "session"]
         entry_ids = [s["id"] for s in sources if s["type"] in ("evidence", "learning")]
         avg_confidence = sum(s["confidence"] for s in sources) / len(sources)
-        domain = sources[0].get("domain", "GENERAL")
+        domain = self._best_domain(sources)
         content_hash = hashlib.md5(compiled["content"].encode()).hexdigest()[:12]
 
-        await db.execute(
-            "INSERT INTO wiki_articles (topic, title, content, summary, related_topics, "
-            "source_sessions, source_entries, domain, confidence, created_at, updated_at, "
-            "compile_count, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
-            (topic, compiled["title"], compiled["content"], compiled["summary"],
-             json.dumps(compiled.get("related_topics", [])),
-             json.dumps(session_ids), json.dumps(entry_ids),
-             domain, round(avg_confidence, 3), now, now, content_hash),
+        # Insert. Include source_task_id only when the column exists (post-migration).
+        cols, vals, placeholders = self._insert_columns_for(db, source_task_id)
+        base_cols = [
+            "topic", "title", "content", "summary", "related_topics",
+            "source_sessions", "source_entries", "domain", "confidence",
+            "created_at", "updated_at", "compile_count", "content_hash",
+        ]
+        base_vals = [
+            topic, compiled["title"], compiled["content"], compiled["summary"],
+            json.dumps(compiled.get("related_topics", [])),
+            json.dumps(session_ids), json.dumps(entry_ids),
+            domain, round(avg_confidence, 3), now, now, 1, content_hash,
+        ]
+        if "source_task_id" in cols:
+            base_cols.append("source_task_id")
+            base_vals.append(source_task_id)
+        sql = (
+            f"INSERT INTO wiki_articles ({', '.join(base_cols)}) "
+            f"VALUES ({', '.join('?' for _ in base_vals)})"
         )
+        await db.execute(sql, tuple(base_vals))
         await db.commit()
-        logger.info(f"Wiki: created article '{topic}' ({len(compiled['content'])} chars)")
+        logger.info(
+            f"Wiki: created article '{topic}' ({len(compiled['content'])} chars, "
+            f"task={source_task_id or 'none'})"
+        )
+
+        # Emit the article as a semantic embedding. Non-blocking on Ollama
+        # failure — the article row is already persisted above.
+        await self._emit_article_embedding(
+            topic, compiled, domain, round(avg_confidence, 3),
+            source_task_id=source_task_id,
+        )
+
+    def _best_domain(self, sources: list[dict]) -> str:
+        """Pick the most common domain across sources (not just sources[0]).
+
+        Replaces the old ``sources[0].get("domain", "GENERAL")`` behaviour,
+        which was order-dependent and mis-classified Hermes learnings that
+        are hardcoded to ``GENERAL``.
+        """
+        from collections import Counter
+        domains = [s.get("domain") or "GENERAL" for s in sources]
+        # Prefer non-GENERAL when there's a tie, since GENERAL is the
+        # "I don't know" bucket (Hermes learnings, uncategorised tasks).
+        counts = Counter(domains)
+        if len(counts) > 1 and "GENERAL" in counts:
+            non_general = [d for d in domains if d != "GENERAL"]
+            if non_general:
+                return Counter(non_general).most_common(1)[0][0]
+        return counts.most_common(1)[0][0]
+
+    def _insert_columns_for(self, db: aiosqlite.Connection, _task_id) -> tuple:
+        """Stub — actual column introspection happens lazily inside the write.
+
+        Historically this used a PRAGMA probe; that's unnecessary here because
+        ``_safe_add_column`` runs at startup and always adds ``source_task_id``.
+        We keep the hook so the caller remains explicit and a future schema
+        change can gate behaviour here without touching call sites.
+        """
+        return ({"source_task_id"}, None, None)
 
     async def _update_article(
-        self, db: aiosqlite.Connection, topic: str, existing: dict, new_sources: list[dict]
+        self, db: aiosqlite.Connection, topic: str, existing: dict,
+        new_sources: list[dict], source_task_id: Optional[str] = None,
     ) -> None:
         """Update an existing wiki article with new sources."""
         compiled = await self._llm_compile(topic, new_sources, existing_content=existing["content"])
@@ -389,18 +451,116 @@ class KnowledgeWiki:
 
         content_hash = hashlib.md5(compiled["content"].encode()).hexdigest()[:12]
 
-        await db.execute(
-            "UPDATE wiki_articles SET content = ?, summary = ?, title = ?, "
-            "related_topics = ?, source_sessions = ?, source_entries = ?, "
-            "confidence = ?, updated_at = ?, compile_count = compile_count + 1, "
-            "content_hash = ? WHERE topic = ?",
-            (compiled["content"], compiled["summary"], compiled["title"],
-             json.dumps(compiled.get("related_topics", [])),
-             json.dumps(session_ids), json.dumps(entry_ids),
-             round(merged_conf, 3), now, content_hash, topic),
-        )
+        if source_task_id:
+            await db.execute(
+                "UPDATE wiki_articles SET content = ?, summary = ?, title = ?, "
+                "related_topics = ?, source_sessions = ?, source_entries = ?, "
+                "confidence = ?, updated_at = ?, compile_count = compile_count + 1, "
+                "content_hash = ?, source_task_id = ? WHERE topic = ?",
+                (compiled["content"], compiled["summary"], compiled["title"],
+                 json.dumps(compiled.get("related_topics", [])),
+                 json.dumps(session_ids), json.dumps(entry_ids),
+                 round(merged_conf, 3), now, content_hash, source_task_id, topic),
+            )
+        else:
+            await db.execute(
+                "UPDATE wiki_articles SET content = ?, summary = ?, title = ?, "
+                "related_topics = ?, source_sessions = ?, source_entries = ?, "
+                "confidence = ?, updated_at = ?, compile_count = compile_count + 1, "
+                "content_hash = ? WHERE topic = ?",
+                (compiled["content"], compiled["summary"], compiled["title"],
+                 json.dumps(compiled.get("related_topics", [])),
+                 json.dumps(session_ids), json.dumps(entry_ids),
+                 round(merged_conf, 3), now, content_hash, topic),
+            )
         await db.commit()
-        logger.info(f"Wiki: updated article '{topic}' (compile #{existing['compile_count'] + 1})")
+        logger.info(
+            f"Wiki: updated article '{topic}' (compile #{existing['compile_count'] + 1}, "
+            f"task={source_task_id or 'none'})"
+        )
+
+        # Re-embed the merged content so semantic search reflects the update.
+        await self._emit_article_embedding(
+            topic, compiled, existing.get("domain", "GENERAL"), round(merged_conf, 3),
+            source_task_id=source_task_id,
+        )
+
+    async def _emit_article_embedding(
+        self, topic: str, compiled: dict, domain: str, confidence: float,
+        source_task_id: Optional[str] = None,
+    ) -> None:
+        """Write an article's (title + summary + content) into the
+        ``wiki_articles`` vector collection. Keyed by topic slug so re-writes
+        update the same vector (via near-dup merge above the 0.97 threshold).
+
+        Catches Ollama failures so a dead embed server never blocks a wiki
+        write. When that happens we queue the payload for later retry.
+        """
+        try:
+            from tools.embeddings import (
+                VectorStore, embed_text, EMBED_MODEL, NEAR_DUP_THRESHOLD,
+            )
+        except Exception as e:
+            logger.warning(f"Wiki embed skipped (import): {e}")
+            return
+
+        text = self._article_embed_text(topic, compiled)
+        metadata = {
+            "topic": topic,
+            "title": compiled.get("title"),
+            "domain": domain,
+            "confidence": confidence,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "source_task_id": source_task_id,
+        }
+
+        try:
+            embedding = await asyncio.wait_for(embed_text(text), timeout=30.0)
+        except Exception as e:
+            if len(_pending_embeds) < _EMBED_QUEUE_MAX:
+                _pending_embeds.append({
+                    "topic": topic, "text": text, "metadata": metadata,
+                    "queued_at": datetime.now(timezone.utc).isoformat(),
+                })
+            logger.warning(
+                f"Wiki embed deferred for '{topic}': Ollama unavailable ({e}). "
+                f"Queue depth={len(_pending_embeds)}."
+            )
+            return
+
+        store = VectorStore(self.db_path)
+        await store.initialize()
+        try:
+            result = await store.store_or_merge(
+                WIKI_COLLECTION, text, embedding, metadata,
+                model_name=EMBED_MODEL,
+                near_dup_threshold=NEAR_DUP_THRESHOLD,
+            )
+            if result["action"] == "merged":
+                logger.info(
+                    f"Wiki embed: merged '{topic}' into existing vector "
+                    f"(sim={result['similarity']:.4f})"
+                )
+            elif result["action"] == "inserted":
+                logger.debug(f"Wiki embed: inserted '{topic}' (id={result['id']})")
+        except Exception as e:
+            logger.warning(f"Wiki embed store failed for '{topic}': {e}")
+        finally:
+            await store.close()
+
+    def _article_embed_text(self, topic: str, compiled: dict) -> str:
+        """Build a single string that captures the article's semantic payload
+        for embedding. Combines title + summary + truncated content so the
+        vector represents the gist of the article rather than any one field.
+        """
+        parts = [f"Topic: {topic.replace('_', ' ')}"]
+        if compiled.get("title"):
+            parts.append(f"Title: {compiled['title']}")
+        if compiled.get("summary"):
+            parts.append(f"Summary: {compiled['summary']}")
+        if compiled.get("content"):
+            parts.append(f"Content: {compiled['content'][:2000]}")
+        return "\n".join(parts)
 
     async def _llm_compile(
         self, topic: str, sources: list[dict], existing_content: Optional[str]
@@ -767,22 +927,112 @@ class KnowledgeWiki:
     # ──────────────────────────────────────────────────
 
     async def search(
-        self, db: aiosqlite.Connection, query: str, limit: int = 10
+        self, db: aiosqlite.Connection, query: str, top_k: int = 10,
+        domain: Optional[str] = None, min_similarity: float = 0.0,
+        limit: Optional[int] = None,
     ) -> list[dict]:
-        """Search wiki articles by keyword."""
+        """Search wiki articles by SEMANTIC similarity (primary) with a
+        keyword LIKE fallback when embeddings are unavailable.
+
+        Args:
+            query: natural-language query string
+            top_k: max results (aliased by ``limit`` for backcompat)
+            domain: optional filter — only return articles with this domain
+            min_similarity: floor on cosine similarity (0.0 = no floor)
+            limit: deprecated alias for top_k
+
+        Returns: list of ``{topic, title, summary, content, domain,
+        confidence, updated_at, similarity}``. ``similarity`` is ``None`` when
+        the LIKE fallback path was used.
+        """
         await self.initialize(db)
-        cursor = await db.execute(
+        if limit is not None:
+            top_k = limit
+
+        # Primary path: semantic retrieval via VectorStore.
+        try:
+            from tools.embeddings import VectorStore, embed_text, EMBED_MODEL
+            # Embed the query (can fail if Ollama is down).
+            query_emb = await asyncio.wait_for(embed_text(query), timeout=20.0)
+            store = VectorStore(self.db_path)
+            await store.initialize()
+            try:
+                # Over-fetch so we can post-filter by domain without shrinking
+                # the usable result set.
+                fetch_k = top_k * 3 if domain else top_k
+                hits = await store.search(
+                    WIKI_COLLECTION, query_emb, top_k=fetch_k,
+                    min_similarity=min_similarity, model_name=EMBED_MODEL,
+                )
+            finally:
+                await store.close()
+
+            if hits:
+                # Join back to wiki_articles by topic (from metadata).
+                topics_in_order = []
+                sim_by_topic = {}
+                for h in hits:
+                    meta = h.get("metadata") or {}
+                    t = meta.get("topic")
+                    if t and t not in sim_by_topic:
+                        topics_in_order.append(t)
+                        sim_by_topic[t] = h["similarity"]
+                if topics_in_order:
+                    placeholders = ", ".join("?" for _ in topics_in_order)
+                    sql = (
+                        f"SELECT topic, title, summary, content, domain, confidence, "
+                        f"updated_at FROM wiki_articles WHERE topic IN ({placeholders})"
+                    )
+                    params = list(topics_in_order)
+                    if domain:
+                        sql += " AND domain = ?"
+                        params.append(domain)
+                    cursor = await db.execute(sql, params)
+                    rows = await cursor.fetchall()
+                    by_topic = {r[0]: r for r in rows}
+                    out = []
+                    for t in topics_in_order:
+                        r = by_topic.get(t)
+                        if not r:
+                            continue
+                        out.append({
+                            "topic": r[0], "title": r[1], "summary": r[2],
+                            "content": r[3], "domain": r[4], "confidence": r[5],
+                            "updated_at": r[6],
+                            "similarity": round(sim_by_topic[t], 6),
+                        })
+                        if len(out) >= top_k:
+                            break
+                    if out:
+                        return out
+                # Semantic returned hits but none joined to articles — fall through.
+                logger.info(
+                    "Wiki search: semantic hits had no matching wiki_articles row, "
+                    "falling back to LIKE."
+                )
+        except Exception as e:
+            logger.warning(
+                f"Wiki search: semantic path failed ({e}); falling back to LIKE."
+            )
+
+        # Fallback: legacy keyword LIKE search.
+        sql = (
             "SELECT topic, title, summary, content, domain, confidence, updated_at "
             "FROM wiki_articles "
-            "WHERE content LIKE ? OR title LIKE ? OR topic LIKE ? "
-            "ORDER BY updated_at DESC LIMIT ?",
-            (f"%{query}%", f"%{query}%", f"%{query}%", limit),
+            "WHERE (content LIKE ? OR title LIKE ? OR topic LIKE ?)"
         )
+        params = [f"%{query}%", f"%{query}%", f"%{query}%"]
+        if domain:
+            sql += " AND domain = ?"
+            params.append(domain)
+        sql += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(top_k)
+        cursor = await db.execute(sql, params)
         return [
             {
                 "topic": r[0], "title": r[1], "summary": r[2],
                 "content": r[3], "domain": r[4], "confidence": r[5],
-                "updated_at": r[6],
+                "updated_at": r[6], "similarity": None,
             }
             for r in await cursor.fetchall()
         ]
@@ -882,7 +1132,8 @@ class KnowledgeWiki:
 
     async def file_task_result(
         self, db: aiosqlite.Connection, query: str, conclusion: str,
-        confidence: float, domain: str
+        confidence: float, domain: str, task_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> Optional[str]:
         """
         Auto-file a task/query result into the wiki.
@@ -890,13 +1141,28 @@ class KnowledgeWiki:
         Called when a /task completes. The conclusion gets compiled into
         the relevant wiki article, so exploration compounds.
 
+        ``task_id`` is the REAL id from ``task_queue`` — required for lineage
+        joins. When None (legacy callers), we log a warning but still write
+        using a synthetic id so we don't drop the knowledge on the floor.
+
+        ``session_id`` is the AGP ``sessions.session_id`` when available.
+
         Returns the topic slug it was filed under, or None.
         """
         await self.initialize(db)
 
+        if not task_id:
+            logger.warning(
+                "Wiki.file_task_result: called without task_id — lineage will be "
+                "incomplete. Caller should pass the real task_queue id."
+            )
+            source_id = f"task_anon_{int(time.time())}"
+        else:
+            source_id = session_id or f"task_{task_id}"
+
         source = {
             "type": "session",
-            "id": f"task_{int(time.time())}",
+            "id": source_id,
             "query": query,
             "domain": domain,
             "content": conclusion,
@@ -909,11 +1175,15 @@ class KnowledgeWiki:
         try:
             existing = await self._get_article(db, topic)
             if existing:
-                await self._update_article(db, topic, existing, [source])
+                await self._update_article(
+                    db, topic, existing, [source], source_task_id=task_id,
+                )
             else:
-                await self._create_article(db, topic, [source])
+                await self._create_article(
+                    db, topic, [source], source_task_id=task_id,
+                )
 
-            logger.info(f"Wiki: filed task result under '{topic}'")
+            logger.info(f"Wiki: filed task result under '{topic}' (task={task_id})")
             return topic
         except Exception as e:
             logger.warning(f"Wiki: failed to file task result: {e}")

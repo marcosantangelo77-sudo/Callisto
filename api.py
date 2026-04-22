@@ -327,6 +327,7 @@ async def task_worker():
                             await wdb.execute("PRAGMA busy_timeout = 60000")
                             filed_topic = await wiki.file_task_result(
                                 wdb, query, conclusion, confidence, domain,
+                                task_id=str(task_id), session_id=session_id,
                             )
                             if filed_topic:
                                 logger.debug(f"Task {task_id} filed to wiki: {filed_topic}")
@@ -729,7 +730,10 @@ async def query_world(
     min_confidence: Optional[float] = None,
     limit: int = 50,
 ):
-    """Query a domain world."""
+    """Query a domain world. When ``keyword`` is present, retrieval is
+    SEMANTIC (vector similarity) with a keyword-LIKE fallback; otherwise
+    the recent-first ordering is used.
+    """
     try:
         domain_enum = Domain(domain.upper())
     except ValueError:
@@ -737,6 +741,10 @@ async def query_world(
             status_code=400,
             detail=f"Invalid domain. Must be one of: {[d.value for d in Domain]}",
         )
+    # Hard cap on limit so ?limit=1000000 can't blow the API's memory.
+    if limit < 1:
+        limit = 1
+    limit = min(limit, 500)
     results = await memory.query_world(
         domain_enum, keyword=keyword, min_confidence=min_confidence, limit=limit
     )
