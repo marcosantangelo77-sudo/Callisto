@@ -650,10 +650,19 @@ class SelfRepairEngine:
                 except Exception as e:
                     logger.debug(f"WAL checkpoint: {e}")
                 if pruned:
+                    # Defer VACUUM to the dedicated autocommit path — running
+                    # VACUUM on this connection fails silently with
+                    # "cannot VACUUM from within a transaction" because aiosqlite
+                    # keeps an implicit txn open around the preceding DELETEs
+                    # (and the routing patch forwards writes to the coordinator,
+                    # which is also deferred-mode). The vacuum_db() helper
+                    # opens a fresh stdlib sqlite3 connection in autocommit
+                    # mode — no shared state, no transaction conflict.
                     try:
-                        await db.execute("VACUUM")
-                    except Exception:
-                        pass
+                        from tools.schema import vacuum_db as _vacuum_db
+                        await _vacuum_db(DB_PATH)
+                    except Exception as e:
+                        logger.warning(f"VACUUM after prune failed: {e!r}")
         except Exception as e:
             return {"fixed": False, "action": "prune_error", "detail": str(e)}
         if pruned:
