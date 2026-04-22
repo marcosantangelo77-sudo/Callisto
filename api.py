@@ -354,6 +354,19 @@ async def lifespan(app: FastAPI):
     # Startup — ensure DB schema is up to date (now uses patched aiosqlite).
     await ensure_schema()
 
+    # Versioned migrations (tools/migrations/NNN_*.py). Runs AFTER
+    # ensure_schema so fresh DBs have the v1 baseline tables; for existing
+    # DBs the bootstrap step marks every migration as already-applied so
+    # nothing re-runs. Uses a dedicated autocommit stdlib connection so
+    # DDL bypasses the WriteCoordinator entirely.
+    from tools.migrations import apply_pending_migrations
+    try:
+        mig_result = apply_pending_migrations(DB_PATH)
+        logger.info(f"Migrations: {mig_result}")
+    except Exception as e:
+        logger.error(f"Migration framework failed: {e!r}")
+        raise
+
     # Preload priority models into VRAM (devstral-small-2 takes 28s cold, <1s warm)
     from inference import warmup_models
     await warmup_models()
