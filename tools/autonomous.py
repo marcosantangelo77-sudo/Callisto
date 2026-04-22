@@ -1990,7 +1990,8 @@ class ResearchLoop:
         rate-limit window, all deferred hypothesis generation, interpretation,
         and deep work gets executed immediately before the normal cycle.
         """
-        from tools.claude_code import is_available as claude_available, claude_code_query
+        from tools.claude_code import is_available as claude_available
+        from inference import escalate_with_ladder
 
         claude_up = claude_available() and not self._local_only
 
@@ -2015,8 +2016,16 @@ class ResearchLoop:
             if not self._running:
                 break
             try:
-                result = await claude_code_query(
-                    item["prompt"], hermes_caller=item["work_type"]
+                # Route through the ladder; work_type maps onto the
+                # ladder task_type bucket. Unknown work_types fall back
+                # to 'reasoning', which is the default bucket.
+                _task_type = item["work_type"] if item["work_type"] in (
+                    "hypothesis_gen", "deep_work", "reasoning"
+                ) else "reasoning"
+                result = await escalate_with_ladder(
+                    item["prompt"],
+                    task_type=_task_type,
+                    hermes_caller=item["work_type"],
                 )
                 self._last_claude_call = time.time()
                 self._claude_escalations += 1
@@ -2935,7 +2944,7 @@ class ResearchLoop:
             if i["severity"] == "CRITICAL" and i["key"] not in self._diagnostic_issues
         ]
         if new_critical:
-            from tools.claude_code import claude_code_query
+            from inference import escalate_with_ladder
 
             now = time.time()
             if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
@@ -2966,7 +2975,11 @@ class ResearchLoop:
                     f"and whether the pipeline should pause or adjust parameters."
                 )
                 try:
-                    result = await claude_code_query(diag_report)
+                    result = await escalate_with_ladder(
+                        diag_report,
+                        task_type="deep_work",
+                        hermes_caller="default",
+                    )
                     self._last_claude_call = time.time()
                     if result.get("content") and not result.get("error"):
                         logger.info(
@@ -3629,8 +3642,10 @@ class ResearchLoop:
             f"forward-test from {forward_test_start}"
         )
 
-        # ── PRIMARY: Claude Code hypothesis generation ──
-        from tools.claude_code import claude_code_query
+        # ── PRIMARY: hypothesis generation through the ladder ──
+        # The ladder picks the best available model for hypothesis_gen
+        # (QWEN36 primary, Claude last-resort per MODEL_LADDER).
+        from inference import escalate_with_ladder
 
         if (now - self._last_claude_call > CLAUDE_ESCALATION_COOLDOWN
                 and self._claude_ok()):
@@ -3888,7 +3903,11 @@ class ResearchLoop:
                     f"hypotheses into a broken funnel\n"
                 )
 
-                result = await claude_code_query(prompt, hermes_caller="hypothesis_gen")
+                result = await escalate_with_ladder(
+                    prompt,
+                    task_type="hypothesis_gen",
+                    hermes_caller="hypothesis_gen",
+                )
                 self._last_claude_call = time.time()
                 self._claude_escalations += 1
 
@@ -5563,7 +5582,7 @@ class ResearchLoop:
         When Claude is unavailable: defers the prompt to the work queue AND
         runs a local rules-based interpretation as fallback.
         """
-        from tools.claude_code import claude_code_query
+        from inference import escalate_with_ladder
 
         db = self.data_collector._db
         if not db:
@@ -5712,7 +5731,11 @@ class ResearchLoop:
             return
 
         try:
-            result = await claude_code_query(prompt, hermes_caller="deep_work")
+            result = await escalate_with_ladder(
+                prompt,
+                task_type="deep_work",
+                hermes_caller="deep_work",
+            )
             self._last_claude_call = time.time()
             self._claude_escalations += 1
 
@@ -6064,7 +6087,7 @@ class ResearchLoop:
         runs local model fallback for basic maintenance (reject zero-signal
         hypotheses, gather pipeline metrics).
         """
-        from tools.claude_code import claude_code_query
+        from inference import escalate_with_ladder
         import time as _time
 
         if not self._claude_ok():
@@ -6303,7 +6326,11 @@ class ResearchLoop:
             return
 
         try:
-            result = await claude_code_query(prompt, hermes_caller="deep_work")
+            result = await escalate_with_ladder(
+                prompt,
+                task_type="deep_work",
+                hermes_caller="deep_work",
+            )
             self._last_claude_call = _time.time()
             self._claude_escalations += 1
 
@@ -6789,7 +6816,7 @@ class ResearchLoop:
         if self._cycles % SYSTEM_IMPROVEMENT_INTERVAL != 0:
             return
 
-        from tools.claude_code import claude_code_query
+        from inference import escalate_with_ladder
 
         now = time.time()
         remaining = CLAUDE_ESCALATION_COOLDOWN - (now - self._last_claude_call)
@@ -6910,7 +6937,11 @@ class ResearchLoop:
             return
 
         try:
-            result = await claude_code_query(prompt, hermes_caller="deep_work")
+            result = await escalate_with_ladder(
+                prompt,
+                task_type="deep_work",
+                hermes_caller="deep_work",
+            )
             self._last_claude_call = time.time()
             self._claude_escalations += 1
 
@@ -7193,7 +7224,7 @@ class ResearchLoop:
         Queries the DB for concrete evidence of what's failing, then
         escalates to Claude with actionable diagnostics — not vague prompts.
         """
-        from tools.claude_code import claude_code_query
+        from inference import escalate_with_ladder
 
         diag = {}
         try:
@@ -7280,7 +7311,11 @@ class ResearchLoop:
                 f'"fix": "exact change needed"}}'
             )
             try:
-                result = await claude_code_query(prompt, hermes_caller="deep_work")
+                result = await escalate_with_ladder(
+                    prompt,
+                    task_type="deep_work",
+                    hermes_caller="deep_work",
+                )
                 if result.get("content"):
                     logger.warning(f"Spinning diagnosis from Claude: {result['content'][:500]}")
             except Exception as e:

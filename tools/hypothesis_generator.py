@@ -777,13 +777,14 @@ class HypothesisGenerator:
         data_summary: str,
     ) -> list[dict]:
         """
-        Ask Claude Code to generate novel hypotheses from a data summary.
-        Returns structured hypotheses for creation.
+        Ask the hypothesis_gen ladder (qwen36 primary, Claude last) to
+        generate novel hypotheses from a data summary.
 
-        This is the escalation path: local models do pattern detection,
-        Claude does creative hypothesis formulation.
+        The function keeps its historical name for call-site compatibility,
+        but the ladder picks the best available model per task_type and
+        respects CALLISTO_LOCAL_ONLY + Claude Max hours demotion.
         """
-        from tools.claude_code import claude_code_query
+        from inference import escalate_with_ladder
 
         prompt = (
             f"You are Callisto's hypothesis engine. Given the following data summary "
@@ -801,14 +802,16 @@ class HypothesisGenerator:
             f"Return ONLY a JSON array. No explanation text."
         )
 
-        result = await claude_code_query(
+        result = await escalate_with_ladder(
             prompt=prompt,
             system_context="Callisto hypothesis generation — return structured JSON only.",
+            task_type="hypothesis_gen",
             timeout=120,
+            hermes_caller="hypothesis_gen",
         )
 
         if result.get("error"):
-            logger.error(f"Claude Code hypothesis generation failed: {result['error']}")
+            logger.error(f"Hypothesis generation ladder failed: {result['error']}")
             return []
 
         # Parse response

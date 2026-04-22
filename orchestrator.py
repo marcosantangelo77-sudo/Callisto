@@ -24,10 +24,17 @@ from agp import (
     SourceClass,
     ConfidenceTier,
 )
-from inference import get_architect, get_manager, get_sentinel, execute_function_call, _parse_json_response
+from inference import (
+    get_architect,
+    get_manager,
+    get_sentinel,
+    execute_function_call,
+    _parse_json_response,
+    escalate_with_ladder,
+)
 from memory import MemoryStore
 from tools.search import web_search
-from tools.claude_code import claude_code_query, claude_code_available, is_available as claude_available
+from tools.claude_code import claude_code_available, is_available as claude_available
 from tools.odds_api import (
     get_odds as odds_get_odds,
     get_scores as odds_get_scores,
@@ -996,7 +1003,12 @@ class Orchestrator:
                 f"Analyze the provided web search results and extract structured evidence items. "
                 f"Be rigorous: only claim SECONDARY for web-sourced evidence, INFERRED for reasoning."
             )
-            result = await claude_code_query(claude_prompt, system_context=claude_context, timeout=120)
+            result = await escalate_with_ladder(
+                claude_prompt,
+                system_context=claude_context,
+                task_type="reasoning",
+                timeout=120,
+            )
 
             if not result.get("error") and not result.get("rate_limited"):
                 used_tools = True
@@ -1139,9 +1151,12 @@ class Orchestrator:
             safe_q = raw_q.split("\n")[0][:300].strip()
             return await web_search(query=safe_q, count=arguments.get("count", 5))
         if name == "claude_code":
-            return await claude_code_query(
+            # Route through the ladder so CALLISTO_LOCAL_ONLY + cost-aware
+            # routing + time-of-day demotion all apply uniformly.
+            return await escalate_with_ladder(
                 prompt=arguments.get("prompt", ""),
                 system_context=arguments.get("system_context", ""),
+                task_type="reasoning",
             )
         if name == "get_odds":
             return await odds_get_odds(
@@ -1419,7 +1434,12 @@ class Orchestrator:
                 f"Confidence ceilings: INFERRED max=0.55, SECONDARY max=0.75, PRIMARY max=1.0. "
                 f"Be honest about uncertainty — never inflate confidence beyond what evidence supports."
             )
-            result = await claude_code_query(claude_prompt, system_context=claude_context, timeout=120)
+            result = await escalate_with_ladder(
+                claude_prompt,
+                system_context=claude_context,
+                task_type="reasoning",
+                timeout=120,
+            )
 
             if not result.get("error") and not result.get("rate_limited"):
                 content = result.get("content", "")
@@ -1539,7 +1559,12 @@ class Orchestrator:
                 f"\"key_findings\":[\"...\"],\"gaps\":[\"...\"]}}"
             )
 
-        result = await claude_code_query(prompt, system_context=context, timeout=180)
+        result = await escalate_with_ladder(
+            prompt,
+            system_context=context,
+            task_type="deep_work",
+            timeout=180,
+        )
 
         if result.get("error"):
             logger.warning(f"Claude Code enhancement failed: {result['error']}")
