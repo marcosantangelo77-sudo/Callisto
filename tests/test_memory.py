@@ -84,13 +84,22 @@ class TestSessionStorage:
     async def test_sealed_session_stored_and_retrieved(self, memory):
         s = AGPSession("test query")
         s.domain = Domain.GENERAL
-        for step in list(SessionStep)[1:]:
-            s.advance_to(step)
+        s.advance_to(SessionStep.ASSIGN_DOMAIN)
+        s.advance_to(SessionStep.SOURCE_ENUMERATION)
+        s.advance_to(SessionStep.PRIMARY_COLLECTION)
+        # Post-rigor seal() requires real evidence + real conclusion.
+        s.add_evidence(Evidence(
+            content="supporting fact", source_class=SourceClass.SECONDARY,
+            confidence_score=0.7, domain=Domain.GENERAL, origin_agent="test",
+        ))
+        s.advance_to(SessionStep.CONTRADICTION_CHECK)
+        s.advance_to(SessionStep.SYNTHESIS)
         s.summary = SessionSummary(
             scope="test query", domain=Domain.GENERAL,
             conclusion="result", confidence_score=0.5,
-            evidence_count=0, contradiction_count=0,
+            evidence_count=1, contradiction_count=0,
         )
+        s.advance_to(SessionStep.SESSION_CLOSE)
         s.seal()
 
         await memory.store_session(s)
@@ -98,3 +107,50 @@ class TestSessionStorage:
         assert retrieved is not None
         assert retrieved["seal_hash"] == s.seal_hash
         assert retrieved["query"] == "test query"
+
+    async def test_get_session_detects_tampered_seal(self, memory):
+        """memory.get_session() must recompute+verify the seal and raise
+        AGPSealTampered when the stored payload disagrees with seal_hash."""
+        import json as _json
+        from agp import AGPSealTampered
+
+        s = AGPSession("tamper test")
+        s.domain = Domain.GENERAL
+        s.advance_to(SessionStep.ASSIGN_DOMAIN)
+        s.advance_to(SessionStep.SOURCE_ENUMERATION)
+        s.advance_to(SessionStep.PRIMARY_COLLECTION)
+        s.add_evidence(Evidence(
+            content="honest fact", source_class=SourceClass.SECONDARY,
+            confidence_score=0.7, domain=Domain.GENERAL, origin_agent="test",
+        ))
+        s.advance_to(SessionStep.CONTRADICTION_CHECK)
+        s.advance_to(SessionStep.SYNTHESIS)
+        s.summary = SessionSummary(
+            scope="tamper test", domain=Domain.GENERAL,
+            conclusion="honest conclusion", confidence_score=0.6,
+            evidence_count=1, contradiction_count=0,
+        )
+        s.advance_to(SessionStep.SESSION_CLOSE)
+        s.seal()
+        await memory.store_session(s)
+
+        # Direct-mutate the stored full_session JSON to simulate tampering
+        rows = await memory._db.execute_fetchall(
+            "SELECT full_session FROM sessions WHERE session_id = ?",
+            (s.session_id,),
+        )
+        doc = _json.loads(rows[0][0])
+        doc["summary"]["conclusion"] = "MALICIOUS REWRITE"
+        await memory._db.execute(
+            "UPDATE sessions SET full_session = ? WHERE session_id = ?",
+            (_json.dumps(doc), s.session_id),
+        )
+        await memory._db.commit()
+
+        with pytest.raises(AGPSealTampered):
+            await memory.get_session(s.session_id)
+
+        # verify=False bypass (for audit tool) should still return data
+        untrusted = await memory.get_session(s.session_id, verify=False)
+        assert untrusted is not None
+        assert untrusted["summary"]["conclusion"] == "MALICIOUS REWRITE"

@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from agp import Domain
+from agp import AGPSealTampered, Domain
 from logging_config import setup_logging
 from memory import MemoryStore
 from monitor import HealthMonitor
@@ -704,8 +704,19 @@ async def get_task(task_id: int, _auth: None = Depends(require_admin_or_loopback
 
 @app.get("/session/{session_id}")
 async def get_session(session_id: str, _auth: None = Depends(require_admin_or_loopback)):
-    """Get a sealed AGP session with full provenance."""
-    session = await memory.get_session(session_id)
+    """Get a sealed AGP session with full provenance.
+
+    Returns 409 CONFLICT if the stored seal_hash fails verification — the
+    session exists but its content has been tampered with or corrupted.
+    """
+    try:
+        session = await memory.get_session(session_id)
+    except AGPSealTampered as e:
+        logger.error("Seal tamper detected on GET /session/%s: %s", session_id, e)
+        raise HTTPException(
+            status_code=409,
+            detail=f"Session {session_id} seal failed verification (tampered or corrupted)",
+        )
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return session

@@ -6,10 +6,26 @@ Enums, dataclasses, and session lifecycle for the AGP 7-step research methodolog
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Optional, Union
+
+from agp.thresholds import (
+    TIER_VERIFIED_MIN,
+    TIER_CORROBORATED_MIN,
+    TIER_PROBABLE_MIN,
+    TIER_SPECULATIVE_MIN,
+)
+
+logger = logging.getLogger("callisto.agp")
+
+
+# Sentinel value used when synthesis fails to produce anything useful.
+# Sessions with this as their conclusion MUST NOT seal — they represent
+# garbage synthesis that would otherwise write a 0.30 SPECULATIVE row to DB.
+EMPTY_SYNTHESIS_MARKER = "No synthesis produced."
 
 
 class Domain(str, Enum):
@@ -36,13 +52,13 @@ class ConfidenceTier(str, Enum):
 
     @staticmethod
     def from_score(score: float) -> "ConfidenceTier":
-        if score >= 0.90:
+        if score >= TIER_VERIFIED_MIN:
             return ConfidenceTier.VERIFIED
-        elif score >= 0.75:
+        elif score >= TIER_CORROBORATED_MIN:
             return ConfidenceTier.CORROBORATED
-        elif score >= 0.55:
+        elif score >= TIER_PROBABLE_MIN:
             return ConfidenceTier.PROBABLE
-        elif score >= 0.30:
+        elif score >= TIER_SPECULATIVE_MIN:
             return ConfidenceTier.SPECULATIVE
         else:
             return ConfidenceTier.UNVERIFIED
@@ -64,6 +80,24 @@ class SessionStep(int, Enum):
 
 class AGPViolation(Exception):
     """Raised when AGP protocol rules are violated."""
+    pass
+
+
+class AGPSealTampered(Exception):
+    """Raised when a stored session's seal_hash does not match its re-computed hash.
+
+    Signals either data corruption or active tampering. Callers loading sessions
+    from memory MUST handle this — a tampered session is not a trusted session.
+    """
+    pass
+
+
+class AGPSealRefused(Exception):
+    """Raised when seal() refuses to seal a session due to garbage content.
+
+    Conditions: empty conclusion, EMPTY_SYNTHESIS_MARKER conclusion, zero
+    evidence, or filtered_evidence_count > kept evidence count.
+    """
     pass
 
 
@@ -167,6 +201,11 @@ class AGPSession:
         self.summary: Optional[SessionSummary] = None
         self.manager_objections: list[str] = []
 
+        # Track how many Evidence items were dropped by add_evidence() because
+        # they were UNVERIFIED. If this ever exceeds len(self.evidence) at seal
+        # time, the session is mostly noise and seal() refuses.
+        self.filtered_evidence_count: int = 0
+
         self._sealed: bool = False
 
     def advance_to(self, step: SessionStep) -> None:
@@ -182,11 +221,16 @@ class AGPSession:
         self.current_step = step
 
     def add_evidence(self, evidence: Evidence) -> None:
-        """Add evidence, filtering out non-storable items."""
+        """Add evidence, filtering out non-storable items.
+
+        Filtered (UNVERIFIED) items increment filtered_evidence_count so seal()
+        can detect sessions where the majority of evidence was rejected.
+        """
         if self._sealed:
             raise AGPViolation("Cannot add evidence to a sealed session")
         if not evidence.confidence_tier.is_storable:
-            return  # silently filtered per AGP rules
+            self.filtered_evidence_count += 1
+            return  # filtered per AGP rules (was silent pre-rigor fix)
         self.evidence.append(evidence)
 
     def add_contradiction(self, contradiction: Contradiction) -> None:
@@ -214,10 +258,20 @@ class AGPSession:
             "sealed_at": self.sealed_at,
             "seal_hash": self.seal_hash,
             "current_step": self.current_step.name,
+            "filtered_evidence_count": self.filtered_evidence_count,
         }
 
     def seal(self) -> str:
-        """Seal the session with a SHA-256 hash of its canonical JSON payload."""
+        """Seal the session with a SHA-256 hash of its canonical JSON payload.
+
+        Refuses to seal garbage:
+          - conclusion is empty or == EMPTY_SYNTHESIS_MARKER
+          - len(evidence) == 0
+          - filtered_evidence_count > len(evidence)  (mostly-rejected session)
+
+        Raises AGPSealRefused in those cases instead of sealing a 0.30
+        SPECULATIVE row into the DB.
+        """
         if self._sealed:
             raise AGPViolation("Session already sealed")
         if self.current_step != SessionStep.SESSION_CLOSE:
@@ -228,8 +282,81 @@ class AGPSession:
         if self.summary is None:
             raise AGPViolation("Cannot seal session without a summary")
 
+        # ── Refuse-to-seal-garbage gates ──
+        conclusion = (self.summary.conclusion or "").strip()
+        if not conclusion or conclusion == EMPTY_SYNTHESIS_MARKER:
+            logger.warning(
+                "AGP seal refused for session %s: empty/default conclusion",
+                self.session_id,
+            )
+            raise AGPSealRefused(
+                f"Session {self.session_id}: refusing to seal — empty or default conclusion"
+            )
+        if len(self.evidence) == 0:
+            logger.warning(
+                "AGP seal refused for session %s: zero evidence items",
+                self.session_id,
+            )
+            raise AGPSealRefused(
+                f"Session {self.session_id}: refusing to seal — zero evidence"
+            )
+        if self.filtered_evidence_count > len(self.evidence):
+            logger.warning(
+                "AGP seal refused for session %s: filtered=%d > kept=%d",
+                self.session_id,
+                self.filtered_evidence_count,
+                len(self.evidence),
+            )
+            raise AGPSealRefused(
+                f"Session {self.session_id}: refusing to seal — "
+                f"filtered ({self.filtered_evidence_count}) > kept ({len(self.evidence)})"
+            )
+
         self.sealed_at = datetime.now(timezone.utc).isoformat()
-        payload = json.dumps(self.to_dict(), sort_keys=True, ensure_ascii=False)
+        payload = _canonical_payload(self.to_dict())
         self.seal_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         self._sealed = True
         return self.seal_hash
+
+    @staticmethod
+    def verify_seal(stored: Union[dict, str]) -> bool:
+        """Recompute the SHA-256 over a stored session dict (or JSON string) minus
+        seal_hash / sealed_at, and compare with the stored seal_hash.
+
+        Returns True only if the hashes match. False on any failure — including
+        missing seal_hash, malformed JSON, or tampered content. Never raises.
+
+        Callers that want hard failure should raise AGPSealTampered themselves.
+        """
+        try:
+            if isinstance(stored, str):
+                data = json.loads(stored)
+            else:
+                data = dict(stored)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+
+        stored_hash = data.get("seal_hash")
+        if not stored_hash or not isinstance(stored_hash, str):
+            return False
+
+        payload = _canonical_payload(data)
+        recomputed = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return recomputed == stored_hash
+
+
+def _canonical_payload(data: dict) -> str:
+    """Build the canonical JSON payload hashed by seal()/verify_seal().
+
+    Algorithm (preserved from pre-rigor era for backward compatibility with
+    existing sealed sessions):
+      - Normalize seal_hash → None (the field was always present at seal time
+        with value None; it's the one field that cannot be part of its own hash)
+      - Keep sealed_at as-is (set BEFORE the hash is computed)
+      - All other fields are hashed by sort_keys=True JSON
+
+    verify_seal() normalizes input the same way before comparing.
+    """
+    payload_dict = dict(data)
+    payload_dict["seal_hash"] = None
+    return json.dumps(payload_dict, sort_keys=True, ensure_ascii=False)
