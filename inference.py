@@ -273,6 +273,50 @@ async def escalate_with_ladder(
 
     ladder = MODEL_LADDER.get(task_type, MODEL_LADDER["reasoning"])
 
+    # ── Local CC bridge (CALLISTO_LOCAL_ONLY only) ──
+    # When the nuclear kill switch is on, Claude paths are dead but we
+    # still want a real tool-using agent for tasks that benefit from
+    # multi-step reasoning. Try the forked-CC-driven-by-Ollama bridge
+    # FIRST; on any failure (missing binary, timeout, non-zero exit,
+    # empty output) fall THROUGH to the existing direct-Ollama ladder.
+    # This is purely additive — the ladder below is untouched.
+    try:
+        from tools.local_cc_bridge import should_use_bridge, arun_local_cc
+
+        if should_use_bridge(task_type):
+            bridge_timeout_ms = (timeout or 900) * 1000  # default 15 min
+            logger.info(
+                f"Local-only mode: attempting local CC bridge for task_type={task_type}"
+            )
+            bridge_res = await arun_local_cc(
+                prompt,
+                system_context=system_context,
+                timeout_ms=bridge_timeout_ms,
+            )
+            bridge_content = bridge_res.get("content", "")
+            if bridge_content and not bridge_res.get("error"):
+                logger.info(
+                    f"Local CC bridge succeeded for task_type={task_type} "
+                    f"(model={bridge_res.get('model_used')}, "
+                    f"{len(bridge_content)} chars) — skipping direct Ollama ladder"
+                )
+                return {
+                    "content": bridge_content,
+                    "model_used": bridge_res.get("model_used", "local_cc"),
+                    "quality": bridge_res.get("quality", "high"),
+                    "ladder_step": -2,  # sentinel: bridge path, pre-ladder
+                    "path": "local_cc_bridge",
+                }
+            logger.info(
+                f"Local CC bridge unavailable / failed "
+                f"(error={bridge_res.get('error')!r}, "
+                f"timed_out={bridge_res.get('timed_out')}) — "
+                f"falling back to direct Ollama ladder"
+            )
+    except Exception as e:
+        # Bridge import / dispatch should never break the ladder.
+        logger.warning(f"Local CC bridge dispatch error: {e} — using direct ladder")
+
     for step, config in enumerate(ladder):
         model = config["model"]
         model_timeout = timeout or config["timeout"]
