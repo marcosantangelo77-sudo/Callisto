@@ -1483,14 +1483,56 @@ async def vacuum_db(db_path: str = DB_PATH) -> dict:
     Call from a periodic task (e.g. weekly). VACUUM rewrites the entire DB so it
     holds an EXCLUSIVE lock — schedule it during a quiet window (overnight) and
     after wait_for_drain() so backtest/line_monitor writers are paused.
+
+    Implementation note (vacuum-in-tx fix):
+    SQLite refuses ``VACUUM`` when any transaction is active on the connection,
+    and aiosqlite's default isolation_level opens an *implicit* transaction
+    around every write. That manifested as the silent
+    ``OperationalError: cannot VACUUM from within a transaction`` hidden behind
+    the WriteCoordinator's ``writes_failed`` counter.
+
+    The correct call path for VACUUM is therefore a dedicated, autocommit,
+    UNTAGGED stdlib ``sqlite3`` connection on a worker thread:
+      * stdlib sqlite3 with ``isolation_level=None`` ⇒ true autocommit, no
+        implicit BEGIN around VACUUM.
+      * Not tagged with ``_callisto_db_path`` ⇒ the aiosqlite monkey-patch in
+        ``tools.db_writer.install_aiosqlite_routing`` can never re-route VACUUM
+        through the coordinator (which would re-introduce the bug).
+      * Run inside ``asyncio.to_thread`` so we don't block the event loop for
+        the minutes VACUUM can take on a multi-GB DB.
     """
     import os as _os
+    import sqlite3 as _sqlite3
+    import asyncio as _asyncio
+
     before = _os.path.getsize(db_path) if _os.path.exists(db_path) else 0
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA busy_timeout = 300000")  # 5 min for VACUUM
-        await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        await db.execute("VACUUM")
-        await db.commit()
+
+    def _run_vacuum_sync() -> None:
+        # isolation_level=None ⇒ autocommit. No implicit BEGIN is issued by
+        # the driver, so VACUUM runs on a connection with no active tx.
+        conn = _sqlite3.connect(db_path, isolation_level=None, timeout=300.0)
+        try:
+            # 5-minute busy timeout for the EXCLUSIVE lock contention window.
+            conn.execute("PRAGMA busy_timeout = 300000")
+            # Truncate WAL first so VACUUM's new DB is as small as possible.
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            # Invariant check: silent-failure → loud-failure upgrade. If this
+            # connection somehow has an open transaction we refuse to VACUUM
+            # rather than letting SQLite surface the confusing error string.
+            if conn.in_transaction:
+                raise RuntimeError(
+                    "vacuum_db invariant violated: dedicated connection has "
+                    "an open transaction before VACUUM. Refusing to VACUUM."
+                )
+            conn.execute("VACUUM")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    await _asyncio.to_thread(_run_vacuum_sync)
+
     after = _os.path.getsize(db_path) if _os.path.exists(db_path) else 0
     reclaimed = max(0, before - after)
     logger.info(

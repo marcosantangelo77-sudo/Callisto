@@ -272,6 +272,24 @@ class WriteCoordinator:
 
     async def _apply(self, op_type: str, sql, payload):
         assert self._db is not None
+        # Defensive: VACUUM must NEVER be routed through the coordinator. The
+        # coordinator's sink connection is in aiosqlite's deferred-transaction
+        # mode, and SQLite refuses "VACUUM from within a transaction". This is
+        # the silent-failure fix: raise loudly so the caller (or test) can see
+        # the misuse instead of letting it hide as `writes_failed += 1`.
+        if op_type in ("execute", "executemany") and _is_vacuum_sql(sql):
+            raise RuntimeError(
+                "VACUUM cannot run through the WriteCoordinator — use "
+                "tools.schema.vacuum_db() which opens a dedicated autocommit "
+                "connection. See tools/db_writer.py _WRITE_RE comment."
+            )
+        if op_type == "transaction":
+            for _s, _p in (payload or []):
+                if _is_vacuum_sql(_s):
+                    raise RuntimeError(
+                        "VACUUM cannot appear inside a WriteCoordinator "
+                        "transaction — use tools.schema.vacuum_db()."
+                    )
         if op_type == "execute":
             cursor = await self._db.execute(sql, payload or ())
             await self._db.commit()
@@ -393,18 +411,34 @@ _INSTALLED = False
 
 # Heuristic: detect SQL statements that take the writer lock. Anything that
 # isn't clearly a SELECT/PRAGMA-read/EXPLAIN we treat as a write to be safe.
+#
+# NOTE: VACUUM is deliberately EXCLUDED. SQLite refuses to VACUUM from within
+# a transaction, and aiosqlite's default isolation level opens an implicit
+# transaction around every execute(). Routing VACUUM through the coordinator
+# therefore fails with ``OperationalError: cannot VACUUM from within a
+# transaction``. VACUUM must run on a dedicated autocommit connection — see
+# ``tools.schema.vacuum_db`` for the correct call path. If VACUUM is ever
+# submitted to the coordinator despite this, ``_apply`` raises a loud error
+# (silent failure → loud failure upgrade).
 import re as _re_writer
 _WRITE_RE = _re_writer.compile(
     r"^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|TRUNCATE|"
-    r"VACUUM|REINDEX|ATTACH|DETACH|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b",
+    r"REINDEX|ATTACH|DETACH|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b",
     _re_writer.IGNORECASE,
 )
+_VACUUM_RE = _re_writer.compile(r"^\s*VACUUM\b", _re_writer.IGNORECASE)
 
 
 def _is_write_sql(sql) -> bool:
     if not isinstance(sql, str):
         return False
     return bool(_WRITE_RE.match(sql))
+
+
+def _is_vacuum_sql(sql) -> bool:
+    if not isinstance(sql, str):
+        return False
+    return bool(_VACUUM_RE.match(sql))
 
 
 def install_aiosqlite_routing() -> None:
