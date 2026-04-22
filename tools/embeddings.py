@@ -32,9 +32,14 @@ load_dotenv()
 logger = logging.getLogger("callisto.embeddings")
 
 OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text:latest")
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 EMBED_DIM = 768  # nomic-embed-text output dimension
+
+# Near-duplicate threshold for store-time semantic merge. Rows whose top-1
+# cosine similarity against an existing row in the same collection exceeds
+# this are merged (metadata union) instead of being stored as a new row.
+NEAR_DUP_THRESHOLD = 0.97
 
 _client: Optional[httpx.AsyncClient] = None
 
@@ -143,15 +148,22 @@ class VectorStore:
         text: str,
         embedding: list[float],
         metadata: Optional[dict] = None,
+        model_name: Optional[str] = None,
     ) -> int:
-        """Store a text + embedding. Returns row ID. Deduplicates by content hash."""
+        """Store a text + embedding. Returns row ID. Deduplicates by content hash.
+
+        ``model_name`` is recorded so future queries using a different embed
+        model can filter out drift-contaminated rows. Defaults to the process
+        EMBED_MODEL so callers that haven't been updated still stamp something.
+        """
         from tools.db_utils import execute_with_retry, commit_with_retry
         content_hash = _content_hash(text)
+        model = model_name or EMBED_MODEL
         cursor = await execute_with_retry(
             self._db,
             "INSERT OR IGNORE INTO embeddings "
-            "(collection, content_hash, content_text, embedding_json, embedding_blob, metadata_json) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(collection, content_hash, content_text, embedding_json, embedding_blob, metadata_json, model_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 collection,
                 content_hash,
@@ -159,11 +171,101 @@ class VectorStore:
                 json.dumps(embedding),
                 _to_blob(embedding),
                 json.dumps(metadata) if metadata else None,
+                model,
             ),
             operation="vector_store store",
         )
         await commit_with_retry(self._db, operation="vector_store store")
         return cursor.lastrowid
+
+    async def store_or_merge(
+        self,
+        collection: str,
+        text: str,
+        embedding: list[float],
+        metadata: Optional[dict] = None,
+        model_name: Optional[str] = None,
+        near_dup_threshold: float = NEAR_DUP_THRESHOLD,
+    ) -> dict:
+        """Store a vector, but if cosine-sim to an existing top-1 in the
+        same collection exceeds ``near_dup_threshold``, MERGE instead of insert.
+
+        Merge = keep the existing row's id and text, union the metadata dict,
+        refresh the embedding blob to the most recent vector. The existing
+        row's ``created_at`` is preserved; semantics = "this is the same claim,
+        seen again".
+
+        Returns ``{"action": "inserted"|"merged"|"duplicate", "id": int,
+        "similarity": float|None}``.
+        """
+        from tools.db_utils import execute_with_retry, commit_with_retry
+
+        # Short-circuit: exact content_hash dedup (cheaper than a vector scan).
+        content_hash = _content_hash(text)
+        cursor = await self._db.execute(
+            "SELECT id FROM embeddings WHERE collection = ? AND content_hash = ?",
+            (collection, content_hash),
+        )
+        dup = await cursor.fetchone()
+        if dup:
+            return {"action": "duplicate", "id": dup[0], "similarity": 1.0}
+
+        # Find semantic near-duplicate via top-1 search in the same model bucket.
+        model = model_name or EMBED_MODEL
+        top = await self.search(
+            collection, embedding, top_k=1, min_similarity=0.0,
+            model_name=model,
+        )
+        if top and top[0]["similarity"] >= near_dup_threshold:
+            existing_id = top[0]["id"]
+            # Union metadata: new keys win, existing merge_count bumps.
+            existing_meta_json = None
+            cursor = await self._db.execute(
+                "SELECT metadata_json FROM embeddings WHERE id = ?",
+                (existing_id,),
+            )
+            row = await cursor.fetchone()
+            if row and row[0]:
+                try:
+                    existing_meta_json = json.loads(row[0])
+                except Exception:
+                    existing_meta_json = None
+            merged_meta = dict(existing_meta_json or {})
+            if metadata:
+                merged_meta.update(metadata)
+            merged_meta["merge_count"] = int(merged_meta.get("merge_count", 1)) + 1
+            merged_meta["last_merged_at"] = json.dumps(None) and None  # placeholder
+            # Use ISO timestamp for the merge event.
+            from datetime import datetime, timezone
+            merged_meta["last_merged_at"] = datetime.now(timezone.utc).isoformat()
+
+            await execute_with_retry(
+                self._db,
+                "UPDATE embeddings SET embedding_blob = ?, embedding_json = ?, "
+                "metadata_json = ?, model_name = ? WHERE id = ?",
+                (
+                    _to_blob(embedding),
+                    json.dumps(embedding),
+                    json.dumps(merged_meta),
+                    model,
+                    existing_id,
+                ),
+                operation="vector_store merge",
+            )
+            await commit_with_retry(self._db, operation="vector_store merge")
+            logger.info(
+                f"vector_store: MERGED into {collection}#{existing_id} "
+                f"(sim={top[0]['similarity']:.4f} >= {near_dup_threshold})"
+            )
+            return {
+                "action": "merged",
+                "id": existing_id,
+                "similarity": top[0]["similarity"],
+            }
+
+        # No near-duplicate — normal insert.
+        new_id = await self.store(collection, text, embedding, metadata, model_name=model)
+        return {"action": "inserted", "id": new_id, "similarity": None}
 
     async def store_batch(
         self,
@@ -210,32 +312,82 @@ class VectorStore:
         query_embedding: list[float],
         top_k: int = 10,
         min_similarity: float = 0.0,
+        model_name: Optional[str] = None,
     ) -> list[dict]:
         """
         Find the top_k most similar items in a collection.
 
         Uses numpy vectorized cosine similarity for batch computation.
         Loads all embeddings once, computes all similarities in a single matrix op.
+
+        ``model_name``: when provided (and the table has a ``model_name``
+        column), only rows embedded with the same model are compared. Rows
+        tagged with a different model are logged and excluded — cross-model
+        cosine values are meaningless. Rows with NULL model (pre-migration)
+        are included for backwards compatibility but logged once per call.
         """
-        cursor = await self._db.execute(
-            "SELECT id, content_text, embedding_blob, embedding_json, metadata_json "
-            "FROM embeddings WHERE collection = ?",
-            (collection,),
-        )
+        # Check whether the model_name column exists. Old DBs might not have
+        # the migration applied yet; fall back to legacy un-filtered read.
+        has_model_col = False
+        try:
+            info = await self._db.execute("PRAGMA table_info(embeddings)")
+            cols = {row[1] for row in await info.fetchall()}
+            has_model_col = "model_name" in cols
+        except Exception:
+            has_model_col = False
+
+        if has_model_col and model_name is not None:
+            cursor = await self._db.execute(
+                "SELECT id, content_text, embedding_blob, embedding_json, metadata_json, "
+                "model_name FROM embeddings WHERE collection = ?",
+                (collection,),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT id, content_text, embedding_blob, embedding_json, metadata_json "
+                "FROM embeddings WHERE collection = ?",
+                (collection,),
+            )
         rows = await cursor.fetchall()
         if not rows:
             return []
 
-        # Deserialize all embeddings into a matrix
+        # Deserialize all embeddings into a matrix. When model_name filtering
+        # is active, skip rows from other models and log the drift.
         ids = []
         texts = []
         meta_jsons = []
         emb_list = []
-        for row_id, text, emb_blob, emb_json, meta_json in rows:
+        drift_rows = 0
+        null_model_rows = 0
+        for row in rows:
+            if has_model_col and model_name is not None:
+                row_id, text, emb_blob, emb_json, meta_json, row_model = row
+                if row_model is None:
+                    null_model_rows += 1
+                    # Keep NULL-model rows (pre-migration data) for backcompat.
+                elif row_model != model_name:
+                    drift_rows += 1
+                    continue
+            else:
+                row_id, text, emb_blob, emb_json, meta_json = row
             ids.append(row_id)
             texts.append(text)
             meta_jsons.append(meta_json)
             emb_list.append(_deserialize_embedding(emb_blob, emb_json))
+
+        if drift_rows:
+            logger.info(
+                f"vector_store.search({collection}): excluded {drift_rows} "
+                f"rows from other embed models (query model={model_name})"
+            )
+        if null_model_rows:
+            logger.debug(
+                f"vector_store.search({collection}): {null_model_rows} "
+                "pre-migration rows with NULL model_name were included"
+            )
+        if not emb_list:
+            return []
 
         # Vectorized batch cosine similarity
         matrix = np.vstack(emb_list)  # (N, 768)
@@ -280,10 +432,19 @@ class VectorStore:
         query_text: str,
         top_k: int = 10,
         min_similarity: float = 0.0,
+        model_name: Optional[str] = None,
     ) -> list[dict]:
-        """Search by text — embeds the query first, then searches."""
+        """Search by text — embeds the query first, then searches.
+
+        Defaults ``model_name`` to the process EMBED_MODEL so drift is
+        automatically filtered unless the caller explicitly passes None.
+        """
         query_emb = await embed_text(query_text)
-        return await self.search(collection, query_emb, top_k, min_similarity)
+        effective_model = model_name if model_name is not None else EMBED_MODEL
+        return await self.search(
+            collection, query_emb, top_k, min_similarity,
+            model_name=effective_model,
+        )
 
     async def get_all(self, collection: str) -> list[dict]:
         """Get all items in a collection (without embeddings for memory efficiency)."""
