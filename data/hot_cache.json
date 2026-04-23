@@ -1,0 +1,54 @@
+{
+  "identity": {
+    "system": "Callisto",
+    "owner": "Marco Santangelo",
+    "books": [
+      "DraftKings",
+      "Fanatics"
+    ],
+    "reference": [
+      "Pinnacle (via the-odds-api)"
+    ],
+    "method": "Devig sharp books for true probability, compare to retail for mispricing",
+    "primary_edge": "Profit boosts + player props",
+    "date": "2026-04-02"
+  },
+  "bankroll": {
+    "balance": 992.22,
+    "as_of": "2026-03-27T00:47:49.506159+00:00"
+  },
+  "active_bets": [],
+  "sentinel_flags": [
+    {
+      "type": "pipeline_validation",
+      "desc": "STALE: odds_snapshots last update 17.3h ago (threshold: 2h)",
+      "at": "2026-04-02T03:08:12.685674+00:00"
+    },
+    {
+      "type": "pipeline_validation",
+      "desc": "STALE: odds_snapshots last update 17.1h ago (threshold: 2h)",
+      "at": "2026-04-02T02:54:00.544011+00:00"
+    },
+    {
+      "type": "pipeline_validation",
+      "desc": "STALE: odds_snapshots last update 16.8h ago (threshold: 2h)",
+      "at": "2026-04-02T02:36:43.513140+00:00"
+    },
+    {
+      "type": "pipeline_validation",
+      "desc": "STALE: odds_snapshots last update 2.0h ago (threshold: 2h)",
+      "at": "2026-04-01T07:15:04.343756+00:00"
+    },
+    {
+      "type": "pipeline_validation",
+      "desc": "STALE: odds_snapshots last update 2.8h ago (threshold: 2h)",
+      "at": "2026-04-01T02:16:44.496621+00:00"
+    }
+  ],
+  "performance": {
+    "record": "2W-1L",
+    "pending": 0,
+    "pnl": -37.78,
+    "win_rate": 66.7
+  }
+}

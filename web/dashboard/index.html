@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Callisto Ops</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo-dot" aria-hidden="true"></span>
+      <span class="brand-name">Callisto</span>
+      <span class="brand-sub">ops dashboard</span>
+    </div>
+    <div class="status-row">
+      <span id="online-pill" class="pill pill-muted">connecting...</span>
+      <span id="last-refresh" class="muted">never refreshed</span>
+    </div>
+  </header>
+
+  <div id="offline-banner" class="banner banner-offline hidden">
+    Callisto API at <code id="offline-target">localhost:8420</code> is unreachable. Showing last-known / DB-fallback data.
+  </div>
+
+  <main class="grid">
+    <!-- 1. Live state -->
+    <section class="panel" id="panel-state">
+      <h2>Live state</h2>
+      <div class="panel-body" id="state-body">Loading...</div>
+    </section>
+
+    <!-- 2. LIVE hypotheses -->
+    <section class="panel wide" id="panel-hyps">
+      <h2>LIVE hypotheses <span class="count" id="hyp-count"></span></h2>
+      <div class="panel-body" id="hyps-body">Loading...</div>
+    </section>
+
+    <!-- 3. Recent orders -->
+    <section class="panel wide" id="panel-orders">
+      <h2>Recent orders <span class="count" id="orders-count"></span></h2>
+      <div class="panel-body" id="orders-body">Loading...</div>
+    </section>
+
+    <!-- 4. Portfolio -->
+    <section class="panel" id="panel-portfolio">
+      <h2>Portfolio</h2>
+      <div class="panel-body" id="portfolio-body">Loading...</div>
+    </section>
+
+    <!-- 5. Data ingestion -->
+    <section class="panel wide" id="panel-ingestion">
+      <h2>Data ingestion</h2>
+      <div class="panel-body" id="ingestion-body">Loading...</div>
+    </section>
+
+    <!-- 6. Alerts -->
+    <section class="panel" id="panel-alerts">
+      <h2>Alerts</h2>
+      <div class="panel-body" id="alerts-body">Loading...</div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Auto-refresh every 15s &middot; read-only</span>
+    <span id="build-info" class="muted"></span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

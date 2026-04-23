@@ -2,6 +2,7 @@
 Brave Search API tool for Callisto.
 
 Provides web search capability with AGP source class tagging.
+Uses a shared httpx client for connection pooling across searches.
 """
 
 import os
@@ -14,6 +15,31 @@ load_dotenv()
 
 BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
 BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+
+# Shared client for connection reuse — created lazily, closed on shutdown
+_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=15.0,
+            headers={
+                "Accept": "application/json",
+                "Accept-Encoding": "gzip",
+                "X-Subscription-Token": BRAVE_API_KEY,
+            },
+        )
+    return _client
+
+
+async def close_client() -> None:
+    """Close the shared httpx client. Call on shutdown."""
+    global _client
+    if _client and not _client.is_closed:
+        await _client.aclose()
+        _client = None
 
 
 async def brave_search(
@@ -38,16 +64,10 @@ async def brave_search(
     if freshness:
         params["freshness"] = freshness
 
-    headers = {
-        "Accept": "application/json",
-        "Accept-Encoding": "gzip",
-        "X-Subscription-Token": BRAVE_API_KEY,
-    }
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(BRAVE_SEARCH_URL, headers=headers, params=params)
-        resp.raise_for_status()
-        data = resp.json()
+    client = _get_client()
+    resp = await client.get(BRAVE_SEARCH_URL, params=params)
+    resp.raise_for_status()
+    data = resp.json()
 
     web_results = data.get("web", {}).get("results", [])
     results = []
