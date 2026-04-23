@@ -1,0 +1,146 @@
+=== STATUS COUNTS ===
+  rejected: 3240
+  draft: 256
+  retired: 114
+  backtesting: 28
+
+=== HYPOTHESIS_STATS COLUMNS ===
+  ['id', 'hypothesis_id', 'stage', 'computed_at', 'total_n', 'signals_n', 'win', 'loss', 'push_', 'hit_rate', 'avg_edge', 'avg_ev', 'avg_clv', 'positive_clv_rate', 'roi_pct', 'sharpe', 'max_drawdown', 'p_value', 'is_significant', 'sortino', 'brier_score', 'information_coefficient']
+
+=== BACKTESTING HYPOTHESES (by signals) ===
+  mlb_day_after_extra_innings_f5_under [baseball_mlb/totals]: 120ev, 21sig, edge=0.007945285714285714, thresh=1e-05
+  nhl_sandwich_backup_goalie_under [icehockey_nhl/totals]: 122ev, 9sig, edge=0.006820666666666667, thresh=5e-05
+  mlb_road_streak_runline_dog_cover [baseball_mlb/spreads]: 93ev, 7sig, edge=0.13228542857142858, thresh=0.02
+  nba_bubble_team_underdog_ml_motivation [basketball_nba/h2h]: 250ev, 6sig, edge=0.017757833333333334, thresh=0.008
+  nhl_talent_gap_coast_dog_spread [icehockey_nhl/spreads]: 20ev, 6sig, edge=0.004155666666666667, thresh=0.0001
+  nhl_weak_team_sandwich_defensive_collapse_over [icehockey_nhl/totals]: 48ev, 5sig, edge=0.005656400000000001, thresh=0.0003
+  mlb_home_favorite_runline_value [baseball_mlb/spreads]: 8ev, 4sig, edge=0.002386, thresh=0.0003
+  nhl_bubble_desperation_unders [icehockey_nhl/totals]: 23ev, 4sig, edge=0.008666, thresh=0.0003
+  nba_bubble_blowout_loss_bounce_ml [basketball_nba/h2h]: 101ev, 4sig, edge=0.02262075, thresh=0.008
+  nhl_divisional_playoff_race_total_under [icehockey_nhl/totals]: 47ev, 4sig, edge=0.008666, thresh=0.0003
+  nba_blowout_fav_spread_regression [basketball_nba/spreads]: 224ev, 3sig, edge=0.005993000000000001, thresh=1e-05
+  nba_elite_cruise_control_spread_fade [basketball_nba/spreads]: 118ev, 2sig, edge=0.0056625, thresh=0.003
+  nba_elite_sandwich_letdown_ats [basketball_nba/spreads]: 315ev, 2sig, edge=0.004413, thresh=1e-05
+  nba_elite_compressed_schedule_spread [basketball_nba/spreads]: 269ev, 2sig, edge=0.0056625, thresh=0.003
+  nhl_ref_crew_penalty_rate_total_over [icehockey_nhl/totals]: 251ev, 1sig, edge=0.01561, thresh=0.015
+  nhl_compressed_schedule_dog_goalie_edge [icehockey_nhl/h2h]: 1062ev, 1sig, edge=0.02555, thresh=0.02
+  nba_elite_vs_tank_garbage_time_dog_ats [basketball_nba/spreads]: 112ev, 1sig, edge=0.004413, thresh=0.003
+  nba_elite_opponent_underdog_spread [basketball_nba/spreads]: 98ev, 1sig, edge=0.004413, thresh=0.003
+  nba_rest_mismatch_3v0_days_visitor_ml [basketball_nba/h2h]: 16ev, 1sig, edge=0.005229, thresh=0.003
+  nhl_extended_road_trip_totals_over [icehockey_nhl/totals]: 116ev, 1sig, edge=0.01561, thresh=0.015
+  ncaab_sandwich_rotation_depth_under [basketball_ncaab/totals]: 0ev, 0sig, edge=None, thresh=0.003
+  nba_rest_mismatch_overpriced_dog_spread [basketball_nba/spreads]: 4ev, 0sig, edge=None, thresh=0.003
+  nba_bad_team_blowout_win_regression_spread [basketball_nba/spreads]: 135ev, 0sig, edge=None, thresh=0.015
+  ncaab_blowout_winner_regression_fade [basketball_ncaab/spreads]: 31ev, 0sig, edge=None, thresh=0.003
+  nhl_road_streak_fav_spread_fade [icehockey_nhl/spreads]: 71ev, 0sig, edge=None, thresh=0.015
+  ncaab_blowout_loss_bounce_underdog_ml [basketball_ncaab/h2h]: 0ev, 0sig, edge=None, thresh=0.003
+  nba_elite_sandwich_coasting_spread [basketball_nba/spreads]: 318ev, 0sig, edge=None, thresh=0.015
+  nba_rest_mismatch_rested_dog_spread [basketball_nba/spreads]: 19ev, 0sig, edge=None, thresh=0.015
+
+=== HYPOTHESIS_STATS FOR BACKTESTING ===
+  Error: no such column: hs.total_signals
+
+=== PROMOTION CANDIDATES (20+ events, 5+ signals) ===
+  Count: 6
+    mlb_day_after_extra_innings_f5_under: 120ev, 21sig
+    nhl_sandwich_backup_goalie_under: 122ev, 9sig
+    mlb_road_streak_runline_dog_cover: 93ev, 7sig
+    nba_bubble_team_underdog_ml_motivation: 250ev, 6sig
+    nhl_talent_gap_coast_dog_spread: 20ev, 6sig
+    nhl_weak_team_sandwich_defensive_collapse_over: 48ev, 5sig
+
+=== SIGNAL EVENT SAMPLES ===
+  mlb_road_streak_runline_dog_co: edge=0.149023, book=fanduel, book_prob=0.098039, fair=0.247062, date=2026-03-29
+  mlb_road_streak_runline_dog_co: edge=0.113729, book=betmgm, book_prob=0.133333, fair=0.247062, date=2026-03-29
+  mlb_road_streak_runline_dog_co: edge=0.12495, book=williamhill, book_prob=0.083333, fair=0.208284, date=2026-03-29
+  mlb_road_streak_runline_dog_co: edge=0.132526, book=draftkings, book_prob=0.075758, fair=0.208284, date=2026-03-29
+  mlb_road_streak_runline_dog_co: edge=0.12495, book=caesars, book_prob=0.083333, fair=0.208284, date=2026-03-29
+  mlb_road_streak_runline_dog_co: edge=0.13136, book=hardrock, book_prob=0.076923, fair=0.208284, date=2026-03-29
+  mlb_road_streak_runline_dog_co: edge=0.14946, book=betmgm, book_prob=0.058824, fair=0.208284, date=2026-03-29
+  nhl_compressed_schedule_dog_go: edge=0.02555, book=betrivers, book_prob=0.37037, fair=0.395921, date=2026-03-29
+  nba_bubble_blowout_loss_bounce: edge=0.017643, book=fanduel, book_prob=0.406504, fair=0.424147, date=2026-03-09
+  nba_bubble_blowout_loss_bounce: edge=0.02428, book=fanduel, book_prob=0.294118, fair=0.318397, date=2026-03-25
+  nba_bubble_blowout_loss_bounce: edge=0.02428, book=betrivers, book_prob=0.294118, fair=0.318397, date=2026-03-25
+  nba_bubble_blowout_loss_bounce: edge=0.02428, book=hardrock, book_prob=0.294118, fair=0.318397, date=2026-03-25
+  nba_bubble_team_underdog_ml_mo: edge=0.02428, book=fanduel, book_prob=0.294118, fair=0.318397, date=2026-03-25
+  nba_bubble_team_underdog_ml_mo: edge=0.02428, book=betrivers, book_prob=0.294118, fair=0.318397, date=2026-03-25
+  nba_bubble_team_underdog_ml_mo: edge=0.02428, book=hardrock, book_prob=0.294118, fair=0.318397, date=2026-03-25
+
+=== RECENT REJECTIONS (last 20) ===
+  Hypothesis columns: ['hypothesis_id', 'name', 'thesis', 'sport', 'market_type', 'model_config', 'edge_threshold', 'status', 'min_sample_size', 'significance_level', 'created_at', 'updated_at', 'promoted_at', 'promoted_by', 'notes']
+  nhl_home_blowout_loss_coaching_bounce | reason=
+[cycle 14] threshold adjusted to 0.008: 1.4% signal rate at 0.015 threshold; lo
+  referee_foul_tendency_points_overs | reason=Auto-generated by Claude Code hypothesis engine
+  ncaab_freshman_minutes_prop_unders | reason=No historical odds data available for NCAAB
+  ncaab_public_hype_fade_march | reason=No historical odds data available for NCAAB
+  ncaab_mid_major_travel_spread | reason=No historical odds data available for NCAAB
+  ncaab_conference_tournament_fatigue | reason=No historical odds data available for NCAAB
+  nfl_qb_rushing_props_cold_weather | reason=Auto-generated by Claude Code hypothesis engine
+[cycle 1] threshold adjusted to 
+  revenge_game_usage_spike | reason=Auto-generated by Claude Code hypothesis engine
+[cycle 1] threshold adjusted to 
+  cross_country_travel_spread | reason=Auto-generated by Claude Code hypothesis engine
+  sharp_steam_move_follower | reason=Auto-generated by Claude Code hypothesis engine
+[cycle 1] threshold adjusted to 
+  altitude_visitor_fatigue | reason=Auto-generated by Claude Code hypothesis engine
+  referee_crew_foul_tendency | reason=Auto-generated by Claude Code hypothesis engine
+  NCAAB foul rate referee crew totals | reason=No historical odds data available for NCAAB
+  NCAAB travel distance spread adjustment | reason=No historical odds data available for NCAAB
+  NCAAB tempo mismatch game totals | reason=No historical odds data available for NCAAB
+  NCAAB seed-spread public bias | reason=No historical odds data available for NCAAB
+  NCAAB conference tournament fatigue totals | reason=No historical odds data available for NCAAB
+  Closing line value momentum on early sharp mo | reason=Auto-generated by Claude Code hypothesis engine
+[cycle 1] threshold adjusted to 
+  Usage rate spike rebounds assists unders | reason=Auto-generated by Claude Code hypothesis engine
+  Public money fade on primetime spreads | reason=Auto-generated by Claude Code hypothesis engine
+
+=== EVENT SET OVERLAP (backtesting hyps, >5 shared) ===
+  nba_elite_sandwich_letdown_ats <-> nba_elite_sandwich_coasting_spread: 63 shared
+  nba_elite_sandwich_letdown_ats <-> nba_elite_compressed_schedule_sprea: 55 shared
+  nba_elite_sandwich_coasting_spread <-> nba_elite_compressed_schedule_sprea: 55 shared
+  nba_bad_team_blowout_win_regression <-> nba_blowout_fav_spread_regression: 28 shared
+  nhl_ref_crew_penalty_rate_total_ove <-> nhl_compressed_schedule_dog_goalie_: 27 shared
+  nba_elite_cruise_control_spread_fad <-> nba_blowout_fav_spread_regression: 23 shared
+  nba_elite_cruise_control_spread_fad <-> nba_elite_sandwich_letdown_ats: 23 shared
+  nba_elite_cruise_control_spread_fad <-> nba_elite_sandwich_coasting_spread: 23 shared
+  nba_blowout_fav_spread_regression <-> nba_elite_sandwich_letdown_ats: 23 shared
+  nba_blowout_fav_spread_regression <-> nba_elite_sandwich_coasting_spread: 23 shared
+  nba_elite_vs_tank_garbage_time_dog_ <-> nba_elite_sandwich_letdown_ats: 22 shared
+  nba_elite_vs_tank_garbage_time_dog_ <-> nba_elite_sandwich_coasting_spread: 22 shared
+  nba_elite_opponent_underdog_spread <-> nba_elite_sandwich_letdown_ats: 19 shared
+  nba_elite_opponent_underdog_spread <-> nba_elite_sandwich_coasting_spread: 19 shared
+  nba_elite_cruise_control_spread_fad <-> nba_elite_compressed_schedule_sprea: 19 shared
+
+=== PAPER_TRADING / PROMOTED / LIVE ===
+  Count: 0
+
+=== RETIRED (last 10) ===
+  Weather impact on NFL totals | Auto-generated from template 'total_weather_impact'; auto:nf
+  Weather impact on MLB totals | Auto-generated from template 'total_weather_impact'; auto:nf
+  nfl_bye_week_rust_totals | Moved back to draft: no odds data available (2026-03-26); au
+  nfl_divisional_dog_ats | Moved back to draft: no odds data available (2026-03-26); au
+  nfl_short_week_under | Moved back to draft: no odds data available (2026-03-26); au
+  nfl_road_favorite_letdown | Moved back to draft: no odds data available (2026-03-26); au
+  nfl_bye_week_bounce_totals | Moved back to draft: no odds data available (2026-03-26); au
+  nfl_primetime_under_first_half | Auto-generated by Claude Code hypothesis engine; auto:nfl_of
+  nfl_revenge_game_spread_overreaction | Auto-generated by Claude Code hypothesis engine; auto:nfl_of
+  NFL dome-to-outdoor total deflation | Moved back to draft: no odds data available (2026-03-26); au
+
+=== EDGE DISTRIBUTION ON SIGNALS (backtesting hyps) ===
+  Total signals: 85, avg_edge: 0.018866270588235295, min: 0.000297, max: 0.14946
+  >5%: 7, >2%: 14, >1%: 29
+
+=== UNIQUE BOOKS IN SIGNAL EVENTS ===
+  betmgm: 16 signals
+  hardrock: 11 signals
+  betrivers: 11 signals
+  draftkings: 10 signals
+  caesars: 10 signals
+  fanduel: 8 signals
+  williamhill: 5 signals
+  bet365: 4 signals
+  pointsbet: 3 signals
+  mybookieag: 2 signals
+  fanatics: 2 signals
+  espnbet: 2 signals
+  bovada: 1 signals
