@@ -1161,6 +1161,160 @@ THESIS_SEEDS: list[dict[str, Any]] = [
         "variance_justification": "Period derivative + rule mechanic.",
         "exploration_status": "unexplored",
     },
+    # ── Ported from feat/mlb-nhl-props-and-alts HYPOTHESIS_TEMPLATES ──
+    # These 6 prop seeds originally landed in hypothesis_generator.py's
+    # HYPOTHESIS_TEMPLATES list (the pre-wiki template-expansion path).
+    # They are duplicated here so the wiki-grounded generator's
+    # pick_unexplored_seeds() loop can surface them alongside the rest of
+    # the 53-seed library. Both paths (template + wiki-grounded) remain
+    # usable; the seeds are deliberately represented in both to preserve
+    # semantics from both branches.
+    {
+        "seed_id": "mlb_pitcher_k_over_vs_low_k_team",
+        "category": "props",
+        "sport": "baseball_mlb",
+        "market_type": "pitcher_strikeouts",
+        "thesis_template": (
+            "When a starting pitcher with above-median K/9 faces a team in the "
+            "bottom quartile/tercile of team K-rate, books set the pitcher K "
+            "Over too conservatively. Contact-team aggression becomes a "
+            "weakness against high-K stuff; fair Over exceeds implied by 1.5%+."
+        ),
+        "cohort_filter_sql": (
+            "player_stats.pitcher_k9_season >= player_stats.pitcher_k9_league_median "
+            "AND game_contexts.opp_team_k_rate_rank >= 22"
+        ),
+        "signal_logic": "K9 vs team K-rate quartile mismatch -> K prop Over.",
+        "min_sample_heuristic": 30,
+        "ic_prior_estimate": 0.025,
+        "variance_justification": (
+            "Pitcher-K props gated on opponent team K-rate tier; distinct axis "
+            "from park-factor and bullpen-handoff seeds."
+        ),
+        "exploration_status": "unexplored",
+    },
+    {
+        "seed_id": "mlb_batter_hits_over_at_hitter_parks",
+        "category": "props",
+        "sport": "baseball_mlb",
+        "market_type": "batter_hits",
+        "thesis_template": (
+            "Batters with rolling AVG in the top quartile/tercile at extreme "
+            "hitter parks (Coors, Great American, Fenway) see hit-prop Overs "
+            "set too low. Books apply park factor to totals but lag on "
+            "individual-player prop lines; fair exceeds implied by 1.5%+."
+        ),
+        "cohort_filter_sql": (
+            "player_stats.batter_avg_rolling_rank <= 25 "
+            "AND game_contexts.park_hitter_factor_rank <= 5"
+        ),
+        "signal_logic": "Hot-bat + hitter-park stacking underpriced by book.",
+        "min_sample_heuristic": 30,
+        "ic_prior_estimate": 0.020,
+        "variance_justification": (
+            "Batter hit-prop cross of hot-streak and extreme-park factor; "
+            "not covered by generic totals or HR prop seeds."
+        ),
+        "exploration_status": "unexplored",
+    },
+    {
+        "seed_id": "nba_player_pts_over_vs_small_ball",
+        "category": "props",
+        "sport": "basketball_nba",
+        "market_type": "player_points",
+        "thesis_template": (
+            "Primary-scoring guards/wings see point-prop Overs mispriced when "
+            "opponent plays small-ball (no rim protector / 5-out). Books "
+            "adjust totals for pace but not player-level; the star absorbs "
+            "extra possessions at elevated rates. Over is +EV by 1.5%+ when "
+            "opp rim-protection-rank is bottom 10."
+        ),
+        "cohort_filter_sql": (
+            "player_stats.usage_rate_rank <= 5 "
+            "AND game_contexts.opp_rim_protection_rank >= 20"
+        ),
+        "signal_logic": "Usage-heavy scorer vs small lineup -> points Over.",
+        "min_sample_heuristic": 25,
+        "ic_prior_estimate": 0.022,
+        "variance_justification": (
+            "Player points-prop gated on opponent lineup-size / rim-protection; "
+            "orthogonal to ref-crew and B2B travel seeds."
+        ),
+        "exploration_status": "unexplored",
+    },
+    {
+        "seed_id": "nhl_goalie_saves_over_vs_b2b_road",
+        "category": "props",
+        "sport": "icehockey_nhl",
+        "market_type": "goalie_saves",
+        "thesis_template": (
+            "Goalies facing a team on the second night of a back-to-back with "
+            "travel see elevated shot volume. Tired skaters take more low-"
+            "percentage perimeter shots that inflate Saves without changing "
+            "Goals Against much. Over Saves is +EV by 1.5%+."
+        ),
+        "cohort_filter_sql": (
+            "game_contexts.opp_back_to_back = 1 "
+            "AND game_contexts.opp_travel_km >= 1000"
+        ),
+        "signal_logic": "B2B+travel opponent -> low-pct shot volume -> Saves Over.",
+        "min_sample_heuristic": 20,
+        "ic_prior_estimate": 0.020,
+        "variance_justification": (
+            "Goalie-saves prop keyed on OPPONENT fatigue rather than goalie "
+            "rest; complements nhl_backup_goalie_b2b and nhl_goalie_rest_7plus."
+        ),
+        "exploration_status": "unexplored",
+    },
+    {
+        "seed_id": "nhl_skater_sog_over_after_trailing_3rd",
+        "category": "props",
+        "sport": "icehockey_nhl",
+        "market_type": "skater_shots_on_goal",
+        "thesis_template": (
+            "Volume shooters who logged 3rd-period comeback minutes in the "
+            "previous game see elevated SOG in the next outing — line combos "
+            "stabilize and shot rate reverts high. Books set SOG Over using "
+            "season averages rather than momentum-adjusted rate. Over +EV 1.5%+."
+        ),
+        "cohort_filter_sql": (
+            "player_stats.prev_game_trailing_toi_rank <= 10 "
+            "AND player_stats.season_shot_volume_rank <= 15"
+        ),
+        "signal_logic": "Prev-game leverage TOI -> next-game SOG Over.",
+        "min_sample_heuristic": 25,
+        "ic_prior_estimate": 0.018,
+        "variance_justification": (
+            "SOG prop gated on previous-game leverage minutes; distinct from "
+            "d-pair-injury and empty-net total seeds."
+        ),
+        "exploration_status": "unexplored",
+    },
+    {
+        "seed_id": "mlb_nrfi_both_aces_first_inning",
+        "category": "totals",
+        "sport": "baseball_mlb",
+        "market_type": "first_inning_nrfi_yrfi",
+        "thesis_template": (
+            "When both starting pitchers rank top quartile/tercile in first-"
+            "inning wOBA-allowed, the NRFI (No Runs First Inning) line is "
+            "mispriced. Books aggregate across starter quality; top-tier aces "
+            "strike out the top of the order at elevated rates in frame 1. "
+            "NRFI fair probability exceeds implied by 2%+."
+        ),
+        "cohort_filter_sql": (
+            "player_stats.home_sp_first_inning_woba_rank <= 7 "
+            "AND player_stats.away_sp_first_inning_woba_rank <= 7"
+        ),
+        "signal_logic": "Both SP top-tier 1st-inning wOBA -> NRFI Yes.",
+        "min_sample_heuristic": 30,
+        "ic_prior_estimate": 0.025,
+        "variance_justification": (
+            "NRFI derivative gated on BOTH starters' 1st-inning splits; "
+            "distinct from starter-first-scoreless and opener-bullpen seeds."
+        ),
+        "exploration_status": "unexplored",
+    },
 ]
 
 
