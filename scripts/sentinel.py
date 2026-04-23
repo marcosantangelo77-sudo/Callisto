@@ -238,10 +238,13 @@ async def _kill_api_process() -> None:
     # 1. Try graceful: POST /admin/restart (may not exist in old code)
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(f"{API_URL}/admin/restart")
+            resp = await client.post(f"{API_URL}/admin/restart", params={"confirm": "YES"})
             if resp.status_code == 200:
                 logger.info("Graceful restart triggered via /admin/restart")
                 return
+            logger.info(
+                f"Graceful restart returned {resp.status_code} — falling back to kill: {resp.text[:200]}"
+            )
     except Exception as e:
         logger.info(f"Graceful restart endpoint unavailable (falling back to kill): {e}")
 
