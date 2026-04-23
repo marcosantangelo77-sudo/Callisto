@@ -206,12 +206,24 @@ def _is_internal_query(query: str) -> bool:
 
 
 async def _maybe_auto_followup(parent_task_id: int, result: dict) -> None:
-    """If a session concluded with INSUFFICIENT DATA and a clear next step, auto-queue follow-up."""
+    """If a session concluded with INSUFFICIENT DATA and a clear next step, auto-queue follow-up.
+
+    Hardened per feat/auto-followup-hardening:
+      - depth cap (CALLISTO_MAX_FOLLOWUP_DEPTH, default 5)
+      - fan-out cap (CALLISTO_MAX_FOLLOWUP_FANOUT, default 3)
+      - quality gate (vague language / verbatim / entity-free rejected)
+      - semantic dedup against recent queue (cosine ≥ threshold in 1h window)
+      - chain budget (CALLISTO_MAX_CHAIN_BUDGET_USD, default $1.00)
+      - ancestry tracking via task_queue.parent_task_id / root_task_id
+
+    Every rejection is logged at WARNING or INFO so the gating is visible
+    in api_stderr_*.log. Nothing in this path raises; auto-followup is
+    always best-effort relative to the parent task's completion.
+    """
     try:
         summary = result.get("summary", {})
         conclusion = summary.get("conclusion", "")
         confidence = summary.get("confidence_score", 1.0)
-        tier = summary.get("confidence_tier", "")
 
         # Only follow up on low-confidence results with explicit next steps
         if confidence > 0.50 or "INSUFFICIENT DATA" not in conclusion.upper():
@@ -228,8 +240,51 @@ async def _maybe_auto_followup(parent_task_id: int, result: dict) -> None:
             return
 
         followup_query = f"AUTO-FOLLOWUP from task {parent_task_id}: {next_step}"
+
+        # Evaluate guards against the live DB snapshot. Keep the scope
+        # tight: one connection open just for the guard + insert path.
+        from tools import followup_guard
+        async with aiosqlite.connect(memory.db_path) as guard_db:
+            await guard_db.execute("PRAGMA busy_timeout = 30000")
+            decision = await followup_guard.evaluate_followup(
+                guard_db, parent_task_id, followup_query
+            )
+
+        if not decision.allowed:
+            # Audit trail: rejection reason always logged.
+            logger.info(
+                "auto_followup_rejected: parent=%d reason=%s",
+                parent_task_id, decision.reason,
+            )
+            return
+
+        # Enqueue via the normal TaskQueue path so WriteCoordinator is
+        # used when active. Then stamp the followup bookkeeping columns
+        # in a follow-up UPDATE (the coordinator's insert helper doesn't
+        # accept extra columns today; keeping the two-step pattern avoids
+        # a breaking change to task_queue.submit_task).
         task_id = await queue.submit_task(followup_query, priority=1)
-        logger.info(f"Auto-queued follow-up task {task_id} from parent {parent_task_id}")
+        try:
+            async with aiosqlite.connect(memory.db_path) as stamp_db:
+                await stamp_db.execute("PRAGMA busy_timeout = 30000")
+                await stamp_db.execute(
+                    "UPDATE task_queue "
+                    "SET followup_depth = ?, parent_task_id = ?, root_task_id = ? "
+                    "WHERE task_id = ?",
+                    (decision.depth, decision.parent_task_id,
+                     decision.root_task_id, task_id),
+                )
+                await stamp_db.commit()
+        except Exception as stamp_err:
+            logger.warning(
+                "auto_followup: stamp depth/parent failed for task %d: %r",
+                task_id, stamp_err,
+            )
+
+        logger.info(
+            "auto_followup_queued: task=%d parent=%d depth=%d root=%d",
+            task_id, parent_task_id, decision.depth, decision.root_task_id,
+        )
     except Exception as e:
         logger.warning(f"Auto-followup check failed (non-fatal): {e}")
 
@@ -787,6 +842,18 @@ async def lifespan(app: FastAPI):
     # Startup — ensure DB schema is up to date (now uses patched aiosqlite).
     await ensure_schema()
 
+    # Followup hardening columns (feat/auto-followup-hardening).
+    # Adds followup_depth / parent_task_id / root_task_id / cost_usd to
+    # task_queue so _maybe_auto_followup can enforce depth + budget caps
+    # and /task/{id}/chain can walk the ancestry tree.
+    try:
+        from tools.followup_guard import ensure_followup_columns
+        async with aiosqlite.connect(DB_PATH) as _fg_db:
+            await _fg_db.execute("PRAGMA busy_timeout = 30000")
+            await ensure_followup_columns(_fg_db)
+    except Exception as e:
+        logger.warning(f"followup_guard column migration failed (non-fatal): {e!r}")
+
     # Versioned migrations (tools/migrations/NNN_*.py). Runs AFTER
     # ensure_schema so fresh DBs have the v1 baseline tables; for existing
     # DBs the bootstrap step marks every migration as already-applied so
@@ -1296,6 +1363,28 @@ async def get_task(task_id: int, _auth: None = Depends(require_admin_or_loopback
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
+
+
+@app.get("/task/{task_id}/chain")
+async def get_task_chain(
+    task_id: int, _auth: None = Depends(require_admin_or_loopback)
+):
+    """Return the full followup tree rooted at ``task_id``'s 0-depth ancestor.
+
+    Enables "where did this task come from / what else did it spawn?"
+    debugging. Includes total cost and max-depth so a runaway chain is
+    visible at a glance.
+
+    Loopback-or-admin gated: same auth posture as GET /task/{id} since
+    the chain leaks the same query text.
+    """
+    from tools.followup_guard import get_chain_tree
+    async with aiosqlite.connect(memory.db_path) as db:
+        await db.execute("PRAGMA busy_timeout = 30000")
+        tree = await get_chain_tree(db, task_id)
+    if tree.get("error") == "task_not_found":
+        raise HTTPException(status_code=404, detail="Task not found")
+    return tree
 
 
 @app.get("/session/{session_id}")
