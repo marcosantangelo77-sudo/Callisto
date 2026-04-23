@@ -178,6 +178,7 @@ worker_task: Optional[asyncio.Task] = None
 wal_checkpoint_task: Optional[asyncio.Task] = None
 restart_signal_task: Optional[asyncio.Task] = None
 order_cron_task: Optional[asyncio.Task] = None
+prop_resolver_task: Optional[asyncio.Task] = None
 order_manager_instance: Optional[OrderManager] = None
 
 
@@ -747,7 +748,7 @@ async def order_cron_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle manager."""
-    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task, order_cron_task, order_manager_instance
+    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task, order_cron_task, prop_resolver_task, order_manager_instance
 
     # Start memory profiling only when explicitly requested — tracemalloc tracks every
     # allocation in C-level metadata (~50-100 bytes each), which adds 55-110 MB of invisible
@@ -914,9 +915,20 @@ async def lifespan(app: FastAPI):
     restart_signal_task = asyncio.create_task(restart_signal_watcher())
     sla_watchdog_task = asyncio.create_task(ingestion_sla_watchdog_loop())
     order_cron_task = asyncio.create_task(order_cron_loop())
+    # Prop resolution — fills backtest_events.actual_result for player_* markets.
+    # Without this, every prop hypothesis stats at 0 resolved (silent freeze).
+    try:
+        from tools.prop_resolver import prop_resolution_loop
+        prop_resolver_task = asyncio.create_task(prop_resolution_loop())
+        logger.info(
+            "prop_resolution_loop started (15m interval, 500 rows/pass)"
+        )
+    except Exception as e:
+        logger.warning(f"prop_resolution_loop failed to start: {e}")
     logger.info(
         f"Callisto API started on port {CALLISTO_PORT} "
-        f"(WAL ckpt 5m, restart-signal watcher active, ingestion SLA watchdog 5m)"
+        f"(WAL ckpt 5m, restart-signal watcher active, ingestion SLA watchdog 5m, "
+        f"prop resolver 15m)"
     )
 
     # Notify on Telegram
@@ -961,6 +973,12 @@ async def lifespan(app: FastAPI):
         order_cron_task.cancel()
         try:
             await order_cron_task
+        except asyncio.CancelledError:
+            pass
+    if prop_resolver_task:
+        prop_resolver_task.cancel()
+        try:
+            await prop_resolver_task
         except asyncio.CancelledError:
             pass
     if worker_task:
