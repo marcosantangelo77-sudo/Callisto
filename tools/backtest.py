@@ -3316,22 +3316,15 @@ class BacktestEngine:
             if not home_team or not away_team:
                 continue
 
-            # Fuzzy match: find the game in results for this date
-            # Try exact date first, then ±1 day for timezone offsets,
-            # then ±2-3 days for pre-game odds captured before game day
-            # (e.g. Opening Day odds posted days before the actual games)
+            # Exact-date match only.
+            #
+            # Pre-fix this was ±1 day to compensate for the game_date vs
+            # UTC-sliced commence_time timezone mismatch (see
+            # tools/game_dates.py and migration 007). With local_game_date
+            # now canonical across tables, the fuzzy window would just
+            # occasionally match bets to the wrong adjacent-day game.
             scores = None
-            try:
-                base = _dt.strptime(game_date, "%Y-%m-%d")
-                # Only try exact date and ±1 day (timezone offsets).
-                # ±3 days was matching bets to wrong games days apart.
-                date_candidates = [
-                    game_date,
-                    (base + _td(days=1)).strftime("%Y-%m-%d"),
-                    (base - _td(days=1)).strftime("%Y-%m-%d"),
-                ]
-            except ValueError:
-                date_candidates = [game_date]
+            date_candidates = [game_date]
 
             for try_date in date_candidates:
                 candidates = games_by_date.get((ev_sport, try_date), [])
@@ -3765,13 +3758,28 @@ class BacktestEngine:
         now = datetime.now(timezone.utc).isoformat()
 
         def _game_date_from_commence(game_obj: dict) -> str:
-            """Extract actual game date from commence_time, fallback to today."""
+            """Venue-local game date for this game.
+
+            Pre-fix this sliced ``commence_time[:10]`` which is the UTC date.
+            For a Dodgers 7:30pm PT home game (``02:30Z`` next day) that
+            returned tomorrow's UTC date, causing silent day-of-week and
+            day/night cohort corruption. Now: convert to the venue's local
+            timezone via ``tools.game_dates.local_game_date``.
+            """
+            from tools.game_dates import local_game_date as _lgd
+
             ct = game_obj.get("commence_time", "")
-            if ct and len(ct) >= 10:
-                try:
-                    return ct[:10]  # YYYY-MM-DD from ISO timestamp
-                except Exception:
-                    pass
+            if not ct:
+                return today
+            home = game_obj.get("home_team", "")
+            sp = game_obj.get("sport_key") or sport or ""
+            d = _lgd(ct, sp, home)
+            if d is not None:
+                return d.isoformat()
+            # Fallback to pre-existing UTC-slice behavior only if the helper
+            # couldn't parse the timestamp — better than inventing a date.
+            if len(ct) >= 10:
+                return ct[:10]
             return today
 
         # Parse hypothesis-specific filters (same as main backtest path)
@@ -4015,14 +4023,18 @@ class BacktestEngine:
 
             trade_id = str(uuid.uuid4())[:12]
 
-            # Move to paper_trades table
+            # Move to paper_trades table. ``actual_gd`` is already the
+            # venue-local date (see _game_date_from_commence above) — write
+            # it to BOTH game_date (legacy) and local_game_date (canonical)
+            # so new rows don't need a backfill.
             await self._db.execute(
                 "INSERT OR IGNORE INTO paper_trades "
                 "(trade_id, hypothesis_id, event_id, sport, player, market, "
                 "line, side, book, signal_time, signal_odds_american, "
                 "signal_implied_prob, model_fair_prob, edge, ev_pct, "
-                "kelly_fraction, game_date, home_team, away_team) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "kelly_fraction, game_date, local_game_date, "
+                "home_team, away_team) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     trade_id, hypothesis_id, eid,
                     event["sport"], event.get("player"), event["market"],
@@ -4030,7 +4042,7 @@ class BacktestEngine:
                     now, event["book_odds_american"],
                     event["book_implied_prob"], event["model_fair_prob"],
                     event["edge"], event["ev_pct"],
-                    event.get("kelly_fraction"), actual_gd,
+                    event.get("kelly_fraction"), actual_gd, actual_gd,
                     home_team, away_team,
                 ),
             )

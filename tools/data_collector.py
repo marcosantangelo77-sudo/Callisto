@@ -351,6 +351,14 @@ class DataCollector:
             if venue_meta:
                 context.update(venue_meta)
 
+            # Canonical local-tz date (tools.game_dates). ESPN's per-event
+            # ``date`` is the UTC commence time, so we can derive the venue-
+            # local date without relying on the ET-oriented ``dates`` param.
+            from tools.game_dates import local_game_date as _lgd
+            event_utc = event.get("date", "")
+            local_date = _lgd(event_utc, sport, home_team)
+            local_date_str = local_date.isoformat() if local_date else None
+
             # Store game context — only overwrite if the new context is richer
             # (more keys) than the existing one. Prevents sparse re-collections
             # from regressing enriched data with officials/rest/broadcasts.
@@ -360,19 +368,21 @@ class DataCollector:
                 await execute_with_retry(
                     self._db,
                     "INSERT INTO game_contexts "
-                    "(sport, event_id, game_date, home_team, away_team, "
+                    "(sport, event_id, game_date, local_game_date, "
+                    "home_team, away_team, "
                     "home_score, away_score, context_json) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(sport, event_id) DO UPDATE SET "
                     "context_json = CASE "
                     "  WHEN length(excluded.context_json) >= length(context_json) "
                     "    THEN excluded.context_json "
                     "  ELSE context_json "
                     "END, "
+                    "local_game_date = COALESCE(excluded.local_game_date, local_game_date), "
                     "home_score = COALESCE(excluded.home_score, home_score), "
                     "away_score = COALESCE(excluded.away_score, away_score)",
                     (
-                        sport, event_id, game_date_fmt,
+                        sport, event_id, game_date_fmt, local_date_str,
                         home_team, away_team,
                         home_score, away_score,
                         context_json,
@@ -407,11 +417,12 @@ class DataCollector:
                 await execute_with_retry(
                     self._db,
                     "INSERT OR IGNORE INTO game_results "
-                    "(sport, game_date, home_team, away_team, home_score, "
-                    "away_score, total_score, spread_result, winner, source) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'espn')",
+                    "(sport, game_date, local_game_date, home_team, away_team, "
+                    "home_score, away_score, total_score, spread_result, winner, source) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'espn')",
                     (
-                        sport, game_date_fmt, home_team, away_team,
+                        sport, game_date_fmt, local_date_str,
+                        home_team, away_team,
                         home_score, away_score, total_score, spread_result, winner,
                     ),
                     operation="data_collector store_game_result",
