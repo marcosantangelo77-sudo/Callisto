@@ -1,4 +1,4 @@
-"""Migration 005: live_game_states table for in-game detector.
+"""Migration 007: live_game_states table for in-game detector.
 
 Stores ESPN live boxscore snapshots captured every ~30s while a game is
 in progress. The detector in ``tools/live_edges.py`` reads the most
