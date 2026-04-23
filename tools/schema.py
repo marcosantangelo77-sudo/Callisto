@@ -284,8 +284,11 @@ CREATE TABLE IF NOT EXISTS hypotheses (
     -- 'paused' added 2026-04-21: demotion state from LIVE for underperforming
     -- hypotheses (see tools.hypothesis.review_live_hypotheses). Not retired:
     -- can be un-paused once stats recover.
+    -- 'drawdown_paused' added 2026-04-22 (feat/portfolio-kelly-live-loop):
+    -- distinct from 'paused' so recovery logic knows the system-wide drawdown
+    -- kill-switch fired and a *manual* re-enable is required after review.
     status TEXT NOT NULL DEFAULT 'draft'
-        CHECK(status IN ('draft','backtesting','paper_trading','live','paused','retired','rejected')),
+        CHECK(status IN ('draft','backtesting','paper_trading','live','paused','drawdown_paused','retired','rejected')),
     min_sample_size INTEGER NOT NULL DEFAULT 50,
     significance_level REAL NOT NULL DEFAULT 0.05,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -1592,6 +1595,93 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
                     await db.commit()
         except Exception as e:
             logger.warning(f"Could not evaluate migration 20260421: {e}")
+
+        # Migration 20260422 (feat/portfolio-kelly-live-loop): allow
+        # 'drawdown_paused' status so the drawdown kill-switch can flag LIVE
+        # hypotheses distinctly from ordinary 'paused' demotion. Also create
+        # the bankroll_peak table used by the kill switch.
+        try:
+            cur = await db.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 20260422"
+            )
+            if not await cur.fetchone():
+                cur = await db.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='hypotheses'"
+                )
+                row = await cur.fetchone()
+                table_sql = row[0] if row else ""
+                if table_sql and "'drawdown_paused'" not in table_sql:
+                    logger.info("Migration 20260422: rebuilding hypotheses table to add 'drawdown_paused' status")
+                    await db.execute("BEGIN")
+                    try:
+                        await db.execute("ALTER TABLE hypotheses RENAME TO hypotheses_old_20260422")
+                        await db.execute("""
+                            CREATE TABLE hypotheses (
+                                hypothesis_id TEXT PRIMARY KEY,
+                                name TEXT NOT NULL,
+                                thesis TEXT NOT NULL,
+                                sport TEXT NOT NULL,
+                                market_type TEXT NOT NULL,
+                                model_config TEXT NOT NULL,
+                                edge_threshold REAL NOT NULL DEFAULT 0.01,
+                                status TEXT NOT NULL DEFAULT 'draft'
+                                    CHECK(status IN ('draft','backtesting','paper_trading','live','paused','drawdown_paused','retired','rejected')),
+                                min_sample_size INTEGER NOT NULL DEFAULT 50,
+                                significance_level REAL NOT NULL DEFAULT 0.05,
+                                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                promoted_at DATETIME,
+                                promoted_by TEXT,
+                                notes TEXT
+                            )
+                        """)
+                        await db.execute(
+                            "INSERT INTO hypotheses "
+                            "(hypothesis_id, name, thesis, sport, market_type, "
+                            " model_config, edge_threshold, status, min_sample_size, "
+                            " significance_level, created_at, updated_at, "
+                            " promoted_at, promoted_by, notes) "
+                            "SELECT hypothesis_id, name, thesis, sport, market_type, "
+                            " model_config, edge_threshold, status, min_sample_size, "
+                            " significance_level, created_at, updated_at, "
+                            " promoted_at, promoted_by, notes "
+                            "FROM hypotheses_old_20260422"
+                        )
+                        await db.execute("DROP TABLE hypotheses_old_20260422")
+                        await db.execute(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS idx_hypotheses_name ON hypotheses(name)"
+                        )
+                        await db.execute(
+                            "INSERT INTO schema_migrations (version, name) VALUES (20260422, 'add_drawdown_paused_status')"
+                        )
+                        await db.commit()
+                        logger.info("Migration 20260422 complete: 'drawdown_paused' status now allowed")
+                    except Exception as mig_err:
+                        await db.rollback()
+                        logger.error(f"Migration 20260422 failed: {mig_err}")
+                else:
+                    await db.execute(
+                        "INSERT OR IGNORE INTO schema_migrations (version, name) "
+                        "VALUES (20260422, 'add_drawdown_paused_status')"
+                    )
+                    await db.commit()
+
+            # bankroll_peak table (drawdown kill-switch state). Keyed by date
+            # so we can see a rolling 30d peak via a simple MAX query.
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS bankroll_peak (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    observed_at DATETIME NOT NULL,
+                    balance REAL NOT NULL,
+                    note TEXT
+                )
+            """)
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_bankroll_peak_ts ON bankroll_peak(observed_at)"
+            )
+            await db.commit()
+        except Exception as e:
+            logger.warning(f"Could not evaluate migration 20260422: {e}")
 
         # Migration (odds-freshness audit): add ingestion-time stamp to
         # odds_snapshots so downstream consumers can compute freshness-weighted
