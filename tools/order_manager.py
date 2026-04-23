@@ -689,71 +689,28 @@ class OrderManager:
 
 # --- Settlement reconciler --------------------------------------------------
 
+# The real reconciler lives in ``tools.order_reconciler``. Re-exported here
+# for backwards compatibility — ``api.py`` and the /orders/reconcile endpoint
+# both import ``reconcile_filled_orders`` from this module. Keeping the
+# alias means the order-management branch's wiring still works.
 
-async def reconcile_filled_orders(manager: OrderManager) -> dict:
-    """For every ``filled`` order, try to match it against ``game_results``
-    and auto-settle.
 
-    Matching heuristic (kept deliberately simple): if we have an event_id
-    and there's a game_results row with winner/total_score for it, we can
-    decide moneyline, spread or total outcomes. This is the MVP; per-prop
-    settlement arrives when per-market result tables ship.
+async def reconcile_filled_orders(manager: "OrderManager", *, limit: int = 100) -> dict:
+    """Shim delegating to :func:`tools.order_reconciler.reconcile_filled_orders`.
+
+    The full reconciler handles moneyline/spread/total/player-prop/SGP
+    resolution, CLV logging, hypothesis_stats refresh, stuck detection,
+    and Telegram confirmation. Imported lazily so a degraded install
+    (missing reconciler) still lets OrderManager function.
     """
-    assert manager._db is not None
-    settled = 0
-    skipped = 0
-    errors = 0
+    from tools.order_reconciler import reconcile_filled_orders as _real
+    return await _real(manager, limit=limit)
 
-    cursor = await manager._db.execute(
-        "SELECT order_id, event_id, market, side, price_american, stake_dollars "
-        "FROM orders WHERE state = ?",
-        (FILLED,),
-    )
-    rows = await cursor.fetchall()
-    for r in rows:
-        try:
-            if not r["event_id"]:
-                skipped += 1
-                continue
-            # Look up a game_results row. We don't know home/away mapping
-            # here so we take any row for this event.
-            gr_cur = await manager._db.execute(
-                "SELECT home_team, away_team, home_score, away_score, "
-                "total_score, winner FROM game_results WHERE "
-                "sport || ':' || game_date || ':' || home_team || ':' || away_team = ? "
-                "OR home_team = ? OR away_team = ? LIMIT 1",
-                (r["event_id"], r["event_id"], r["event_id"]),
-            )
-            gr = await gr_cur.fetchone()
-            if not gr or gr["winner"] is None:
-                skipped += 1
-                continue
-            # H2H resolution only for MVP.
-            side = (r["side"] or "").lower()
-            winner = (gr["winner"] or "").lower()
-            if winner and side and (winner in side or side in winner):
-                result = "win"
-            else:
-                result = "loss"
-            stake = float(r["stake_dollars"] or 0.0)
-            price = int(r["price_american"] or 0)
-            if result == "win" and price:
-                pnl = stake * (price / 100.0) if price > 0 else stake * (100.0 / abs(price))
-            elif result == "loss":
-                pnl = -stake
-            else:
-                pnl = 0.0
-            await manager.settle(
-                r["order_id"],
-                result=result,
-                pnl_dollars=pnl,
-                reason="auto_from_game_results",
-            )
-            settled += 1
-        except Exception as e:
-            logger.warning(f"reconcile: failed for {r['order_id']}: {e}")
-            errors += 1
-    return {"settled": settled, "skipped": skipped, "errors": errors}
+
+async def detect_voided_orders(manager: "OrderManager") -> dict:
+    """Shim — see :func:`tools.order_reconciler.detect_voided_orders`."""
+    from tools.order_reconciler import detect_voided_orders as _real
+    return await _real(manager)
 
 
 # --- Module-level singleton -------------------------------------------------

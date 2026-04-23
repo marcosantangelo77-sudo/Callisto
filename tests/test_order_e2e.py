@@ -185,6 +185,7 @@ async def test_reconciler_skips_unresolved(mgr):
     await mgr.mark_filled(oid, actual_price=-110)
     stats = await reconcile_filled_orders(mgr)
     assert stats["settled"] == 0
-    assert stats["skipped"] == 1
+    # New reconciler splits skipped into no-result vs unsupported-market.
+    assert stats["skipped_no_result"] + stats.get("skipped_unsupported", 0) == 1
     o = await mgr.get_order(oid)
     assert o.state == FILLED  # unchanged

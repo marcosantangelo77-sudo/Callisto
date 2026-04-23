@@ -48,6 +48,7 @@ from tools.state_paths import restart_signal_path
 from tools.order_manager import (
     OrderManager,
     reconcile_filled_orders,
+    detect_voided_orders,
     get_manager as _get_order_manager,
 )
 
@@ -717,6 +718,7 @@ async def order_cron_loop() -> None:
     Every 60s:   expire pending_approval rows past their TTL.
     Every 300s:  reconcile ``filled`` rows against ``game_results`` and
                  auto-settle those that have resolved.
+    Every 900s:  detect postponed/cancelled games and void filled orders.
     """
     global order_manager_instance
     ticks = 0
@@ -735,10 +737,17 @@ async def order_cron_loop() -> None:
             if ticks % 5 == 0:  # every 5 min
                 try:
                     stats = await reconcile_filled_orders(order_manager_instance)
-                    if stats.get("settled"):
+                    if stats.get("settled") or stats.get("stuck"):
                         logger.info(f"order cron: reconcile {stats}")
                 except Exception as e:
                     logger.warning(f"order cron reconcile failed: {e}")
+            if ticks % 15 == 0:  # every 15 min
+                try:
+                    void_stats = await detect_voided_orders(order_manager_instance)
+                    if void_stats.get("voided"):
+                        logger.info(f"order cron: void scan {void_stats}")
+                except Exception as e:
+                    logger.warning(f"order cron void scan failed: {e}")
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -4377,6 +4386,15 @@ async def orders_reconcile():
     if order_manager_instance is None:
         raise HTTPException(503, "order_manager not initialised")
     stats = await reconcile_filled_orders(order_manager_instance)
+    return {"status": "ok", **stats}
+
+
+@app.post("/orders/voids", dependencies=[Depends(require_admin_or_loopback)])
+async def orders_voids():
+    """Trigger the postponed/cancelled game void-detector immediately."""
+    if order_manager_instance is None:
+        raise HTTPException(503, "order_manager not initialised")
+    stats = await detect_voided_orders(order_manager_instance)
     return {"status": "ok", **stats}
 
 
