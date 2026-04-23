@@ -84,16 +84,25 @@ def up(conn: sqlite3.Connection) -> None:
     # downstream filters can route live-in-game edges distinctly from
     # pre-match line-movement rows. expires_at is the edge TTL (typical
     # 60s for live rows) — consumers MUST honor it before placing.
-    for col, coltype in (
-        ("is_live", "INTEGER DEFAULT 0"),
-        ("thesis_tag", "TEXT"),
-        ("expires_at", "TEXT"),
-    ):
-        try:
-            conn.execute(f"ALTER TABLE ev_opportunities ADD COLUMN {col} {coltype}")
-        except sqlite3.OperationalError as e:
-            if "duplicate column" not in str(e).lower():
-                raise
+    # Note: ev_opportunities is created lazily by tools/line_monitor.py on
+    # first write. On a fresh DB that hasn't yet had line_monitor run,
+    # the table may not exist. Skip gracefully in that case — line_monitor's
+    # CREATE TABLE IF NOT EXISTS already includes these columns in its
+    # canonical schema, so cold-starts inherit them directly.
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ev_opportunities'"
+    ).fetchone()
+    if row is not None:
+        for col, coltype in (
+            ("is_live", "INTEGER DEFAULT 0"),
+            ("thesis_tag", "TEXT"),
+            ("expires_at", "TEXT"),
+        ):
+            try:
+                conn.execute(f"ALTER TABLE ev_opportunities ADD COLUMN {col} {coltype}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
 
 
 def down(conn: sqlite3.Connection) -> None:
