@@ -5,7 +5,9 @@ Single SQLite DB with WAL mode. Domain isolation enforced via CHECK constraints.
 Views provide per-domain world access. Cross-domain reads are permanently logged.
 """
 
+import asyncio
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional
@@ -14,24 +16,37 @@ import aiosqlite
 from dotenv import load_dotenv
 
 from agp import (
+    AGPSealTampered,
+    AGPSession,
     ConfidenceTier,
     Domain,
     Evidence,
-    AGPSession,
 )
+from agp.thresholds import DB_CONFIDENCE_FLOOR
+
+logger = logging.getLogger("callisto.memory")
 
 load_dotenv()
 
+logger = logging.getLogger("callisto.memory")
+
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
-SCHEMA_SQL = """
+def _world_collection(domain: Domain) -> str:
+    """Per-domain vector collection name, matching the ``world_{domain}`` views."""
+    return f"world_{domain.value.lower()}"
+
+
+# Schema's CHECK(confidence_score >= N) must match agp.thresholds.DB_CONFIDENCE_FLOOR.
+# We format it in at module load rather than hard-coding "0.30" in two places.
+SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS catalogue (
     entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
     origin_agent TEXT NOT NULL,
     content TEXT NOT NULL,
     source_class TEXT NOT NULL CHECK(source_class IN ('PRIMARY', 'SECONDARY', 'SIGNAL', 'INFERRED')),
-    confidence_score REAL NOT NULL CHECK(confidence_score >= 0.30),
+    confidence_score REAL NOT NULL CHECK(confidence_score >= {DB_CONFIDENCE_FLOOR}),
     confidence_tier TEXT NOT NULL CHECK(confidence_tier IN ('VERIFIED', 'CORROBORATED', 'PROBABLE', 'SPECULATIVE')),
     domain TEXT NOT NULL CHECK(domain IN ('FINANCIAL', 'TECHNICAL', 'SIGNAL', 'SYNTHESIS', 'GENERAL')),
     source_name TEXT DEFAULT '',
@@ -100,8 +115,14 @@ class MemoryStore:
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA wal_autocheckpoint = 1000")
+        await self._db.execute("PRAGMA journal_size_limit = 67108864")
+        await self._db.execute("PRAGMA busy_timeout = 120000")
         await self._db.execute("PRAGMA foreign_keys=ON")
-        await self._db.executescript(SCHEMA_SQL)
+        # SECURITY (audit C-6): apply DDL one statement at a time so we never
+        # hold an EXCLUSIVE lock long enough to block concurrent WAL readers.
+        for stmt in (s.strip() for s in SCHEMA_SQL.split(";") if s.strip()):
+            await self._db.execute(stmt)
         await self._db.commit()
 
     async def close(self) -> None:
@@ -110,7 +131,13 @@ class MemoryStore:
             self._db = None
 
     async def store_evidence(self, session_id: str, evidence: Evidence) -> Optional[int]:
-        """Store a piece of evidence. Returns entry_id or None if not storable."""
+        """Store a piece of evidence. Returns entry_id or None if not storable.
+
+        Also emits a semantic embedding into the ``world_{domain}`` vector
+        collection so ``query_world(..., keyword=...)`` can do real similarity
+        search instead of SQL LIKE. Ollama failures are caught — the
+        catalogue row still persists.
+        """
         tier = evidence.confidence_tier
         if not tier.is_storable:
             return None
@@ -133,7 +160,62 @@ class MemoryStore:
             ),
         )
         await self._db.commit()
-        return cursor.lastrowid
+        entry_id = cursor.lastrowid
+
+        # Non-blocking: emit to the per-domain vector collection.
+        try:
+            await self._emit_world_embedding(entry_id, session_id, evidence)
+        except Exception as e:
+            logger.debug(f"World embedding skipped for entry {entry_id}: {e}")
+        return entry_id
+
+    async def _emit_world_embedding(
+        self, entry_id: int, session_id: str, evidence: Evidence
+    ) -> None:
+        """Write an evidence entry's content into the per-domain vector
+        collection for semantic retrieval. Non-fatal on Ollama failure.
+        """
+        try:
+            from tools.embeddings import VectorStore, embed_text, EMBED_MODEL
+        except Exception as e:
+            logger.debug(f"world embed import failed: {e}")
+            return
+
+        metadata = {
+            "entry_id": entry_id,
+            "session_id": session_id,
+            "origin_agent": evidence.origin_agent,
+            "domain": evidence.domain.value,
+            "confidence_score": evidence.confidence_score,
+            "confidence_tier": evidence.confidence_tier.value,
+            "source_class": evidence.source_class.value,
+            "source_name": evidence.source_name,
+            "created_at": evidence.timestamp,
+        }
+        try:
+            embedding = await asyncio.wait_for(
+                embed_text(evidence.content), timeout=30.0,
+            )
+        except Exception as e:
+            logger.info(
+                f"world embed deferred (Ollama down? entry={entry_id}): {e}"
+            )
+            return
+
+        store = VectorStore(self.db_path)
+        await store.initialize()
+        try:
+            await store.store(
+                _world_collection(evidence.domain),
+                evidence.content,
+                embedding,
+                metadata,
+                model_name=EMBED_MODEL,
+            )
+        except Exception as e:
+            logger.warning(f"world embed store failed entry={entry_id}: {e}")
+        finally:
+            await store.close()
 
     async def store_session(self, session: AGPSession) -> None:
         """Store a sealed AGP session."""
@@ -172,8 +254,29 @@ class MemoryStore:
         min_confidence: Optional[float] = None,
         limit: int = 50,
     ) -> list[dict]:
-        """Query a domain world. Returns evidence entries."""
+        """Query a domain world. Returns evidence entries.
+
+        With ``keyword``: semantic vector retrieval (primary), keyword LIKE
+        fallback if the vector path fails. Without ``keyword``: recent-first
+        ordering (unchanged).
+        """
         view = f"world_{domain.value.lower()}"
+        columns = [
+            "entry_id", "session_id", "origin_agent", "content", "source_class",
+            "confidence_score", "confidence_tier", "domain", "source_name",
+            "created_at", "promotion_history",
+        ]
+
+        # Semantic path — only when the caller actually provided a keyword.
+        if keyword:
+            semantic_results = await self._semantic_world_search(
+                domain, keyword, min_confidence, limit,
+            )
+            if semantic_results is not None:
+                return semantic_results
+            # semantic_results is None → fall through to LIKE fallback below.
+
+        # LIKE / recent-first fallback.
         conditions = []
         params = []
 
@@ -194,12 +297,87 @@ class MemoryStore:
         if not rows:
             return []
 
+        return [dict(zip(columns, row)) for row in rows]
+
+    async def _semantic_world_search(
+        self,
+        domain: Domain,
+        keyword: str,
+        min_confidence: Optional[float],
+        limit: int,
+    ) -> Optional[list[dict]]:
+        """Semantic retrieval via VectorStore. Returns None to signal fallback
+        (e.g. Ollama down, no vectors yet for this domain).
+        """
+        try:
+            from tools.embeddings import VectorStore, embed_text, EMBED_MODEL
+            query_emb = await asyncio.wait_for(embed_text(keyword), timeout=20.0)
+            store = VectorStore(self.db_path)
+            await store.initialize()
+            try:
+                fetch_k = max(limit * 3, 30)
+                hits = await store.search(
+                    _world_collection(domain), query_emb, top_k=fetch_k,
+                    model_name=EMBED_MODEL,
+                )
+            finally:
+                await store.close()
+        except Exception as e:
+            logger.warning(
+                f"query_world semantic path failed for {domain.value} "
+                f"(keyword={keyword!r}): {e}. Falling back to LIKE."
+            )
+            return None
+
+        if not hits:
+            # No vectors for this domain yet — let LIKE fallback give the user
+            # whatever text matches we have.
+            return None
+
+        entry_ids = []
+        sim_by_id = {}
+        for h in hits:
+            meta = h.get("metadata") or {}
+            eid = meta.get("entry_id")
+            if eid is not None and eid not in sim_by_id:
+                entry_ids.append(eid)
+                sim_by_id[eid] = h["similarity"]
+
+        if not entry_ids:
+            return None
+
+        view = f"world_{domain.value.lower()}"
+        placeholders = ", ".join("?" for _ in entry_ids)
+        sql = (
+            f"SELECT entry_id, session_id, origin_agent, content, source_class, "
+            f"confidence_score, confidence_tier, domain, source_name, created_at, "
+            f"promotion_history FROM {view} WHERE entry_id IN ({placeholders})"
+        )
+        params: list = list(entry_ids)
+        if min_confidence is not None:
+            sql += " AND confidence_score >= ?"
+            params.append(min_confidence)
+
+        rows = await self._db.execute_fetchall(sql, params)
+        if not rows:
+            return []
+
         columns = [
             "entry_id", "session_id", "origin_agent", "content", "source_class",
             "confidence_score", "confidence_tier", "domain", "source_name",
             "created_at", "promotion_history",
         ]
-        return [dict(zip(columns, row)) for row in rows]
+        by_id = {r[0]: dict(zip(columns, r)) for r in rows}
+        ordered = []
+        for eid in entry_ids:
+            rec = by_id.get(eid)
+            if rec is None:
+                continue
+            rec["similarity"] = round(float(sim_by_id[eid]), 6)
+            ordered.append(rec)
+            if len(ordered) >= limit:
+                break
+        return ordered
 
     async def cross_domain_query(
         self,
@@ -230,12 +408,46 @@ class MemoryStore:
         await self._db.commit()
         return results
 
-    async def get_session(self, session_id: str) -> Optional[dict]:
-        """Retrieve a sealed session by ID."""
+    async def get_session(
+        self, session_id: str, verify: bool = True
+    ) -> Optional[dict]:
+        """Retrieve a sealed session by ID.
+
+        When verify=True (default), recomputes the SHA-256 seal over the stored
+        canonical payload and compares against the stored seal_hash. On mismatch,
+        raises AGPSealTampered.
+
+        Legacy sessions without a seal_hash (pre-verify era) are returned but
+        logged at WARNING — callers should treat them as untrusted.
+
+        Pass verify=False ONLY for the tamper-audit dry-run tool, never for
+        live consumption of session data.
+        """
         row = await self._db.execute_fetchall(
             "SELECT full_session FROM sessions WHERE session_id = ?",
             (session_id,),
         )
-        if row:
-            return json.loads(row[0][0])
-        return None
+        if not row:
+            return None
+        data = json.loads(row[0][0])
+        if not verify:
+            return data
+
+        stored_hash = data.get("seal_hash")
+        if not stored_hash:
+            logger.warning(
+                "get_session(%s): no seal_hash on stored session (legacy/pre-verify)",
+                session_id,
+            )
+            return data
+
+        if not AGPSession.verify_seal(data):
+            logger.error(
+                "SEAL TAMPERED for session %s — stored hash %s does not match recomputed",
+                session_id,
+                stored_hash[:16],
+            )
+            raise AGPSealTampered(
+                f"Session {session_id} failed seal verification"
+            )
+        return data
