@@ -359,6 +359,184 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads", sport: str
     return edges
 
 
+# ---------------------------------------------------------------------------
+# Alt-line edge scanning
+# ---------------------------------------------------------------------------
+#
+# Every alternate spread / total / prop line is its own market — a -3.5 alt
+# spread has a different win probability from the -2.5 main line, and books
+# price them independently. Historically we only scanned the main line, which
+# left "key number arbitrage" on the table: when one book sits on -3 (a dead
+# number in NFL) while another offers -3.5 (a key number), the -3.5 line is
+# mathematically superior by ~2% and can go uncontested for minutes.
+#
+# Design:
+#   - fetch_alt_lines_for_games(games, sport): per-event odds-api call for
+#     alternate_spreads + alternate_totals, cached 15 min per event_id to
+#     keep credit burn bounded (~2 events × 1 call per 15 min = ~4/hr/sport).
+#   - scan_alt_line_edges(games_with_alts, sport): runs the normal
+#     cross-book scanner once per alt point value and tags results as
+#     "alt_line" so they're distinguishable from main-line edges.
+#
+# The cache is process-local — production callers reuse the same scanner
+# instance across snapshots so the 15-min TTL is enough to prevent
+# duplicate calls on the same slate.
+
+import time as _alt_time
+
+_ALT_LINE_CACHE: dict[str, tuple[float, dict]] = {}
+_ALT_LINE_TTL_S = 15 * 60  # 15 minutes
+
+
+def _alt_cache_get(key: str) -> Optional[dict]:
+    entry = _ALT_LINE_CACHE.get(key)
+    if not entry:
+        return None
+    ts, data = entry
+    if _alt_time.time() - ts > _ALT_LINE_TTL_S:
+        _ALT_LINE_CACHE.pop(key, None)
+        return None
+    return data
+
+
+def _alt_cache_put(key: str, data: dict) -> None:
+    _ALT_LINE_CACHE[key] = (_alt_time.time(), data)
+    # Simple LRU-ish cap: drop oldest when >500 entries. Each entry is small.
+    if len(_ALT_LINE_CACHE) > 500:
+        oldest_key = min(_ALT_LINE_CACHE, key=lambda k: _ALT_LINE_CACHE[k][0])
+        _ALT_LINE_CACHE.pop(oldest_key, None)
+
+
+async def fetch_alt_lines_for_games(games: list[dict], sport: str) -> list[dict]:
+    """Fetch alternate spreads / totals for each upcoming game, with per-event
+    caching. Returns the games list with an extra ``alt_bookmakers`` key on
+    each game holding the alternate-line bookmaker array from odds-api.
+
+    Low-credit-burn: at most 1 odds-api call per event per 15 minutes. Call
+    this before ``scan_alt_line_edges`` in the main loop. Games already in
+    progress are skipped (the pre-game filter runs inside).
+    """
+    from tools.odds_api import get_alternate_lines
+
+    pre_game = _filter_in_progress_games(games)
+    enriched = []
+    for g in pre_game:
+        eid = g.get("id", "")
+        if not eid:
+            enriched.append(g)
+            continue
+        cache_key = f"{sport}:{eid}"
+        cached = _alt_cache_get(cache_key)
+        if cached is not None:
+            g2 = dict(g)
+            g2["alt_bookmakers"] = cached.get("bookmakers", [])
+            enriched.append(g2)
+            continue
+        try:
+            resp = await get_alternate_lines(sport, eid)
+            if resp.get("error"):
+                logger.debug(f"alt lines fetch error {sport}/{eid}: {resp['error']}")
+                enriched.append(g)
+                continue
+            _alt_cache_put(cache_key, resp)
+            g2 = dict(g)
+            g2["alt_bookmakers"] = resp.get("bookmakers", [])
+            enriched.append(g2)
+        except Exception as e:
+            logger.debug(f"alt lines fetch exception {sport}/{eid}: {e}")
+            enriched.append(g)
+    return enriched
+
+
+def scan_alt_line_edges(games: list[dict], sport: str = "") -> list[dict]:
+    """Scan alternate-line markets for cross-book divergence.
+
+    Expects each game dict to carry an ``alt_bookmakers`` key populated by
+    ``fetch_alt_lines_for_games``. For each sport-relevant alt market
+    (alternate_spreads, alternate_totals, plus prop alt-lines when present),
+    groups outcomes by point value and feeds every point group through the
+    standard cross-book scanner so each alt point becomes its own candidate
+    edge — producing the "key number arbitrage" signal the April audit
+    flagged as a dead zone.
+
+    Returns the same edge dict shape as ``scan_cross_book_edges`` with an
+    additional ``is_alt_line": True`` marker and ``alt_market`` name.
+    """
+    games = _filter_in_progress_games(games)
+
+    SHARP_TITLES = get_sharp_titles_for_sport(sport)
+    SOFT_TITLES = {"fanduel", "draftkings", "betmgm", "pointsbet", "caesars",
+                   "betrivers", "mybookie.ag", "bovada", "betus",
+                   "fanatics", "fanatics sportsbook"}
+
+    edges: list[dict] = []
+
+    for game in games:
+        alt_bookmakers = game.get("alt_bookmakers") or []
+        if not alt_bookmakers:
+            continue
+        home = game.get("home_team", "")
+        away = game.get("away_team", "")
+
+        # Flatten to (market_key, team, point) -> [line dicts]
+        from collections import defaultdict
+        grouped: dict[tuple[str, str, float], list[dict]] = defaultdict(list)
+        for bm in alt_bookmakers:
+            bm_title = bm.get("title") or bm.get("key", "")
+            fetched_at = bm.get("last_update")
+            for mkt in bm.get("markets", []):
+                mkey = mkt.get("key", "")
+                if not mkey:
+                    continue
+                # Only scan alt markets plus alt prop markets
+                if not (mkey.startswith("alternate_") or mkey.startswith("player_")):
+                    continue
+                for outcome in mkt.get("outcomes", []):
+                    team_or_side = outcome.get("name", "")
+                    point = outcome.get("point")
+                    price = outcome.get("price")
+                    if price is None or point is None or not team_or_side:
+                        continue
+                    grouped[(mkey, team_or_side, float(point))].append({
+                        "bookmaker": bm_title,
+                        "price": int(price) if isinstance(price, (int, float)) else price,
+                        "point": float(point),
+                        "last_update": fetched_at,
+                    })
+
+        # Run each (market, side, point) group through the line-group scanner.
+        for (mkey, side, point), lines in grouped.items():
+            if len(lines) < 2:
+                continue
+            # Map alt market back to the base market for downstream tooling.
+            if mkey == "alternate_spreads":
+                base_market = "spreads"
+            elif mkey == "alternate_totals":
+                base_market = "totals"
+            else:
+                base_market = mkey  # player props keep their market key
+            _scan_line_group(
+                edges=edges,
+                lines=lines,
+                game=game,
+                home=home,
+                away=away,
+                team=side,
+                market=base_market,
+                sport=sport,
+                SHARP_TITLES=SHARP_TITLES,
+                SOFT_TITLES=SOFT_TITLES,
+            )
+            # Tag the last-added edge (if one was produced) as an alt line.
+            if edges and edges[-1].get("game_id", "") == game.get("id", ""):
+                edges[-1]["is_alt_line"] = True
+                edges[-1]["alt_market"] = mkey
+                edges[-1]["alt_point"] = point
+
+    edges.sort(key=lambda x: x["implied_range"], reverse=True)
+    return edges
+
+
 def _scan_line_group(
     *,
     edges: list,
@@ -996,6 +1174,21 @@ def full_edge_scan(snapshot: dict) -> dict:
     else:
         report["dead_number_steals"] = []
 
+    # Alt-line edges — scan alternate spreads / totals / prop alts
+    # for cross-book divergence at each alt point value. The caller is
+    # expected to have enriched games with `alt_bookmakers` via
+    # ``fetch_alt_lines_for_games`` before handing the snapshot off (the
+    # sync path can't itself fire the async fetch). Every alt point becomes
+    # its own edge candidate.
+    alt_enriched_games = [g for g in games if g.get("alt_bookmakers")]
+    if alt_enriched_games:
+        alt_edges = scan_alt_line_edges(alt_enriched_games, sport=sport)
+        report["alt_line_edges"] = alt_edges
+        if alt_edges:
+            logger.info(f"Alt-line edges: {len(alt_edges)} found across {len(alt_enriched_games)} game(s)")
+    else:
+        report["alt_line_edges"] = []
+
     # Simulation-based edge validation — independently validate cross-book
     # edges using Monte Carlo simulations (simulate_spread for high-scoring,
     # compare_poisson_to_market for low-scoring sports)
@@ -1008,7 +1201,7 @@ def full_edge_scan(snapshot: dict) -> dict:
     total_edges = sum(
         len(report.get(k, []))
         for k in report
-        if k.startswith("cross_book_") or k.startswith("low_vig_") or k in ("pace_model_totals", "dead_number_steals", "simulation_validated")
+        if k.startswith("cross_book_") or k.startswith("low_vig_") or k in ("pace_model_totals", "dead_number_steals", "simulation_validated", "alt_line_edges")
     )
     report["total_edges"] = total_edges
 

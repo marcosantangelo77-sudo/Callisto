@@ -483,6 +483,163 @@ HYPOTHESIS_TEMPLATES = [
             "min_edge": [1.5, 2, 3],
         },
     },
+    # ── Prop-market seed hypotheses (MLB / NBA / NHL) ──
+    # Template roots for the prop-market expansion. The generator
+    # instantiates them on game-day once the live slate is known.
+    {
+        "id": "mlb_pitcher_k_over_when_facing_low_k_team",
+        "name": "MLB pitcher {prop_type} Over vs low-K opponents",
+        "thesis": (
+            "When a starting pitcher with above-median K/9 faces a team in the "
+            "bottom {opp_k_tier} of team K-rate, books set the pitcher K Over "
+            "too conservatively. The strike-zone mismatch compounds — a contact "
+            "team's aggressive approach becomes a weakness against high-K stuff. "
+            "Fair probability of Over exceeds book implied by {min_edge}%+."
+        ),
+        "sport_filter": ["baseball_mlb"],
+        "market_type": "pitcher_strikeouts",
+        "model_config": {
+            "type": "prop_fair_value+consensus",
+            "fair_value_fn": "project_mlb_pitcher_strikeouts",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 2,
+            "context_factors": ["pitcher_k9", "opponent_team_k_rate", "park_factor"],
+            "side_filter": "Over",
+        },
+        "variables": {
+            "prop_type": ["strikeouts"],
+            "opp_k_tier": ["quartile", "tercile"],
+            "min_edge": [1.5, 2, 3],
+        },
+    },
+    {
+        "id": "mlb_batter_hits_over_at_hitter_parks",
+        "name": "MLB batter {prop_type} Over at extreme hitter parks",
+        "thesis": (
+            "Batters with rolling AVG in the top {batter_tier} at extreme "
+            "hitter parks (Coors, Great American, Fenway) see hit-prop Overs "
+            "set too low. Books apply park factor to totals but lag on "
+            "individual-player prop lines. Fair exceeds implied by {min_edge}%+."
+        ),
+        "sport_filter": ["baseball_mlb"],
+        "market_type": "batter_hits",
+        "model_config": {
+            "type": "prop_fair_value+consensus",
+            "fair_value_fn": "project_mlb_batter_hits",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 2,
+            "context_factors": ["batter_avg", "park_factor", "opp_sp_quality"],
+            "side_filter": "Over",
+        },
+        "variables": {
+            "prop_type": ["hits", "total_bases"],
+            "batter_tier": ["quartile", "tercile"],
+            "min_edge": [1.5, 2, 3],
+        },
+    },
+    {
+        "id": "nba_player_pts_over_when_opp_plays_small_ball",
+        "name": "NBA {prop_type} Over vs small-ball opponents",
+        "thesis": (
+            "Primary-scoring guards and wings see point-prop Overs mispriced "
+            "when the opponent plays small-ball (no rim protector / 5-out). "
+            "Books adjust totals for pace but not player-level; the star "
+            "absorbs the extra possessions at elevated rates. Over is +EV "
+            "by {min_edge}%+ when opp rim-protection-rank is bottom 10."
+        ),
+        "sport_filter": ["basketball_nba"],
+        "market_type": "player_{prop_type}",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 3,
+            "context_factors": ["opp_rim_protection", "opp_lineup_size", "pace_differential"],
+            "side_filter": "Over",
+        },
+        "variables": {
+            "prop_type": ["points", "points_rebounds_assists"],
+            "min_edge": [1.5, 2, 3],
+        },
+    },
+    {
+        "id": "nhl_goalie_saves_over_when_playing_b2b_road_team",
+        "name": "NHL goalie {prop_type} Over vs B2B road opponents",
+        "thesis": (
+            "Goalies facing a team on the second night of a back-to-back with "
+            "travel see elevated shot volume. Tired skaters take more low-"
+            "percentage perimeter shots that inflate Saves without changing "
+            "Goals Against much. Over Saves is +EV by {min_edge}%+."
+        ),
+        "sport_filter": ["icehockey_nhl"],
+        "market_type": "goalie_saves",
+        "model_config": {
+            "type": "prop_fair_value+consensus",
+            "fair_value_fn": "project_nhl_skater_shots_on_goal",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 2,
+            "context_factors": ["opp_back_to_back", "opp_travel_km", "opp_shot_rate"],
+            "side_filter": "Over",
+        },
+        "variables": {
+            "prop_type": ["saves"],
+            "min_edge": [1.5, 2, 3],
+        },
+    },
+    {
+        "id": "nhl_skater_sog_over_when_trailing_last_game",
+        "name": "NHL {prop_type} Over after a trailing-third-period game",
+        "thesis": (
+            "Volume shooters who logged 3rd-period comeback minutes in the "
+            "previous game see elevated SOG in the next outing — line combos "
+            "stabilize and shot rate reverts high. Books set SOG Over using "
+            "season averages rather than momentum-adjusted rate. Over is "
+            "+EV by {min_edge}%+."
+        ),
+        "sport_filter": ["icehockey_nhl"],
+        "market_type": "skater_shots_on_goal",
+        "model_config": {
+            "type": "prop_fair_value+consensus",
+            "fair_value_fn": "project_nhl_skater_shots_on_goal",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 2,
+            "context_factors": ["prev_game_trailing_toi", "shot_volume_rank"],
+            "side_filter": "Over",
+        },
+        "variables": {
+            "prop_type": ["shots_on_goal"],
+            "min_edge": [1.5, 2, 3],
+        },
+    },
+    {
+        "id": "mlb_first_inning_nrfi_sharp_starter",
+        "name": "MLB NRFI when both starters are top-tier",
+        "thesis": (
+            "When both starting pitchers rank top {sp_tier} in first-inning "
+            "wOBA-allowed, the NRFI (No Runs First Inning) line is mispriced. "
+            "Books aggregate across starter quality; top-tier aces strike out "
+            "the top of the order at elevated rates in the first frame. "
+            "NRFI fair probability exceeds implied by {min_edge}%+."
+        ),
+        "sport_filter": ["baseball_mlb"],
+        "market_type": "first_inning_nrfi_yrfi",
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 2,
+            "context_factors": ["home_sp_first_inning_woba", "away_sp_first_inning_woba"],
+            "side_filter": "NRFI",
+        },
+        "variables": {
+            "sp_tier": ["quartile", "tercile"],
+            "min_edge": [2, 3, 4],
+        },
+    },
     {
         "id": "consensus_divergence",
         "name": "Cross-book consensus divergence on {market_type}",
@@ -502,7 +659,9 @@ HYPOTHESIS_TEMPLATES = [
         },
         "variables": {
             "market_type": ["spreads", "totals", "h2h",
-                           "player_points", "player_rebounds", "player_assists"],
+                           "player_points", "player_rebounds", "player_assists",
+                           "pitcher_strikeouts", "batter_hits", "batter_total_bases",
+                           "skater_shots_on_goal", "goalie_saves"],
             "min_books": [3, 4, 5],
             "min_edge": [0.5, 1, 2],
         },
