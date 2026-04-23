@@ -78,6 +78,50 @@ MIN_PAPER_TRADES = _env_int("CALLISTO_MIN_PAPER_TRADES", 10)
 MIN_CLV_RATE = _env_float("CALLISTO_MIN_CLV_RATE", 0.005)  # 0.5% floor; CLV measurement unit bug tracked separately
 LIVE_REVIEW_WINDOW_DAYS = _env_int("CALLISTO_LIVE_REVIEW_WINDOW_DAYS", 14)
 
+# FWER (Šidák) correction window in days. 'inf' counts every hypothesis ever
+# tested. Every hypothesis that ever ran a backtest counts — not just
+# currently-active ones — because each of those was a multiple-comparison
+# opportunity for false alpha. With 4500+ lifetime hypotheses α can go below
+# 1e-5; that is intentional (no floor).
+FWER_LOOKBACK_DAYS_RAW = os.getenv("CALLISTO_FWER_LOOKBACK_DAYS", "365")
+try:
+    FWER_LOOKBACK_DAYS: float = (
+        float("inf")
+        if FWER_LOOKBACK_DAYS_RAW.strip().lower() in ("inf", "infinity", "all", "0")
+        else float(FWER_LOOKBACK_DAYS_RAW)
+    )
+except (TypeError, ValueError):
+    FWER_LOOKBACK_DAYS = 365.0
+
+# Portfolio correlation: reject LIVE promotion if candidate's signals overlap
+# >X% with an existing LIVE hypothesis's signals on the same events
+# (correlated signals = non-independent bets).
+MAX_LIVE_OVERLAP_PCT = _env_float("CALLISTO_MAX_LIVE_OVERLAP_PCT", 0.40)
+PORTFOLIO_OVERLAP_WINDOW_DAYS = _env_int(
+    "CALLISTO_PORTFOLIO_OVERLAP_WINDOW_DAYS", 30
+)
+
+# Signal-collapse mode for per-event dedup in `_get_backtest_signals`.
+#   "random_row" — pick one row per event_id with a deterministic seed
+#                  (removes best-edge selection bias; matches the
+#                  "bet one, not the best" real-world scenario)
+#   "composite"  — aggregate per-event: sum stakes, average edge/ev across
+#                  all prop rows within the event, return a single
+#                  composite-signal row per event_id.  Models how
+#                  correlated prop bets behave in practice.
+#   "best_edge"  — legacy (pre-audit) behavior; KEPT ONLY for backward-
+#                  compat with hypotheses created before FWER fix.  Not
+#                  recommended; selection-biases upward.
+SIGNAL_COLLAPSE_MODE = os.getenv(
+    "CALLISTO_SIGNAL_COLLAPSE_MODE", "random_row"
+).strip().lower()
+if SIGNAL_COLLAPSE_MODE not in ("random_row", "composite", "best_edge"):
+    logger.warning(
+        f"Invalid CALLISTO_SIGNAL_COLLAPSE_MODE={SIGNAL_COLLAPSE_MODE!r}; "
+        f"falling back to 'random_row'"
+    )
+    SIGNAL_COLLAPSE_MODE = "random_row"
+
 # Promotion gates: {transition: {min_n, max_p, min_clv_rate, extras}}
 # Note: max_p_value is the BASE threshold. Actual threshold is adaptive via
 # get_adaptive_p_value_threshold() — relaxed at small n, tightens as data grows.
@@ -1044,12 +1088,40 @@ class HypothesisManager:
                 f"Hypothesis {hypothesis_id}: adaptive p-value threshold "
                 f"{max_p:.2f} (base={base_p:.2f}, n={n})"
             )
-        # SECURITY (audit H-5): apply a Šidák family-wise correction across the
-        # ACTIVE corpus (hypotheses currently in backtesting or paper_trading).
-        # Without correction, with 4594 lifetime hypotheses we expect ~230 false
-        # positives at α=0.05. Correcting against the *active* set instead of the
-        # full corpus keeps it tractable and matches the pool of decisions actually
-        # being made right now. Floored at p=0.001 so the gate stays reachable.
+        # SECURITY (audit H-5 + 2026-04-22 FWER fix): apply a Šidák family-wise
+        # correction against the **lifetime** pool of hypotheses that were ever
+        # backtested in the lookback window.  Every ever-tested hypothesis
+        # represents a multiple-comparison opportunity for a false positive,
+        # not just currently-active ones.  With ~4600 lifetime hypotheses and
+        # α_family = 0.05 the per-hypothesis α is ~1.1e-5; this is correct and
+        # the floor at 0.001 (pre-audit) was masking the true FWER.
+        #
+        # Denominator: COUNT(DISTINCT hypothesis_id) FROM backtest_runs within
+        # the lookback window (CALLISTO_FWER_LOOKBACK_DAYS; 'inf' supported).
+        # Legacy hypotheses with model_config['legacy']=True are grandfathered
+        # and still use the active-only denominator to avoid mass demotions.
+        lifetime_n = 0
+        try:
+            if math.isinf(FWER_LOOKBACK_DAYS):
+                lifetime_cur = await self._db.execute(
+                    "SELECT COUNT(DISTINCT hypothesis_id) FROM backtest_runs "
+                    "WHERE completed_at IS NOT NULL"
+                )
+            else:
+                lookback_iso = (
+                    datetime.now(timezone.utc)
+                    - timedelta(days=FWER_LOOKBACK_DAYS)
+                ).isoformat()
+                lifetime_cur = await self._db.execute(
+                    "SELECT COUNT(DISTINCT hypothesis_id) FROM backtest_runs "
+                    "WHERE completed_at IS NOT NULL AND completed_at > ?",
+                    (lookback_iso,),
+                )
+            lifetime_n = int((await lifetime_cur.fetchone())[0] or 0)
+        except Exception as e:
+            logger.warning(f"FWER lifetime count failed: {e}; falling back to active-only")
+            lifetime_n = 0
+
         try:
             active_cur = await self._db.execute(
                 "SELECT COUNT(*) FROM hypotheses WHERE status IN ('backtesting','paper_trading')"
@@ -1057,20 +1129,30 @@ class HypothesisManager:
             active_n = int((await active_cur.fetchone())[0] or 1)
         except Exception:
             active_n = 1
-        if active_n > 1:
-            sidak = 1.0 - (1.0 - max_p) ** (1.0 / active_n)
-            sidak = max(0.001, sidak)
+
+        # Legacy grandfather: hypotheses flagged legacy=True stay on the
+        # old active-only denominator.  New hypotheses (default) get the
+        # full lifetime denominator — true FWER control.
+        is_legacy = bool((h.get("model_config") or {}).get("legacy") is True) if isinstance(h.get("model_config"), dict) else False
+        fwer_n = active_n if is_legacy else max(lifetime_n, active_n, 1)
+
+        if fwer_n > 1:
+            # Šidák: α_per_test = 1 - (1 - α_family)^(1/n_tests)
+            sidak = 1.0 - (1.0 - max_p) ** (1.0 / fwer_n)
+            # NO FLOOR — α below 1e-5 is the correct behavior at lifetime N
+            # in the thousands; floor was masking the true family-wise rate.
             corrected_p = min(max_p, sidak)
+            denom_tag = "active-only (legacy)" if is_legacy else f"lifetime (lookback_days={FWER_LOOKBACK_DAYS})"
             checks.append(
-                f"INFO: Šidák FWER correction over {active_n} active hypotheses → "
-                f"p threshold {corrected_p:.5f} (was {max_p:.4f})"
+                f"INFO: Šidák FWER correction over n={fwer_n} [{denom_tag}] → "
+                f"p threshold {corrected_p:.2e} (was {max_p:.4f})"
             )
             max_p = corrected_p
         if p > max_p:
-            checks.append(f"FAIL: p-value {p:.4f} > {max_p:.5f} (adaptive+FWER, base={base_p}, n={n}, active={active_n})")
+            checks.append(f"FAIL: p-value {p:.4f} > {max_p:.2e} (adaptive+FWER, base={base_p}, n={n}, fwer_n={fwer_n})")
             ready = False
         else:
-            checks.append(f"PASS: p-value {p:.4f} <= {max_p:.5f} (adaptive+FWER, base={base_p}, n={n}, active={active_n})")
+            checks.append(f"PASS: p-value {p:.4f} <= {max_p:.2e} (adaptive+FWER, base={base_p}, n={n}, fwer_n={fwer_n})")
 
         # CLV rate
         clv_rate = report.get("clv", {}).get("positive_clv_rate", 0)
@@ -1354,6 +1436,37 @@ class HypothesisManager:
                             f"{n} signals — can never promote (zombie)"
                         )
 
+        # ── PORTFOLIO CORRELATION GATE (paper_trading → live only) ──
+        # Reject promotion when the candidate's last-30d signals overlap >X%
+        # with an existing LIVE hypothesis's signals on the same event_ids.
+        # Correlated bets behave as ONE bet for risk — 21 LIVE signals on the
+        # same Dodgers–Giants game are not 21 independent edges.
+        # Grandfathered for legacy hypotheses.
+        portfolio_overlap = None
+        if ready and transition == "paper_trading→live" and not is_legacy:
+            try:
+                portfolio_overlap = await self._compute_portfolio_overlap(hypothesis_id)
+                worst_pair = None
+                worst_pct = 0.0
+                for other_id, pct in portfolio_overlap.items():
+                    if pct > worst_pct:
+                        worst_pct = pct
+                        worst_pair = other_id
+                if worst_pct > MAX_LIVE_OVERLAP_PCT:
+                    checks.append(
+                        f"FAIL: portfolio_correlation_too_high — {worst_pct:.1%} of "
+                        f"last-{PORTFOLIO_OVERLAP_WINDOW_DAYS}d signals overlap with "
+                        f"LIVE hyp {worst_pair} (cap: {MAX_LIVE_OVERLAP_PCT:.0%})"
+                    )
+                    ready = False
+                elif portfolio_overlap:
+                    max_pair = f" (max={worst_pct:.1%} vs {worst_pair})" if worst_pair else ""
+                    checks.append(
+                        f"PASS: portfolio_correlation within cap ({MAX_LIVE_OVERLAP_PCT:.0%}){max_pair}"
+                    )
+            except Exception as e:
+                logger.warning(f"portfolio_overlap check failed: {e}")
+
         next_stage = STAGE_ORDER[STAGE_ORDER.index(status) + 1] if ready else None
 
         return {
@@ -1363,6 +1476,7 @@ class HypothesisManager:
             "next_stage": next_stage,
             "should_reject": should_reject,
             "checks": checks,
+            "portfolio_overlap": portfolio_overlap,
             "report_summary": {
                 "n": n,
                 "p_value": round(p, 6),
@@ -1371,6 +1485,58 @@ class HypothesisManager:
                 "clv_rate": clv_rate,
             },
         }
+
+    async def _compute_portfolio_overlap(
+        self,
+        hypothesis_id: str,
+        window_days: int | None = None,
+    ) -> dict[str, float]:
+        """Compute % of candidate's signals that fall on events where an
+        existing LIVE hypothesis also fired.
+
+        Returns: {live_hypothesis_id: overlap_pct, …}
+        where overlap_pct = |candidate_events ∩ live_events| / |candidate_events|.
+        """
+        window_days = window_days or PORTFOLIO_OVERLAP_WINDOW_DAYS
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=window_days)
+        ).strftime("%Y-%m-%d")
+
+        # Candidate's distinct signal event_ids in window
+        cand_cur = await self._db.execute(
+            "SELECT DISTINCT event_id FROM backtest_events "
+            "WHERE hypothesis_id = ? AND signal_generated = 1 "
+            "AND game_date >= ?",
+            (hypothesis_id, cutoff),
+        )
+        cand_events = {r[0] for r in await cand_cur.fetchall()}
+        if not cand_events:
+            return {}
+
+        # Live hyps (excluding candidate)
+        live_cur = await self._db.execute(
+            "SELECT hypothesis_id FROM hypotheses "
+            "WHERE status = 'live' AND hypothesis_id != ?",
+            (hypothesis_id,),
+        )
+        live_ids = [r[0] for r in await live_cur.fetchall()]
+
+        overlap_map: dict[str, float] = {}
+        for live_id in live_ids:
+            live_ev_cur = await self._db.execute(
+                "SELECT DISTINCT event_id FROM backtest_events "
+                "WHERE hypothesis_id = ? AND signal_generated = 1 "
+                "AND game_date >= ?",
+                (live_id, cutoff),
+            )
+            live_events = {r[0] for r in await live_ev_cur.fetchall()}
+            if not live_events:
+                continue
+            shared = cand_events & live_events
+            if shared:
+                overlap_map[live_id] = len(shared) / len(cand_events)
+
+        return overlap_map
 
     async def auto_promote(self, hypothesis_id: str) -> dict:
         """If criteria met, advance to next stage. Returns result.
@@ -2029,54 +2195,134 @@ class HypothesisManager:
     async def _get_backtest_signals(self, hypothesis_id: str) -> list[dict]:
         """Get backtest signal events, deduplicated by unique event.
 
-        Each event_id can appear multiple times (once per book).  For
-        evaluation we keep only the best-edge row per event so sample
-        size reflects independent betting opportunities, not book count.
-        (e.g. 49 unique events = N=49, not N=150 from 49×3 books.)
+        Pre-2026-04-22 this kept the best-edge row per event_id.  For player-
+        prop hypotheses that produce many rows per game that is *selection
+        bias* — a 10-row game reports the max edge, not the representative
+        edge.  We switch to one of three modes (``CALLISTO_SIGNAL_COLLAPSE_MODE``):
+
+        * ``random_row`` — pick one row per event_id with a deterministic seed
+          keyed on event_id+hypothesis_id.  Backward-compatible shape,
+          eliminates best-edge selection bias.  Default.
+        * ``composite``  — aggregate rows within an event into a single
+          composite signal (averaged edge/ev/fair_prob, summed kelly_fraction
+          capped at 1.0).  Matches real-world correlated-prop behavior.
+        * ``best_edge``  — legacy pre-audit behavior; kept only for hypotheses
+          marked ``model_config['legacy']=True``.  Not recommended.
         """
+        import random as _random
+
         cursor = await self._db.execute(
             "SELECT * FROM backtest_events "
             "WHERE hypothesis_id = ? AND signal_generated = 1 "
-            "ORDER BY game_date",
+            "ORDER BY game_date, id",
             (hypothesis_id,),
         )
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
         all_events = [dict(zip(cols, row)) for row in rows]
 
-        # Deduplicate: keep best-edge row per unique event
-        best_by_event: dict[str, dict] = {}
-        for event in all_events:
-            eid = event["event_id"]
-            if eid not in best_by_event or (event.get("edge") or 0) > (best_by_event[eid].get("edge") or 0):
-                best_by_event[eid] = event
+        # Group rows by event_id
+        by_event: dict[str, list[dict]] = {}
+        for ev in all_events:
+            eid = ev["event_id"]
+            by_event.setdefault(eid, []).append(ev)
 
-        return sorted(best_by_event.values(), key=lambda e: e.get("game_date", ""))
+        # Per-hypothesis mode: legacy hyps use best_edge; new hyps use the
+        # configured collapse mode (default random_row).
+        h = await self.get_hypothesis(hypothesis_id)
+        cfg = (h or {}).get("model_config") or {}
+        is_legacy = bool(cfg.get("legacy") is True) if isinstance(cfg, dict) else False
+        mode = "best_edge" if is_legacy else SIGNAL_COLLAPSE_MODE
+
+        collapsed: list[dict] = []
+        for eid, group in by_event.items():
+            if len(group) == 1:
+                collapsed.append(group[0])
+                continue
+
+            if mode == "best_edge":
+                pick = max(group, key=lambda e: (e.get("edge") or 0))
+                collapsed.append(pick)
+            elif mode == "composite":
+                # Aggregate across rows: average edge/ev/fair/implied,
+                # sum kelly (capped at 1.0 — stake fraction), keep first
+                # row's metadata.  actual_result: "won" iff any row won;
+                # otherwise "lost" if any row resolved.
+                base = dict(group[0])
+                n_g = len(group)
+                def _avg(key):
+                    vals = [r.get(key) for r in group if r.get(key) is not None]
+                    return (sum(vals) / len(vals)) if vals else base.get(key)
+                base["edge"] = _avg("edge")
+                base["ev_pct"] = _avg("ev_pct")
+                base["model_fair_prob"] = _avg("model_fair_prob")
+                base["book_implied_prob"] = _avg("book_implied_prob")
+                kelly_sum = sum((r.get("kelly_fraction") or 0) for r in group)
+                base["kelly_fraction"] = min(1.0, kelly_sum)
+                # Composite outcome: count a win only if majority of rows won.
+                # This matches "correlated parlay" semantics within an event.
+                wins = sum(1 for r in group if r.get("actual_result") == "won")
+                losses = sum(1 for r in group if r.get("actual_result") == "lost")
+                if wins == 0 and losses == 0:
+                    base["actual_result"] = None
+                elif wins > losses:
+                    base["actual_result"] = "won"
+                elif losses > wins:
+                    base["actual_result"] = "lost"
+                else:
+                    base["actual_result"] = "push"
+                base["_composite_n"] = n_g
+                collapsed.append(base)
+            else:  # random_row (default)
+                rng = _random.Random(f"{hypothesis_id}|{eid}")
+                pick = rng.choice(group)
+                collapsed.append(pick)
+
+        return sorted(collapsed, key=lambda e: e.get("game_date", ""))
 
     async def _get_backtest_resolved(self, hypothesis_id: str) -> list[dict]:
         """Get resolved backtest events, deduplicated by unique event.
 
         Fallback for evaluate_significance when 0 signal events exist —
         lets us determine if the thesis has any merit before auto-rejecting.
-        Keeps best-edge row per event_id for same reason as _get_backtest_signals.
+        Uses the same collapse mode as _get_backtest_signals
+        (CALLISTO_SIGNAL_COLLAPSE_MODE) to avoid re-introducing best-edge
+        selection bias on the fallback path.
         """
+        import random as _random
+
         cursor = await self._db.execute(
             "SELECT * FROM backtest_events "
             "WHERE hypothesis_id = ? AND actual_result IS NOT NULL "
-            "ORDER BY game_date",
+            "ORDER BY game_date, id",
             (hypothesis_id,),
         )
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
         all_events = [dict(zip(cols, row)) for row in rows]
 
-        best_by_event: dict[str, dict] = {}
-        for event in all_events:
-            eid = event["event_id"]
-            if eid not in best_by_event or (event.get("edge") or 0) > (best_by_event[eid].get("edge") or 0):
-                best_by_event[eid] = event
+        by_event: dict[str, list[dict]] = {}
+        for ev in all_events:
+            by_event.setdefault(ev["event_id"], []).append(ev)
 
-        return sorted(best_by_event.values(), key=lambda e: e.get("game_date", ""))
+        h = await self.get_hypothesis(hypothesis_id)
+        cfg = (h or {}).get("model_config") or {}
+        is_legacy = bool(cfg.get("legacy") is True) if isinstance(cfg, dict) else False
+        mode = "best_edge" if is_legacy else SIGNAL_COLLAPSE_MODE
+
+        collapsed: list[dict] = []
+        for eid, group in by_event.items():
+            if len(group) == 1:
+                collapsed.append(group[0])
+                continue
+            if mode == "best_edge":
+                pick = max(group, key=lambda e: (e.get("edge") or 0))
+            else:  # random_row / composite both select deterministically here
+                rng = _random.Random(f"{hypothesis_id}|{eid}|resolved")
+                pick = rng.choice(group)
+            collapsed.append(pick)
+
+        return sorted(collapsed, key=lambda e: e.get("game_date", ""))
 
     async def _diagnose_edge_threshold(self, hypothesis_id: str) -> dict:
         """Check if a hypothesis's edge_threshold is suppressing valid signals.

@@ -266,13 +266,43 @@ class BacktestEngine:
                 f"processing all lines (generic cross-book edge detection)"
             )
 
-        # Warn specifically when a totals hypothesis couldn't determine a side
-        if market_type == "totals" and "side_filter" not in filters:
+        # HARD GATE (2026-04-22 FWER audit): binary-both-sides markets
+        # (totals O/U, h2h ML) without a side_filter double-count events —
+        # each game produces rows for BOTH sides, diluting/selection-biasing
+        # the signal population.  Refuse to run unless:
+        #   - the hypothesis config sets model_config['legacy']=True  (grandfather), OR
+        #   - CALLISTO_ALLOW_BOTH_SIDES=1 is set in the env (emergency override)
+        _binary_both = market_type in ("totals", "h2h")
+        _has_side = "side_filter" in filters
+        _allow_both = os.getenv("CALLISTO_ALLOW_BOTH_SIDES", "0").strip() in ("1", "true", "yes")
+        _is_legacy = bool((config or {}).get("legacy") is True)
+        if _binary_both and not _has_side and not _allow_both and not _is_legacy:
+            logger.error(
+                f"Backtest {hypothesis_id}: REJECTED — market_type={market_type} "
+                f"requires side_filter.  Add 'side_filter' to model_config or "
+                f"encode 'over'/'under'/'home'/'away' in thesis/name, or set "
+                f"CALLISTO_ALLOW_BOTH_SIDES=1, or mark model_config['legacy']=True."
+            )
+            return {
+                "hypothesis_id": hypothesis_id,
+                "hypothesis_name": h_name,
+                "error": "side_filter_required",
+                "detail": (
+                    f"Binary-both-sides hypothesis ({market_type}) without "
+                    f"side_filter — cannot run.  Both sides would be evaluated "
+                    f"and double-count events, selection-biasing the signal "
+                    f"set.  Fix: set model_config['side_filter']='Over'|'Under' "
+                    f"(or 'home'|'away'), or mark legacy=True for grandfather."
+                ),
+                "total_events": 0,
+                "signals_generated": 0,
+                "hypothesis_filters": filters if filters else {},
+            }
+        if _binary_both and not _has_side and (_allow_both or _is_legacy):
             logger.warning(
-                f"Backtest {hypothesis_id}: totals hypothesis without side filter — "
-                f"BOTH Over and Under will be evaluated (2x events, diluted signal). "
-                f"Fix: add side_filter to model_config or include 'over'/'under' in "
-                f"thesis/name."
+                f"Backtest {hypothesis_id}: ALLOW_BOTH_SIDES bypass — legacy="
+                f"{_is_legacy}, env_override={_allow_both}.  BOTH sides will "
+                f"be evaluated (2x events, diluted signal)."
             )
 
         # Log unfilterable context factors (Tier 2)
