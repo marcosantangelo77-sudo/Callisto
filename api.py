@@ -1702,7 +1702,7 @@ async def parlay_scan(sport: str):
     # Get standard odds
     odds_data = await _get_odds(sport=sport, regions="us", markets="h2h,spreads,totals")
     if odds_data.get("error"):
-        return {"error": odds_data["error"]}
+        raise HTTPException(status_code=503, detail=odds_data["error"])
 
     all_edges = []
     correlated_suggestions = []
@@ -1782,10 +1782,13 @@ async def sgp_analysis(sport: str):
 
     snapshot = line_monitor._snapshots.get(sport)
     if not snapshot or not snapshot.get("games"):
-        return {
-            "error": f"No snapshot data for {sport}. "
-            f"Wait for next snapshot cycle or force one via POST /odds/snapshot/{sport}",
-        }
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"No snapshot data for {sport}. "
+                f"Wait for next snapshot cycle or force one via POST /odds/snapshot/{sport}"
+            ),
+        )
 
     games = snapshot["games"]
     all_suggestions = []
@@ -1891,7 +1894,7 @@ async def dk_props(sport: str):
     # First get game list
     games_data = await scrape_dk_odds(sport)
     if games_data.get("error"):
-        return {"error": games_data["error"], "games": []}
+        raise HTTPException(status_code=503, detail=games_data["error"])
 
     results = []
     for game in games_data.get("games", []):
@@ -1920,14 +1923,16 @@ async def dk_props(sport: str):
 @app.get("/odds/status")
 async def odds_status():
     """Get line monitor status and credit info."""
-    return (await line_monitor.get_status()) if line_monitor else {"error": "Monitor not initialized"}
+    if not line_monitor:
+        raise HTTPException(status_code=503, detail="Monitor not initialized")
+    return await line_monitor.get_status()
 
 
 @app.get("/odds/learned-correlations")
 async def get_learned_correlations():
     """Get learned correlation estimates — Bayesian blend of priors + empirical data."""
     if learned_correlation_store is None:
-        return {"error": "Learned correlation store not initialized"}
+        raise HTTPException(status_code=503, detail="Learned correlation store not initialized")
     estimates = await learned_correlation_store.get_all_learned()
     stats = learned_correlation_store.get_stats()
     return {"stats": stats, "estimates": estimates}
@@ -2016,7 +2021,7 @@ async def market_analysis(sport: str):
 
     odds_data = await _get_odds(sport=sport, regions="us", markets="h2h,spreads,totals")
     if odds_data.get("error"):
-        return {"error": odds_data["error"]}
+        raise HTTPException(status_code=503, detail=odds_data["error"])
 
     analysis = full_market_analysis(odds_data.get("games", []), sport)
     analysis["credits"] = odds_data.get("credits", {})
@@ -2031,7 +2036,7 @@ async def stale_lines(sport: str):
 
     odds_data = await _get_odds(sport=sport, regions="us", markets="h2h,spreads,totals")
     if odds_data.get("error"):
-        return {"error": odds_data["error"]}
+        raise HTTPException(status_code=503, detail=odds_data["error"])
 
     stale = find_stale_lines(odds_data.get("games", []))
     return {"count": len(stale), "stale_lines": stale, "credits": odds_data.get("credits", {})}
@@ -2054,7 +2059,10 @@ async def market_psychology(sport: str):
 
     snapshot = line_monitor._snapshots.get(sport)
     if not snapshot or not snapshot.get("games"):
-        return {"error": f"No snapshot data for {sport}. Wait for next snapshot cycle or force one via POST /odds/snapshot/{sport}"}
+        raise HTTPException(
+            status_code=503,
+            detail=f"No snapshot data for {sport}. Wait for next snapshot cycle or force one via POST /odds/snapshot/{sport}",
+        )
 
     psych = full_market_psychology(
         games=snapshot["games"],
@@ -2100,11 +2108,17 @@ async def dead_numbers_endpoint(sport: str):
 
     snapshot = line_monitor._snapshots.get(sport)
     if not snapshot or not snapshot.get("games"):
-        return {"error": f"No snapshot data for {sport}. Wait for next snapshot cycle or force one via POST /odds/snapshot/{sport}"}
+        raise HTTPException(
+            status_code=503,
+            detail=f"No snapshot data for {sport}. Wait for next snapshot cycle or force one via POST /odds/snapshot/{sport}",
+        )
 
     _dn_sport = sport.lower()
     if _dn_sport not in SPORT_ALIASES:
-        return {"error": f"Sport '{sport}' not supported for dead number analysis. Supported: {list(set(SPORT_ALIASES.values()))}"}
+        raise HTTPException(
+            status_code=400,
+            detail=f"Sport '{sport}' not supported for dead number analysis. Supported: {list(set(SPORT_ALIASES.values()))}",
+        )
 
     games = snapshot.get("games", [])
     all_steals = []
@@ -2228,7 +2242,7 @@ async def cross_tabulate_endpoint(sport: str, min_sample: int = 20):
     db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
     df = load_game_results(db_path, sport=sport)
     if df.height == 0:
-        return {"error": f"No game results for {sport}"}
+        raise HTTPException(status_code=503, detail=f"No game results for {sport}")
     return cross_tabulate(df, min_sample=min_sample).to_dicts()
 
 
@@ -2255,7 +2269,10 @@ async def line_analysis_endpoint(sport: str):
 
     snapshot = line_monitor._snapshots.get(sport)
     if not snapshot or not snapshot.get("games"):
-        return {"error": f"No snapshot data for {sport}. Wait for next snapshot cycle or force one via POST /odds/snapshot/{sport}"}
+        raise HTTPException(
+            status_code=503,
+            detail=f"No snapshot data for {sport}. Wait for next snapshot cycle or force one via POST /odds/snapshot/{sport}",
+        )
 
     games = snapshot.get("games", [])
     public_analyses = []
@@ -2483,7 +2500,10 @@ async def simulate_portfolio_endpoint(
         ids = [x.strip() for x in hypothesis_ids.split(",") if x.strip()]
 
     if not ids:
-        return {"error": "No hypothesis_ids supplied (pass hypothesis_ids=a,b,c or all_live=1)"}
+        raise HTTPException(
+            status_code=400,
+            detail="No hypothesis_ids supplied (pass hypothesis_ids=a,b,c or all_live=1)",
+        )
 
     cache_key = (tuple(sorted(ids)), n_sims, horizon_days, float(starting_bankroll), float(kelly_fraction))
     now = _time.time()
@@ -2533,12 +2553,14 @@ async def get_model_total(sport: str, venue: str = "", wind_mph: float = None,
     # Get latest snapshot for this sport
     snapshot = line_monitor._snapshots.get(sport)
     if not snapshot:
-        return {"error": f"No snapshot available for {sport}. Trigger a snapshot first.",
-                "sport": sport}
+        raise HTTPException(
+            status_code=503,
+            detail=f"No snapshot available for {sport}. Trigger a snapshot first.",
+        )
 
     games = snapshot.get("games", [])
     if not games:
-        return {"error": "No games in snapshot", "sport": sport}
+        raise HTTPException(status_code=503, detail=f"No games in snapshot for {sport}")
 
     edges = scan_pace_model_total_edges(
         games=games,
@@ -2677,7 +2699,7 @@ async def injury_impact_model(sport: str):
     }
     model_sport = _model_sport_map.get(sport, "")
     if not model_sport:
-        return {"error": f"Sport {sport} not supported by injury model"}
+        raise HTTPException(status_code=400, detail=f"Sport {sport} not supported by injury model")
 
     injuries_data = await _get_injuries(sport)
     scoreboard = await _get_sb(sport)
@@ -2834,14 +2856,14 @@ async def line_gaps(sport: str, event_id: str = "", market: str = "alternate_spr
     if event_id:
         alt_data = await _get_alt(sport=sport, event_id=event_id)
         if alt_data.get("error"):
-            return {"error": alt_data["error"]}
+            raise HTTPException(status_code=503, detail=alt_data["error"])
         gaps = scan_line_gaps(alt_data.get("bookmakers", []), market_key=market)
         return {"event_id": event_id, "market": market, "gap_count": len(gaps), "gaps": gaps}
 
     # No event_id — scan first 5 games
     odds_data = await _get_odds(sport=sport, regions="us", markets="h2h")
     if odds_data.get("error"):
-        return {"error": odds_data["error"]}
+        raise HTTPException(status_code=503, detail=odds_data["error"])
 
     all_gaps = []
     for game in odds_data.get("games", [])[:5]:
@@ -2877,13 +2899,13 @@ async def prop_gaps(sport: str, event_id: str = ""):
     if event_id:
         prop_data = await _get_props(sport=sport, event_id=event_id)
         if prop_data.get("error"):
-            return {"error": prop_data["error"]}
+            raise HTTPException(status_code=503, detail=prop_data["error"])
         gaps = scan_prop_gaps(prop_data)
         return {"event_id": event_id, "gap_count": len(gaps), "gaps": gaps}
 
     odds_data = await _get_odds(sport=sport, regions="us", markets="h2h")
     if odds_data.get("error"):
-        return {"error": odds_data["error"]}
+        raise HTTPException(status_code=503, detail=odds_data["error"])
 
     all_gaps = []
     for game in odds_data.get("games", [])[:3]:
@@ -4101,7 +4123,10 @@ async def admin_restart(confirm: str = "", _auth: None = Depends(require_admin_o
     # SECURITY: timing-safe equality (audit C-2). Token is "YES" — short, but pattern is
     # what matters: never use `==` or `!=` on auth-adjacent strings.
     if not _secrets.compare_digest(confirm, "YES"):
-        return {"error": "Add ?confirm=YES to actually restart. WARNING: without watchdog, system will not relaunch."}
+        raise HTTPException(
+            status_code=400,
+            detail="Add ?confirm=YES to actually restart. WARNING: without watchdog, system will not relaunch.",
+        )
     logger.info("RESTART REQUESTED via /admin/restart — shutting down gracefully")
     send_msg = "Callisto restarting (code reload requested)"
     try:
@@ -4140,10 +4165,10 @@ async def debug_memory(_auth: None = Depends(require_admin)):
     rss_mb = process.memory_info().rss / (1024 * 1024)
 
     if not tracemalloc.is_tracing():
-        return {
-            "rss_mb": round(rss_mb, 1),
-            "error": "tracemalloc not active — set CALLISTO_TRACEMALLOC=1 and restart to enable",
-        }
+        raise HTTPException(
+            status_code=409,
+            detail=f"tracemalloc not active — set CALLISTO_TRACEMALLOC=1 and restart to enable (rss_mb={round(rss_mb, 1)})",
+        )
 
     current = tracemalloc.take_snapshot()
     current = current.filter_traces((
@@ -4193,7 +4218,10 @@ async def debug_memory(_auth: None = Depends(require_admin)):
 async def debug_memory_traces(limit: int = 10, _auth: None = Depends(require_admin)):
     """Show full stack traces for the top memory consumers."""
     if not tracemalloc.is_tracing():
-        return {"error": "tracemalloc not active — set CALLISTO_TRACEMALLOC=1 and restart to enable"}
+        raise HTTPException(
+            status_code=409,
+            detail="tracemalloc not active — set CALLISTO_TRACEMALLOC=1 and restart to enable",
+        )
 
     snapshot = tracemalloc.take_snapshot()
     snapshot = snapshot.filter_traces((
@@ -4350,7 +4378,7 @@ async def admin_sql(request: Request, _auth: None = Depends(require_admin)):
     body = await request.json()
     sql = (body.get("sql") or "").strip()
     if not sql:
-        return {"error": "No SQL provided"}
+        raise HTTPException(status_code=400, detail="No SQL provided")
 
     err = _validate_admin_sql(sql)
     if err:
@@ -4360,7 +4388,7 @@ async def admin_sql(request: Request, _auth: None = Depends(require_admin)):
             err,
             sql[:300],
         )
-        return {"error": err}
+        raise HTTPException(status_code=400, detail=err)
 
     # 10-second execution budget. sqlite3's progress handler fires every N
     # opcodes; returning non-zero aborts the query cleanly.
@@ -4389,7 +4417,7 @@ async def admin_sql(request: Request, _auth: None = Depends(require_admin)):
                 rows = await cursor.fetchall()
             except _sqlite3.OperationalError as oe:
                 if "interrupted" in str(oe).lower() or "abort" in str(oe).lower():
-                    return {"error": "Query exceeded 10s timeout"}
+                    raise HTTPException(status_code=504, detail="Query exceeded 10s timeout")
                 raise
             finally:
                 try:
@@ -4404,8 +4432,11 @@ async def admin_sql(request: Request, _auth: None = Depends(require_admin)):
                 "row_count": len(rows),
                 "truncated": len(rows) > 500,
             }
+    except HTTPException:
+        raise
     except Exception as e:
-        return {"error": str(e)}
+        logger.exception("admin_sql execution failed sql=%r", sql[:300])
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ---------------------------------------------------------------------------
