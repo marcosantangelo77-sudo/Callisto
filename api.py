@@ -1150,13 +1150,76 @@ async def submit_task(
     Writes are auth-gated: without this, a caller could queue arbitrary LLM
     work against the billing account. GET /task/{id} is already gated, so
     writes must match.
+
+    Wiki task short-circuit (feat/wiki-in-the-loop, 2026-04-22):
+      Before enqueueing, embed the query and semantic-search the wiki. If
+      a high-similarity (>0.88) article exists, create the task in COMPLETED
+      state immediately with the wiki article as its result — saving ~5min
+      orchestrator cycles on duplicate queries. Toggle:
+      ``CALLISTO_TASK_SHORT_CIRCUIT=1`` (default on).
     """
     try:
+        # Short-circuit pass — safe on any failure (returns None).
+        short_circuit_result = None
+        if os.getenv("CALLISTO_TASK_SHORT_CIRCUIT", "1") == "1":
+            short_circuit_result = await _wiki_task_short_circuit(submission.query)
+
         task_id = await queue.submit_task(submission.query, submission.priority)
+
+        if short_circuit_result is not None:
+            try:
+                await queue.complete_task(task_id, short_circuit_result)
+                logger.info(
+                    f"Task {task_id} SHORT-CIRCUITED via wiki "
+                    f"(topic={short_circuit_result.get('wiki_topic')}, "
+                    f"sim={short_circuit_result.get('wiki_similarity')})"
+                )
+            except Exception as e:
+                # If we can't mark it complete, leave it PENDING — the worker
+                # will pick it up normally. Not fatal.
+                logger.warning(f"Short-circuit complete_task failed for {task_id}: {e}")
+
         return TaskResponse(task_id=task_id)
     except Exception as e:
         logger.error(f"POST /task failed: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+
+
+async def _wiki_task_short_circuit(query: str) -> Optional[dict]:
+    """Look up a pre-existing wiki answer for ``query``.
+
+    Returns a result-dict suitable for ``queue.complete_task(...)`` when a
+    high-similarity match is found, else None. All failures return None —
+    the task proceeds normally through the orchestrator.
+    """
+    try:
+        threshold = float(os.getenv("CALLISTO_TASK_SHORT_CIRCUIT_THRESHOLD", "0.88"))
+        from tools.knowledge_wiki import get_wiki
+        wiki = get_wiki()
+        async with aiosqlite.connect(memory.db_path) as wdb:
+            await wdb.execute("PRAGMA busy_timeout = 20000")
+            hits = await wiki.search(wdb, query, top_k=1, min_similarity=0.0)
+        if not hits:
+            return None
+        top = hits[0]
+        sim = top.get("similarity")
+        if not isinstance(sim, (int, float)) or sim < threshold:
+            return None
+        return {
+            "short_circuited": True,
+            "wiki_topic": top.get("topic"),
+            "wiki_title": top.get("title"),
+            "wiki_similarity": round(sim, 4),
+            "wiki_domain": top.get("domain"),
+            "wiki_confidence": top.get("confidence"),
+            "conclusion": top.get("summary") or top.get("content"),
+            "confidence_score": top.get("confidence") or 0.5,
+            "domain": top.get("domain") or "GENERAL",
+            "source": "wiki_short_circuit",
+        }
+    except Exception as e:
+        logger.debug(f"Wiki task short-circuit skipped: {e}")
+        return None
 
 
 @app.get("/task/{task_id}")

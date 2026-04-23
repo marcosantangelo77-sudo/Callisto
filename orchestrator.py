@@ -10,8 +10,11 @@ Optimizations: parallel Brave searches, pipelined model loading, compressed prom
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Optional
+
+import aiosqlite
 
 from agp import (
     AGPSealRefused,
@@ -1026,8 +1029,54 @@ class Orchestrator:
 
         Claude Code is the PRIMARY reasoning engine. Local models are the fallback
         when Claude is rate-limited or unavailable.
+
+        Wiki-in-the-loop (feat/wiki-in-the-loop, 2026-04-22):
+          Before LLM analysis, the knowledge wiki is queried for articles
+          relevant to ``session.scope``. High-similarity hits (>0.85) are
+          injected as PRIMARY evidence WITH cites, short-circuiting cheap
+          look-ups and providing a citation trail. We AUGMENT external
+          search rather than replacing it (per AGP rigor).
         """
         used_tools = len(search_results) > 0
+
+        # ── Wiki retrieval (pre-LLM) ──
+        wiki_evidence: list[Evidence] = []
+        wiki_in_loop = os.getenv("CALLISTO_WIKI_IN_LOOP", "1") == "1"
+        if wiki_in_loop:
+            try:
+                from tools.knowledge_wiki import get_wiki
+                wiki = get_wiki()
+                async with aiosqlite.connect(wiki.db_path) as wdb:
+                    await wdb.execute("PRAGMA busy_timeout = 30000")
+                    wiki_hits = await wiki.search(
+                        wdb, session.scope, top_k=5, min_similarity=0.0,
+                    )
+                for hit in wiki_hits:
+                    sim = hit.get("similarity")
+                    # High-similarity hits: promote to SECONDARY with wiki cite.
+                    if isinstance(sim, (int, float)) and sim >= 0.85:
+                        content = (
+                            f"[wiki prior: {hit.get('topic')}] "
+                            f"{(hit.get('summary') or hit.get('content') or '')[:400]}"
+                        )
+                        ev = Evidence(
+                            content=content,
+                            source_class=SourceClass.SECONDARY,
+                            confidence_score=min(0.75, float(hit.get("confidence", 0.5))),
+                            domain=session.domain,
+                            origin_agent="knowledge_wiki",
+                            source_name=f"wiki://{hit.get('topic')}",
+                        )
+                        wiki_evidence.append(ev)
+                if wiki_evidence:
+                    logger.info(
+                        f"Session {session.session_id}: wiki retrieval injected "
+                        f"{len(wiki_evidence)} high-similarity evidence items"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"Session {session.session_id}: wiki retrieval failed (non-fatal): {e}"
+                )
 
         if search_results:
             compact = [
@@ -1092,8 +1141,13 @@ class Orchestrator:
                         except (ValueError, KeyError) as e:
                             logger.warning(f"Skipping malformed evidence from Claude: {e}")
                 if evidence_list:
-                    logger.info(f"Session {session.session_id}: Claude Code extracted {len(evidence_list)} evidence items")
-                    return evidence_list, used_tools
+                    # Prepend wiki evidence so its cites appear first in the trail.
+                    combined = wiki_evidence + evidence_list
+                    logger.info(
+                        f"Session {session.session_id}: Claude Code extracted "
+                        f"{len(evidence_list)} evidence items (+ {len(wiki_evidence)} wiki priors)"
+                    )
+                    return combined, used_tools or bool(wiki_evidence)
                 else:
                     logger.warning(f"Session {session.session_id}: Claude Code returned no parseable evidence, falling back to local")
             else:
@@ -1165,7 +1219,9 @@ class Orchestrator:
                     evidence_list.append(ev)
                 except (ValueError, KeyError) as e:
                     logger.warning(f"Skipping malformed evidence: {e}")
-        return evidence_list, used_tools
+        # Prepend wiki priors so their cites appear first in the trail.
+        combined = wiki_evidence + evidence_list
+        return combined, used_tools or bool(wiki_evidence)
 
     async def _run_searches_parallel(
         self, queries: list[str], freshness: Optional[str] = None

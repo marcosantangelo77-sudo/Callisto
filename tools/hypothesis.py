@@ -2219,29 +2219,69 @@ class HypothesisManager:
             except Exception as e:
                 logger.warning(f"live_review stats insert failed for {hid}: {e}")
 
-            # Best-effort: attach a compact wiki article so demotions appear in
-            # the research trail, not just logs. Fails silently if wiki tables
-            # don't exist on this install.
+            # Attach a wiki article so demotions appear in the research trail.
+            # Pre-2026-04-22: this used (article_id, title, body, domain,
+            # created_at) — a schema that NEVER existed. The INSERT raised
+            # every call, was swallowed by `except Exception: pass`, and not
+            # a single demotion ever made it into the wiki. Now routed through
+            # knowledge_wiki.write_lesson_article which uses the real schema
+            # (topic PK, title, content, summary, related_topics, ...) and
+            # increments _wiki_writes_failed on any real error so we notice.
             try:
-                from tools.db_utils import execute_with_retry, commit_with_retry
-                await execute_with_retry(
-                    self._db,
-                    "INSERT OR IGNORE INTO wiki_articles "
-                    "(article_id, title, body, domain, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (
-                        f"live_review_{hid}_{int(datetime.now(timezone.utc).timestamp())}",
-                        f"LIVE demotion: {h.get('name', hid)}",
-                        reason_str + f" | n={n_resolved} hit={hit_rate:.1%} "
-                        f"roi={roi:.2%} mdd={mdd:.1%} clv={avg_clv}",
-                        "SIGNAL",
-                        datetime.now(timezone.utc).isoformat(),
-                    ),
-                    operation="live_review wiki insert",
+                from tools.knowledge_wiki import get_wiki
+                wiki = get_wiki()
+                demotion_content = (
+                    f"LIVE demotion post-mortem for {h.get('name', hid)} "
+                    f"(hypothesis_id={hid}).\n\n"
+                    f"Reason: {reason_str}\n\n"
+                    f"Performance window (last {window} days):\n"
+                    f"  - n_resolved: {n_resolved}\n"
+                    f"  - hit_rate: {hit_rate:.1%}\n"
+                    f"  - roi: {roi:.2%}\n"
+                    f"  - max_drawdown: {mdd:.1%}\n"
+                    f"  - avg_clv: {avg_clv}\n"
+                    f"  - sortino: {sortino}\n\n"
+                    f"Sport: {h.get('sport', 'unknown')}\n"
+                    f"Market: {h.get('market_type', 'unknown')}\n"
+                    f"Demoted at: {datetime.now(timezone.utc).isoformat()}\n\n"
+                    f"This article is retrievable by the hypothesis generator "
+                    f"so similar patterns in the same cohort aren't "
+                    f"re-proposed without acknowledging this prior failure."
                 )
-                await commit_with_retry(self._db, operation="live_review wiki")
-            except Exception:
-                pass  # wiki_articles may not exist / schema may differ
+                topic_slug = f"{hid}_live_demotion_lessons"
+                write_result = await wiki.write_lesson_article(
+                    self._db,
+                    topic=topic_slug,
+                    title=f"LIVE demotion: {h.get('name', hid)}",
+                    content=demotion_content,
+                    domain="SIGNAL",
+                    related_topics=[
+                        "demotion_lessons",
+                        f"sport:{h.get('sport', 'unknown')}",
+                        f"market:{h.get('market_type', 'unknown')}",
+                        "live_review_failure",
+                    ],
+                    confidence=0.7,
+                )
+                outcome["wiki_article_topic"] = topic_slug
+                outcome["wiki_write_action"] = write_result.get("action")
+                if write_result.get("action") == "failed":
+                    # Loud, not silent — the whole point of this fix.
+                    logger.warning(
+                        f"Demotion wiki write FAILED for {hid}: "
+                        f"{write_result.get('error')}"
+                    )
+            except Exception as e:
+                # Explicit log + counter bump — replaces the old bare `pass`.
+                logger.warning(
+                    f"Demotion wiki lesson write raised for {hid}: "
+                    f"{type(e).__name__}: {e}"
+                )
+                try:
+                    from tools import knowledge_wiki as _kw
+                    _kw._wiki_writes_failed += 1
+                except Exception:
+                    pass
 
             results.append(outcome)
 
