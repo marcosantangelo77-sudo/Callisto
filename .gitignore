@@ -34,3 +34,8 @@ audit_output.txt
 # Numeric-only files (accidental stdout captures)
 [0-9]
 [0-9].[0-9]*
+
+# ML model artifacts — retrainable from live DB, bulky
+models/*.joblib
+models/*.json
+models/*.drift.json
