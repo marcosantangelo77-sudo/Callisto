@@ -10,6 +10,7 @@ import gc
 import logging
 import os
 import secrets as _secrets
+import time
 import tracemalloc
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -417,14 +418,183 @@ async def ingestion_sla_watchdog_loop():
 # Per-task hard timeout. AGP sessions that route through Claude Code
 # occasionally run 7+ minutes (observed 419s on task 484, 2026-04-18),
 # and the worker processes tasks serially — one slow session stalls every
-# pending task behind it (today: task 485 waited >5 min). Sessions beyond
-# this budget are cancelled and marked FAILED; the worker moves on so the
-# queue stays fluid. Overridable via CALLISTO_TASK_TIMEOUT_S env var.
+# pending task behind it. CALLISTO_TASK_TIMEOUT_S remains honored as the
+# DEFAULT bucket for backward-compat; per-task-type buckets live in
+# tools/task_classifier.py and override this when the query matches a
+# heuristic (or the caller passed an explicit task_type).
 TASK_WORKER_TIMEOUT_S = float(os.getenv("CALLISTO_TASK_TIMEOUT_S", "300"))
+
+# Adaptive-extension knobs. If the orchestrator has made progress within
+# PROGRESS_WINDOW_S, the watchdog adds EXTENSION_S to the deadline (up to
+# the hard ceiling). If no progress for STALL_WINDOW_S, terminate at the
+# current deadline instead of extending.
+#
+# Sizing rationale: a single Claude-through-ladder step can take 30-120s
+# (observed 2026-04-22), so the orchestrator legitimately goes silent
+# between progress events for up to ~2min while waiting on one call.
+# We want to extend through those, but cut off at 4-5 min silence which
+# is definitely a stuck session (timeout, deadlock, or dropped socket).
+_ADAPTIVE_PROGRESS_WINDOW_S = float(os.getenv("CALLISTO_PROGRESS_WINDOW_S", "120"))
+_ADAPTIVE_STALL_WINDOW_S = float(os.getenv("CALLISTO_STALL_WINDOW_S", "240"))
+_ADAPTIVE_EXTENSION_S = float(os.getenv("CALLISTO_EXTENSION_S", "120"))
+_ADAPTIVE_POLL_S = float(os.getenv("CALLISTO_ADAPTIVE_POLL_S", "5"))
+
+
+async def _run_session_with_adaptive_timeout(
+    query: str,
+    skip_search: bool,
+    initial_budget_s: float,
+    hard_ceiling_s: float,
+) -> tuple[dict, dict]:
+    """Run the orchestrator session with a budget that extends on live progress.
+
+    Returns (result, telemetry). Raises ``asyncio.TimeoutError`` if the
+    hard ceiling is hit or the session stalls past the current deadline.
+
+    Telemetry shape (always populated, even on timeout via the outer
+    except): {
+        'phase': current orchestrator step name or 'UNKNOWN',
+        'evidence_count': int,
+        'filtered_evidence_count': int,
+        'progress_events': int,
+        'contradictions': int,
+        'elapsed_s': float,
+        'extensions': int,
+        'stalled': bool,     # True if we cut off due to idle, not budget
+    }
+
+    Implementation: we spawn the orchestrator as an asyncio.Task, look it
+    up against orchestrator_instance._active_sessions, and poll every
+    _ADAPTIVE_POLL_S seconds. On each tick:
+      - if the task finished → return its result
+      - if monotonic() > current_deadline:
+          - session made progress recently? extend up to hard ceiling
+          - else terminate
+      - if monotonic() - last_progress > stall_window → terminate
+    """
+    start_monotonic = time.monotonic()
+    deadline = start_monotonic + initial_budget_s
+    hard_deadline = start_monotonic + hard_ceiling_s
+    extensions = 0
+
+    run_task = asyncio.create_task(
+        orchestrator_instance.run_session(query, skip_search=skip_search)
+    )
+
+    def _snapshot() -> dict:
+        """Grab current session state for telemetry."""
+        session = orchestrator_instance.active_session_for(run_task)
+        if session is None:
+            return {
+                "phase": "UNKNOWN",
+                "evidence_count": 0,
+                "filtered_evidence_count": 0,
+                "progress_events": 0,
+                "contradictions": 0,
+                "last_progress_at": None,
+            }
+        return {
+            "phase": session.current_step.name,
+            "evidence_count": len(session.evidence),
+            "filtered_evidence_count": session.filtered_evidence_count,
+            "progress_events": session.progress_events,
+            "contradictions": len(session.contradictions),
+            "last_progress_at": session.last_progress_at,
+        }
+
+    try:
+        while True:
+            # Sleep until the next poll tick OR the deadline, whichever is sooner.
+            now = time.monotonic()
+            time_to_deadline = max(0.0, deadline - now)
+            wait = min(_ADAPTIVE_POLL_S, time_to_deadline) if time_to_deadline > 0 else 0.1
+            try:
+                result = await asyncio.wait_for(asyncio.shield(run_task), timeout=wait)
+                # Session completed cleanly.
+                snap = _snapshot()
+                snap.update({
+                    "elapsed_s": time.monotonic() - start_monotonic,
+                    "extensions": extensions,
+                    "stalled": False,
+                })
+                return result, snap
+            except asyncio.TimeoutError:
+                pass  # tick — evaluate progress
+
+            if run_task.done():
+                # Could be exception; let exception propagate on await below.
+                result = await run_task
+                snap = _snapshot()
+                snap.update({
+                    "elapsed_s": time.monotonic() - start_monotonic,
+                    "extensions": extensions,
+                    "stalled": False,
+                })
+                return result, snap
+
+            now = time.monotonic()
+            snap = _snapshot()
+            last_progress = snap.get("last_progress_at") or start_monotonic
+            idle_s = now - last_progress
+
+            # Hard-ceiling guard first — no extension ever crosses this line.
+            if now >= hard_deadline:
+                raise asyncio.TimeoutError("hard ceiling")
+
+            # Stall guard — if the orchestrator has been silent too long,
+            # terminate regardless of remaining budget. Extension is only
+            # for sessions demonstrably making progress.
+            if idle_s >= _ADAPTIVE_STALL_WINDOW_S:
+                raise asyncio.TimeoutError("stalled")
+
+            # Deadline reached — extend if progress was recent.
+            if now >= deadline:
+                if idle_s <= _ADAPTIVE_PROGRESS_WINDOW_S:
+                    # Progress within window → extend, capped at hard ceiling.
+                    new_deadline = min(deadline + _ADAPTIVE_EXTENSION_S, hard_deadline)
+                    if new_deadline <= deadline:
+                        # Already at hard ceiling.
+                        raise asyncio.TimeoutError("hard ceiling")
+                    deadline = new_deadline
+                    extensions += 1
+                    logger.info(
+                        f"Adaptive timeout: extending by {_ADAPTIVE_EXTENSION_S:.0f}s "
+                        f"(phase={snap['phase']}, evidence={snap['evidence_count']}, "
+                        f"progress_events={snap['progress_events']}, extension #{extensions})"
+                    )
+                else:
+                    raise asyncio.TimeoutError("budget")
+    except asyncio.TimeoutError as te:
+        # Kill the underlying task and annotate telemetry.
+        reason = str(te) or "budget"
+        if not run_task.done():
+            run_task.cancel()
+            try:
+                await run_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        snap = _snapshot()
+        snap.update({
+            "elapsed_s": time.monotonic() - start_monotonic,
+            "extensions": extensions,
+            "stalled": reason == "stalled",
+            "timeout_reason": reason,
+        })
+        raise _AdaptiveTimeout(snap) from te
+
+
+class _AdaptiveTimeout(asyncio.TimeoutError):
+    """Internal — carries telemetry for the task_worker to report."""
+
+    def __init__(self, telemetry: dict):
+        super().__init__()
+        self.telemetry = telemetry
 
 
 async def task_worker():
     """Background worker: polls task queue and runs AGP sessions."""
+    from tools.task_classifier import classify_and_budget, get_hard_ceiling_s
+
     while True:
         try:
             task = await queue.get_next()
@@ -435,7 +605,17 @@ async def task_worker():
             task_id = task["task_id"]
             query = task["query"]
             skip_search = _is_internal_query(query)
-            logger.info(f"Worker picked up task {task_id} (skip_search={skip_search}): {query}")
+
+            # Classify and resolve per-task budget. The classifier is
+            # keyword-based; miscategorizations merely spend extra wall-
+            # clock — they never kill a session early below the old 300s.
+            task_type, initial_budget = classify_and_budget(query)
+            hard_ceiling = get_hard_ceiling_s()
+            logger.info(
+                f"Worker picked up task {task_id} "
+                f"(type={task_type.value}, budget={initial_budget:.0f}s, "
+                f"ceiling={hard_ceiling:.0f}s, skip_search={skip_search}): {query}"
+            )
 
             # In local_only mode, skip tasks that would require Claude
             # (orchestrator calls claude_code_query without checking local_only)
@@ -445,16 +625,19 @@ async def task_worker():
                 continue
 
             try:
-                # Hard-cap the whole AGP session. asyncio.wait_for cancels the
-                # inner coroutine on timeout so the orchestrator stops burning
-                # Claude credits / VRAM for a result that will be discarded.
-                result = await asyncio.wait_for(
-                    orchestrator_instance.run_session(query, skip_search=skip_search),
-                    timeout=TASK_WORKER_TIMEOUT_S,
+                result, telemetry = await _run_session_with_adaptive_timeout(
+                    query,
+                    skip_search=skip_search,
+                    initial_budget_s=initial_budget,
+                    hard_ceiling_s=hard_ceiling,
                 )
                 session_id = result.get("session_id")
                 await queue.complete_task(task_id, result, session_id=session_id)
-                logger.info(f"Task {task_id} completed, session {session_id}")
+                logger.info(
+                    f"Task {task_id} completed in {telemetry['elapsed_s']:.1f}s "
+                    f"(type={task_type.value}, extensions={telemetry['extensions']}), "
+                    f"session {session_id}"
+                )
 
                 # Wiki auto-file: compound task results into knowledge base
                 try:
@@ -477,15 +660,37 @@ async def task_worker():
 
                 # Auto-follow-up: if session concluded INSUFFICIENT DATA, queue the next step
                 await _maybe_auto_followup(task_id, result)
+            except _AdaptiveTimeout as ate:
+                t = ate.telemetry
+                reason = t.get("timeout_reason", "budget")
+                # Build a structured error the SLA watchdog can parse.
+                err_msg = (
+                    f"timeout: type={task_type.value} reason={reason} "
+                    f"phase={t.get('phase')} elapsed={t.get('elapsed_s', 0):.1f}s "
+                    f"evidence={t.get('evidence_count', 0)} "
+                    f"filtered={t.get('filtered_evidence_count', 0)} "
+                    f"contradictions={t.get('contradictions', 0)} "
+                    f"progress_events={t.get('progress_events', 0)} "
+                    f"extensions={t.get('extensions', 0)} "
+                    f"stalled={t.get('stalled', False)}"
+                )
+                logger.error(f"Task {task_id} TIMEOUT: {err_msg}")
+                partial = {
+                    "task_id": task_id,
+                    "task_type": task_type.value,
+                    "telemetry": t,
+                    "error": err_msg,
+                }
+                await queue.timeout_task(task_id, err_msg, result=partial)
             except asyncio.TimeoutError:
-                logger.error(
-                    f"Task {task_id} TIMEOUT after {TASK_WORKER_TIMEOUT_S}s — "
-                    f"orchestrator session cancelled to unblock queue."
+                # Fallback path — shouldn't happen since _run_session_with_adaptive_timeout
+                # wraps into _AdaptiveTimeout, but be defensive.
+                err_msg = (
+                    f"timeout: orchestrator exceeded {initial_budget:.0f}s budget "
+                    f"(type={task_type.value}, no telemetry)"
                 )
-                await queue.fail_task(
-                    task_id,
-                    f"timeout: orchestrator exceeded {TASK_WORKER_TIMEOUT_S}s budget",
-                )
+                logger.error(f"Task {task_id} TIMEOUT (bare): {err_msg}")
+                await queue.timeout_task(task_id, err_msg)
             except Exception as e:
                 logger.error(f"Task {task_id} failed: {e}", exc_info=True)
                 await queue.fail_task(task_id, str(e))

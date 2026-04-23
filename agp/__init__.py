@@ -208,6 +208,35 @@ class AGPSession:
 
         self._sealed: bool = False
 
+        # Liveness tracking — lets an external watcher (task_worker adaptive
+        # timeout) decide "this session is making progress, extend the
+        # budget" vs "this session has stalled, cut it off at the boundary".
+        # Monotonic clock so the comparison is robust against wall-clock jumps.
+        # Initialized to "now" so a freshly-created session is considered
+        # alive by any watcher that polls before the first step completes.
+        import time as _time
+        self._t_created_monotonic: float = _time.monotonic()
+        self.last_progress_at: float = self._t_created_monotonic
+        self.last_step_at: float = self._t_created_monotonic
+        # Total count of discrete progress events (step advances + evidence
+        # adds + contradiction adds). Exposed in to_dict() for debuggability.
+        self.progress_events: int = 0
+
+    def _mark_progress(self, step_advance: bool = False) -> None:
+        """Called internally whenever something observable changes.
+
+        Separated so tests can monkey-patch timing without touching internal
+        bookkeeping. step_advance=True also bumps last_step_at so the
+        task_worker can distinguish "phase moved" from "more evidence in same
+        phase".
+        """
+        import time as _time
+        now = _time.monotonic()
+        self.last_progress_at = now
+        if step_advance:
+            self.last_step_at = now
+        self.progress_events += 1
+
     def advance_to(self, step: SessionStep) -> None:
         """Advance to the next step. Steps must proceed sequentially."""
         if self._sealed:
@@ -219,6 +248,7 @@ class AGPSession:
                 f"expected {expected.name}"
             )
         self.current_step = step
+        self._mark_progress(step_advance=True)
 
     def add_evidence(self, evidence: Evidence) -> None:
         """Add evidence, filtering out non-storable items.
@@ -228,6 +258,11 @@ class AGPSession:
         """
         if self._sealed:
             raise AGPViolation("Cannot add evidence to a sealed session")
+        # Mark progress even for filtered evidence — an UNVERIFIED add still
+        # proves the session is actively doing work (tool calls returned,
+        # even if the result was rejected). Silent-stall is the only state
+        # we want to timeout on.
+        self._mark_progress()
         if not evidence.confidence_tier.is_storable:
             self.filtered_evidence_count += 1
             return  # filtered per AGP rules (was silent pre-rigor fix)
@@ -237,6 +272,7 @@ class AGPSession:
         if self._sealed:
             raise AGPViolation("Cannot add contradictions to a sealed session")
         self.contradictions.append(contradiction)
+        self._mark_progress()
 
     def add_manager_objection(self, objection: str) -> None:
         if self._sealed:
@@ -259,6 +295,7 @@ class AGPSession:
             "seal_hash": self.seal_hash,
             "current_step": self.current_step.name,
             "filtered_evidence_count": self.filtered_evidence_count,
+            "progress_events": self.progress_events,
         }
 
     def seal(self) -> str:
