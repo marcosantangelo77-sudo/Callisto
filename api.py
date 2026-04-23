@@ -3639,6 +3639,16 @@ async def _build_health_report() -> dict:
     except Exception as e:
         report["task_queue"] = {"error": str(e)}
 
+    # Stale ML models — surfaces drift-flagged joblibs so operators see
+    # which classifiers are being skipped by the promotion gate. Cheap
+    # filesystem walk; never fails the endpoint.
+    try:
+        from tools.ml_promotion_gate import list_stale_models as _stale_ml
+        report["stale_ml_models"] = _stale_ml()
+    except Exception as e:
+        report["stale_ml_models"] = []
+        logger.debug(f"stale_ml_models lookup failed: {e}")
+
     # Now evaluate demotion signals and stamp reasons
     healthy, severity, reasons = _evaluate_health_signals(report)
     # Only downgrade — the subsystem loop already sets healthy=False on breakers.
