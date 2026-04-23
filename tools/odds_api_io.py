@@ -1075,6 +1075,11 @@ async def get_historical_odds(event_id: str | int, bookmakers: str = "") -> dict
     return data if isinstance(data, dict) else {"data": data}
 
 
+@tracked_ingestion(
+    source=lambda event_id="", bookmaker="DraftKings", market="ML", **_:
+        f"odds_api_io.v3.movements.{market}",
+    sla_seconds=600,
+)
 async def get_odds_movements(
     event_id: str | int,
     bookmaker: str = "DraftKings",
@@ -1095,6 +1100,358 @@ async def get_odds_movements(
         "market": market,
     })
     return data if isinstance(data, dict) else {"data": data}
+
+
+# ---------------------------------------------------------------------------
+# Pre-commence snapshot — lookahead-free backtesting
+# ---------------------------------------------------------------------------
+#
+# Closing-odds lookahead bug: prior backtests used /historical/odds which
+# returns the post-settlement closing price, but stamped it as the bet-time
+# snapshot. That is classic forward-looking contamination — the closing price
+# already reflects every sharp move that happened AFTER a realistic bet would
+# have been placed. This function replaces get_historical_odds() with a
+# timestamped snapshot from /odds/movements, filtered to
+# (commence_time - lead_minutes).
+#
+# Returns the same shape as _normalize_event_odds() would, plus:
+#   - snapshot_quality: 'pre_commence' | 'closing_fallback'
+#   - snapshot_time:    the ACTUAL timestamp we pulled (not 00:00:00Z)
+#   - lead_minutes:     what we targeted (env-overridable; default 60)
+
+
+def _parse_iso(ts: str) -> Optional[datetime]:
+    """Parse an ISO-8601 timestamp. Returns None if unparseable."""
+    if not ts:
+        return None
+    try:
+        s = ts.replace("Z", "+00:00") if ts.endswith("Z") else ts
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def _extract_movement_snapshots(movements_raw: dict | list) -> list[dict]:
+    """Normalize odds-movements response into a list of
+    {time: datetime, odds: {...}} entries, sorted ascending by time.
+
+    The odds-api.io movements endpoint returns varying shapes depending on
+    market. Accept whatever it gives us and extract every entry that has a
+    parseable timestamp + odds payload.
+    """
+    raw = movements_raw
+    if isinstance(raw, dict):
+        # Common shapes: {"movements": [...]}, {"history": [...]}, {"data": [...]}
+        for key in ("movements", "history", "data", "items", "odds"):
+            if isinstance(raw.get(key), list):
+                raw = raw[key]
+                break
+    if not isinstance(raw, list):
+        return []
+
+    out: list[dict] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        ts_str = (
+            entry.get("time") or entry.get("updatedAt")
+            or entry.get("timestamp") or entry.get("date")
+        )
+        dt = _parse_iso(ts_str) if isinstance(ts_str, str) else None
+        if dt is None:
+            continue
+        out.append({"time": dt, "raw": entry})
+    out.sort(key=lambda x: x["time"])
+    return out
+
+
+def _snapshot_to_market_outcomes(
+    entry_raw: dict, market: str, home: str, away: str,
+) -> Optional[dict]:
+    """Turn a single movement entry into a normalized market dict (same shape
+    as _normalize_event_odds() market output)."""
+    market_lc = market.lower().strip()
+
+    # Movement entries use the same per-market schema as historical/odds:
+    #   ML:      {"home": "2.95", "away": "1.43"}
+    #   Spread:  {"hdp": -6.5, "home": "1.91", "away": "1.91"}
+    #   Totals:  {"hdp": 226.5, "over": "1.87", "under": "1.95"}
+    odds = entry_raw.get("odds") or entry_raw
+    if isinstance(odds, list) and odds:
+        odds = odds[0]
+    if not isinstance(odds, dict):
+        return None
+
+    if market_lc in ("ml", "moneyline", "h2h"):
+        home_dec = _safe_float(odds.get("home"))
+        away_dec = _safe_float(odds.get("away"))
+        if not home_dec or not away_dec:
+            return None
+        return {
+            "key": "h2h",
+            "last_update": "",
+            "outcomes": [
+                {"name": home, "price": _decimal_to_american(home_dec)},
+                {"name": away, "price": _decimal_to_american(away_dec)},
+            ],
+        }
+    if market_lc in ("spread", "spreads", "handicap"):
+        hdp = odds.get("hdp")
+        home_dec = _safe_float(odds.get("home"))
+        away_dec = _safe_float(odds.get("away"))
+        if hdp is None or not home_dec or not away_dec:
+            return None
+        hdp_f = float(hdp)
+        return {
+            "key": "spreads",
+            "last_update": "",
+            "outcomes": [
+                {"name": home, "price": _decimal_to_american(home_dec), "point": hdp_f},
+                {"name": away, "price": _decimal_to_american(away_dec), "point": -hdp_f},
+            ],
+        }
+    if market_lc in ("totals", "total", "over/under"):
+        hdp = odds.get("hdp")
+        over_dec = _safe_float(odds.get("over"))
+        under_dec = _safe_float(odds.get("under"))
+        if hdp is None or not over_dec or not under_dec:
+            return None
+        hdp_f = float(hdp)
+        return {
+            "key": "totals",
+            "last_update": "",
+            "outcomes": [
+                {"name": "Over", "price": _decimal_to_american(over_dec), "point": hdp_f},
+                {"name": "Under", "price": _decimal_to_american(under_dec), "point": hdp_f},
+            ],
+        }
+    return None
+
+
+def _pick_pre_commence_entry(
+    entries: list[dict], commence: datetime, lead_minutes: int,
+) -> Optional[dict]:
+    """Return the LATEST entry with time <= commence - lead_minutes.
+    None if no such entry exists (fallback will be triggered)."""
+    if not entries or commence is None:
+        return None
+    cutoff = commence.timestamp() - (lead_minutes * 60)
+    candidates = [e for e in entries if e["time"].timestamp() <= cutoff]
+    if not candidates:
+        return None
+    return candidates[-1]  # latest by time (entries are sorted ascending)
+
+
+@tracked_ingestion(
+    source=lambda event_id="", **_: "odds_api_io.v3.movements.snapshot",
+    sla_seconds=600,
+)
+async def get_historical_snapshot(
+    event_id: str | int,
+    commence_time: str = "",
+    minutes_before_commence: int = 60,
+    bookmakers: str = "",
+    markets: tuple = ("ML", "Spread", "Totals"),
+) -> dict:
+    """Fetch a timestamped PRE-COMMENCE odds snapshot for an event.
+
+    Replaces get_historical_odds() for backtesting. Instead of returning the
+    closing price (lookahead), this walks /v3/odds/movements per (book, market)
+    and picks the LATEST snapshot that occurred before
+    `commence_time - minutes_before_commence`. Guarantees that the returned
+    price was actually visible at the bet-time a realistic strategy would
+    have placed.
+
+    Dual-mode fallback:
+      - If no pre-commence snapshot exists for a given (book, market)
+        combination (odds-api gap, or the book opened late), fall back to
+        the closing odds for that book+market and TAG the book+market
+        with snapshot_quality='closing_fallback'. All other (book, market)
+        combos that DID have pre-commence data stay tagged
+        'pre_commence'. Callers can compute a per-event mix.
+      - If minutes_before_commence == 0, we skip the movements call entirely
+        and return closing odds tagged 'closing_mode' (kept for comparison
+        runs / regression harness).
+
+    Returns shape:
+      {
+        "id": str, "home_team": str, "away_team": str,
+        "commence_time": str, "sport_key": str,
+        "bookmakers": [
+          {"key": ..., "title": ..., "last_update": ISO,
+           "snapshot_quality": "pre_commence"|"closing_fallback",
+           "markets": [...]},
+          ...
+        ],
+        "snapshot_quality_mix": {"pre_commence": N, "closing_fallback": M},
+        "lead_minutes": int,
+      }
+    """
+    override = os.getenv("CALLISTO_BACKTEST_LEAD_MINUTES")
+    if override is not None:
+        try:
+            minutes_before_commence = int(override)
+        except (ValueError, TypeError):
+            pass
+
+    bm_list = [b.strip() for b in (bookmakers or _SELECTED_BOOKMAKERS).split(",") if b.strip()]
+    commence_dt = _parse_iso(commence_time) if commence_time else None
+
+    # Closing-mode shortcut (for comparison backtests / regression harness):
+    # skip the per-book movements fan-out entirely.
+    if minutes_before_commence == 0 or commence_dt is None:
+        closing_raw = await get_historical_odds(event_id, bookmakers=",".join(bm_list))
+        if isinstance(closing_raw, dict) and closing_raw.get("bookmakers"):
+            normalized = _normalize_event_odds(
+                closing_raw,
+                {"id": str(event_id), "commence_time": commence_time},
+                closing_raw.get("sport_key", ""),
+            )
+            if normalized:
+                for bm in normalized.get("bookmakers", []):
+                    bm["snapshot_quality"] = "closing_mode"
+                normalized["snapshot_quality_mix"] = {
+                    "pre_commence": 0,
+                    "closing_fallback": 0,
+                    "closing_mode": len(normalized.get("bookmakers", [])),
+                }
+                normalized["lead_minutes"] = 0
+                normalized["snapshot_time"] = commence_time or ""
+                return normalized
+        return {"error": "closing-mode fallback returned empty", "id": str(event_id)}
+
+    # Fan out movements per (book, market). Each call is 1 odds-api credit.
+    # We batch the markets the backtest actually consumes (ML/Spread/Totals).
+    per_book_markets: dict[str, list[dict]] = {}
+    per_book_qualities: dict[str, str] = {}
+    home_guess = ""
+    away_guess = ""
+    sport_key_guess = ""
+    latest_snapshot_time: Optional[datetime] = None
+    mix_counts = {"pre_commence": 0, "closing_fallback": 0}
+
+    # Fallback handle — only fetched once, lazily, if any book/market gap.
+    closing_fallback_cache: Optional[dict] = None
+
+    async def _get_closing_fallback() -> dict:
+        nonlocal closing_fallback_cache
+        if closing_fallback_cache is None:
+            raw = await get_historical_odds(event_id, bookmakers=",".join(bm_list))
+            closing_fallback_cache = raw if isinstance(raw, dict) else {}
+        return closing_fallback_cache
+
+    for bm_name in bm_list:
+        used_pre_commence = False
+        for market in markets:
+            try:
+                mv = await get_odds_movements(
+                    event_id=event_id, bookmaker=bm_name, market=market,
+                )
+            except Exception as e:
+                logger.debug(f"movements fetch failed {bm_name}/{market}: {e}")
+                continue
+
+            if isinstance(mv, dict) and mv.get("error"):
+                # API error — skip this (book, market) and let fallback fire.
+                continue
+
+            entries = _extract_movement_snapshots(mv)
+            if not entries:
+                continue
+
+            pick = _pick_pre_commence_entry(
+                entries, commence_dt, minutes_before_commence,
+            )
+            if pick is None:
+                # Fallback path — no pre-commence data for this slot.
+                continue
+
+            # Infer home/away if the movements payload carries it.
+            for k in ("home", "homeTeam", "home_team"):
+                val = mv.get(k) if isinstance(mv, dict) else None
+                if val:
+                    home_guess = val
+                    break
+            for k in ("away", "awayTeam", "away_team"):
+                val = mv.get(k) if isinstance(mv, dict) else None
+                if val:
+                    away_guess = val
+                    break
+            sk = mv.get("sport_key") if isinstance(mv, dict) else None
+            if sk:
+                sport_key_guess = sk
+
+            market_obj = _snapshot_to_market_outcomes(
+                pick["raw"], market, home_guess, away_guess,
+            )
+            if market_obj is None:
+                continue
+            market_obj["last_update"] = pick["time"].isoformat()
+
+            per_book_markets.setdefault(bm_name, []).append(market_obj)
+            used_pre_commence = True
+            if latest_snapshot_time is None or pick["time"] > latest_snapshot_time:
+                latest_snapshot_time = pick["time"]
+
+        if used_pre_commence:
+            per_book_qualities[bm_name] = "pre_commence"
+            mix_counts["pre_commence"] += 1
+        else:
+            # Fallback: pull closing odds for this book.
+            fb = await _get_closing_fallback()
+            bm_block = (fb.get("bookmakers") or {}).get(bm_name) if isinstance(fb, dict) else None
+            if bm_block:
+                # bm_block is the raw market list; reuse normalize path by
+                # wrapping as a single-book response.
+                partial = {
+                    "id": event_id,
+                    "home": fb.get("home", home_guess),
+                    "away": fb.get("away", away_guess),
+                    "date": commence_time,
+                    "bookmakers": {bm_name: bm_block},
+                }
+                norm = _normalize_event_odds(partial, {"id": str(event_id)}, sport_key_guess or "")
+                if norm and norm.get("bookmakers"):
+                    per_book_markets[bm_name] = norm["bookmakers"][0].get("markets", [])
+                    per_book_qualities[bm_name] = "closing_fallback"
+                    mix_counts["closing_fallback"] += 1
+                    logger.warning(
+                        f"snapshot_quality=closing_fallback for event={event_id} book={bm_name}: "
+                        f"no pre-commence movement data (lead_minutes={minutes_before_commence})"
+                    )
+
+    if not per_book_markets:
+        return {
+            "error": "no snapshots available (pre-commence or fallback)",
+            "id": str(event_id),
+            "lead_minutes": minutes_before_commence,
+        }
+
+    result = {
+        "id": str(event_id),
+        "home_team": home_guess,
+        "away_team": away_guess,
+        "commence_time": commence_time,
+        "sport_key": sport_key_guess,
+        "bookmakers": [],
+        "snapshot_quality_mix": mix_counts,
+        "lead_minutes": minutes_before_commence,
+        "snapshot_time": latest_snapshot_time.isoformat() if latest_snapshot_time else commence_time,
+    }
+    for bm_name, markets_list in per_book_markets.items():
+        bm_slug = _BOOKMAKER_SLUG_MAP.get(bm_name, bm_name.lower().replace(" ", "_"))
+        result["bookmakers"].append({
+            "key": bm_slug,
+            "title": bm_name,
+            "last_update": latest_snapshot_time.isoformat() if latest_snapshot_time else "",
+            "snapshot_quality": per_book_qualities.get(bm_name, "pre_commence"),
+            "markets": markets_list,
+        })
+
+    return result
 
 
 @tracked_ingestion(
