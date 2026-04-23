@@ -434,7 +434,10 @@ def find_ats_patterns(
             "pattern_type": pl.Utf8, "pattern_key": pl.Utf8,
             "sample_size": pl.Int64, "wins": pl.Int64,
             "hit_rate": pl.Float64, "edge_pct": pl.Float64,
-            "p_value": pl.Float64, "pattern_hash": pl.Utf8,
+            "p_value": pl.Float64,
+            "p_value_adj": pl.Float64,
+            "n_tests": pl.Int64,
+            "pattern_hash": pl.Utf8,
         })
 
     # Ensure we have the required columns, compute derived ones
@@ -453,7 +456,10 @@ def find_ats_patterns(
             "pattern_type": pl.Utf8, "pattern_key": pl.Utf8,
             "sample_size": pl.Int64, "wins": pl.Int64,
             "hit_rate": pl.Float64, "edge_pct": pl.Float64,
-            "p_value": pl.Float64, "pattern_hash": pl.Utf8,
+            "p_value": pl.Float64,
+            "p_value_adj": pl.Float64,
+            "n_tests": pl.Int64,
+            "pattern_hash": pl.Utf8,
         })
 
     # Prefer the canonical local_game_date (venue-local tz) when present —
@@ -538,18 +544,26 @@ def find_ats_patterns(
         min_sample, min_edge, patterns,
     )
 
+    # Apply Bonferroni across the entire group-by grid (≥6 parametric tests).
+    # Discovery phase p-hacking: report both raw and adjusted p so downstream
+    # hypothesis generation uses the corrected value as its significance gate.
+    _bonferroni_finalize(patterns)
+
     if not patterns:
         return pl.DataFrame(schema={
             "pattern_type": pl.Utf8, "pattern_key": pl.Utf8,
             "sample_size": pl.Int64, "wins": pl.Int64,
             "hit_rate": pl.Float64, "edge_pct": pl.Float64,
-            "p_value": pl.Float64, "pattern_hash": pl.Utf8,
+            "p_value": pl.Float64,
+            "p_value_adj": pl.Float64,
+            "n_tests": pl.Int64,
+            "pattern_hash": pl.Utf8,
         })
 
     result = pl.DataFrame(patterns)
 
-    # Sort by p_value ascending (most significant first)
-    result = result.sort("p_value")
+    # Sort by adjusted p ascending (most significant after correction first)
+    result = result.sort("p_value_adj")
 
     return result
 
@@ -563,7 +577,14 @@ def _find_group_patterns(
     min_edge: float,
     patterns: list[dict],
 ) -> None:
-    """Helper: find patterns for a specific grouping."""
+    """Helper: find patterns for a specific grouping.
+
+    Each row returned carries BOTH the raw binomial p-value (``p_value``)
+    and an unfinalized Bonferroni-adjusted p (``p_value_adj_raw = p*k``).
+    The caller (``find_ats_patterns``) does the final correction across
+    the entire group-by grid (see ``_bonferroni_finalize``) since only
+    the caller knows the total number of tests performed.
+    """
     # Filter to rows where group cols and target are non-null
     valid_cols = [c for c in group_cols if c in df.columns]
     if len(valid_cols) != len(group_cols) or target_col not in df.columns:
@@ -611,12 +632,36 @@ def _find_group_patterns(
             "hit_rate": round(row["hit_rate"], 4),
             "edge_pct": round(row["edge_pct"], 2),
             "p_value": round(p_val, 6),
+            # p_value_adj filled in by caller once total-tests k is known
+            "p_value_adj": None,
             "pattern_hash": _pattern_hash({
                 "type": pattern_type,
                 "key": key_parts,
                 "target": target_col,
             }),
         })
+
+
+def _bonferroni_finalize(patterns: list[dict]) -> None:
+    """Apply Bonferroni correction across all tests performed in the grid.
+
+    Discovery-phase p-hacking: ≥6 parametric group-bys across sport×dow,
+    sport×month, sport×total_bucket, teams, etc. each test gets its own
+    hypothesis, so the family-wise rate scales linearly with k.  We report
+    both raw (``p_value``) and adjusted (``p_value_adj = min(1, p*k)``)
+    so downstream hypothesis generation can use the corrected value as
+    its gate.
+    """
+    k = len(patterns)
+    if k <= 1:
+        for p in patterns:
+            p["p_value_adj"] = p["p_value"]
+            p["n_tests"] = k
+        return
+    for p in patterns:
+        raw = float(p.get("p_value") or 1.0)
+        p["p_value_adj"] = round(min(1.0, raw * k), 6)
+        p["n_tests"] = k
 
 
 def find_player_prop_patterns(
