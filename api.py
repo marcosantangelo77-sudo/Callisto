@@ -44,7 +44,7 @@ from tools.health import SystemHealth
 from tools.pipeline_integrity import get_checker as get_integrity_checker, initialize as init_integrity
 from tools.learned_correlations import LearnedCorrelationStore
 from tools.correlation import set_learned_store, SPORT_CORRELATIONS
-from tools.state_paths import restart_signal_path
+from tools.state_paths import restart_signal_path, state_dir
 from tools.order_manager import (
     OrderManager,
     reconcile_filled_orders,
@@ -403,8 +403,94 @@ async def restart_signal_watcher():
 # The set `_sla_alerted_sources` dedupes — one alert per source until
 # it recovers. If we didn't dedupe, a 6-hour ESPN outage would flood
 # the task queue with 72 identical tasks and starve real work.
-_sla_alerted_sources: set[str] = set()
+#
+# PERSISTENCE: The alerted-source set is mirrored to a JSON file under
+# ``tools.state_paths.state_dir()`` so watchdog-driven API restarts don't
+# re-fire investigation tasks for every stale source on startup. Prior
+# to persistence, a restart with 22 stale sources would flood the queue
+# with 22 duplicates instantly — and the queue had accumulated 599 such
+# entries on 2026-04-23.
+#
+# DEFENSE IN DEPTH: Before inserting a new task we also check whether a
+# PENDING or PROCESSING ``investigate: ingestion source '<X>'`` task
+# already exists for this source. If the state file is ever lost
+# (disk wipe, STATE_DIR env change, manual deletion) but the queue still
+# holds the tasks, this DB-level guard blocks duplicates.
+SLA_ALERTED_SOURCES_PATH = state_dir() / "sla_alerted_sources.json"
 INGESTION_SLA_CHECK_INTERVAL_S = 300  # 5 min
+
+
+def _load_sla_alerted_sources() -> set[str]:
+    """Load the persisted alerted-source set. Missing/corrupt file → empty."""
+    try:
+        if not SLA_ALERTED_SOURCES_PATH.exists():
+            return set()
+        import json as _json
+        raw = SLA_ALERTED_SOURCES_PATH.read_text(encoding="utf-8")
+        data = _json.loads(raw)
+        if isinstance(data, list):
+            return {str(x) for x in data if isinstance(x, str)}
+        if isinstance(data, dict) and isinstance(data.get("sources"), list):
+            return {str(x) for x in data["sources"] if isinstance(x, str)}
+        return set()
+    except Exception as e:
+        logger.warning(
+            f"SLA watchdog: could not load {SLA_ALERTED_SOURCES_PATH}: {e}"
+        )
+        return set()
+
+
+def _save_sla_alerted_sources(sources: set[str]) -> None:
+    """Atomically persist the alerted-source set (tmp + replace)."""
+    try:
+        import json as _json
+        payload = {
+            "sources": sorted(sources),
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        target = SLA_ALERTED_SOURCES_PATH
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_text(
+            _json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(tmp, target)
+    except Exception as e:
+        logger.warning(
+            f"SLA watchdog: could not persist {SLA_ALERTED_SOURCES_PATH}: {e}"
+        )
+
+
+_sla_alerted_sources: set[str] = _load_sla_alerted_sources()
+
+
+def _sla_investigate_query_prefix(source: str) -> str:
+    """Stable prefix used by the task-queue dedup LIKE match.
+
+    Must match the exact opening of the query string submitted in
+    ``ingestion_sla_watchdog_loop`` so existing PENDING/PROCESSING rows
+    are detected.
+    """
+    return f"investigate: ingestion source '{source}'"
+
+
+async def _pending_investigate_task_exists(db, source: str) -> bool:
+    """Return True iff a PENDING/PROCESSING investigate-task already
+    exists in ``task_queue`` for this source. Fail-open on DB errors so
+    transient issues never mask a real stale-source alert."""
+    try:
+        cursor = await db.execute(
+            "SELECT 1 FROM task_queue "
+            "WHERE status IN ('PENDING','PROCESSING') "
+            "  AND query LIKE ? "
+            "LIMIT 1",
+            (f"{_sla_investigate_query_prefix(source)}%",),
+        )
+        row = await cursor.fetchone()
+        return row is not None
+    except Exception as e:
+        logger.debug(f"SLA watchdog: dedup check failed for {source}: {e}")
+        return False
 
 
 async def ingestion_sla_watchdog_loop():
@@ -415,6 +501,8 @@ async def ingestion_sla_watchdog_loop():
         try:
             await asyncio.sleep(INGESTION_SLA_CHECK_INTERVAL_S)
 
+            still_stale: set[str] = set()
+            scan_completed = False
             try:
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("PRAGMA busy_timeout = 10000")
@@ -436,44 +524,57 @@ async def ingestion_sla_watchdog_loop():
                         "  )"
                     )
                     rows = await cursor.fetchall()
+                    scan_completed = True
+
+                    for source, last_status, age_s in rows:
+                        if age_s is None:
+                            continue
+                        sla = resolve_sla_seconds(source)
+                        if float(age_s) > sla * CRITICAL_MULTIPLIER:
+                            still_stale.add(source)
+                            if source in _sla_alerted_sources:
+                                continue  # already filed (process-local memory)
+                            if await _pending_investigate_task_exists(db, source):
+                                _sla_alerted_sources.add(source)
+                                _save_sla_alerted_sources(_sla_alerted_sources)
+                                logger.info(
+                                    f"SLA watchdog: {source} already has a "
+                                    f"pending investigate-task — skipping submit"
+                                )
+                                continue
+                            minutes = int(float(age_s) / 60)
+                            query = (
+                                f"investigate: ingestion source '{source}' has not "
+                                f"successfully ingested for {minutes} minutes "
+                                f"(SLA: {sla}s, last_status: {last_status}). "
+                                f"Check whether this is a credential / URL / upstream "
+                                f"outage, an off-season lull, or a schema drift. "
+                                f"Propose a remediation."
+                            )
+                            try:
+                                await queue.submit_task(query, priority=2)
+                                _sla_alerted_sources.add(source)
+                                _save_sla_alerted_sources(_sla_alerted_sources)
+                                logger.warning(
+                                    f"SLA watchdog: filed investigation task for {source} "
+                                    f"({minutes} min stale)"
+                                )
+                            except Exception as e:
+                                logger.warning(f"SLA watchdog: submit_task failed: {e}")
             except Exception as e:
                 logger.debug(f"SLA watchdog query failed: {e}")
                 continue
 
-            still_stale: set[str] = set()
-            for source, last_status, age_s in rows:
-                if age_s is None:
-                    continue
-                sla = resolve_sla_seconds(source)
-                if float(age_s) > sla * CRITICAL_MULTIPLIER:
-                    still_stale.add(source)
-                    if source in _sla_alerted_sources:
-                        continue  # already filed
-                    minutes = int(float(age_s) / 60)
-                    query = (
-                        f"investigate: ingestion source '{source}' has not "
-                        f"successfully ingested for {minutes} minutes "
-                        f"(SLA: {sla}s, last_status: {last_status}). "
-                        f"Check whether this is a credential / URL / upstream "
-                        f"outage, an off-season lull, or a schema drift. "
-                        f"Propose a remediation."
-                    )
-                    try:
-                        await queue.submit_task(query, priority=2)
-                        _sla_alerted_sources.add(source)
-                        logger.warning(
-                            f"SLA watchdog: filed investigation task for {source} "
-                            f"({minutes} min stale)"
-                        )
-                    except Exception as e:
-                        logger.warning(f"SLA watchdog: submit_task failed: {e}")
-
             # Recovery: drop sources that have recovered so a future breach
-            # re-files.
-            recovered = _sla_alerted_sources - still_stale
-            for src in recovered:
-                _sla_alerted_sources.discard(src)
-                logger.info(f"SLA watchdog: {src} recovered, re-arming alert")
+            # re-files. Only run when the scan actually succeeded — a DB
+            # error doesn't mean every source recovered.
+            if scan_completed:
+                recovered = _sla_alerted_sources - still_stale
+                if recovered:
+                    for src in recovered:
+                        _sla_alerted_sources.discard(src)
+                        logger.info(f"SLA watchdog: {src} recovered, re-arming alert")
+                    _save_sla_alerted_sources(_sla_alerted_sources)
 
         except asyncio.CancelledError:
             break
