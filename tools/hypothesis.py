@@ -41,6 +41,7 @@ from tools.market_microstructure import (
     brier_score as _brier_score,
     information_coefficient as _information_coefficient,
 )
+from tools.bankroll_sim import simulate_before_promote  # pre-LIVE sim gate
 
 load_dotenv()
 
@@ -100,6 +101,16 @@ MAX_LIVE_OVERLAP_PCT = _env_float("CALLISTO_MAX_LIVE_OVERLAP_PCT", 0.40)
 PORTFOLIO_OVERLAP_WINDOW_DAYS = _env_int(
     "CALLISTO_PORTFOLIO_OVERLAP_WINDOW_DAYS", 30
 )
+
+# Pre-LIVE Monte Carlo simulation gate (feat/bankroll-montecarlo-sim 2026-04-22):
+#   CALLISTO_SIM_GATE=1                  enables the simulate-before-promote gate
+#   CALLISTO_MAX_PRE_PROMOTE_RUIN=0.02   max 15%-drawdown ruin prob over 30d
+#   CALLISTO_PRE_PROMOTE_N_SIMS=500      n_sims for the gate
+#   CALLISTO_PRE_PROMOTE_HORIZON=30      horizon days for the gate
+SIM_GATE_ENABLED = os.getenv("CALLISTO_SIM_GATE", "1").strip() not in ("0", "false", "False")
+MAX_PRE_PROMOTE_RUIN = _env_float("CALLISTO_MAX_PRE_PROMOTE_RUIN", 0.02)
+PRE_PROMOTE_N_SIMS = _env_int("CALLISTO_PRE_PROMOTE_N_SIMS", 500)
+PRE_PROMOTE_HORIZON = _env_int("CALLISTO_PRE_PROMOTE_HORIZON", 30)
 
 # Signal-collapse mode for per-event dedup in `_get_backtest_signals`.
 #   "random_row" — pick one row per event_id with a deterministic seed
@@ -1524,6 +1535,47 @@ class HypothesisManager:
             except Exception as e:
                 logger.warning(f"portfolio_overlap check failed: {e}")
 
+        # ── PRE-LIVE MONTE CARLO SIMULATION GATE ──
+        # feat/bankroll-montecarlo-sim (2026-04-22): before promoting to LIVE,
+        # simulate the candidate + all current LIVE hyps across 500 bootstrapped
+        # 30-day paths. If 15%-drawdown ruin probability exceeds
+        # CALLISTO_MAX_PRE_PROMOTE_RUIN (default 0.02), block promotion.
+        sim_result = None
+        if (
+            ready
+            and transition == "paper_trading→live"
+            and SIM_GATE_ENABLED
+            and not is_legacy
+        ):
+            try:
+                sim_result = simulate_before_promote(
+                    hypothesis_id,
+                    n_sims=PRE_PROMOTE_N_SIMS,
+                    horizon_days=PRE_PROMOTE_HORIZON,
+                )
+                ruin = sim_result.get("ruin_prob_30d", 0.0)
+                if ruin > MAX_PRE_PROMOTE_RUIN:
+                    checks.append(
+                        f"FAIL: simulation_ruin_risk — ruin_prob_30d={ruin:.3%} > "
+                        f"cap {MAX_PRE_PROMOTE_RUIN:.1%}. Expected monthly ROI "
+                        f"{sim_result.get('expected_monthly_roi', 0):.2%}, "
+                        f"median drawdown {sim_result.get('expected_drawdown', 0):.1%} "
+                        f"across {sim_result.get('hyp_count', '?')} hyps."
+                    )
+                    ready = False
+                else:
+                    checks.append(
+                        f"PASS: simulation_ruin_risk — ruin_prob_30d={ruin:.3%} "
+                        f"(cap {MAX_PRE_PROMOTE_RUIN:.1%}), monthly ROI "
+                        f"{sim_result.get('expected_monthly_roi', 0):.2%}"
+                    )
+            except Exception as e:
+                # Simulation must not be a silent-failure vector — surface the
+                # error so operators see "simulation failed" rather than the
+                # gate being skipped invisibly.
+                logger.warning(f"simulate_before_promote failed for {hypothesis_id}: {e}")
+                checks.append(f"WARN: simulation_gate_error — {e}")
+
         next_stage = STAGE_ORDER[STAGE_ORDER.index(status) + 1] if ready else None
 
         return {
@@ -1534,6 +1586,7 @@ class HypothesisManager:
             "should_reject": should_reject,
             "checks": checks,
             "portfolio_overlap": portfolio_overlap,
+            "simulation": sim_result,
             "report_summary": {
                 "n": n,
                 "p_value": round(p, 6),

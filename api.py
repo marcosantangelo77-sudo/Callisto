@@ -2214,6 +2214,76 @@ async def simulate_poisson_game(req: PoissonRequest):
     return simulate_poisson(req.home_expected, req.away_expected)
 
 
+# =========================================================================
+# Pre-LIVE bankroll Monte Carlo simulation endpoint
+# feat/bankroll-montecarlo-sim (2026-04-22)
+# =========================================================================
+_PORTFOLIO_SIM_CACHE: dict[tuple, tuple[float, dict]] = {}
+_PORTFOLIO_SIM_CACHE_TTL = 3600  # 1 hour
+
+
+@app.get("/simulate/portfolio", dependencies=[Depends(require_admin_or_loopback)])
+async def simulate_portfolio_endpoint(
+    hypothesis_ids: str = "",
+    n_sims: int = 500,
+    horizon_days: int = 90,
+    starting_bankroll: float = 10000.0,
+    kelly_fraction: float = 0.25,
+    all_live: bool = False,
+):
+    """Run a bankroll Monte Carlo simulation for a portfolio of hypotheses.
+
+    Query params:
+      hypothesis_ids: CSV of hypothesis IDs (ignored if all_live=1)
+      all_live: if true, simulate the full current LIVE roster
+      n_sims: number of paths (capped at 5000)
+      horizon_days: per-path horizon (capped at 365)
+      starting_bankroll: dollar amount each path starts with
+      kelly_fraction: Kelly multiplier (0.25 default = quarter-Kelly)
+
+    Results cached 1hr per unique input signature.
+    """
+    import time as _time
+    from tools.bankroll_sim import simulate_portfolio
+
+    n_sims = max(10, min(int(n_sims), 5000))
+    horizon_days = max(1, min(int(horizon_days), 365))
+
+    if all_live:
+        import sqlite3 as _sqlite3
+        db = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+        conn = _sqlite3.connect(db)
+        try:
+            rows = conn.execute(
+                "SELECT hypothesis_id FROM hypotheses WHERE status = 'live'"
+            ).fetchall()
+        finally:
+            conn.close()
+        ids = [r[0] for r in rows]
+    else:
+        ids = [x.strip() for x in hypothesis_ids.split(",") if x.strip()]
+
+    if not ids:
+        return {"error": "No hypothesis_ids supplied (pass hypothesis_ids=a,b,c or all_live=1)"}
+
+    cache_key = (tuple(sorted(ids)), n_sims, horizon_days, float(starting_bankroll), float(kelly_fraction))
+    now = _time.time()
+    cached = _PORTFOLIO_SIM_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _PORTFOLIO_SIM_CACHE_TTL:
+        return {"cached": True, "age_seconds": round(now - cached[0], 1), **cached[1]}
+
+    result = simulate_portfolio(
+        hypothesis_ids=ids,
+        n_sims=n_sims,
+        horizon_days=horizon_days,
+        starting_bankroll=starting_bankroll,
+        kelly_fraction=kelly_fraction,
+    )
+    payload = result.to_dict(include_paths=False)
+    _PORTFOLIO_SIM_CACHE[cache_key] = (now, payload)
+    return {"cached": False, **payload}
+
+
 @app.get("/model/total/{sport}")
 async def get_model_total(sport: str, venue: str = "", wind_mph: float = None,
                           wind_dir: str = "", temp_f: float = None,
