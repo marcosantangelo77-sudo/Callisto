@@ -182,7 +182,8 @@ CREATE TABLE IF NOT EXISTS clv_log (
     actual_result TEXT,
     actual_pnl REAL,
     close_reliable BOOLEAN DEFAULT TRUE,
-    logged_at DATETIME
+    logged_at DATETIME,
+    local_game_date DATE  -- Canonical: date in venue's local tz. See tools.game_dates.
 );
 
 CREATE INDEX IF NOT EXISTS idx_clv_log_result ON clv_log(actual_result, logged_at);
@@ -360,7 +361,8 @@ CREATE TABLE IF NOT EXISTS backtest_events (
     closing_odds INTEGER,
     closing_implied REAL,
     clv_implied REAL,
-    game_date DATE NOT NULL,
+    game_date DATE NOT NULL,  -- DEPRECATED: use local_game_date. Kept for back-compat.
+    local_game_date DATE,     -- Canonical: date in venue's local tz. See tools.game_dates.
     snapshot_time DATETIME NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (run_id) REFERENCES backtest_runs(run_id),
@@ -369,6 +371,7 @@ CREATE TABLE IF NOT EXISTS backtest_events (
 
 CREATE INDEX IF NOT EXISTS idx_bt_events_run ON backtest_events(run_id, game_date);
 CREATE INDEX IF NOT EXISTS idx_bt_events_signal ON backtest_events(hypothesis_id, signal_generated, actual_result);
+CREATE INDEX IF NOT EXISTS idx_bt_events_local_date ON backtest_events(local_game_date);
 
 -- ──────────────────────────────────────────
 -- PAPER TRADES: forward-test without wagering
@@ -397,7 +400,8 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     actual_result TEXT,
     actual_stat REAL,
     hypothetical_pnl REAL,
-    game_date DATE NOT NULL,
+    game_date DATE NOT NULL,  -- DEPRECATED: use local_game_date. Kept for back-compat.
+    local_game_date DATE,     -- Canonical: date in venue's local tz. See tools.game_dates.
     home_team TEXT,
     away_team TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -407,6 +411,7 @@ CREATE TABLE IF NOT EXISTS paper_trades (
 CREATE INDEX IF NOT EXISTS idx_paper_hypo ON paper_trades(hypothesis_id, game_date);
 CREATE INDEX IF NOT EXISTS idx_paper_result ON paper_trades(hypothesis_id, actual_result);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_dedup ON paper_trades(hypothesis_id, event_id, book, game_date);
+CREATE INDEX IF NOT EXISTS idx_paper_local_date ON paper_trades(local_game_date);
 
 -- ──────────────────────────────────────────
 -- HYPOTHESIS STATS: rolling aggregates
@@ -575,7 +580,8 @@ CREATE TABLE IF NOT EXISTS game_contexts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sport TEXT NOT NULL,
     event_id TEXT,
-    game_date DATE NOT NULL,
+    game_date DATE NOT NULL,  -- DEPRECATED: use local_game_date.
+    local_game_date DATE,     -- Canonical: date in venue's local tz.
     home_team TEXT NOT NULL,
     away_team TEXT NOT NULL,
     home_score INTEGER,
@@ -587,6 +593,7 @@ CREATE TABLE IF NOT EXISTS game_contexts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_game_ctx_sport_date ON game_contexts(sport, game_date);
+CREATE INDEX IF NOT EXISTS idx_game_ctx_local_date ON game_contexts(sport, local_game_date);
 
 -- ──────────────────────────────────────────
 -- PLAYER STATS: post-game stats for prop resolution
@@ -1107,7 +1114,8 @@ CREATE INDEX IF NOT EXISTS idx_edge_surface_event ON live_edge_surface(event_id,
 CREATE TABLE IF NOT EXISTS game_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sport TEXT NOT NULL,
-    game_date TEXT NOT NULL,
+    game_date TEXT NOT NULL,   -- DEPRECATED: use local_game_date (see tools.game_dates).
+    local_game_date DATE,      -- Canonical: date in venue's local tz.
     home_team TEXT NOT NULL,
     away_team TEXT NOT NULL,
     home_score INTEGER,
@@ -1121,6 +1129,8 @@ CREATE TABLE IF NOT EXISTS game_results (
 
 CREATE INDEX IF NOT EXISTS idx_game_results_lookup
     ON game_results(sport, game_date, home_team, away_team);
+CREATE INDEX IF NOT EXISTS idx_game_results_local_date
+    ON game_results(sport, local_game_date);
 
 CREATE VIEW IF NOT EXISTS box_scores AS
 SELECT sport, game_date, home_team AS team_name,

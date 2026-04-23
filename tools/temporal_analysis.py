@@ -456,6 +456,21 @@ def find_ats_patterns(
             "p_value": pl.Float64, "pattern_hash": pl.Utf8,
         })
 
+    # Prefer the canonical local_game_date (venue-local tz) when present —
+    # the legacy game_date column mixes ESPN's ET-oriented date with
+    # UTC-sliced commence_time, which corrupted DOW/month cohorts for
+    # West-Coast late games. Fall back to game_date when local is NULL
+    # (pre-migration rows that the backfill couldn't resolve).
+    if "local_game_date" in df.columns:
+        df = df.with_columns(
+            pl.when(pl.col("local_game_date").is_not_null())
+            .then(pl.col("local_game_date").cast(pl.Utf8))
+            .otherwise(pl.col("game_date"))
+            .alias("_canonical_date")
+        )
+    else:
+        df = df.with_columns(pl.col("game_date").alias("_canonical_date"))
+
     # Add derived columns for grouping
     df = df.with_columns([
         # Total score bucket (5-point buckets)
@@ -467,10 +482,10 @@ def find_ats_patterns(
         (
             pl.col("spread_result").truediv(5).floor().mul(5).cast(pl.Int64)
         ).alias("margin_bucket"),
-        # Day of week from game_date
-        pl.col("game_date").str.to_date("%Y-%m-%d").dt.weekday().alias("day_of_week"),
+        # Day of week from canonical venue-local date
+        pl.col("_canonical_date").str.to_date("%Y-%m-%d").dt.weekday().alias("day_of_week"),
         # Month
-        pl.col("game_date").str.to_date("%Y-%m-%d").dt.month().alias("month"),
+        pl.col("_canonical_date").str.to_date("%Y-%m-%d").dt.month().alias("month"),
         # Home team won
         (pl.col("spread_result") > 0).cast(pl.Int64).alias("home_won"),
     ])
