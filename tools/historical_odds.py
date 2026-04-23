@@ -152,7 +152,7 @@ class HistoricalOddsFetcher:
         odds_format: str = "american",
     ) -> dict:
         """
-        Fetch historical odds for a sport on a specific date.
+        Fetch a pre-commence historical snapshot for a sport on a specific date.
 
         Source cascade:
           1. SQLite cache (free)
@@ -160,17 +160,33 @@ class HistoricalOddsFetcher:
           (fallback: OddsPapi was removed 2026-04-18; odds-api.io Pro is the
           only historical source now. If it fails, we fail loudly rather than
           silently serving stale / lower-quality data.)
+
+        Cache-key note: `market_type` embeds the lead minutes
+        (f"{markets}|lead={N}") so the same date can hold
+        both closing-mode (lead=0) and pre-commence (lead=60) snapshots
+        side-by-side for the re-evaluation harness.
         """
-        # Check cache first
-        cached = await self._get_cached(sport, date, None, markets)
+        # Include lead_minutes in the cache key so lookahead-mode and
+        # pre-commence-mode snapshots don't collide.
+        try:
+            lead_minutes = int(os.getenv("CALLISTO_BACKTEST_LEAD_MINUTES", "60"))
+        except (ValueError, TypeError):
+            lead_minutes = 60
+        cache_key = f"{markets}|lead={lead_minutes}"
+
+        # Check cache first — historical truth is immutable after settlement,
+        # so the cache is never-expires for lookahead-free (lead>0) keys.
+        cached = await self._get_cached(
+            sport, date, None, cache_key, ttl_applies=(lead_minutes == 0),
+        )
         if cached:
-            logger.debug(f"Cache hit: {sport} {date}")
+            logger.debug(f"Cache hit: {sport} {date} key={cache_key}")
             return cached
 
         # Source 1 (and only): Odds-API.io Pro (15 books, best quality)
         result = await self._fetch_via_odds_api_io(sport, date, markets)
         if result and result.get("games"):
-            await self._cache_response(sport, date, None, markets, result, 1)
+            await self._cache_response(sport, date, None, cache_key, result, 1)
             return result
 
         # Source failed — log with source_errors for triage.
@@ -183,15 +199,25 @@ class HistoricalOddsFetcher:
     async def _fetch_via_odds_api_io(
         self, sport: str, date: str, markets: str,
     ) -> dict:
-        """Try Odds-API.io Pro for historical odds (15 books, 1 request).
+        """Try Odds-API.io Pro for historical odds (15 books).
 
-        Uses /historical/events to find events for a date, then
-        /historical/odds to get closing odds + scores.
+        Lookahead-safe path: for each event, instead of fetching closing odds
+        and stamping them as bet-time, we fetch a PRE-COMMENCE snapshot via
+        /v3/odds/movements and pick the latest snapshot_time that occurred at
+        or before (commence_time - CALLISTO_BACKTEST_LEAD_MINUTES).
+
+        Env override:
+            CALLISTO_BACKTEST_LEAD_MINUTES (int, default 60)
+            0 = closing-mode fallback (for A/B comparison).
+
+        Fallback: when /odds/movements has no pre-commence snapshot for a
+        (book, market) slot, the individual book is tagged
+        snapshot_quality='closing_fallback' and retains the closing price.
+        Downstream promotion gates filter on the mix.
         """
         try:
             from tools.odds_api_io import (
-                get_historical_events, get_historical_odds, get_usage_status,
-                _normalize_event_odds, SPORT_MAP, SPORT_TITLES,
+                get_historical_events, get_historical_snapshot, get_usage_status,
             )
 
             usage = get_usage_status()
@@ -200,35 +226,74 @@ class HistoricalOddsFetcher:
             if usage.get("requests_remaining_this_hour", 0) < 5:
                 return {"error": "Odds-API.io rate limit low", "games": []}
 
+            # Env override for the lead window.
+            lead_minutes_raw = os.getenv("CALLISTO_BACKTEST_LEAD_MINUTES", "60")
+            try:
+                lead_minutes = int(lead_minutes_raw)
+            except (ValueError, TypeError):
+                lead_minutes = 60
+
             # Get historical events for this sport/date
             hist = await get_historical_events(sport, date, date)
             events = hist.get("events", [])
             if not events:
                 return {"error": f"No historical events for {sport} on {date}", "games": []}
 
-            # Get closing odds for each event via /historical/odds
-            event_ids = [e.get("id") for e in events if e.get("id")]
             games = []
+            latest_snapshot_time: Optional[str] = None
+            mix_total = {"pre_commence": 0, "closing_fallback": 0, "closing_mode": 0}
 
-            for eid in event_ids:
-                raw = await get_historical_odds(eid)
-                if isinstance(raw, dict) and raw.get("bookmakers"):
-                    normalized = _normalize_event_odds(raw, {}, sport)
-                    if normalized:
-                        games.append(normalized)
+            for ev in events:
+                eid = ev.get("id")
+                if not eid:
+                    continue
+                commence = (
+                    ev.get("date") or ev.get("commence_time")
+                    or ev.get("start_time") or f"{date}T00:00:00Z"
+                )
+                snapshot = await get_historical_snapshot(
+                    event_id=eid,
+                    commence_time=commence,
+                    minutes_before_commence=lead_minutes,
+                )
+                if not isinstance(snapshot, dict) or snapshot.get("error"):
+                    continue
+                if not snapshot.get("bookmakers"):
+                    continue
+
+                # Ensure downstream sees the expected sport_key.
+                snapshot.setdefault("sport_key", sport)
+                if not snapshot.get("sport_key"):
+                    snapshot["sport_key"] = sport
+
+                games.append(snapshot)
+
+                mix = snapshot.get("snapshot_quality_mix", {})
+                for k in mix_total:
+                    mix_total[k] += int(mix.get(k, 0) or 0)
+
+                snap_ts = snapshot.get("snapshot_time")
+                if snap_ts and (latest_snapshot_time is None or snap_ts > latest_snapshot_time):
+                    latest_snapshot_time = snap_ts
 
             if games:
                 logger.info(
-                    f"Historical odds via Odds-API.io Pro: {sport} {date} → "
-                    f"{len(games)} games (15 books)"
+                    f"Historical snapshot via Odds-API.io Pro: {sport} {date} → "
+                    f"{len(games)} games (lead={lead_minutes}m, "
+                    f"pre_commence={mix_total['pre_commence']}, "
+                    f"closing_fallback={mix_total['closing_fallback']}, "
+                    f"closing_mode={mix_total['closing_mode']})"
                 )
             return {
                 "sport": sport,
                 "date": date,
-                "timestamp": f"{date}T00:00:00Z",
+                # Use the real latest snapshot_time — no more midnight-UTC lie.
+                "timestamp": latest_snapshot_time or f"{date}T00:00:00Z",
                 "games": games,
                 "game_count": len(games),
                 "source": "odds_api_io_pro",
+                "lead_minutes": lead_minutes,
+                "snapshot_quality_mix": mix_total,
             }
         except Exception as e:
             logger.debug(f"Odds-API.io Pro historical failed: {e}")
@@ -335,16 +400,25 @@ class HistoricalOddsFetcher:
 
     async def _get_cached(
         self, sport: str, date: str, event_id: Optional[str], market_type: str,
+        *, ttl_applies: bool = False,
     ) -> Optional[dict]:
         """Check SQLite cache for a historical odds response.
 
         Uses read-only connection to avoid WAL write lock contention.
-        Cache entries older than 7 days are treated as stale and re-fetched
-        (odds providers sometimes issue corrections).
+
+        TTL policy:
+          - For lookahead-free keys (market_type contains 'lead=N' with N>0),
+            historical truth is IMMUTABLE after game settlement. Cache is
+            keyed on (sport, date, event_id, market_type_with_lead) and
+            never expires. Caller passes ttl_applies=False.
+          - For closing-mode / live-odds keys, keep the legacy 7-day TTL
+            (odds providers occasionally issue corrections). Caller passes
+            ttl_applies=True.
         """
         db = self._read_db if self._read_db else self._db
-        # 7-day TTL on cache entries — odds providers may issue corrections
-        ttl_clause = "AND fetched_at > datetime('now', '-7 days')"
+        ttl_clause = (
+            "AND fetched_at > datetime('now', '-7 days')" if ttl_applies else ""
+        )
         if event_id:
             cursor = await db.execute(
                 "SELECT response_json FROM historical_odds_cache "

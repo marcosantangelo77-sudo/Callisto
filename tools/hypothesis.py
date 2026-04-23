@@ -1128,6 +1128,60 @@ class HypothesisManager:
             else:
                 checks.append(f"PASS: Positive edge rate {pos_rate:.1%} >= {min_per:.0%}")
 
+        # ── HARD GATE: lookahead-free snapshot quality ──
+        # Every backtest event row records snapshot_quality in its
+        # model_factors JSON ('pre_commence' | 'closing_fallback' |
+        # 'closing_mode'). At least 80% of the SIGNAL sample must be
+        # 'pre_commence' — otherwise the hypothesis earned its p-value on
+        # closing-line lookahead data and can't be trusted to promote.
+        # Silent-skip when the metadata isn't present (e.g. legacy rows
+        # from before the 2026-04-22 fix) — the re-eval harness quantifies
+        # historic damage separately.
+        if transition == "backtesting→paper_trading":
+            try:
+                quality_cur = await self._db.execute(
+                    "SELECT "
+                    "  COALESCE(json_extract(model_factors,'$.snapshot_quality'),'unknown') AS q, "
+                    "  COUNT(*) "
+                    "FROM backtest_events "
+                    "WHERE hypothesis_id = ? AND signal_generated = 1 "
+                    "GROUP BY q",
+                    (hypothesis_id,),
+                )
+                rows = await quality_cur.fetchall()
+                counts = {r[0]: int(r[1]) for r in rows}
+                total = sum(counts.values())
+                pre = counts.get("pre_commence", 0)
+                legacy_unknown = counts.get("unknown", 0)
+                # If the sample is majority legacy-unknown, don't block —
+                # those are rows from before the fix. Quantify separately
+                # via scripts/reeval_backtests_no_lookahead.py.
+                if total > 0 and (total - legacy_unknown) > 0:
+                    instrumented = total - legacy_unknown
+                    pre_rate = pre / instrumented
+                    if pre_rate < 0.80:
+                        fb = counts.get("closing_fallback", 0)
+                        cm = counts.get("closing_mode", 0)
+                        checks.append(
+                            f"FAIL: snapshot_quality sample only {pre_rate:.1%} "
+                            f"pre_commence (need >=80%; pre={pre}, "
+                            f"closing_fallback={fb}, closing_mode={cm}, "
+                            f"instrumented={instrumented}/{total})"
+                        )
+                        ready = False
+                    else:
+                        checks.append(
+                            f"PASS: snapshot_quality {pre_rate:.1%} pre_commence "
+                            f"(instrumented={instrumented}/{total})"
+                        )
+                elif total > 0:
+                    checks.append(
+                        f"INFO: snapshot_quality unknown on all {total} signals "
+                        f"(legacy data — gate skipped)"
+                    )
+            except Exception as e:
+                logger.debug(f"snapshot_quality gate error for {hypothesis_id}: {e}")
+
         # Overall edge distribution check (SIGNAL events only, deduplicated by event_id)
         # CRITICAL FIX: Previous version averaged ALL events including non-signals.
         # Non-signal events having negative edge is EXPECTED — the hypothesis correctly

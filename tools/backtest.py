@@ -533,6 +533,10 @@ class BacktestEngine:
                     f"schedule_context is EMPTY — all games will be rejected (fail-closed)"
                 )
 
+        # Track aggregate snapshot-quality mix across the whole run so the
+        # promotion gate downstream can enforce the >=80% pre_commence rule.
+        run_quality_mix = {"pre_commence": 0, "closing_fallback": 0, "closing_mode": 0}
+
         for date_str in dates_in_range:
             snapshot = await self.historical_fetcher.fetch_historical_odds(
                 sport=sport, date=date_str, markets=fetch_markets,
@@ -544,6 +548,10 @@ class BacktestEngine:
             )
             games = snapshot.get("games", [])
             snapshot_time = snapshot.get("timestamp", date_str)
+            # Aggregate the lookahead-mix summary emitted by historical_odds.py
+            _snap_mix = snapshot.get("snapshot_quality_mix") or {}
+            for k in run_quality_mix:
+                run_quality_mix[k] += int(_snap_mix.get(k, 0) or 0)
             # Release the top-level snapshot dict early — games list is all we need
             del snapshot
 
@@ -650,6 +658,19 @@ class BacktestEngine:
             f"Backtest {run_id}: {multibook_dates} dates with multi-book data, "
             f"{singlebook_skipped} dates with single-book only (no cross-book edges)"
         )
+
+        # Persist lookahead-mode summary into run_config so the promotion gate
+        # and re-eval harness can audit which lead_minutes + snapshot_quality
+        # mix produced these stats. Lets downstream reject >=20% closing_fallback.
+        try:
+            _lead_minutes = int(os.getenv("CALLISTO_BACKTEST_LEAD_MINUTES", "60"))
+        except (ValueError, TypeError):
+            _lead_minutes = 60
+        config = dict(config) if isinstance(config, dict) else {"raw": config}
+        config["_lookahead"] = {
+            "lead_minutes": _lead_minutes,
+            "snapshot_quality_mix": run_quality_mix,
+        }
 
         # ── DEFERRED WRITE: batch ALL writes into one transaction ──
         # Uses a FRESH connection to avoid lock contention from persistent
@@ -2266,6 +2287,17 @@ class BacktestEngine:
         signals = 0
         _pending_rows: list[tuple] = []  # Collect rows for batch INSERT
 
+        # Per-book snapshot_quality: 'pre_commence' | 'closing_fallback' |
+        # 'closing_mode'. Gets embedded into model_factors on every event row
+        # so the promotion gate can aggregate on the hypothesis level without
+        # re-fetching the upstream snapshot. Defaults to 'pre_commence' for
+        # books that don't emit it (legacy / synthetic test data) — the
+        # promotion gate only rejects when the sample is >=20% fallback.
+        book_snapshot_quality: dict[str, str] = {}
+        for bm in bookmakers:
+            bk_key = bm.get("key", "").lower()
+            book_snapshot_quality[bk_key] = bm.get("snapshot_quality", "pre_commence")
+
         # Organize lines by (market, outcome_name, point) -> book -> price
         lines_by_key = {}
         for bm in bookmakers:
@@ -2484,6 +2516,12 @@ class BacktestEngine:
                                 "contributing_books": contrib_books,
                                 "home_team": home,
                                 "away_team": away,
+                                # Lookahead provenance — per-row so the
+                                # promotion gate can count fallbacks vs
+                                # pre-commence without joining upstream.
+                                "snapshot_quality": book_snapshot_quality.get(
+                                    eval_target, "pre_commence"
+                                ),
                             }),
                             round(edge, 6), round(ev, 6), round(kelly, 6),
                             is_signal, game_date, snapshot_time,

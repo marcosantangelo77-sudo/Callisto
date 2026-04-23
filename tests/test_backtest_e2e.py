@@ -247,15 +247,21 @@ async def insert_game_result(db_path, sport=SPORT, game_date=GAME_DATE,
 
 
 async def insert_cached_odds(db_path, snapshot, sport=SPORT, game_date=GAME_DATE):
-    """Insert the snapshot into historical_odds_cache so the fetcher finds it."""
+    """Insert the snapshot into historical_odds_cache so the fetcher finds it.
+
+    Writes BOTH the legacy key ('h2h,spreads,totals') and the new
+    lookahead-tagged key ('h2h,spreads,totals|lead=60') so tests work
+    under the no-lookahead cache-keying introduced 2026-04-22.
+    """
     async with aiosqlite.connect(db_path) as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO historical_odds_cache "
-            "(sport, snapshot_date, event_id, market_type, response_json, credits_cost) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (sport, game_date, None, "h2h,spreads,totals",
-             json.dumps(snapshot), 0),
-        )
+        for market_key in ("h2h,spreads,totals", "h2h,spreads,totals|lead=60"):
+            await db.execute(
+                "INSERT OR REPLACE INTO historical_odds_cache "
+                "(sport, snapshot_date, event_id, market_type, response_json, credits_cost) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (sport, game_date, None, market_key,
+                 json.dumps(snapshot), 0),
+            )
         await db.commit()
 
 
