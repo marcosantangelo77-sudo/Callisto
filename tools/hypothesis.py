@@ -606,6 +606,7 @@ class HypothesisManager:
         """
         now = datetime.now(timezone.utc).isoformat()
         from tools.db_utils import execute_with_retry, commit_with_retry
+        prev_status = expected_status
         if expected_status is None:
             logger.warning(
                 f"update_status called WITHOUT expected_status for "
@@ -633,6 +634,7 @@ class HypothesisManager:
                 logger.info(
                     f"Hypothesis {hypothesis_id} → {new_status} (by {promoted_by}, expected={expected_status!r})"
                 )
+                _fire_sharpening_hook(self, hypothesis_id, expected_status, new_status)
             return {
                 "hypothesis_id": hypothesis_id,
                 "new_status": new_status,
@@ -648,6 +650,7 @@ class HypothesisManager:
         )
         await commit_with_retry(self._db, operation="hypothesis update_status")
         logger.info(f"Hypothesis {hypothesis_id} → {new_status} (by {promoted_by})")
+        _fire_sharpening_hook(self, hypothesis_id, prev_status, new_status)
         return {"hypothesis_id": hypothesis_id, "new_status": new_status, "changed": True}
 
     # ── STATISTICAL EVALUATION ──
@@ -2303,3 +2306,65 @@ class HypothesisManager:
             "training_p_value": config.get("training_p_value"),
             "has_temporal_isolation": True,
         }
+
+
+# ──────────────────────────────────────────────────────────────────
+# Sharpening hook: terminal status → wiki article.
+# Fire-and-forget. Never blocks or raises up into update_status.
+# Opt-in by env (default OFF to avoid disrupting existing behavior).
+# ──────────────────────────────────────────────────────────────────
+
+_SHARPENING_TERMINAL = {"rejected", "retired", "live"}
+
+
+def _fire_sharpening_hook(
+    mgr: "HypothesisManager",
+    hypothesis_id: str,
+    prev_status: Optional[str],
+    new_status: str,
+) -> None:
+    """Fire a best-effort sharpening wiki write when a hypothesis reaches
+    a terminal-ish status. Safe no-op on any error.
+
+    Enable with:  CALLISTO_SHARPENING_HOOK=1  (default off).
+    """
+    import os as _os
+    if _os.getenv("CALLISTO_SHARPENING_HOOK", "0") != "1":
+        return
+    if new_status not in _SHARPENING_TERMINAL:
+        return
+    try:
+        import asyncio as _asyncio
+        from tools.hypothesis_generator import HypothesisGenerator
+        from tools.embeddings import VectorStore
+
+        async def _run() -> None:
+            try:
+                vs = VectorStore(mgr.db_path)
+                await vs.initialize()
+                gen = HypothesisGenerator(mgr, vs, db_path=mgr.db_path)
+                await gen.initialize()
+                try:
+                    outcome = (
+                        "success" if new_status in {"live", "retired"}
+                        else "failure"
+                    )
+                    await gen.record_backtest_outcome_to_wiki(
+                        hypothesis_id, outcome,
+                        stats={"prev_status": prev_status,
+                               "new_status": new_status},
+                    )
+                finally:
+                    await gen.close()
+                    await vs.close()
+            except Exception as e:
+                logger.debug(f"sharpening hook inner error: {e}")
+
+        try:
+            loop = _asyncio.get_running_loop()
+            loop.create_task(_run())
+        except RuntimeError:
+            # No running loop — run a fresh one synchronously
+            _asyncio.run(_run())
+    except Exception as e:
+        logger.debug(f"sharpening hook dispatch error: {e}")
