@@ -5497,15 +5497,120 @@ class ResearchLoop:
             except Exception as e:
                 logger.debug(f"Narrative scan failed for {sport}: {e}")
 
+    # ------------------------------------------------------------------
+    # Correlation matrix (feat/portfolio-kelly-live-loop, audit 2026-04-22)
+    # ------------------------------------------------------------------
+    async def _build_correlation_matrix(
+        self, hypothesis_ids: list[str], lookback_days: int = 30
+    ) -> dict[tuple[str, str], float]:
+        """Build a pairwise correlation matrix from ``backtest_events`` history.
+
+        For each pair (A, B), compute
+            corr(A, B) = |events where A AND B signalled on same event_id| /
+                         |events where A OR B signalled|
+        over the last ``lookback_days``. This is the Jaccard co-firing rate —
+        a conservative proxy for bet correlation when both sit on the same
+        event. Perfect co-firing = 1.0, no overlap = 0.0.
+
+        Cached on ``self._corr_matrix_cache`` with TTL
+        ``CALLISTO_CORR_TTL_SECONDS`` (default 4h). The cache is keyed by
+        the sorted tuple of hypothesis_ids so demotion/promotion invalidates
+        it implicitly.
+        """
+        cache_ttl = int(os.getenv("CALLISTO_CORR_TTL_SECONDS", "14400"))
+        cache_key = tuple(sorted(hypothesis_ids))
+        cache = getattr(self, "_corr_matrix_cache", {})
+        now_ts = time.time()
+        if cache_key in cache:
+            cached_at, matrix = cache[cache_key]
+            if now_ts - cached_at < cache_ttl:
+                return matrix
+
+        db = self.data_collector._db if self.data_collector else None
+        if not db or not hypothesis_ids:
+            return {}
+
+        since = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+
+        # Pull (hypothesis_id, event_id) tuples where signal_generated=1 in window.
+        try:
+            placeholders = ",".join(["?"] * len(hypothesis_ids))
+            cursor = await db.execute(
+                f"SELECT hypothesis_id, event_id FROM backtest_events "
+                f"WHERE signal_generated = 1 AND hypothesis_id IN ({placeholders}) "
+                f"AND created_at >= ?",
+                (*hypothesis_ids, since),
+            )
+            rows = await cursor.fetchall()
+        except Exception as e:
+            logger.warning(f"Correlation matrix: query failed: {e}")
+            return {}
+
+        # Build per-hyp event_id sets.
+        fired: dict[str, set[str]] = {}
+        for hid, eid in rows:
+            if not eid:
+                continue
+            fired.setdefault(hid, set()).add(eid)
+
+        matrix: dict[tuple[str, str], float] = {}
+        ids = sorted(hypothesis_ids)
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                sa = fired.get(a, set())
+                sb = fired.get(b, set())
+                union = len(sa | sb)
+                if union == 0:
+                    corr = 0.0
+                else:
+                    corr = len(sa & sb) / union
+                matrix[(a, b)] = round(corr, 4)
+
+        # Store with timestamp; cap cache growth.
+        cache[cache_key] = (now_ts, matrix)
+        if len(cache) > 32:
+            oldest = min(cache, key=lambda k: cache[k][0])
+            cache.pop(oldest, None)
+        self._corr_matrix_cache = cache
+        return matrix
+
+    async def _hyp_signals_n_map(self, hypothesis_ids: list[str]) -> dict[str, int]:
+        """Return {hypothesis_id: most_recent_signals_n} from hypothesis_stats."""
+        db = self.data_collector._db if self.data_collector else None
+        if not db or not hypothesis_ids:
+            return {}
+        placeholders = ",".join(["?"] * len(hypothesis_ids))
+        try:
+            cursor = await db.execute(
+                f"SELECT hypothesis_id, signals_n FROM hypothesis_stats "
+                f"WHERE hypothesis_id IN ({placeholders}) "
+                f"ORDER BY computed_at DESC",
+                tuple(hypothesis_ids),
+            )
+            rows = await cursor.fetchall()
+        except Exception:
+            return {}
+        result: dict[str, int] = {}
+        for hid, n in rows:
+            if hid not in result:
+                result[hid] = int(n or 0)
+        return result
+
     async def _phase_live_execute(self) -> None:
         """Execute bets on live (proven) hypotheses using the bet executor.
 
-        Scans live odds for signals matching live hypotheses, then places
-        real bets via Playwright browser automation on DraftKings.
-        Only runs if the executor is enabled and logged in.
+        feat/portfolio-kelly-live-loop (audit 2026-04-22): the per-signal loop
+        was the #1 blow-up risk — 22 LIVE hyps could each take 5% of bankroll
+        on one MLB game. Now the loop:
+          1. Collects ALL pending signals across ALL LIVE hyps into a batch.
+          2. Builds a correlation matrix from backtest_events history.
+          3. Calls compute_portfolio_stakes ONCE per cycle with per-game and
+             per-sport caps.
+          4. Executes each bet with the pre-computed ``stake_override``.
+          5. Runs the drawdown kill-switch check before ANY execution.
         """
         try:
-            from tools.bet_executor import BetExecutor
+            from tools.bet_executor import BetExecutor  # noqa: F401
         except ImportError:
             return
 
@@ -5513,6 +5618,19 @@ class ResearchLoop:
         executor = getattr(self, "_bet_executor", None)
         if not executor or not executor.is_enabled:
             return
+
+        # Drawdown kill-switch: evaluate BEFORE we consider any new bets.
+        try:
+            dd = await executor.check_drawdown_and_kill()
+            if dd.get("triggered"):
+                logger.error(
+                    "Research: drawdown kill-switch fired; aborting live execution "
+                    f"(drawdown={dd.get('drawdown_pct'):.1%}, "
+                    f"paused={len(dd.get('paused_hypotheses', []))})"
+                )
+                return
+        except Exception as e:
+            logger.warning(f"Drawdown check failed: {e}")
 
         live = await self.hypothesis_manager.list_hypotheses(status="live")
         if not live:
@@ -5523,15 +5641,17 @@ class ResearchLoop:
         # Cache live odds per sport
         odds_cache: dict[str, dict] = {}
 
+        # ---- Phase 1: collect signals from all LIVE hyps into a single batch ----
+        batch: list[dict] = []
+        signal_by_index: list[tuple[dict, dict]] = []  # (hyp, signal) for each batch row
+
         for h in live:
             if not self._running:
                 break
-
             try:
                 sport = h["sport"]
                 market = h.get("market_type", "")
 
-                # Get live odds (DK scraper for game-level, Odds API for props)
                 if sport not in odds_cache:
                     if market.startswith("player_"):
                         from tools.odds_api_io import get_odds
@@ -5542,7 +5662,6 @@ class ResearchLoop:
                         if odds_data.get("error") or not odds_data.get("games"):
                             from tools.odds_api_io import get_odds
                             odds_data = await get_odds(sport=sport, regions="us", markets="h2h,spreads,totals")
-
                     if not odds_data.get("error"):
                         odds_cache[sport] = odds_data
 
@@ -5550,43 +5669,100 @@ class ResearchLoop:
                 if not odds_data:
                     continue
 
-                # Generate signals using the backtest engine's paper trade logic
                 signals = await self.backtest_engine.generate_paper_trade_signal(
                     hypothesis_id=h["hypothesis_id"],
                     live_odds=odds_data,
                 )
-
                 if not signals:
                     continue
 
-                # Execute each signal
                 for signal in signals:
-                    if not self._running:
-                        break
+                    batch.append({
+                        "edge": signal.get("edge", 0.0),
+                        "odds": signal.get("book_odds_american", 0),
+                        "confidence": signal.get("confidence_score", 0.6),
+                        "event_id": signal.get("event_id", ""),
+                        "sport": sport,
+                        "market_type": signal.get("market", market),
+                        "hypothesis_id": h["hypothesis_id"],
+                        "description": (
+                            f"{h['hypothesis_id'][:8]}:{signal.get('team', '')}"
+                            f" {signal.get('market', market)}"
+                        ),
+                    })
+                    signal_by_index.append((h, signal))
 
-                    result = await executor.execute_bet(
-                        sport=sport,
-                        team=signal.get("team", ""),
-                        market=signal.get("market", market),
-                        side=signal.get("side", ""),
-                        odds=signal.get("book_odds_american", 0),
-                        fair_prob=signal.get("model_fair_prob", 0.5),
-                        edge=signal.get("edge", 0),
-                        hypothesis_id=h["hypothesis_id"],
-                        event_id=signal.get("event_id", ""),
-                        game_description=signal.get("game_description", ""),
+            except Exception as e:
+                logger.warning(f"Live signal collection failed for {h['hypothesis_id']}: {e}")
+
+        if not batch:
+            return
+
+        logger.info(
+            f"Research: collected {len(batch)} signals across {len(set(b['hypothesis_id'] for b in batch))} "
+            f"hyps on {len(set(b['event_id'] for b in batch if b['event_id']))} events"
+        )
+
+        # ---- Phase 2: correlation matrix + signals_n dampener ----
+        live_ids = [h["hypothesis_id"] for h in live]
+        try:
+            corr_matrix = await self._build_correlation_matrix(live_ids)
+        except Exception as e:
+            logger.warning(f"Correlation matrix build failed: {e}")
+            corr_matrix = {}
+
+        try:
+            sig_counts = await self._hyp_signals_n_map(live_ids)
+        except Exception:
+            sig_counts = {}
+        for b in batch:
+            b["signals_n"] = sig_counts.get(b["hypothesis_id"], 0)
+
+        # ---- Phase 3: portfolio sizing, ONCE, with caps applied inside ----
+        try:
+            bankroll = await executor.get_bankroll()
+        except Exception as e:
+            logger.warning(f"Bankroll read failed, aborting live execution: {e}")
+            return
+
+        if bankroll <= 0:
+            logger.warning("Bankroll is zero; skipping live execution")
+            return
+
+        sized = executor.compute_portfolio_stakes(
+            bets=batch, bankroll=bankroll, correlation_matrix=corr_matrix,
+        )
+
+        # ---- Phase 4: execute each sized bet via stake_override ----
+        for i, sized_row in enumerate(sized):
+            if not self._running:
+                break
+            stake = float(sized_row.get("stake", 0.0) or 0.0)
+            if stake <= 0:
+                continue
+            h, signal = signal_by_index[i]
+            try:
+                result = await executor.execute_bet(
+                    sport=h["sport"],
+                    team=signal.get("team", ""),
+                    market=signal.get("market", h.get("market_type", "")),
+                    side=signal.get("side", ""),
+                    odds=signal.get("book_odds_american", 0),
+                    fair_prob=signal.get("model_fair_prob", 0.5),
+                    edge=signal.get("edge", 0),
+                    hypothesis_id=h["hypothesis_id"],
+                    event_id=signal.get("event_id", ""),
+                    game_description=signal.get("game_description", ""),
+                    stake_override=stake,
+                )
+                if result.get("success"):
+                    logger.info(
+                        f"LIVE BET PLACED: {signal.get('team')} "
+                        f"${result.get('stake', 0):.2f} @ {signal.get('book_odds_american')} "
+                        f"(portfolio-sized, n={sized_row.get('signals_n', 0)})"
                     )
-
-                    if result.get("success"):
-                        logger.info(
-                            f"LIVE BET PLACED: {signal.get('team')} "
-                            f"${result.get('stake', 0):.2f} @ {signal.get('book_odds_american')}"
-                        )
-                    else:
-                        logger.warning(
-                            f"Live bet failed: {result.get('reason', 'unknown')}"
-                        )
-
+                else:
+                    logger.warning(f"Live bet failed: {result.get('reason', 'unknown')}")
             except Exception as e:
                 logger.warning(f"Live execution failed for {h['hypothesis_id']}: {e}")
 

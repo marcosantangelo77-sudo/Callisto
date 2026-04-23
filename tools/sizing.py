@@ -7,6 +7,16 @@ Kelly math:
   uncertainty-adjusted: scales by info_ratio = edge / noise
 
 Best price: compare DK vs Fanatics, always take the better number.
+
+DEPRECATION NOTE (feat/portfolio-kelly-live-loop, audit 2026-04-22):
+    ``tools.kelly`` is the CANONICAL sizing module. It integrates AGP
+    confidence tiers, variance dampening, portfolio Kelly with correlation,
+    and ruin-probability modeling. The helpers in this file
+    (``kelly_binary``, ``kelly_with_push``, ``uncertainty_adjusted_kelly``,
+    ``bet_size``, ``bet_size_american``, ``best_price``) are retained as
+    lightweight primitives and for the push-aware math that ``tools.kelly``
+    doesn't cover — but any NEW caller doing single-bet or portfolio sizing
+    should import from ``tools.kelly`` (``kelly_dynamic``, ``kelly_portfolio``).
 """
 
 from tools.math_utils import american_to_decimal, american_to_implied

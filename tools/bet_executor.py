@@ -48,6 +48,28 @@ DAILY_LOSS_LIMIT_PCT = float(os.getenv("EXECUTOR_DAILY_LOSS_PCT", "0.20"))  # 20
 MIN_EDGE_TO_EXECUTE = float(os.getenv("EXECUTOR_MIN_EDGE", "0.02"))  # 2% minimum EV
 KELLY_FRACTION = float(os.getenv("EXECUTOR_KELLY_FRACTION", "0.25")) # Quarter Kelly
 MIN_BET_AMOUNT = float(os.getenv("EXECUTOR_MIN_BET", "1.00"))       # $1 minimum
+
+# --- Portfolio-level caps (feat/portfolio-kelly-live-loop, audit 2026-04-22) ---
+# Prevents N LIVE hyps from all loading up on one MLB game. Per-game cap
+# scales ALL stakes on the same event_id if their sum would exceed bankroll * cap.
+MAX_GAME_EXPOSURE_PCT = float(os.getenv("CALLISTO_MAX_GAME_EXPOSURE_PCT", "0.08"))
+# Per-sport cap: prevent all-MLB days from pushing too much on baseball.
+MAX_SPORT_EXPOSURE_PCT = float(os.getenv("CALLISTO_MAX_SPORT_EXPOSURE_PCT", "0.15"))
+
+# --- Drawdown kill switch (feat/portfolio-kelly-live-loop, audit 2026-04-22) ---
+# If bankroll drops more than MAX_DRAWDOWN_PCT below the 30-day peak, flip
+# _enabled=False on the executor AND set all LIVE hyps to 'drawdown_paused'.
+# Recovery is MANUAL — auto-resume is intentionally not implemented.
+MAX_DRAWDOWN_PCT = float(os.getenv("CALLISTO_MAX_DRAWDOWN_PCT", "0.15"))
+DRAWDOWN_PEAK_WINDOW_DAYS = int(os.getenv("CALLISTO_DRAWDOWN_WINDOW_DAYS", "30"))
+
+# --- Variance-dampener boundaries tied to paper-trade sample size ---
+# < 25 signals: fresh evidence, force half-Kelly (0.125 base fraction)
+# >= 100 signals: full quarter-Kelly allowed (0.25 base fraction)
+# Smooth linear interp in between.
+_VAR_DAMPENER_LOW_N = int(os.getenv("CALLISTO_VAR_DAMPENER_LOW_N", "25"))
+_VAR_DAMPENER_HIGH_N = int(os.getenv("CALLISTO_VAR_DAMPENER_HIGH_N", "100"))
+
 DK_BASE_URL = "https://sportsbook.draftkings.com"
 
 # DraftKings sport slugs for URL navigation
@@ -259,76 +281,186 @@ class BetExecutor:
 
         return stake
 
+    @staticmethod
+    def _signals_n_to_kelly_fraction(signals_n: int) -> float:
+        """Map observed-signals count to Kelly base fraction.
+
+        feat/portfolio-kelly-live-loop (audit 2026-04-22): half-Kelly for
+        hypotheses with fewer than _VAR_DAMPENER_LOW_N signals, full quarter-
+        Kelly once they cross _VAR_DAMPENER_HIGH_N. Linear interp between.
+        """
+        if signals_n <= _VAR_DAMPENER_LOW_N:
+            return 0.125  # half-Kelly relative to quarter-Kelly floor
+        if signals_n >= _VAR_DAMPENER_HIGH_N:
+            return 0.25  # full quarter-Kelly
+        # Linear interpolation between 0.125 and 0.25
+        span = max(1, _VAR_DAMPENER_HIGH_N - _VAR_DAMPENER_LOW_N)
+        t = (signals_n - _VAR_DAMPENER_LOW_N) / span
+        return 0.125 + t * (0.25 - 0.125)
+
     def compute_portfolio_stakes(
         self,
         bets: list[dict],
         bankroll: float,
+        correlation_matrix: Optional[dict] = None,
     ) -> list[dict]:
         """
         Size multiple simultaneous bets with correlation-aware Kelly.
 
-        When multiple bets are open at the same time (e.g., two NBA games
-        tonight), correlated bets should be sized down to avoid concentrating
-        risk. Falls back to individual quarter-Kelly for a single bet.
+        feat/portfolio-kelly-live-loop (audit 2026-04-22): now the primary
+        sizing path for the live-execution loop. Enforces per-game and
+        per-sport exposure caps on top of correlation-aware Kelly.
 
         Args:
             bets: List of dicts, each with {edge, odds, confidence,
-                  correlation_with_others, description}.
+                  correlation_with_others, description, event_id, sport,
+                  market_type, hypothesis_id, signals_n}.
             bankroll: Current bankroll in dollars.
+            correlation_matrix: Optional {(hyp_a, hyp_b): float}. If present,
+                this overrides per-bet ``correlation_with_others`` by looking
+                up the mean pairwise correlation of each bet with every other
+                bet in the batch.
 
         Returns:
-            List of dicts with {description, stake, fraction, ...} per bet.
+            List of dicts with {description, stake, fraction, event_id, sport,
+            method, portfolio_summary} per bet.
         """
         if not bets:
             return []
 
-        # Single bet: use standard individual sizing (no portfolio overhead)
+        # Single bet: use standard individual sizing (no portfolio overhead).
         if len(bets) == 1:
             b = bets[0]
+            signals_n = int(b.get("signals_n", 0) or 0)
+            kelly_frac = self._signals_n_to_kelly_fraction(signals_n)
             stake = self.compute_stake(
                 b.get("edge", 0.0),
                 b.get("odds", -110),
                 bankroll,
                 b.get("confidence", 0.6),
             )
+            # Scale by signals_n-aware base fraction (cap-at-quarter Kelly).
+            stake = round(stake * (kelly_frac / KELLY_FRACTION), 2) if KELLY_FRACTION > 0 else stake
             return [{
                 "description": b.get("description", "Bet 1"),
-                "stake": stake,
+                "stake": stake if stake >= MIN_BET_AMOUNT else 0.0,
                 "fraction": round(stake / bankroll, 6) if bankroll > 0 else 0,
-                "method": "individual_kelly",
+                "event_id": b.get("event_id", ""),
+                "sport": b.get("sport", ""),
+                "hypothesis_id": b.get("hypothesis_id", ""),
+                "method": "individual_kelly_n_adjusted",
+                "kelly_base_fraction": kelly_frac,
+                "signals_n": signals_n,
             }]
 
-        # Multiple bets: use correlation-aware portfolio Kelly
+        # Multiple bets: use correlation-aware portfolio Kelly.
         from tools.kelly import kelly_portfolio
 
+        # If a correlation matrix was passed, override per-bet
+        # ``correlation_with_others`` with the average pairwise correlation
+        # of each bet with every other bet in the batch. This is what the
+        # audit wants: correlations derived from historical co-firing.
+        corr_overrides: dict[int, float] = {}
+        if correlation_matrix:
+            n = len(bets)
+            for i, bi in enumerate(bets):
+                hi = bi.get("hypothesis_id", "")
+                if not hi:
+                    continue
+                pair_corrs = []
+                for j, bj in enumerate(bets):
+                    if i == j:
+                        continue
+                    hj = bj.get("hypothesis_id", "")
+                    if not hj:
+                        continue
+                    key = (hi, hj) if (hi, hj) in correlation_matrix else (hj, hi)
+                    if key in correlation_matrix:
+                        pair_corrs.append(correlation_matrix[key])
+                if pair_corrs:
+                    corr_overrides[i] = sum(pair_corrs) / len(pair_corrs)
+
         portfolio_bets = []
-        for b in bets:
+        for i, b in enumerate(bets):
+            rho = corr_overrides.get(i, b.get("correlation_with_others", 0.1))
             portfolio_bets.append({
                 "edge": b.get("edge", 0.0),
                 "odds": b.get("odds", -110),
                 "confidence_score": b.get("confidence", 0.6),
                 "variance_estimate": abs(b.get("edge", 0.01)) * 0.5,
-                "correlation_with_others": b.get("correlation_with_others", 0.1),
+                "correlation_with_others": rho,
                 "description": b.get("description", ""),
             })
 
         sized = kelly_portfolio(portfolio_bets)
 
-        results = []
-        for item in sized:
-            frac = item.get("final_fraction", 0.0)
+        # First pass: compute raw stakes, apply signals_n dampener, floor.
+        results: list[dict] = []
+        for i, item in enumerate(sized):
+            b = bets[i]
+            frac = float(item.get("final_fraction", 0.0))
+            signals_n = int(b.get("signals_n", 0) or 0)
+            # Blend in the signals_n dampener: scale the portfolio-Kelly
+            # fraction by (kelly_frac / KELLY_FRACTION) — so a fresh hyp
+            # (signals_n<25) gets half its correlation-aware allocation.
+            kelly_frac = self._signals_n_to_kelly_fraction(signals_n)
+            scale = (kelly_frac / KELLY_FRACTION) if KELLY_FRACTION > 0 else 1.0
+            frac = frac * scale
             stake = round(bankroll * frac, 2)
-            if stake < MIN_BET_AMOUNT:
-                stake = 0.0
             results.append({
                 "description": item.get("description", ""),
                 "stake": stake,
                 "fraction": frac,
                 "correlation": item.get("correlation", 0.0),
                 "tier": item.get("tier", ""),
-                "method": "portfolio_kelly",
+                "event_id": b.get("event_id", ""),
+                "sport": b.get("sport", ""),
+                "hypothesis_id": b.get("hypothesis_id", ""),
+                "market_type": b.get("market_type", ""),
+                "method": "portfolio_kelly_n_adjusted",
+                "kelly_base_fraction": kelly_frac,
+                "signals_n": signals_n,
                 "portfolio_summary": item.get("portfolio_summary", {}),
             })
+
+        # Second pass: per-game exposure cap.
+        game_cap = bankroll * MAX_GAME_EXPOSURE_PCT
+        by_game: dict[str, list[int]] = {}
+        for idx, r in enumerate(results):
+            eid = r.get("event_id") or ""
+            if not eid:
+                continue
+            by_game.setdefault(eid, []).append(idx)
+        for eid, idxs in by_game.items():
+            total = sum(results[i]["stake"] for i in idxs)
+            if total > game_cap and total > 0:
+                scale = game_cap / total
+                for i in idxs:
+                    results[i]["stake"] = round(results[i]["stake"] * scale, 2)
+                    results[i]["fraction"] = results[i]["fraction"] * scale
+                    results[i]["game_cap_scale"] = round(scale, 4)
+
+        # Third pass: per-sport exposure cap.
+        sport_cap = bankroll * MAX_SPORT_EXPOSURE_PCT
+        by_sport: dict[str, list[int]] = {}
+        for idx, r in enumerate(results):
+            sp = r.get("sport") or ""
+            if not sp:
+                continue
+            by_sport.setdefault(sp, []).append(idx)
+        for sp, idxs in by_sport.items():
+            total = sum(results[i]["stake"] for i in idxs)
+            if total > sport_cap and total > 0:
+                scale = sport_cap / total
+                for i in idxs:
+                    results[i]["stake"] = round(results[i]["stake"] * scale, 2)
+                    results[i]["fraction"] = results[i]["fraction"] * scale
+                    results[i]["sport_cap_scale"] = round(scale, 4)
+
+        # Final pass: floor below MIN_BET_AMOUNT.
+        for r in results:
+            if r["stake"] < MIN_BET_AMOUNT:
+                r["stake"] = 0.0
 
         return results
 
@@ -595,11 +727,18 @@ class BetExecutor:
         game_description: str = "",
         confidence: float = 0.6,
         point: float = None,
+        stake_override: Optional[float] = None,
     ) -> dict:
         """
         Full bet execution pipeline: size → preflight → navigate → place → record.
 
         Returns execution result dict.
+
+        feat/portfolio-kelly-live-loop (audit 2026-04-22): callers can pass
+        ``stake_override`` to use a pre-computed portfolio stake and skip the
+        per-bet Kelly sizing. The portfolio caller (``size_portfolio`` in the
+        live-exec loop) already applied correlation, game/sport caps, and the
+        signals_n dampener; recomputing here would undo that work.
 
         SECURITY (audit H-1, H-4): the read-bankroll → size → exposure-check → write
         sequence is serialized by ``self._bankroll_lock`` so two concurrent placements
@@ -611,8 +750,11 @@ class BetExecutor:
         async with self._bankroll_lock:
             bankroll = await self.get_bankroll()
 
-            # Size the bet
-            stake = self.compute_stake(edge, odds, bankroll, confidence)
+            # Size the bet — respect pre-computed portfolio stake if provided.
+            if stake_override is not None and stake_override > 0:
+                stake = round(float(stake_override), 2)
+            else:
+                stake = self.compute_stake(edge, odds, bankroll, confidence)
             if stake <= 0:
                 return {"success": False, "reason": "Stake too small after Kelly sizing"}
 
@@ -777,19 +919,175 @@ class BetExecutor:
 
         # Update bankroll (deduct stake) under the same lock that gated sizing,
         # so the read→write of bankroll is atomic across concurrent placements
-        # (audit H-4).
+        # (audit H-4). feat/portfolio-kelly-live-loop (audit 2026-04-22):
+        # wrap read+insert in BEGIN IMMEDIATE so SQLite's own locking
+        # serializes even if two callers somehow race past the asyncio lock
+        # (e.g. different event loops, or the fallback path when the
+        # WriteCoordinator is not running).
         async with self._bankroll_lock:
-            bankroll = await self.get_bankroll()
+            # BEGIN IMMEDIATE acquires a RESERVED lock now, preventing any
+            # other writer from reading-then-writing on top of our snapshot.
+            try:
+                await self._db.execute("BEGIN IMMEDIATE")
+            except Exception:
+                # If a transaction is already open (WriteCoordinator path),
+                # BEGIN will raise — that's fine, the coordinator serializes
+                # writes already.
+                pass
+            try:
+                bankroll = await self.get_bankroll()
+                await execute_with_retry(
+                    self._db,
+                    "INSERT INTO bankroll (timestamp, balance, change, bet_id, description) VALUES (?, ?, ?, ?, ?)",
+                    (now, bankroll - stake, -stake, bet_id, f"Auto bet #{bet_id}: {team} {market}"),
+                    max_retries=10,
+                    operation="executor record_bet bankroll",
+                )
+
+                await commit_with_retry(self._db, max_retries=10, operation="executor record_bet")
+            except Exception:
+                try:
+                    await self._db.rollback()
+                except Exception:
+                    pass
+                raise
+        return bet_id
+
+    # ------------------------------------------------------------------
+    # Drawdown kill-switch (feat/portfolio-kelly-live-loop, audit 2026-04-22)
+    # ------------------------------------------------------------------
+    async def _record_bankroll_peak(self, bankroll: float) -> None:
+        """Record an observation of bankroll into the peak table.
+
+        Called opportunistically by ``check_drawdown_and_kill``. The table is
+        append-only so a 30d peak is a simple MAX over the window.
+        """
+        try:
+            from tools.db_utils import execute_with_retry, commit_with_retry
             await execute_with_retry(
                 self._db,
-                "INSERT INTO bankroll (timestamp, balance, change, bet_id, description) VALUES (?, ?, ?, ?, ?)",
-                (now, bankroll - stake, -stake, bet_id, f"Auto bet #{bet_id}: {team} {market}"),
-                max_retries=10,
-                operation="executor record_bet bankroll",
+                "INSERT INTO bankroll_peak (observed_at, balance, note) VALUES (?, ?, ?)",
+                (datetime.now(timezone.utc).isoformat(), float(bankroll), "auto-observed"),
+                operation="bankroll_peak insert",
             )
+            await commit_with_retry(self._db, operation="bankroll_peak insert")
+        except Exception as e:
+            logger.debug(f"bankroll_peak insert skipped: {e}")
 
-            await commit_with_retry(self._db, max_retries=10, operation="executor record_bet")
-        return bet_id
+    async def _rolling_peak(self, window_days: int = None) -> float:
+        """Return MAX(balance) over the rolling peak window."""
+        window = window_days or DRAWDOWN_PEAK_WINDOW_DAYS
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window)).isoformat()
+        try:
+            cursor = await self._db.execute(
+                "SELECT COALESCE(MAX(balance), 0) FROM bankroll_peak WHERE observed_at >= ?",
+                (cutoff,),
+            )
+            row = await cursor.fetchone()
+            peak = float(row[0]) if row and row[0] is not None else 0.0
+        except Exception:
+            peak = 0.0
+        # Fallback to bankroll history if bankroll_peak is empty / missing.
+        if peak <= 0:
+            try:
+                cursor = await self._db.execute(
+                    "SELECT COALESCE(MAX(balance), 0) FROM bankroll WHERE timestamp >= ?",
+                    (cutoff,),
+                )
+                row = await cursor.fetchone()
+                peak = float(row[0]) if row and row[0] is not None else 0.0
+            except Exception:
+                peak = 0.0
+        return peak
+
+    async def check_drawdown_and_kill(self) -> dict:
+        """Evaluate rolling drawdown; if past MAX_DRAWDOWN_PCT, kill-switch.
+
+        Flow:
+          1. Read current bankroll and rolling peak.
+          2. Record current bankroll into bankroll_peak (so next call has a
+             growing history).
+          3. If current < peak * (1 - MAX_DRAWDOWN_PCT):
+             - self._enabled = False
+             - CAS all LIVE hyps to 'drawdown_paused'
+             - fire Telegram alert (best-effort; missing webhook is fine)
+
+        Returns a status dict describing the action taken.
+        """
+        current = await self.get_bankroll()
+        peak = await self._rolling_peak()
+        await self._record_bankroll_peak(current)
+
+        status: dict = {
+            "current_bankroll": current,
+            "rolling_peak": peak,
+            "drawdown_pct": 0.0,
+            "threshold_pct": MAX_DRAWDOWN_PCT,
+            "triggered": False,
+            "paused_hypotheses": [],
+        }
+
+        if peak <= 0 or current >= peak:
+            return status
+
+        drawdown_pct = (peak - current) / peak
+        status["drawdown_pct"] = round(drawdown_pct, 4)
+
+        if drawdown_pct < MAX_DRAWDOWN_PCT:
+            return status
+
+        # Kill switch fires.
+        logger.error(
+            f"DRAWDOWN KILL SWITCH: current=${current:,.2f} peak=${peak:,.2f} "
+            f"drawdown={drawdown_pct:.1%} exceeds threshold {MAX_DRAWDOWN_PCT:.1%}"
+        )
+        self._enabled = False
+        status["triggered"] = True
+
+        # CAS all LIVE hypotheses to drawdown_paused.
+        try:
+            from tools.db_utils import execute_with_retry, commit_with_retry
+            cursor = await self._db.execute(
+                "SELECT hypothesis_id FROM hypotheses WHERE status = 'live'"
+            )
+            live_rows = await cursor.fetchall()
+            now_ts = datetime.now(timezone.utc).isoformat()
+            paused = []
+            for row in live_rows:
+                hid = row[0]
+                res = await execute_with_retry(
+                    self._db,
+                    "UPDATE hypotheses SET status = 'drawdown_paused', updated_at = ?, "
+                    "promoted_at = ?, promoted_by = ? "
+                    "WHERE hypothesis_id = ? AND status = 'live'",
+                    (now_ts, now_ts, "drawdown_kill_switch", hid),
+                    operation="drawdown pause hypothesis",
+                )
+                if (res.rowcount or 0) > 0:
+                    paused.append(hid)
+            await commit_with_retry(self._db, operation="drawdown pause hypotheses")
+            status["paused_hypotheses"] = paused
+        except Exception as e:
+            logger.error(f"Drawdown: failed to pause LIVE hypotheses: {e}")
+
+        # Best-effort Telegram alert.
+        try:
+            from tools.telegram import send_alert  # noqa: WPS433
+            msg = (
+                f"<b>DRAWDOWN KILL SWITCH FIRED</b>\n"
+                f"\n"
+                f"Current bankroll: ${current:,.2f}\n"
+                f"30d peak: ${peak:,.2f}\n"
+                f"Drawdown: {drawdown_pct:.1%} (threshold {MAX_DRAWDOWN_PCT:.1%})\n"
+                f"\n"
+                f"Executor disabled. {len(status['paused_hypotheses'])} LIVE "
+                f"hyps → drawdown_paused. Manual review required."
+            )
+            await send_alert(msg, throttle_key="drawdown_kill")
+        except Exception as e:
+            logger.debug(f"Telegram drawdown alert skipped: {e}")
+
+        return status
 
     async def _log_action(
         self, action, sport, team, market, side, odds, stake, edge,
