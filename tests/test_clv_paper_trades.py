@@ -64,7 +64,8 @@ async def _setup_db() -> aiosqlite.Connection:
             actual_result TEXT,
             actual_pnl REAL,
             close_reliable BOOLEAN,
-            logged_at TEXT
+            logged_at TEXT,
+            regime_phase_at_placement TEXT
         )"""
     )
     await db.commit()

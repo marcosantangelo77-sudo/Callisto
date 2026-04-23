@@ -75,6 +75,34 @@ def _half_vig_devig(implied: Optional[float], vig: float) -> Optional[float]:
         return implied
 
 
+def _regime_stamp(sport: str) -> Optional[str]:
+    """Return a compact ``<sport>|<season_phase>`` stamp or None on failure.
+
+    Uses ``_classify_phase`` (pure date-math, no DB) rather than
+    ``detect_regime`` so the stamp computation never opens a separate DB
+    connection while a write is in flight on the primary aiosqlite one —
+    cross-connection contention would otherwise stall a bet resolution
+    under concurrent load. Callers write this into
+    ``clv_log.regime_phase_at_placement`` so downstream analysis can bucket
+    CLV by regime. Any error degrades to None so CLV writes never fail
+    due to regime lookup.
+    """
+    if not sport:
+        return None
+    try:
+        from tools.market_regime import (
+            _classify_phase as _mr_classify,
+            _canonical_sport as _mr_canon,
+        )
+        from datetime import date as _date
+        sp_norm = _mr_canon(sport)
+        phase, _win, _bounds = _mr_classify(sp_norm, _date.today())
+        return f"{sp_norm}|{phase}"
+    except Exception as e:
+        logger.debug(f"regime_stamp failed for {sport!r}: {e}")
+        return None
+
+
 def _american_to_decimal(odds: Optional[int]) -> Optional[float]:
     """American → decimal odds. None/0 → None (can't convert)."""
     if odds is None:
@@ -448,6 +476,12 @@ class CLVTracker:
 
         now = datetime.now(timezone.utc).isoformat()
 
+        # Regime stamp at placement (feat/regime-aware-sizing, 2026-04-22).
+        # Format: "<sport>|<season_phase>" — compact so downstream GROUP BY
+        # queries can split on '|' to get both dimensions. Errors degrade
+        # to None (no stamp) so clv_log writes never fail on regime lookup.
+        regime_stamp = _regime_stamp(bet.get("sport", ""))
+
         try:
             from tools.db_utils import execute_with_retry
             await execute_with_retry(
@@ -456,8 +490,8 @@ class CLVTracker:
                 "(bet_id, event, outcome, point, book, our_odds_decimal, "
                 "pinnacle_close_fair_prob, pinnacle_close_fair_decimal, "
                 "clv_cents, clv_prob_bp, actual_result, actual_pnl, "
-                "close_reliable, logged_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "close_reliable, logged_at, regime_phase_at_placement) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     str(bet_id),
                     bet.get("event_id", ""),
@@ -475,13 +509,15 @@ class CLVTracker:
                     actual_pnl,
                     close_reliable,
                     now,
+                    regime_stamp,
                 ),
                 max_retries=10,
                 operation="clv_tracker log_clv",
             )
             logger.info(
                 f"CLV logged: bet #{bet_id}, clv_prob_bp={clv_prob_bp}, "
-                f"result={result}, pnl={actual_pnl}, reliable={close_reliable}"
+                f"result={result}, pnl={actual_pnl}, reliable={close_reliable}, "
+                f"regime={regime_stamp}"
             )
         except Exception as e:
             logger.warning(f"Failed to log CLV for bet #{bet_id}: {e}")
@@ -544,6 +580,8 @@ class CLVTracker:
 
         now = datetime.now(timezone.utc).isoformat()
 
+        regime_stamp = _regime_stamp(trade.get("sport", ""))
+
         try:
             from tools.db_utils import execute_with_retry
             await execute_with_retry(
@@ -552,8 +590,8 @@ class CLVTracker:
                 "(bet_id, event, outcome, point, book, our_odds_decimal, "
                 "pinnacle_close_fair_prob, pinnacle_close_fair_decimal, "
                 "clv_cents, clv_prob_bp, actual_result, actual_pnl, "
-                "close_reliable, logged_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "close_reliable, logged_at, regime_phase_at_placement) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     bet_key,
                     trade.get("event_id", ""),
@@ -569,6 +607,7 @@ class CLVTracker:
                     trade.get("hypothetical_pnl"),
                     close_reliable,
                     now,
+                    regime_stamp,
                 ),
                 max_retries=10,
                 operation="clv_tracker log_paper_trade_clv",

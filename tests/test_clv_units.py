@@ -84,7 +84,8 @@ async def test_log_clv_writes_prob_bp_column():
                     clv_cents REAL,
                     clv_prob_bp REAL,
                     actual_result TEXT, actual_pnl REAL,
-                    close_reliable INTEGER, logged_at TEXT
+                    close_reliable INTEGER, logged_at TEXT,
+                    regime_phase_at_placement TEXT
                 )
             """)
             # paper_trades — not used here but the tracker's initialize()

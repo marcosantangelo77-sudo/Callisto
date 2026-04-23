@@ -1718,6 +1718,12 @@ async def ensure_schema(db_path: str = DB_PATH) -> None:
         # clv_cents as deprecated/mixed-units.
         await _safe_add_column(db, "clv_log", "clv_prob_bp", "REAL")
 
+        # Migration (feat/regime-aware-sizing, 2026-04-22): stamp the
+        # market regime (sport|season_phase) at placement time so CLV
+        # analysis can bucket by regime. Future regime-bucket queries show
+        # whether a hypothesis is regime-robust or regime-fragile.
+        await _safe_add_column(db, "clv_log", "regime_phase_at_placement", "TEXT")
+
         # Migration (odds-freshness audit): gate flag for ev_opportunities.
         # An ev_opportunity with steam_only=1 means the row was surfaced by
         # line-movement consensus alone, NOT ratified by an independent model

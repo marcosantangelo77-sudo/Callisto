@@ -70,6 +70,56 @@ DRAWDOWN_PEAK_WINDOW_DAYS = int(os.getenv("CALLISTO_DRAWDOWN_WINDOW_DAYS", "30")
 _VAR_DAMPENER_LOW_N = int(os.getenv("CALLISTO_VAR_DAMPENER_LOW_N", "25"))
 _VAR_DAMPENER_HIGH_N = int(os.getenv("CALLISTO_VAR_DAMPENER_HIGH_N", "100"))
 
+# --- Regime-aware sizing (feat/regime-aware-sizing, 2026-04-22) ---
+# Scale each bet's stake by its sport's current regime multiplier so
+# exposure reflects season phase + volatility. Hard floor/ceiling enforced
+# in-module even if market_regime returns an out-of-range value.
+REGIME_SIZING_ENABLED = os.getenv("CALLISTO_REGIME_SIZING", "1") == "1"
+REGIME_SAFETY_ENABLED = os.getenv("CALLISTO_REGIME_SAFETY", "1") == "1"
+_REGIME_MIN_MULT = 0.1   # never zero-size a live bet; use safety gate for that
+_REGIME_MAX_MULT = 1.5   # cap upside even in the best regime
+
+
+def _clamped_regime_multiplier(sport: str) -> float:
+    """Fetch current_regime_multiplier(sport) and clamp to [_REGIME_MIN_MULT, _REGIME_MAX_MULT].
+
+    Any exception (DB missing, import error) degrades to 1.0 so sizing never
+    fails closed due to the regime module. The whole feature is gated by
+    CALLISTO_REGIME_SIZING so callers can disable wholesale.
+    """
+    if not REGIME_SIZING_ENABLED:
+        return 1.0
+    try:
+        from tools.market_regime import current_regime_multiplier
+        m = float(current_regime_multiplier(sport))
+    except Exception as e:
+        logger.debug(f"regime multiplier lookup failed for {sport}: {e}; using 1.0")
+        return 1.0
+    return max(_REGIME_MIN_MULT, min(_REGIME_MAX_MULT, m))
+
+
+def _regime_safe(sport: str) -> tuple[bool, str]:
+    """Return (safe, phase) for ``sport``. Safe=True when gate disabled or OK.
+
+    Second value is the season_phase string so callers can include it in log
+    lines (``regime_unsafe_phase=preseason`` etc). Any error degrades to safe.
+    """
+    if not REGIME_SAFETY_ENABLED:
+        return True, ""
+    try:
+        from tools.market_regime import regime_safe_for_trading, detect_regime
+        safe = bool(regime_safe_for_trading(sport))
+        phase = ""
+        if not safe:
+            try:
+                phase = detect_regime(sport).season_phase or ""
+            except Exception:
+                phase = ""
+        return safe, phase
+    except Exception as e:
+        logger.debug(f"regime safety lookup failed for {sport}: {e}; treating as safe")
+        return True, ""
+
 DK_BASE_URL = "https://sportsbook.draftkings.com"
 
 # DraftKings sport slugs for URL navigation
@@ -328,6 +378,20 @@ class BetExecutor:
         if not bets:
             return []
 
+        # --- Regime multipliers per sport in the batch (cached for this call) ---
+        # Compute once per distinct sport so a 20-bet batch hits the regime
+        # module at most len(set(sports)) times rather than 20.
+        sports_in_batch = {b.get("sport", "") for b in bets if b.get("sport")}
+        regime_mults: dict[str, float] = {
+            sp: _clamped_regime_multiplier(sp) for sp in sports_in_batch
+        }
+        if regime_mults:
+            logger.info(
+                "regime_sizing: applying multipliers %s (enabled=%s)",
+                {k: round(v, 3) for k, v in regime_mults.items()},
+                REGIME_SIZING_ENABLED,
+            )
+
         # Single bet: use standard individual sizing (no portfolio overhead).
         if len(bets) == 1:
             b = bets[0]
@@ -341,16 +405,29 @@ class BetExecutor:
             )
             # Scale by signals_n-aware base fraction (cap-at-quarter Kelly).
             stake = round(stake * (kelly_frac / KELLY_FRACTION), 2) if KELLY_FRACTION > 0 else stake
+            # Regime multiplier (feat/regime-aware-sizing).
+            sport = b.get("sport", "")
+            reg_mult = regime_mults.get(sport, 1.0)
+            pre_regime_stake = stake
+            stake = round(stake * reg_mult, 2)
+            if reg_mult != 1.0 and pre_regime_stake >= MIN_BET_AMOUNT:
+                logger.info(
+                    "regime_sizing: %s stake ${%.2f} → ${%.2f} (mult=%.3f sport=%s)",
+                    b.get("hypothesis_id", "?"), pre_regime_stake, stake,
+                    reg_mult, sport,
+                )
             return [{
                 "description": b.get("description", "Bet 1"),
                 "stake": stake if stake >= MIN_BET_AMOUNT else 0.0,
                 "fraction": round(stake / bankroll, 6) if bankroll > 0 else 0,
                 "event_id": b.get("event_id", ""),
-                "sport": b.get("sport", ""),
+                "sport": sport,
                 "hypothesis_id": b.get("hypothesis_id", ""),
                 "method": "individual_kelly_n_adjusted",
                 "kelly_base_fraction": kelly_frac,
                 "signals_n": signals_n,
+                "regime_multiplier": reg_mult,
+                "stake_before_regime": pre_regime_stake,
             }]
 
         # Multiple bets: use correlation-aware portfolio Kelly.
@@ -394,7 +471,8 @@ class BetExecutor:
 
         sized = kelly_portfolio(portfolio_bets)
 
-        # First pass: compute raw stakes, apply signals_n dampener, floor.
+        # First pass: compute raw stakes, apply signals_n dampener + regime
+        # multiplier, floor.
         results: list[dict] = []
         for i, item in enumerate(sized):
             b = bets[i]
@@ -406,7 +484,19 @@ class BetExecutor:
             kelly_frac = self._signals_n_to_kelly_fraction(signals_n)
             scale = (kelly_frac / KELLY_FRACTION) if KELLY_FRACTION > 0 else 1.0
             frac = frac * scale
+            stake_before_regime = round(bankroll * frac, 2)
+            # Regime multiplier (feat/regime-aware-sizing).
+            sport = b.get("sport", "")
+            reg_mult = regime_mults.get(sport, 1.0)
+            frac = frac * reg_mult
             stake = round(bankroll * frac, 2)
+            if reg_mult != 1.0 and stake_before_regime > 0:
+                logger.info(
+                    "regime_sizing: %s stake ${%.2f} → ${%.2f} "
+                    "(mult=%.3f sport=%s)",
+                    b.get("hypothesis_id", "?"), stake_before_regime, stake,
+                    reg_mult, sport,
+                )
             results.append({
                 "description": item.get("description", ""),
                 "stake": stake,
@@ -414,12 +504,14 @@ class BetExecutor:
                 "correlation": item.get("correlation", 0.0),
                 "tier": item.get("tier", ""),
                 "event_id": b.get("event_id", ""),
-                "sport": b.get("sport", ""),
+                "sport": sport,
                 "hypothesis_id": b.get("hypothesis_id", ""),
                 "market_type": b.get("market_type", ""),
                 "method": "portfolio_kelly_n_adjusted",
                 "kelly_base_fraction": kelly_frac,
                 "signals_n": signals_n,
+                "regime_multiplier": reg_mult,
+                "stake_before_regime": stake_before_regime,
                 "portfolio_summary": item.get("portfolio_summary", {}),
             })
 

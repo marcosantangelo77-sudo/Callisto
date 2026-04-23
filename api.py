@@ -3641,7 +3641,105 @@ async def health_detailed():
         sla_report = {"unavailable": str(e)}
     report["ingestion_sla"] = sla_report
 
+    # feat/regime-aware-sizing (2026-04-22): surface the sizer multipliers
+    # currently in effect so operators can see why LIVE stakes may be
+    # reduced. Best-effort — never fail the endpoint on regime lookup.
+    regimes_block: dict = {}
+    try:
+        from tools.market_regime import (
+            current_regime_multiplier,
+            regime_safe_for_trading,
+            detect_regime,
+        )
+        from tools.bet_executor import REGIME_SIZING_ENABLED, REGIME_SAFETY_ENABLED
+        sports = [
+            "baseball_mlb",
+            "basketball_nba",
+            "icehockey_nhl",
+            "americanfootball_nfl",
+            "basketball_ncaab",
+            "basketball_ncaaw",
+        ]
+        per_sport = {}
+        for sp in sports:
+            try:
+                r = detect_regime(sp)
+                per_sport[sp] = {
+                    "multiplier": current_regime_multiplier(sp),
+                    "safe_for_trading": regime_safe_for_trading(sp),
+                    "season_phase": r.season_phase,
+                    "confidence": round(r.confidence, 3),
+                    "noisy_window": r.noisy_window,
+                }
+            except Exception as e:
+                per_sport[sp] = {"error": str(e)}
+        regimes_block = {
+            "sizing_enabled": REGIME_SIZING_ENABLED,
+            "safety_enabled": REGIME_SAFETY_ENABLED,
+            "per_sport": per_sport,
+        }
+    except Exception as e:
+        regimes_block = {"unavailable": str(e)}
+    report["regimes"] = regimes_block
+
     return report
+
+
+@app.get("/regime/sizer-multipliers", dependencies=[Depends(require_admin_or_loopback)])
+async def regime_sizer_multipliers():
+    """Current regime multiplier per sport, as the portfolio sizer would apply them.
+
+    feat/regime-aware-sizing (2026-04-22). Admin-or-loopback gated — reveals
+    both the raw ``current_regime_multiplier`` from the market_regime module
+    and the clamped value actually used by
+    ``BetExecutor.compute_portfolio_stakes`` after env-toggle + bounds.
+    """
+    from tools.market_regime import (
+        current_regime_multiplier,
+        regime_safe_for_trading,
+        detect_regime,
+    )
+    from tools.bet_executor import (
+        REGIME_SIZING_ENABLED,
+        REGIME_SAFETY_ENABLED,
+        _REGIME_MIN_MULT,
+        _REGIME_MAX_MULT,
+        _clamped_regime_multiplier,
+    )
+    sports = [
+        "baseball_mlb",
+        "basketball_nba",
+        "icehockey_nhl",
+        "americanfootball_nfl",
+        "basketball_ncaab",
+        "basketball_ncaaw",
+    ]
+    out: dict = {}
+    for sp in sports:
+        try:
+            r = detect_regime(sp)
+            raw = float(current_regime_multiplier(sp))
+            applied = _clamped_regime_multiplier(sp)
+            out[sp] = {
+                "raw_multiplier": round(raw, 3),
+                "applied_multiplier": round(applied, 3),
+                "safe_for_trading": regime_safe_for_trading(sp),
+                "season_phase": r.season_phase,
+                "days_into_phase": r.days_into_phase,
+                "phase_length_days": r.phase_length_days,
+                "confidence": round(r.confidence, 3),
+                "noisy_window": r.noisy_window,
+                "historical_roi_prior": r.historical_roi_prior,
+                "historical_clv_prior": r.historical_clv_prior,
+            }
+        except Exception as e:
+            out[sp] = {"error": str(e)}
+    return {
+        "sizing_enabled": REGIME_SIZING_ENABLED,
+        "safety_enabled": REGIME_SAFETY_ENABLED,
+        "bounds": {"min": _REGIME_MIN_MULT, "max": _REGIME_MAX_MULT},
+        "sports": out,
+    }
 
 
 @app.get("/admin/writer", dependencies=[Depends(require_admin)])
