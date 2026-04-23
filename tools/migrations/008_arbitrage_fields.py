@@ -39,6 +39,15 @@ def up(conn: sqlite3.Connection) -> None:
         # matters for long-lived DBs already past that code path.
         return
 
+    # Older DBs (or synthetic test fixtures) may have an ev_opportunities
+    # table that predates the source/status/expires_at columns. The index
+    # is only useful once those columns exist; skip cleanly otherwise so
+    # this migration doesn't explode on legacy schemas.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(ev_opportunities)")}
+    required = {"source", "status", "expires_at"}
+    if not required.issubset(cols):
+        return
+
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_ev_open_arbs "
         "ON ev_opportunities(source, status, expires_at)"
