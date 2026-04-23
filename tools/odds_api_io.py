@@ -981,24 +981,63 @@ async def get_odds_multi(event_ids: list[str | int], bookmakers: str = "") -> li
     return results
 
 
+# odds-api.io's /odds/updated endpoint validates the `sport` param against
+# display NAMES (e.g. "Basketball"), not the slugs used by every other endpoint
+# on the same API ("basketball"). Passing the slug gets HTTP 400 "X is not a
+# valid sport" despite /sports listing that slug as valid. Hard-coded because
+# SPORT_MAP already commits to slugs and introducing a /sports round-trip on
+# every incremental poll would be pointless.
+_SPORT_SLUG_TO_DISPLAY = {
+    "basketball": "Basketball",
+    "american-football": "American Football",
+    "ice-hockey": "Ice Hockey",
+    "baseball": "Baseball",
+    "football": "Football",
+    "golf": "Golf",
+    "tennis": "Tennis",
+    "mixed-martial-arts": "MMA",
+    "boxing": "Boxing",
+}
+
+
 @tracked_ingestion(source="odds_api_io.v3.odds.updated", sla_seconds=300)
-async def get_odds_updated(since_unix: int, sport: str = "", bookmaker: str = "") -> dict:
+async def get_odds_updated(
+    since_unix: int, sport: str = "", bookmaker: str = "DraftKings",
+) -> dict:
     """
     Get incremental odds changes since a unix timestamp (max 60s ago).
 
     Only returns odds that changed, not full snapshots. Efficient for
     high-frequency polling without wasting requests.
+
+    odds-api.io requires BOTH `sport` and `bookmaker` params on this endpoint
+    (responds HTTP 400 "Missing sport/bookmaker parameter" otherwise) AND
+    quirkily expects the sport to be the display NAME not the slug. We default
+    the bookmaker to DraftKings (our primary anchor book) and require the
+    caller to pass a sport — returning an error sentinel when it is missing
+    prevents a guaranteed HTTP 400 and the ingestion_runs row that tags it
+    'failed'.
     """
+    if not sport:
+        return {
+            "error": "sport is required (odds-api.io rejects /odds/updated without it)",
+            "updates": [],
+        }
+    if not bookmaker:
+        return {"error": "bookmaker is required", "updates": []}
+
     budget_err = _check_budget(1)
     if budget_err:
         return {"error": budget_err, "updates": []}
 
-    params: dict = {"since": since_unix}
-    if sport:
-        mapping = SPORT_MAP.get(sport, {})
-        params["sport"] = mapping.get("sport", sport)
-    if bookmaker:
-        params["bookmaker"] = bookmaker
+    mapping = SPORT_MAP.get(sport, {})
+    slug = mapping.get("sport", sport)
+    display = _SPORT_SLUG_TO_DISPLAY.get(slug, slug.title())
+    params: dict = {
+        "since": since_unix,
+        "sport": display,
+        "bookmaker": bookmaker,
+    }
 
     data = await _api_get("/odds/updated", params)
     if isinstance(data, dict) and data.get("error"):
@@ -1084,21 +1123,42 @@ async def get_odds_movements(
     event_id: str | int,
     bookmaker: str = "DraftKings",
     market: str = "ML",
+    market_line: Optional[str] = None,
 ) -> dict:
     """
     Get full line movement history for an event (opening to current/closing).
 
     Shows every price change for the specified bookmaker+market combination.
+
+    odds-api.io requires a `marketLine` parameter for every market OTHER than
+    ML ("Missing marketLine (required for non-ML markets)" HTTP 400 otherwise).
+    We short-circuit that call to an error sentinel before hitting the wire —
+    without this, every Spread/Totals fan-out burned an HTTP round-trip and
+    wrote a `failed` row to ingestion_runs (47K+ such rows were accumulating
+    in practice). Callers that legitimately want Spread/Totals movements must
+    pass `market_line` explicitly.
     """
+    if market != "ML" and not market_line:
+        return {
+            "error": (
+                f"marketLine is required for non-ML markets "
+                f"(market={market!r}); pass market_line=<line value>"
+            ),
+        }
+
     budget_err = _check_budget(1)
     if budget_err:
         return {"error": budget_err}
 
-    data = await _api_get("/odds/movements", {
+    params: dict = {
         "eventId": str(event_id),
         "bookmaker": bookmaker,
         "market": market,
-    })
+    }
+    if market_line:
+        params["marketLine"] = str(market_line)
+
+    data = await _api_get("/odds/movements", params)
     return data if isinstance(data, dict) else {"data": data}
 
 
@@ -1346,6 +1406,15 @@ async def get_historical_snapshot(
     for bm_name in bm_list:
         used_pre_commence = False
         for market in markets:
+            # odds-api.io /odds/movements only accepts non-ML markets when
+            # paired with a marketLine we don't know up-front at this call
+            # site — the backtest is asking "what did the line look like before
+            # commence", we can't also say "at which line". For Spread/Totals
+            # we fall through to the closing_fallback path below (same as if
+            # the API returned no pre-commence snapshot).
+            if market != "ML":
+                continue
+
             try:
                 mv = await get_odds_movements(
                     event_id=event_id, bookmaker=bm_name, market=market,
