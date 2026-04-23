@@ -25,7 +25,7 @@ from typing import Optional
 import aiosqlite
 from dotenv import load_dotenv
 
-from tools.embeddings import VectorStore, embed_text, cosine_similarity
+from tools.embeddings import VectorStore, embed_text, embed_batch, cosine_similarity
 from tools.hypothesis import HypothesisManager
 
 load_dotenv()
@@ -33,6 +33,18 @@ load_dotenv()
 logger = logging.getLogger("callisto.hypothesis_generator")
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+
+# ──────────────────────────────────────────────────
+# Wiki-grounded variance-enforced generator constants
+# ──────────────────────────────────────────────────
+# Candidate sim >= CANDIDATE_DEDUP_SIM  ⇒ drop the weaker of the two
+CANDIDATE_DEDUP_SIM: float = 0.85
+# Candidate sim >= PRIOR_CORPUS_SIM to any wiki/existing-hyp  ⇒ drop (already covered)
+PRIOR_CORPUS_SIM: float = 0.80
+# How many wiki articles to prime the LLM with
+WIKI_CONTEXT_TOP_K: int = 8
+# How many recent rejected hypotheses to show as negative examples
+NEGATIVE_EXAMPLES_N: int = 4
 
 
 # ──────────────────────────────────────────────────
@@ -1134,3 +1146,539 @@ class HypothesisGenerator:
                 "unique_players": len(set(players)),
             },
         }
+
+    # ──────────────────────────────────────────────────────────────
+    # WIKI-GROUNDED, VARIANCE-ENFORCED GENERATOR
+    # (additive — existing generate_* methods unchanged)
+    # ──────────────────────────────────────────────────────────────
+
+    async def generate_wiki_grounded(
+        self,
+        sport: str,
+        focus_market: Optional[str] = None,
+        n_candidates: int = 8,
+        max_keep: int = 5,
+        include_seeds: bool = True,
+    ) -> dict:
+        """
+        Retrieve wiki articles + rejection examples, then call the hypothesis_gen
+        ladder to produce N candidates, embed them, enforce diversity vs each
+        other AND vs prior corpus, and persist the survivors as draft hypotheses.
+
+        Returns a dict:
+          {
+            "generated": [<hyp dict>, ...],     # final survivors, persisted
+            "rejected": [{"reason", "candidate"}, ...],
+            "wiki_context_topics": [...],
+            "seeds_used": [...],
+            "model_used": <str>,
+            "diversity_metric": float,          # avg pairwise cosine distance
+                                                # (1 - sim) among survivors
+          }
+        """
+        from inference import escalate_with_ladder
+
+        # 1. Retrieve wiki articles related to the sport/market ------------
+        wiki_articles = await self._retrieve_wiki_context(sport, focus_market)
+
+        # 2. Pull a handful of rejected hypotheses as negative examples ----
+        rejected_examples = await self._retrieve_rejection_examples(
+            sport, focus_market, limit=NEGATIVE_EXAMPLES_N
+        )
+
+        # 3. Pick underexplored seeds --------------------------------------
+        seeds: list[dict] = []
+        if include_seeds:
+            try:
+                from tools.thesis_seeds import pick_unexplored_seeds
+                existing_names = await self.hypothesis_manager.get_all_names()
+                existing_theses = await self._recent_theses(sport)
+                seeds = pick_unexplored_seeds(
+                    existing_names, existing_theses, sport=sport, max_seeds=3,
+                )
+            except Exception as e:
+                logger.debug(f"Seed retrieval failed (non-fatal): {e}")
+                seeds = []
+
+        # 4. Build the grounding prompt ------------------------------------
+        prompt = self._build_grounded_prompt(
+            sport, focus_market, wiki_articles, rejected_examples, seeds, n_candidates
+        )
+
+        # 5. Call the ladder ------------------------------------------------
+        result = await escalate_with_ladder(
+            prompt=prompt,
+            system_context=(
+                "You are Callisto's hypothesis engine. Produce specific, "
+                "SQL-filterable, backtest-able hypotheses. Return JSON ONLY."
+            ),
+            task_type="hypothesis_gen",
+            timeout=180,
+            hermes_caller="hypothesis_gen_wiki",
+        )
+        model_used = result.get("model_used", "unknown")
+        content = result.get("content", "")
+        if result.get("error"):
+            logger.error(f"grounded generator ladder error: {result['error']}")
+            return {
+                "generated": [], "rejected": [],
+                "wiki_context_topics": [a.get("topic") for a in wiki_articles],
+                "seeds_used": [s["seed_id"] for s in seeds],
+                "model_used": model_used, "diversity_metric": 0.0,
+            }
+
+        candidates = self._parse_candidates(content)
+        if not candidates:
+            logger.warning("grounded generator returned no parseable candidates")
+            return {
+                "generated": [], "rejected": [],
+                "wiki_context_topics": [a.get("topic") for a in wiki_articles],
+                "seeds_used": [s["seed_id"] for s in seeds],
+                "model_used": model_used, "diversity_metric": 0.0,
+            }
+
+        # 6. Embed candidate thesis statements in ONE batch -----------------
+        thesis_texts = [
+            (c.get("thesis_statement")
+             or c.get("thesis")
+             or c.get("name")
+             or "").strip()
+            for c in candidates
+        ]
+        try:
+            cand_embs = await embed_batch(thesis_texts)
+        except Exception as e:
+            logger.warning(f"embed_batch failed ({e}); skipping variance step")
+            cand_embs = []
+
+        # 7. Variance-enforce vs each other and vs prior corpus --------------
+        kept_indices, drop_reasons = await self._enforce_variance(
+            candidates, cand_embs, wiki_articles
+        )
+        kept_indices = kept_indices[:max_keep]
+
+        # 8. Persist survivors as draft hypotheses ---------------------------
+        today = datetime.now(timezone.utc).date()
+        training_cutoff = today - timedelta(days=30)
+        training_period_start = "2023-01-01"
+        training_period_end = str(training_cutoff)
+        forward_test_start = str(training_cutoff + timedelta(days=1))
+
+        created: list[dict] = []
+        rejected_log = drop_reasons[:]
+        for i in kept_indices:
+            c = candidates[i]
+            try:
+                mc = c.get("model_config") or {
+                    "type": "consensus_devig",
+                    "devig_method": "power",
+                    "target_book": "draftkings",
+                    "consensus_min_books": 3,
+                }
+                mc["training_period_start"] = training_period_start
+                mc["training_period_end"] = training_period_end
+                mc["forward_test_start"] = forward_test_start
+                mc["grounding"] = {
+                    "source": "wiki_grounded_v1",
+                    "wiki_topics": [a.get("topic") for a in wiki_articles][:5],
+                    "seed_ids": [s["seed_id"] for s in seeds],
+                    "ladder_model": model_used,
+                }
+
+                thesis_txt = (
+                    c.get("thesis_statement")
+                    or c.get("thesis")
+                    or c.get("signal_logic")
+                    or ""
+                )
+                name = c.get("name", f"auto_{sport}_{i}")
+                market = (c.get("market_type") or c.get("market")
+                          or focus_market or "spreads")
+                edge = c.get("edge_threshold")
+                if edge is None:
+                    edge = c.get("ic_prior_estimate", 0.02)
+                try:
+                    edge = float(edge)
+                except (TypeError, ValueError):
+                    edge = 0.02
+
+                hid = await self.hypothesis_manager.create_hypothesis(
+                    name=name,
+                    thesis=thesis_txt,
+                    sport=sport,
+                    market_type=market,
+                    model_config=mc,
+                    edge_threshold=edge,
+                    notes=(
+                        f"Wiki-grounded generation (model={model_used}). "
+                        f"Train: [{training_period_start}..{training_period_end}], "
+                        f"forward-test from {forward_test_start}."
+                    ),
+                )
+                created.append({
+                    "hypothesis_id": hid,
+                    "name": name,
+                    "thesis": thesis_txt,
+                    "market_type": market,
+                    "source": "wiki_grounded",
+                })
+            except Exception as e:
+                logger.warning(f"grounded generator persist failed: {e}")
+                rejected_log.append({"reason": f"persist_error: {e}",
+                                     "candidate": c})
+
+        # 9. Diversity metric on the survivors ------------------------------
+        kept_embs = [cand_embs[i] for i in kept_indices if i < len(cand_embs)]
+        diversity = self._avg_pairwise_distance(kept_embs)
+
+        logger.info(
+            f"grounded generator: sport={sport} survivors={len(created)} "
+            f"dropped={len(rejected_log)} diversity={diversity:.3f} "
+            f"model={model_used}"
+        )
+        return {
+            "generated": created,
+            "rejected": rejected_log,
+            "wiki_context_topics": [a.get("topic") for a in wiki_articles],
+            "seeds_used": [s["seed_id"] for s in seeds],
+            "model_used": model_used,
+            "diversity_metric": round(diversity, 4),
+        }
+
+    # ── helper: wiki retrieval ────────────────────────────────────
+    async def _retrieve_wiki_context(
+        self, sport: str, focus_market: Optional[str]
+    ) -> list[dict]:
+        """Semantic-search the wiki for articles related to sport/market."""
+        try:
+            from tools.knowledge_wiki import KnowledgeWiki
+        except Exception as e:
+            logger.debug(f"wiki import failed: {e}")
+            return []
+
+        query_parts = [sport.replace("_", " ")]
+        if focus_market:
+            query_parts.append(focus_market.replace("_", " "))
+        query_parts.append("betting edge hypothesis")
+        query = " ".join(query_parts)
+
+        try:
+            kw = KnowledgeWiki(self.db_path)
+            # kw.search needs an aiosqlite connection; reuse our own.
+            if self._db is None:
+                await self.initialize()
+            hits = await kw.search(self._db, query, top_k=WIKI_CONTEXT_TOP_K)
+            return hits or []
+        except Exception as e:
+            logger.debug(f"wiki semantic search failed (non-fatal): {e}")
+            return []
+
+    # ── helper: rejected-hypothesis retrieval ─────────────────────
+    async def _retrieve_rejection_examples(
+        self, sport: str, focus_market: Optional[str], limit: int
+    ) -> list[dict]:
+        """Pull a few recent rejected hypotheses in the same cohort."""
+        if self._db is None:
+            await self.initialize()
+        sql_parts = ["SELECT name, thesis, notes FROM hypotheses WHERE status='rejected'"]
+        params: list = []
+        if sport:
+            sql_parts.append("AND sport = ?")
+            params.append(sport)
+        if focus_market:
+            sql_parts.append("AND market_type = ?")
+            params.append(focus_market)
+        sql_parts.append("ORDER BY updated_at DESC LIMIT ?")
+        params.append(limit)
+        try:
+            cur = await self._db.execute(" ".join(sql_parts), params)
+            rows = await cur.fetchall()
+            return [
+                {"name": r[0], "thesis": r[1] or "", "notes": r[2] or ""}
+                for r in rows
+            ]
+        except Exception as e:
+            logger.debug(f"rejection-example retrieval failed: {e}")
+            return []
+
+    async def _recent_theses(self, sport: str, limit: int = 50) -> list[str]:
+        if self._db is None:
+            await self.initialize()
+        try:
+            cur = await self._db.execute(
+                "SELECT thesis FROM hypotheses WHERE sport = ? ORDER BY created_at DESC LIMIT ?",
+                (sport, limit),
+            )
+            return [r[0] or "" for r in await cur.fetchall()]
+        except Exception:
+            return []
+
+    # ── helper: prompt construction ───────────────────────────────
+    def _build_grounded_prompt(
+        self,
+        sport: str,
+        focus_market: Optional[str],
+        wiki_articles: list[dict],
+        rejected_examples: list[dict],
+        seeds: list[dict],
+        n_candidates: int,
+    ) -> str:
+        wiki_block = "\n".join(
+            f"- [{a.get('topic')}] {a.get('title')}: "
+            f"{(a.get('summary') or '')[:220]}"
+            for a in wiki_articles[:WIKI_CONTEXT_TOP_K]
+        ) or "(no prior wiki articles)"
+
+        neg_block = "\n".join(
+            f"- REJECTED: {r['name']} — {(r['thesis'] or '')[:180]}"
+            for r in rejected_examples
+        ) or "(no prior rejections for this cohort)"
+
+        seed_block = "\n".join(
+            f"- SEED {s['seed_id']} ({s['category']}, {s['market_type']}): "
+            f"{s['thesis_template'][:180]}"
+            for s in seeds
+        ) or "(no seeds supplied)"
+
+        mkt = focus_market or "any market (props/totals/spreads/h2h/live/parlay)"
+        return (
+            f"Sport: {sport}\nFocus market: {mkt}\n\n"
+            f"THINGS THE WIKI ALREADY KNOWS "
+            f"(do NOT propose re-discovery of these — propose COMPLEMENTARY "
+            f"or ORTHOGONAL theses):\n{wiki_block}\n\n"
+            f"RECENT FAILED HYPOTHESES IN THIS COHORT "
+            f"(do NOT propose variations of these shape):\n{neg_block}\n\n"
+            f"UNDEREXPLORED THESIS SPACES "
+            f"(preferred starting points — specialize to a concrete "
+            f"testable form using sport-specific names/markets):\n{seed_block}\n\n"
+            f"Generate exactly {n_candidates} DISTINCT candidate hypotheses "
+            f"as a JSON array. Each item MUST have:\n"
+            f"  - name:               short unique slug\n"
+            f"  - market:             specific market key\n"
+            f"  - cohort_filter:      SQL-expressible WHERE clause over "
+            f"game_contexts / player_stats\n"
+            f"  - signal_logic:       why the edge exists, mechanism\n"
+            f"  - min_signals:        integer ≥ 20\n"
+            f"  - ic_prior_estimate:  float in [0.005, 0.08]\n"
+            f"  - variance_justification: one sentence — why this is NOT a "
+            f"duplicate of any wiki article or rejected hypothesis above\n"
+            f"  - thesis_statement:   2-3 sentence backtestable claim\n"
+            f"  - edge_threshold:     float (decimal, e.g., 0.02)\n"
+            f"  - model_config:       dict (devig_method, target_book, "
+            f"consensus_min_books, context_factors list)\n\n"
+            f"HARD RULES:\n"
+            f"1. Reject vague wording. 'Team plays better when rested' is "
+            f"BANNED; say exactly which column, threshold, and side.\n"
+            f"2. Every candidate must be DIFFERENT from the others — do not "
+            f"vary only one numeric threshold.\n"
+            f"3. Prefer specific official/umpire/ref/coach/venue/microstructure "
+            f"triggers over blanket team-level claims.\n"
+            f"4. Return ONLY the JSON array. No explanation text, no code "
+            f"fences outside the JSON."
+        )
+
+    # ── helper: tolerant JSON extraction ──────────────────────────
+    @staticmethod
+    def _parse_candidates(content: str) -> list[dict]:
+        if not content:
+            return []
+        # Strip code fences if present.
+        txt = content.strip()
+        if txt.startswith("```"):
+            txt = txt.strip("`")
+            # drop optional "json" language marker
+            if txt.lstrip().lower().startswith("json"):
+                txt = txt.split("\n", 1)[1] if "\n" in txt else txt
+        start = txt.find("[")
+        end = txt.rfind("]")
+        if start < 0 or end <= start:
+            return []
+        try:
+            data = json.loads(txt[start:end + 1])
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(data, list):
+            return []
+        return [x for x in data if isinstance(x, dict)]
+
+    # ── helper: variance enforcement ──────────────────────────────
+    async def _enforce_variance(
+        self,
+        candidates: list[dict],
+        cand_embs: list[list[float]],
+        wiki_articles: list[dict],
+    ) -> tuple[list[int], list[dict]]:
+        """Greedy selection that drops:
+          (a) near-duplicate candidates (sim >= CANDIDATE_DEDUP_SIM)
+          (b) candidates that cluster against a wiki article
+              (sim >= PRIOR_CORPUS_SIM)
+
+        Returns (kept_indices, drop_reasons)."""
+        if not cand_embs or len(cand_embs) != len(candidates):
+            # Embeddings unavailable — trust the LLM and accept all.
+            return list(range(len(candidates))), []
+
+        # Load wiki embeddings for articles we have summaries for.
+        # We embed summaries once per call (cheap — typically 8 items).
+        wiki_texts = [
+            (a.get("summary") or a.get("title") or a.get("topic") or "")[:500]
+            for a in wiki_articles
+        ]
+        wiki_texts = [t for t in wiki_texts if t]
+        try:
+            wiki_embs = await embed_batch(wiki_texts) if wiki_texts else []
+        except Exception as e:
+            logger.debug(f"wiki embed_batch failed: {e}")
+            wiki_embs = []
+
+        kept: list[int] = []
+        drop_reasons: list[dict] = []
+
+        # Score candidates by ic_prior as a quality signal.
+        def _q(i: int) -> float:
+            try:
+                return float(candidates[i].get("ic_prior_estimate", 0.0))
+            except (TypeError, ValueError):
+                return 0.0
+
+        order = sorted(range(len(candidates)), key=_q, reverse=True)
+
+        for i in order:
+            emb_i = cand_embs[i]
+
+            # Drop vs already-kept candidates.
+            dup = False
+            for j in kept:
+                sim = cosine_similarity(emb_i, cand_embs[j])
+                if sim >= CANDIDATE_DEDUP_SIM:
+                    dup = True
+                    drop_reasons.append({
+                        "reason": f"near_duplicate_of_candidate_{j} (sim={sim:.3f})",
+                        "candidate": candidates[i],
+                    })
+                    break
+            if dup:
+                continue
+
+            # Drop vs wiki articles already in the corpus.
+            prior_hit = False
+            for w_emb, w_meta in zip(wiki_embs, wiki_articles):
+                sim = cosine_similarity(emb_i, w_emb)
+                if sim >= PRIOR_CORPUS_SIM:
+                    prior_hit = True
+                    drop_reasons.append({
+                        "reason": (
+                            f"overlaps_wiki_{w_meta.get('topic')} "
+                            f"(sim={sim:.3f})"
+                        ),
+                        "candidate": candidates[i],
+                    })
+                    break
+            if prior_hit:
+                continue
+
+            kept.append(i)
+
+        # Sort kept back into original order for stable output.
+        kept.sort()
+        return kept, drop_reasons
+
+    @staticmethod
+    def _avg_pairwise_distance(embs: list[list[float]]) -> float:
+        """1 - mean cosine similarity across all pairs (higher = more diverse)."""
+        n = len(embs)
+        if n < 2:
+            return 0.0
+        sims: list[float] = []
+        for i in range(n):
+            for j in range(i + 1, n):
+                sims.append(cosine_similarity(embs[i], embs[j]))
+        if not sims:
+            return 0.0
+        return 1.0 - (sum(sims) / len(sims))
+
+    # ──────────────────────────────────────────────────────────────
+    # SHARPENING LOOP: post-backtest wiki article
+    # ──────────────────────────────────────────────────────────────
+    async def record_backtest_outcome_to_wiki(
+        self,
+        hypothesis_id: str,
+        outcome: str,   # "success" | "failure" | "inconclusive"
+        stats: Optional[dict] = None,
+    ) -> bool:
+        """Write a wiki article summarizing why a hypothesis did or didn't work.
+
+        Called from hypothesis_mgr post-backtest hook. Next generation cycle
+        will retrieve the article via semantic search, so the LLM can avoid
+        re-proposing near-duplicates.
+
+        Returns True on wiki write, False on any error (non-fatal).
+        """
+        try:
+            from tools.knowledge_wiki import KnowledgeWiki
+        except Exception as e:
+            logger.debug(f"wiki import for sharpening failed: {e}")
+            return False
+
+        hyp = await self.hypothesis_manager.get_hypothesis(hypothesis_id)
+        if not hyp:
+            logger.debug(f"sharpening: hypothesis {hypothesis_id} not found")
+            return False
+
+        topic = f"backtest_outcome_{hypothesis_id}"
+        title = f"Backtest outcome: {hyp['name']} ({outcome})"
+        stats_blob = json.dumps(stats or {}, default=str)
+        summary = (
+            f"Outcome={outcome}. Market={hyp['market_type']}, sport={hyp['sport']}. "
+            f"Edge threshold={hyp['edge_threshold']}. "
+            f"Thesis: {(hyp.get('thesis') or '')[:240]}"
+        )
+        content = (
+            f"Hypothesis: {hyp['name']}\n"
+            f"Thesis: {hyp.get('thesis', '')}\n"
+            f"Outcome: {outcome}\n"
+            f"Stats: {stats_blob}\n"
+            f"Model config: {json.dumps(hyp.get('model_config') or {})[:1500]}\n"
+        )
+
+        try:
+            kw = KnowledgeWiki(self.db_path)
+            if self._db is None:
+                await self.initialize()
+            await kw.initialize(self._db)
+            # Upsert path: use a minimal insert-or-replace so we don't
+            # require the LLM-compiler for sharpening signals.
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await self._db.execute(
+                "INSERT OR REPLACE INTO wiki_articles "
+                "(topic, title, content, summary, related_topics, "
+                "source_sessions, source_entries, domain, confidence, "
+                "created_at, updated_at, compile_count, content_hash) "
+                "VALUES (?, ?, ?, ?, '[]', '[]', '[]', ?, ?, ?, ?, 1, ?)",
+                (
+                    topic, title, content, summary, "SIGNAL",
+                    0.8 if outcome == "success" else 0.5,
+                    now_iso, now_iso,
+                    f"hypgen:{hypothesis_id}:{outcome}",
+                ),
+            )
+            await self._db.commit()
+            # Embed and stash for retrieval.
+            try:
+                emb = await embed_text(summary)
+                store = VectorStore(self.db_path)
+                await store.initialize()
+                try:
+                    await store.store(
+                        "wiki_articles", summary, emb,
+                        metadata={"topic": topic, "outcome": outcome,
+                                  "hypothesis_id": hypothesis_id},
+                    )
+                finally:
+                    await store.close()
+            except Exception as e:
+                logger.debug(f"sharpening: embed/store failed: {e}")
+            return True
+        except Exception as e:
+            logger.warning(f"sharpening wiki write failed: {e}")
+            return False
