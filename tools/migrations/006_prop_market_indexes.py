@@ -1,4 +1,4 @@
-"""Migration 005: prop-market indexes for MLB/NHL coverage expansion.
+"""Migration 006: prop-market indexes for MLB/NHL coverage expansion.
 
 The props-expansion adds 13 MLB and 11 NHL prop markets to
 ``DK_PROP_CATEGORIES``. The edge scanner, fair-value model, and hypothesis
