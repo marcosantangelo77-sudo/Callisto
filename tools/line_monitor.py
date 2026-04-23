@@ -41,6 +41,7 @@ from tools.dk_scraper import scrape_dk_odds
 from tools.action_network_scraper import scrape_action_network
 from tools.fanduel_scraper import scrape_fd_odds
 from tools.betmgm_scraper import scrape_betmgm_odds
+from tools.fanatics_scraper import fetch_fanatics_odds
 from tools.odds_api_io import (
     get_odds as odds_api_io_get_odds,
     get_usage_status as odds_api_io_usage,
@@ -819,6 +820,18 @@ class LineMonitor:
         except Exception as e:
             logger.warning(f"FanDuel scraper failed for {sport}: {e}")
 
+        # 4b. Fanatics — secondary book per project_sportsbooks. Free public
+        # endpoint; cookie-optional (CALLISTO_FANATICS_SESSION_COOKIE upgrades
+        # to authed reads). Skip sports Fanatics doesn't carry (golf, MLS).
+        try:
+            from tools.fanatics_scraper import FANATICS_LEAGUE_KEYS
+            if sport in FANATICS_LEAGUE_KEYS:
+                fan_data = await fetch_fanatics_odds(sport)
+                if not fan_data.get("error") and fan_data.get("game_count", 0) > 0:
+                    scraped["fanatics"] = fan_data
+        except Exception as e:
+            logger.warning(f"Fanatics scraper failed for {sport}: {e}")
+
         # 5. BetMGM — DISABLED: redundant with odds-api.io Pro (includes BetMGM).
         # Scraped endpoint returns 400/403 consistently, generating log noise.
         # Re-enable only if odds-api.io loses BetMGM coverage.
@@ -885,6 +898,7 @@ class LineMonitor:
             # Enrich with fresh scraper data from all free sources (always)
             new_snapshot = await self._enrich_with_dk(sport, new_snapshot)
             new_snapshot = await self._enrich_with_fd(sport, new_snapshot)
+            new_snapshot = await self._enrich_with_fanatics(sport, new_snapshot)
 
             await self._process_snapshot(sport, new_snapshot)
 
@@ -1053,6 +1067,71 @@ class LineMonitor:
 
         except Exception as e:
             logger.warning(f"BetMGM enrichment failed for {sport}: {e}", exc_info=True)
+
+        return snapshot
+
+    async def _enrich_with_fanatics(self, sport: str, snapshot: dict) -> dict:
+        """Merge fresh Fanatics scraper data into an odds snapshot.
+
+        Same pattern as _enrich_with_dk/_enrich_with_fd. Fanatics is the
+        secondary book (per project_sportsbooks) so we always pull a
+        fresh scrape when the sport is supported. Silent on failure — the
+        Fanatics endpoints are UNDOCUMENTED and we expect them to break
+        periodically; @tracked_ingestion records the outage.
+        """
+        try:
+            from tools.fanatics_scraper import FANATICS_LEAGUE_KEYS
+        except Exception:
+            return snapshot
+        if sport not in FANATICS_LEAGUE_KEYS:
+            return snapshot
+
+        try:
+            fan_data = await fetch_fanatics_odds(sport)
+            if fan_data.get("error") or not fan_data.get("games"):
+                return snapshot
+
+            fan_by_matchup: dict[str, dict] = {}
+            for fan_game in fan_data["games"]:
+                key = self._matchup_key(fan_game.get("home_team", ""), fan_game.get("away_team", ""))
+                if key:
+                    fan_by_matchup[key] = fan_game
+
+            enriched = 0
+            for game in snapshot.get("games", []):
+                key = self._matchup_key(game.get("home_team", ""), game.get("away_team", ""))
+                if not key or key not in fan_by_matchup:
+                    continue
+
+                fan_game = fan_by_matchup[key]
+                fan_bookmaker = None
+                for bm in fan_game.get("bookmakers", []):
+                    if bm.get("key") == "fanatics":
+                        fan_bookmaker = bm
+                        break
+
+                if not fan_bookmaker:
+                    continue
+
+                # Replace any existing Fanatics entry (including spelling
+                # variants) with the scraped one, or append if absent.
+                replaced = False
+                for i, bm in enumerate(game.get("bookmakers", [])):
+                    if bm.get("key", "").lower() in ("fanatics", "fanatics_sportsbook"):
+                        game["bookmakers"][i] = fan_bookmaker
+                        replaced = True
+                        break
+
+                if not replaced:
+                    game.setdefault("bookmakers", []).append(fan_bookmaker)
+
+                enriched += 1
+
+            if enriched > 0:
+                logger.info(f"Fanatics enrichment {sport}: updated {enriched}/{len(snapshot.get('games', []))} games")
+
+        except Exception as e:
+            logger.warning(f"Fanatics enrichment failed for {sport}: {e}", exc_info=True)
 
         return snapshot
 
