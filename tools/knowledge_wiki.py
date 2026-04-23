@@ -42,6 +42,21 @@ WIKI_COLLECTION = "wiki_articles"
 _EMBED_QUEUE_MAX = 500
 _pending_embeds: list[dict] = []
 
+# Wiki write telemetry — bumped on every direct-write (bypasses LLM compile).
+# Pre-2026-04-22 the demotion writer used the wrong schema and every call
+# failed silently inside a bare ``except Exception: pass``; these counters
+# make future silent failures loud.
+_wiki_writes_succeeded: int = 0
+_wiki_writes_failed: int = 0
+
+
+def get_write_stats() -> dict:
+    """Expose wiki direct-write counters for /health-style introspection."""
+    return {
+        "succeeded": _wiki_writes_succeeded,
+        "failed": _wiki_writes_failed,
+    }
+
 # ── Schema ──────────────────────────────────────────────
 
 WIKI_SCHEMA_SQL = """
@@ -921,6 +936,136 @@ class KnowledgeWiki:
         except Exception as e:
             logger.warning(f"Wiki contradiction detection failed: {e}")
             return []
+
+    # ──────────────────────────────────────────────────
+    # WRITE: Direct schema-correct article upsert (no LLM compile)
+    # ──────────────────────────────────────────────────
+
+    async def write_lesson_article(
+        self,
+        db: aiosqlite.Connection,
+        *,
+        topic: str,
+        title: str,
+        content: str,
+        domain: str = "GENERAL",
+        related_topics: Optional[list[str]] = None,
+        source_sessions: Optional[list[str]] = None,
+        source_entries: Optional[list[str]] = None,
+        confidence: float = 0.6,
+        summary: Optional[str] = None,
+    ) -> dict:
+        """Schema-correct direct write of a wiki article.
+
+        Unlike ``_create_article``/``_update_article`` this does NOT invoke the
+        LLM compile pipeline — it's for "we already know the lesson, file it"
+        cases like LIVE-demotion post-mortems and backtest null results.
+
+        Uses the REAL table schema (topic PK, title, content, summary,
+        related_topics, source_sessions, source_entries, domain, confidence,
+        created_at, updated_at, compile_count, content_hash) — the previous
+        demotion writer tried ``(article_id, body)`` which failed every call.
+
+        Returns ``{"action": "created"|"updated"|"failed", "topic": ..., "error": ...}``.
+        On failure the error is logged loudly and the ``_wiki_writes_failed``
+        module counter is incremented — never swallowed silently.
+        """
+        global _wiki_writes_failed, _wiki_writes_succeeded
+        await self.initialize(db)
+
+        related_topics = related_topics or []
+        source_sessions = source_sessions or []
+        source_entries = source_entries or []
+        if summary is None:
+            # Use first 280 chars of content as summary
+            summary = content[:280] + ("..." if len(content) > 280 else "")
+        content_hash = hashlib.md5(content.encode()).hexdigest()[:12]
+        now = datetime.now(timezone.utc).isoformat()
+
+        try:
+            existing = await self._get_article(db, topic)
+            if existing:
+                # Merge related_topics + source lists (dedup), bump compile_count
+                merged_related = list(dict.fromkeys(
+                    existing.get("related_topics", []) + related_topics
+                ))
+                merged_sessions = list(dict.fromkeys(
+                    existing.get("source_sessions", []) + source_sessions
+                ))
+                merged_entries = list(dict.fromkeys(
+                    existing.get("source_entries", []) + source_entries
+                ))
+                await db.execute(
+                    "UPDATE wiki_articles SET title = ?, content = ?, "
+                    "summary = ?, related_topics = ?, source_sessions = ?, "
+                    "source_entries = ?, domain = ?, confidence = ?, "
+                    "updated_at = ?, compile_count = compile_count + 1, "
+                    "content_hash = ? WHERE topic = ?",
+                    (
+                        title, content, summary,
+                        json.dumps(merged_related),
+                        json.dumps(merged_sessions),
+                        json.dumps(merged_entries),
+                        domain, round(float(confidence), 3), now,
+                        content_hash, topic,
+                    ),
+                )
+                await db.commit()
+                _wiki_writes_succeeded += 1
+                logger.info(
+                    f"Wiki lesson: updated '{topic}' (domain={domain}, "
+                    f"compile_count+=1)"
+                )
+                try:
+                    await self._emit_article_embedding(
+                        topic,
+                        {"title": title, "summary": summary, "content": content},
+                        domain, round(float(confidence), 3),
+                    )
+                except Exception as e:
+                    logger.debug(f"Wiki lesson embed deferred for '{topic}': {e}")
+                return {"action": "updated", "topic": topic}
+            else:
+                await db.execute(
+                    "INSERT INTO wiki_articles "
+                    "(topic, title, content, summary, related_topics, "
+                    " source_sessions, source_entries, domain, confidence, "
+                    " created_at, updated_at, compile_count, content_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        topic, title, content, summary,
+                        json.dumps(related_topics),
+                        json.dumps(source_sessions),
+                        json.dumps(source_entries),
+                        domain, round(float(confidence), 3),
+                        now, now, 1, content_hash,
+                    ),
+                )
+                await db.commit()
+                _wiki_writes_succeeded += 1
+                logger.info(
+                    f"Wiki lesson: created '{topic}' (domain={domain}, "
+                    f"{len(content)} chars)"
+                )
+                # Emit the embedding so the article is retrievable via
+                # semantic search — without this the wiki-in-the-loop
+                # retrieval path would never find lesson articles.
+                try:
+                    await self._emit_article_embedding(
+                        topic,
+                        {"title": title, "summary": summary, "content": content},
+                        domain, round(float(confidence), 3),
+                    )
+                except Exception as e:
+                    logger.debug(f"Wiki lesson embed deferred for '{topic}': {e}")
+                return {"action": "created", "topic": topic}
+        except Exception as e:
+            _wiki_writes_failed += 1
+            logger.error(
+                f"Wiki lesson write FAILED for '{topic}': {type(e).__name__}: {e}. "
+                f"writes_failed={_wiki_writes_failed}"
+            )
+            return {"action": "failed", "topic": topic, "error": str(e)}
 
     # ──────────────────────────────────────────────────
     # QUERY: Search wiki articles

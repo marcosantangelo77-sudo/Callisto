@@ -122,6 +122,58 @@ class _LRUCache:
 _regime_cache: _LRUCache = _LRUCache(maxsize=500)
 
 
+# ── Wiki-in-the-loop toggles (feat/wiki-in-the-loop, 2026-04-22) ─────────
+# Opt-in via env var so the retrieval path can be cleanly disabled for
+# A/B comparison or if the wiki itself is broken. Default on in this branch.
+def _wiki_in_loop_enabled() -> bool:
+    return os.getenv("CALLISTO_WIKI_IN_LOOP", "1") == "1"
+
+
+async def _fetch_wiki_priors(
+    db,
+    query: str,
+    *,
+    top_k: int = 10,
+    domain: Optional[str] = None,
+    min_similarity: float = 0.0,
+) -> list[dict]:
+    """Retrieve top-K relevant wiki articles for ``query``.
+
+    Safe: all failures return ``[]``. Wiki being down cannot break the
+    calling flow. Respects ``CALLISTO_WIKI_IN_LOOP`` toggle.
+    """
+    if not _wiki_in_loop_enabled():
+        return []
+    try:
+        from tools.knowledge_wiki import get_wiki
+        wiki = get_wiki()
+        return await wiki.search(
+            db, query, top_k=top_k, domain=domain,
+            min_similarity=min_similarity,
+        )
+    except Exception as e:
+        logger.warning(f"_fetch_wiki_priors failed for '{query[:80]}': {e}")
+        return []
+
+
+def _render_wiki_priors_block(articles: list[dict], max_chars_per: int = 400) -> str:
+    """Render wiki articles into a compact "PRIOR KNOWLEDGE" block for LLM prompts.
+
+    Returns empty string if no articles — caller can unconditionally concat.
+    """
+    if not articles:
+        return ""
+    lines = ["PRIOR KNOWLEDGE (wiki articles most relevant to this decision):"]
+    for a in articles:
+        sim = a.get("similarity")
+        sim_str = f"(sim={sim:.2f}) " if isinstance(sim, (int, float)) else ""
+        summary = (a.get("summary") or a.get("content") or "")[:max_chars_per]
+        lines.append(
+            f"- [{a.get('topic')}] {sim_str}{a.get('title', '')}: {summary}"
+        )
+    return "\n".join(lines) + "\n\n"
+
+
 def get_regime_for_team(sport: str, team_name: str) -> Optional[dict]:
     """Module-level lookup for cached regime analysis.
 
@@ -3799,9 +3851,92 @@ class ResearchLoop:
                         "and cross-book consensus divergence.\n\n"
                     )
 
+                # ── Wiki-in-the-loop: prior-knowledge injection ──
+                # Pull relevant articles from the knowledge wiki AND the most
+                # recent REJECTED hypotheses in the same cohort. Replaces the
+                # old HARDCODED banned list — the banned list below is now
+                # generated from live wiki + DB state instead of being frozen
+                # in source. (feat/wiki-in-the-loop, 2026-04-22)
+                wiki_priors_block = ""
+                dynamic_banned_lines: list[str] = []
+                if db and _wiki_in_loop_enabled():
+                    try:
+                        # Top-10 wiki articles across the eligible sports, weighted
+                        # toward SIGNAL domain (demotion lessons, backtest nulls).
+                        priors_query = (
+                            f"hypothesis generation priors for sports "
+                            f"{eligible_sports} — dead patterns, demotion lessons, "
+                            f"null backtests"
+                        )
+                        prior_articles = await _fetch_wiki_priors(
+                            db, priors_query, top_k=10,
+                        )
+                        wiki_priors_block = _render_wiki_priors_block(
+                            prior_articles, max_chars_per=360
+                        )
+                        # Build banned-list from wiki topics that look like null
+                        # results or demotion lessons.
+                        for a in prior_articles:
+                            topic = a.get("topic", "")
+                            if (
+                                "null_result" in topic
+                                or "live_demotion" in topic
+                                or "dead" in topic.lower()
+                            ):
+                                title = a.get("title", topic)
+                                dynamic_banned_lines.append(
+                                    f"  - {title} (wiki:{topic})"
+                                )
+                    except Exception as e:
+                        logger.debug(f"Wiki priors fetch failed (non-fatal): {e}")
+
+                    # Last 20 REJECTED hypotheses in similar cohort — negative
+                    # examples so the generator doesn't re-propose them.
+                    try:
+                        cursor = await db.execute(
+                            "SELECT name, thesis, sport, market_type "
+                            "FROM hypotheses WHERE status = 'rejected' "
+                            "ORDER BY COALESCE(updated_at, created_at) DESC "
+                            "LIMIT 20"
+                        )
+                        rejected_rows = await cursor.fetchall()
+                        if rejected_rows:
+                            dynamic_banned_lines.append(
+                                "  (recently-rejected in same pipeline — "
+                                "don't resubmit structurally identical variants)"
+                            )
+                            for r in rejected_rows[:20]:
+                                dynamic_banned_lines.append(
+                                    f"  - {r[0]} [{r[2]}/{r[3]}]: "
+                                    f"{(r[1] or '')[:120]}"
+                                )
+                    except Exception as e:
+                        logger.debug(f"Rejected-cohort fetch failed: {e}")
+
+                # Fall back to the static banned list ONLY when wiki yields nothing
+                # — this preserves behaviour on a fresh install with an empty wiki.
+                if dynamic_banned_lines:
+                    banned_block = (
+                        "  BANNED (from LIVE wiki + rejected cohort — "
+                        "these patterns are demonstrably dead, do NOT re-propose):\n"
+                        + "\n".join(dynamic_banned_lines) + "\n"
+                    )
+                else:
+                    banned_block = (
+                        "  BANNED (already priced, stop generating these):\n"
+                        "  - Generic rest/B2B/travel advantages\n"
+                        "  - Home underdog ATS\n"
+                        "  - Eliminated team fades\n"
+                        "  - Basic weather totals\n"
+                        "  - Blowout-loss bounce-back (63 variants tested, 0 promoted, 3 anti-predictive at p<0.02 — structurally dead)\n"
+                        "  - Any hypothesis that is just 'situational factor X is underpriced'\n"
+                        "    without specifying WHY models can't capture it\n"
+                    )
+
                 prompt = (
                     f"CALLISTO HYPOTHESIS GENERATION — Cycle #{self._cycles}\n\n"
                     f"{spinning_preamble}"
+                    f"{wiki_priors_block}"
                     f"You are a skeptical quantitative researcher. Your default stance: "
                     f"most hypotheses are noise. Your job is to find the rare ones that aren't.\n\n"
                     f"BEFORE GENERATING: scrutinize the pipeline state below. If something "
@@ -3849,14 +3984,7 @@ class ResearchLoop:
                     f"    dome-to-outdoor, timezone-specific circadian effects\n"
                     f"  - Calendar/scheduling quirks: exam week in college sports, holiday games,\n"
                     f"    conference tournament motivation asymmetry\n\n"
-                    f"  BANNED (already priced, stop generating these):\n"
-                    f"  - Generic rest/B2B/travel advantages\n"
-                    f"  - Home underdog ATS\n"
-                    f"  - Eliminated team fades\n"
-                    f"  - Basic weather totals\n"
-                    f"  - Blowout-loss bounce-back (63 variants tested, 0 promoted, 3 anti-predictive at p<0.02 — structurally dead)\n"
-                    f"  - Any hypothesis that is just 'situational factor X is underpriced'\n"
-                    f"    without specifying WHY models can't capture it\n\n"
+                    f"{banned_block}\n"
                     f"RESPOND WITH EXACTLY THIS JSON (no other text):\n"
                     f'{{"hypotheses": [\n'
                     f'  {{"name": "unique_snake_case_name", '
@@ -6053,6 +6181,87 @@ class ResearchLoop:
                     if insights:
                         logger.info(f"Research: Claude backtest insights — {insights[:300]}")
 
+                    # ── Wiki write-back: file backtest stats as lessons ──
+                    # (feat/wiki-in-the-loop 2026-04-22) — replaces the prior
+                    # "read memory/error_patterns.md only" pattern. For each
+                    # hypothesis with sufficient data: file success article if
+                    # significant, null-result article if n>=30 and not
+                    # significant. Future hypothesis gen retrieves these.
+                    if _wiki_in_loop_enabled():
+                        try:
+                            from tools.knowledge_wiki import get_wiki
+                            wiki = get_wiki()
+                            for entry in hypo_data:
+                                try:
+                                    hid = entry.get("id")
+                                    n = int(entry.get("events", 0) or 0)
+                                    is_sig = bool(entry.get("significant"))
+                                    if is_sig and n >= 15:
+                                        topic = f"{hid}_backtest_success"
+                                        title = f"Backtest success: {entry.get('name', hid)}"
+                                        content = (
+                                            f"Hypothesis {entry.get('name', hid)} "
+                                            f"({hid}) shows statistically significant "
+                                            f"edge in backtest.\n\n"
+                                            f"Stats: n={n}, wins={entry.get('wins')}, "
+                                            f"losses={entry.get('losses')}, "
+                                            f"hit_rate={entry.get('hit_rate')}, "
+                                            f"avg_edge={entry.get('avg_edge')}, "
+                                            f"avg_ev={entry.get('avg_ev')}, "
+                                            f"p_value={entry.get('p_value')}, "
+                                            f"z_score={entry.get('z_score')}.\n"
+                                            f"Sport: {entry.get('sport')}, "
+                                            f"Market: {entry.get('market')}.\n"
+                                            f"Thesis: {entry.get('thesis')}"
+                                        )
+                                        await wiki.write_lesson_article(
+                                            db, topic=topic, title=title,
+                                            content=content, domain="SIGNAL",
+                                            related_topics=[
+                                                "backtest_success",
+                                                f"sport:{entry.get('sport')}",
+                                                f"market:{entry.get('market')}",
+                                            ],
+                                            confidence=0.75,
+                                        )
+                                    elif (not is_sig) and n >= 30:
+                                        topic = f"{hid}_backtest_null_result"
+                                        title = f"Backtest null: {entry.get('name', hid)}"
+                                        content = (
+                                            f"Hypothesis {entry.get('name', hid)} "
+                                            f"({hid}) produced no significant edge "
+                                            f"after {n} events — treat as dead.\n\n"
+                                            f"Stats: wins={entry.get('wins')}, "
+                                            f"losses={entry.get('losses')}, "
+                                            f"hit_rate={entry.get('hit_rate')}, "
+                                            f"avg_edge={entry.get('avg_edge')}, "
+                                            f"avg_ev={entry.get('avg_ev')}, "
+                                            f"p_value={entry.get('p_value')}.\n"
+                                            f"Sport: {entry.get('sport')}, "
+                                            f"Market: {entry.get('market')}.\n"
+                                            f"Thesis: {entry.get('thesis')}\n\n"
+                                            f"Do not re-propose structurally identical "
+                                            f"variants — this pattern has been tested."
+                                        )
+                                        await wiki.write_lesson_article(
+                                            db, topic=topic, title=title,
+                                            content=content, domain="SIGNAL",
+                                            related_topics=[
+                                                "backtest_null_result",
+                                                "dead_pattern",
+                                                f"sport:{entry.get('sport')}",
+                                                f"market:{entry.get('market')}",
+                                            ],
+                                            confidence=0.65,
+                                        )
+                                except Exception as e:
+                                    logger.debug(
+                                        f"Wiki write-back skipped for "
+                                        f"{entry.get('id')}: {e}"
+                                    )
+                        except Exception as e:
+                            logger.warning(f"Backtest wiki write-back failed: {e}")
+
                 except (json.JSONDecodeError, ValueError) as e:
                     logger.warning(f"Claude interpretation response not valid JSON: {e}")
 
@@ -6096,13 +6305,53 @@ class ResearchLoop:
             f"_phase_review_live: reviewed {len(results)} LIVE hypotheses — "
             f"demoted {len(demoted)}, held {len(held)}"
         )
+
+        # ── Wiki consult: surface prior warnings & recovery-cycle precedents ──
+        # (feat/wiki-in-the-loop 2026-04-22) — before logging the demotion,
+        # query the wiki for matching failure modes so the decision trail
+        # includes cites, not just raw stats.
+        db = self.data_collector._db if self.data_collector else None
         for r in demoted:
+            name = r.get("name") or r["hypothesis_id"]
+            wiki_cites = []
+            if db and _wiki_in_loop_enabled():
+                try:
+                    prior = await _fetch_wiki_priors(
+                        db, f"{name} failure mode underperformance demotion",
+                        top_k=3,
+                    )
+                    wiki_cites = [
+                        f"{a.get('topic')}(sim={a.get('similarity')})"
+                        for a in prior if a.get("similarity") is not None
+                    ]
+                except Exception as e:
+                    logger.debug(f"Wiki demotion prior-fetch failed: {e}")
+            r["wiki_cites"] = wiki_cites
             logger.warning(
-                f"LIVE DEMOTION: {r.get('name') or r['hypothesis_id']} → paused. "
+                f"LIVE DEMOTION: {name} → paused. "
                 f"n={r['n_resolved']} hit={r['hit_rate']:.1%} "
                 f"roi={r['roi']:.2%} mdd={r['max_drawdown']:.1%} "
-                f"clv={r['avg_clv']} reasons={r['reasons']}"
+                f"clv={r['avg_clv']} reasons={r['reasons']} "
+                f"wiki_cites={wiki_cites}"
             )
+
+        # For held hypotheses: consult wiki for historical demote→recover
+        # cycles on similar cohorts. Informational only — not a gate.
+        if db and _wiki_in_loop_enabled():
+            for r in held:
+                try:
+                    name = r.get("name") or r["hypothesis_id"]
+                    recov = await _fetch_wiki_priors(
+                        db, f"{name} demote recover cycle rebound",
+                        top_k=2,
+                    )
+                    if recov:
+                        logger.debug(
+                            f"_phase_review_live: held {name} — wiki recovery "
+                            f"precedents: {[a.get('topic') for a in recov]}"
+                        )
+                except Exception:
+                    pass
 
     async def _phase_paper_trade(self) -> None:
         """Generate paper trade signals for promoted hypotheses.
