@@ -212,7 +212,17 @@ async def _seed_hypothesis(
             ),
         )
     for i in range(paper_trades):
-        gd = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
+        # Spread paper trades across two regimes so the regime-diversity gate
+        # added in feat/regime-aware-sizing doesn't incorrectly demote the
+        # "passing" seeded hypotheses. Use recent dates (timedelta-based) so
+        # significance/window filters still include these trades: alternate
+        # between baseball_mlb (currently in regular) and icehockey_nhl
+        # (currently in playoffs) — two distinct regime buckets.
+        base = datetime.now(timezone.utc) - timedelta(days=i)
+        gd = base.strftime("%Y-%m-%d")
+        # Even-indexed trades use the hypothesis's own sport; odd-indexed
+        # trades are stamped as NHL so we hit a second (sport, phase) bucket.
+        sport_i = "baseball_mlb" if i % 2 == 0 else "icehockey_nhl"
         await db.execute(
             "INSERT INTO paper_trades "
             "(trade_id, hypothesis_id, event_id, sport, market, side, book, "
@@ -222,7 +232,7 @@ async def _seed_hypothesis(
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 f"{hid}_pt{i}", hid, f"pt_ev_{hid}_{i}",
-                "baseball_mlb", "h2h", "Home", "draftkings",
+                sport_i, "h2h", "Home", "draftkings",
                 datetime.now(timezone.utc).isoformat(), -110, 0.524,
                 0.56, 0.036, 5.0, 0.53, "won", gd,
             ),

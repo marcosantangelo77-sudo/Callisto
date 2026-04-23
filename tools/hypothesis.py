@@ -1593,6 +1593,74 @@ class HypothesisManager:
                 logger.warning(f"simulate_before_promote failed for {hypothesis_id}: {e}")
                 checks.append(f"WARN: simulation_gate_error — {e}")
 
+        # ── REGIME-DIVERSITY GATE (paper_trading → live only) ──
+        # feat/regime-aware-sizing (2026-04-22): a hypothesis whose resolved
+        # paper trades all fell inside ONE regime has not proven it
+        # generalizes. e.g. mlb_sandwich_spot_managerial_conservation_under
+        # showed +0.57 ROI on 57 REGULAR trades but only 2 PRESEASON — the
+        # regular-season fit might be overfitting to that phase.
+        # Require ≥2 distinct regimes (sport|season_phase buckets) in the
+        # paper-trade sample. Gated by CALLISTO_REGIME_DIVERSITY_GATE.
+        # Placed LAST so ``ready`` from upstream checks (p-value, portfolio
+        # overlap, simulation) is not masked when operators review the
+        # failure categories — the regime gate sets ready=False but doesn't
+        # hide any other reason line.
+        if (
+            transition == "paper_trading→live"
+            and not is_legacy
+            and os.getenv("CALLISTO_REGIME_DIVERSITY_GATE", "1") == "1"
+        ):
+            try:
+                cur = await self._db.execute(
+                    "SELECT DISTINCT sport, game_date FROM paper_trades "
+                    "WHERE hypothesis_id = ? "
+                    "AND actual_result IN ('won','lost','push','win','loss')",
+                    (hypothesis_id,),
+                )
+                rows = await cur.fetchall()
+                regimes_seen: set[str] = set()
+                if rows:
+                    try:
+                        # _classify_phase is pure calendar math — no DB access,
+                        # no external calls. Safe to call inside the existing
+                        # async tx on self._db.
+                        from tools.market_regime import (
+                            _classify_phase as _mr_classify,
+                            _canonical_sport as _mr_canon,
+                        )
+                        from datetime import date as _date
+                        for sp, gd in rows:
+                            if not sp or not gd:
+                                continue
+                            try:
+                                d = _date.fromisoformat(str(gd)[:10])
+                            except Exception:
+                                continue
+                            try:
+                                sp_norm = _mr_canon(sp)
+                                phase, _win, _bounds = _mr_classify(sp_norm, d)
+                                regimes_seen.add(f"{sp_norm}|{phase}")
+                            except Exception:
+                                continue
+                    except Exception as _e:
+                        logger.debug(f"regime-diversity import failed: {_e}")
+                if rows and len(regimes_seen) < 2:
+                    only = next(iter(regimes_seen), "unknown")
+                    checks.append(
+                        f"FAIL: single_regime_sample — all {len(rows)} resolved "
+                        f"paper trades fall in one regime ({only}); need >=2 "
+                        f"distinct regimes to promote"
+                    )
+                    ready = False
+                elif rows:
+                    checks.append(
+                        f"PASS: regime_diversity — {len(regimes_seen)} distinct "
+                        f"regimes across {len(rows)} resolved paper trades "
+                        f"({sorted(regimes_seen)})"
+                    )
+            except Exception as e:
+                logger.debug(f"regime-diversity gate error for {hypothesis_id}: {e}")
+
         next_stage = STAGE_ORDER[STAGE_ORDER.index(status) + 1] if ready else None
 
         return {

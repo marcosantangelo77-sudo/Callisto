@@ -77,6 +77,7 @@ logging.basicConfig(
 # CLI values so the filter can target a single failure mode.
 CATEGORY_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("portfolio_correlation", re.compile(r"portfolio_correlation_too_high", re.I)),
+    ("single_regime_sample", re.compile(r"single_regime_sample", re.I)),
     ("paper_trade_sample", re.compile(r"paper_trade_sample_insufficient", re.I)),
     ("snapshot_quality", re.compile(r"snapshot_quality sample only", re.I)),
     ("min_days", re.compile(r"insufficient_time_in_stage", re.I)),

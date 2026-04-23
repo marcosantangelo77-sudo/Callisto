@@ -5888,7 +5888,8 @@ class ResearchLoop:
         # execute directly via the Playwright bet_executor with
         # stake_override=stake. In BOTH paths, the stake has already been
         # capped by compute_portfolio_stakes (per-game, per-sport, Kelly,
-        # drawdown-aware).
+        # drawdown-aware, regime-multiplier-scaled).
+        from tools.bet_executor import _regime_safe as _bet_regime_safe  # noqa: WPS433
         for i, sized_row in enumerate(sized):
             if not self._running:
                 break
@@ -5896,6 +5897,19 @@ class ResearchLoop:
             if stake <= 0:
                 continue
             h, signal = signal_by_index[i]
+
+            # ── Regime-safe trading gate (feat/regime-aware-sizing) ──
+            # Skip the bet if market_regime says this sport is in a known-
+            # noisy phase (preseason / offseason / final days of regular
+            # season). Gated by CALLISTO_REGIME_SAFETY so operators can
+            # disable if the calendar is mis-configured.
+            safe, phase = _bet_regime_safe(h.get("sport", ""))
+            if not safe:
+                logger.info(
+                    "LIVE bet SKIPPED: hyp=%s sport=%s reason=regime_unsafe_phase=%s",
+                    h.get("hypothesis_id"), h.get("sport"), phase or "unknown",
+                )
+                continue
             try:
                 if order_manager is not None:
                     stake_units = stake / bankroll if bankroll > 0 else 0.0
