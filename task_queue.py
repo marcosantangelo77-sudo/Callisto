@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS task_queue (
     task_id INTEGER PRIMARY KEY AUTOINCREMENT,
     query TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'PENDING'
-        CHECK(status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED')),
+        CHECK(status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'TIMEOUT')),
     priority INTEGER NOT NULL DEFAULT 0,
     result TEXT,
     error TEXT,
@@ -44,6 +44,7 @@ class TaskStatus(str, Enum):
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    TIMEOUT = "TIMEOUT"
 
 
 class TaskQueue:
@@ -280,6 +281,68 @@ class TaskQueue:
                     await _asyncio.sleep(min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5))
                 else:
                     raise
+
+    async def timeout_task(
+        self,
+        task_id: int,
+        error: str,
+        result: Optional[dict] = None,
+        session_id: Optional[str] = None,
+    ) -> None:
+        """Mark a task as TIMEOUT — distinct from FAILED.
+
+        Stores any partial session state in ``result`` so downstream retry
+        logic can see how far the orchestrator got before the watchdog
+        yanked it. Falls back to ``fail_task`` semantics if the DB schema
+        hasn't migrated yet (CHECK constraint rejects 'TIMEOUT').
+        """
+        import asyncio as _asyncio
+        try:
+            from tools.db_writer import get_writer_if_running
+            coord = get_writer_if_running(self.db_path)
+        except Exception:
+            coord = None
+        now = datetime.now(timezone.utc).isoformat()
+        result_json = json.dumps(result, ensure_ascii=False) if result else None
+
+        async def _run(is_timeout: bool) -> None:
+            status = "TIMEOUT" if is_timeout else "FAILED"
+            if coord is not None:
+                await coord.execute(
+                    """UPDATE task_queue
+                       SET status = ?, error = ?, result = ?, session_id = ?,
+                           completed_at = ?
+                       WHERE task_id = ?""",
+                    (status, error, result_json, session_id, now, task_id),
+                )
+                return
+            for attempt in range(8):
+                try:
+                    await self._db.execute(
+                        """UPDATE task_queue
+                           SET status = ?, error = ?, result = ?, session_id = ?,
+                               completed_at = ?
+                           WHERE task_id = ?""",
+                        (status, error, result_json, session_id, now, task_id),
+                    )
+                    await self._db.commit()
+                    return
+                except Exception as e:
+                    if "locked" in str(e).lower() and attempt < 7:
+                        await _asyncio.sleep(
+                            min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5)
+                        )
+                    else:
+                        raise
+
+        try:
+            await _run(is_timeout=True)
+        except Exception as e:
+            # CHECK constraint failure on pre-migration DBs — fall back.
+            if "CHECK constraint" in str(e) or "constraint failed" in str(e).lower():
+                await _run(is_timeout=False)
+            else:
+                raise
 
     async def get_task(self, task_id: int) -> Optional[dict]:
         """Get task by ID."""

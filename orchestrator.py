@@ -759,6 +759,22 @@ class Orchestrator:
         self.architect = get_architect()
         self.manager = get_manager()
         self.sentinel = get_sentinel()
+        # Registry: asyncio.Task → live AGPSession. Lets an external watcher
+        # (the task_worker adaptive-timeout loop) inspect liveness without
+        # changing run_session's return contract. Scoped to the asyncio Task
+        # that invoked run_session so concurrent callers can't clobber each
+        # other. Cleaned up in a finally: block inside run_session.
+        self._active_sessions: dict = {}
+
+    def active_session_for(self, task) -> Optional[AGPSession]:
+        """Return the live AGPSession for a given asyncio.Task, or None.
+
+        Used by api.py::task_worker to poll `last_progress_at`, `current_step`,
+        and evidence counts for the adaptive-timeout extension logic. The
+        Orchestrator instance is shared process-wide; this indirection is the
+        least-invasive way to expose in-flight state.
+        """
+        return self._active_sessions.get(task)
 
     async def run_session(self, query: str, skip_search: bool = False) -> dict:
         """Execute a full 7-step AGP session. Returns the sealed session dict.
@@ -767,6 +783,9 @@ class Orchestrator:
         like edge analysis that already have all data they need).
         """
         session = AGPSession(query)
+        _current_task = asyncio.current_task()
+        if _current_task is not None:
+            self._active_sessions[_current_task] = session
         logger.info(f"Session {session.session_id}: starting — {query}")
         t0 = time.monotonic()
 
@@ -922,6 +941,12 @@ class Orchestrator:
         except Exception as e:
             logger.error(f"Session {session.session_id}: failed: {e}", exc_info=True)
             raise
+        finally:
+            # Drop the session from the active registry so task_worker's
+            # adaptive-timeout watcher doesn't see a stale reference after
+            # normal completion or cancellation.
+            if _current_task is not None:
+                self._active_sessions.pop(_current_task, None)
 
     def _domain_search_query(self, query: str, domain: Domain) -> Optional[str]:
         """Generate a domain-specific search refinement.
