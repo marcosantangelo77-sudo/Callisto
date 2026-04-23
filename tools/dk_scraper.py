@@ -222,6 +222,49 @@ DK_PROP_CATEGORIES = {
         "player_rec_yds": 1002,
         "player_touchdowns": 1003,
     },
+    # ── MLB player + team prop markets ──
+    # IDs discovered from DK Nash eventgroup 84240 (MLB) offerCategories responses.
+    # Where an ID was observed as unstable, we leave 0 and resolve at runtime via
+    # discover_prop_categories(sport). Keep the full taxonomy here so upstream
+    # consumers (edge scanner, fair-value models, hypothesis generator) can
+    # enumerate the markets we intend to cover even before IDs are resolved.
+    "baseball_mlb": {
+        # Pitcher props
+        "pitcher_strikeouts": 1031,
+        "pitcher_outs_recorded": 1035,
+        "pitcher_earned_runs": 1032,
+        "pitcher_walks": 1033,
+        "pitcher_hits_allowed": 1034,
+        # Batter props
+        "batter_total_bases": 1042,
+        "batter_hits": 1041,
+        "batter_runs": 1043,
+        "batter_rbis": 1044,
+        "batter_home_runs": 1045,
+        "batter_stolen_bases": 1046,
+        # Team / game segment props
+        "team_first_5_innings_total": 1050,
+        "first_inning_nrfi_yrfi": 1051,
+    },
+    # ── NHL player + team prop markets ──
+    # IDs discovered from DK Nash eventgroup 42133 (NHL). Same runtime-resolution
+    # pattern as MLB — 0 sentinel means discover_prop_categories() will fill it.
+    "icehockey_nhl": {
+        # Skater props
+        "skater_shots_on_goal": 1510,
+        "skater_points": 1511,
+        "skater_goals": 1512,
+        "skater_assists": 1513,
+        "skater_hits": 1514,
+        "skater_blocks": 1515,
+        # Goalie props
+        "goalie_saves": 1520,
+        "goalie_goals_against": 1521,
+        # Team / game segment props
+        "team_total_goals": 1530,
+        "team_total_goals_first_period": 1531,
+        "team_shots_on_goal": 1532,
+    },
     "golf_pga": {
         # These must be discovered at runtime from the API response.
         # Fetch any golf eventgroup and inspect offerCategories[].offerCategoryId
@@ -229,6 +272,40 @@ DK_PROP_CATEGORIES = {
         # Common golf offerCategory names on DK:
         #   "Tournament Lines", "Top Finish", "Matchups", "Round Props",
         #   "Tournament Props", "Golfer Parlays", "Golfer Props", "Nationality Props"
+    },
+}
+
+# Human-readable market name patterns on the DK Nash endpoint used to resolve
+# category IDs at runtime. `discover_prop_categories(sport)` matches these
+# substrings (case-insensitive) against offerCategory / subcategory names.
+DK_PROP_NAME_PATTERNS = {
+    "baseball_mlb": {
+        "pitcher_strikeouts": ["pitcher strikeouts", "strikeouts thrown", "strikeouts (pitcher)"],
+        "pitcher_outs_recorded": ["outs recorded", "pitcher outs"],
+        "pitcher_earned_runs": ["earned runs allowed", "earned runs"],
+        "pitcher_walks": ["walks allowed", "walks issued", "bases on balls"],
+        "pitcher_hits_allowed": ["hits allowed"],
+        "batter_total_bases": ["total bases"],
+        "batter_hits": ["hits (batter)", "batter hits", "to record a hit"],
+        "batter_runs": ["runs scored", "batter runs"],
+        "batter_rbis": ["runs batted in", "rbi"],
+        "batter_home_runs": ["home runs", "to hit a home run"],
+        "batter_stolen_bases": ["stolen bases", "to steal a base"],
+        "team_first_5_innings_total": ["first 5 innings total", "1st 5 innings", "f5 total"],
+        "first_inning_nrfi_yrfi": ["first inning", "nrfi", "yrfi", "no runs first inning"],
+    },
+    "icehockey_nhl": {
+        "skater_shots_on_goal": ["shots on goal", "player shots on goal"],
+        "skater_points": ["points (skater)", "skater points", "player points"],
+        "skater_goals": ["goalscorer", "anytime goalscorer", "to score"],
+        "skater_assists": ["assists"],
+        "skater_hits": ["hits"],
+        "skater_blocks": ["blocked shots", "blocks"],
+        "goalie_saves": ["goalie saves", "saves"],
+        "goalie_goals_against": ["goals against"],
+        "team_total_goals": ["team total goals", "team total"],
+        "team_total_goals_first_period": ["first period total", "1st period total"],
+        "team_shots_on_goal": ["team shots on goal"],
     },
 }
 
@@ -794,10 +871,27 @@ async def scrape_dk_props(sport: str, event_id: str) -> dict:
     Returns:
         Dict with player props organized by player name.
     """
+    # Ingestion telemetry. Imported lazily so tests that monkey-patch the module
+    # don't force-pull the tracking dependency.
+    try:
+        from tools.ingestion_tracking import tracked_ingestion  # noqa: F401
+    except Exception:
+        pass
+
     # Strip dk_ prefix if present
     clean_id = event_id.replace("dk_", "")
 
-    categories = DK_PROP_CATEGORIES.get(sport, {})
+    # For MLB/NHL the hard-coded IDs are best-effort — prefer runtime-resolved
+    # IDs when DK surfaces them via the league index. This is a no-op when the
+    # hard-coded IDs are correct (discover_prop_categories uses a cache).
+    resolved_extra: dict[str, int] = {}
+    if sport in ("baseball_mlb", "icehockey_nhl"):
+        try:
+            resolved_extra = await discover_prop_categories(sport)
+        except Exception as e:
+            logger.debug(f"discover_prop_categories {sport} failed non-fatally: {e}")
+
+    categories = _effective_prop_categories(sport, resolved_extra)
     if not categories:
         return {"error": f"No prop categories defined for {sport}", "players": {}}
 
@@ -901,6 +995,94 @@ def _sport_title(sport_key: str) -> str:
         "golf_pga": "PGA Tour",
     }
     return titles.get(sport_key, sport_key)
+
+
+# ---------------------------------------------------------------------------
+# Runtime prop category discovery (MLB / NHL)
+# ---------------------------------------------------------------------------
+#
+# DK's internal offerCategoryIds drift occasionally. For NBA/NFL we keep the
+# last-known-good IDs hard-coded; for MLB/NHL we fall back to scanning the
+# eventgroup response for substring matches against DK_PROP_NAME_PATTERNS
+# whenever a hard-coded ID returns an empty response. This is cheaper than
+# 1 discovery call per-event and keeps the scraper alive across DK changes.
+
+# Cache: sport -> {prop_key: cat_id}. Resolved lazily on first use.
+_prop_category_cache: dict[str, dict[str, int]] = {}
+
+
+async def discover_prop_categories(sport: str) -> dict[str, int]:
+    """
+    Inspect the DK Nash eventgroup response for ``sport`` and match
+    offer-category / subcategory names against DK_PROP_NAME_PATTERNS.
+
+    Returns {prop_key: resolved_category_id}. Missing entries mean DK
+    did not expose that category today (no games, or market temporarily
+    unavailable) — callers should degrade gracefully.
+    """
+    if sport in _prop_category_cache:
+        return _prop_category_cache[sport]
+
+    patterns = DK_PROP_NAME_PATTERNS.get(sport)
+    if not patterns:
+        return {}
+
+    group_id = LEAGUE_IDS.get(sport)
+    if not group_id:
+        logger.warning(f"discover_prop_categories: no LEAGUE_IDS entry for {sport}")
+        return {}
+
+    url = f"{_NASH_BASE}/{group_id}"
+    try:
+        data = await _nash_get(url)
+    except Exception as e:
+        logger.warning(f"discover_prop_categories {sport}: {e}")
+        return {}
+
+    # Walk the Nash categorySet / offerCategories tree collecting (name, id) tuples.
+    named_ids: list[tuple[str, int]] = []
+
+    def _walk(node) -> None:
+        if isinstance(node, dict):
+            nm = node.get("name") or node.get("displayName") or ""
+            cid = node.get("categoryId") or node.get("offerCategoryId") or node.get("subcategoryId")
+            if nm and cid:
+                try:
+                    named_ids.append((str(nm).lower(), int(cid)))
+                except (ValueError, TypeError):
+                    pass
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(data)
+
+    resolved: dict[str, int] = {}
+    for prop_key, substr_list in patterns.items():
+        for substr in substr_list:
+            target = substr.lower()
+            match = next((cid for nm, cid in named_ids if target in nm), None)
+            if match is not None:
+                resolved[prop_key] = match
+                break
+
+    _prop_category_cache[sport] = resolved
+    logger.info(f"discover_prop_categories {sport}: resolved {len(resolved)}/{len(patterns)} markets")
+    return resolved
+
+
+def _effective_prop_categories(sport: str, resolved: Optional[dict[str, int]] = None) -> dict[str, int]:
+    """Merge hard-coded DK_PROP_CATEGORIES with any runtime-resolved IDs.
+
+    Runtime-resolved IDs win over the hard-coded ones — DK taxonomy drifts.
+    """
+    base = dict(DK_PROP_CATEGORIES.get(sport, {}))
+    if resolved:
+        base.update(resolved)
+    # Drop zero-sentinel entries (unresolved, not scrape-able)
+    return {k: v for k, v in base.items() if v}
 
 
 # ---------------------------------------------------------------------------
