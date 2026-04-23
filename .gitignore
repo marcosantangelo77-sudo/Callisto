@@ -2,11 +2,40 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+.env.*
+.env.local
+.env.*.local
 memory/
 *.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 .venv/
 *.egg-info/
 dist/
 build/
 logs/
+*.log
 .claude/
+
+# Temp data dumps
+_*.json
+live_odds_dump.json
+
+# Temp scripts and debug files
+tmp_*
+check_odds.py
+audit_output.txt
+*_tmp.json
+*.sqlite
+
+# Numeric-only files (accidental stdout captures)
+[0-9]
+[0-9].[0-9]*
+
+# ML model artifacts — retrainable from live DB, bulky
+models/*.joblib
+models/*.json
+models/*.drift.json

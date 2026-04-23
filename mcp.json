@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "callisto": {
+      "command": "python",
+      "args": [
+        "C:/Users/marco/OneDrive/Desktop/Callisto/tools/callisto_mcp_server.py"
+      ],
+      "env": {
+        "CALLISTO_API_URL": "http://localhost:8420"
+      }
+    }
+  }
+}
