@@ -500,6 +500,11 @@ class LineMonitor:
         several markets. We turn it into a minimal snapshot-shaped payload
         and route through the same _process_snapshot pipeline so edge
         detection and movement evaluation fire on every delta.
+
+        Additionally fires live-edge detectors for the event if a live
+        game state exists — the 30s poller may have stale odds while the
+        WS already has a new price, so piggy-backing here catches rapid
+        reactive edges between polls.
         """
         self._ws_updates_received += 1
         self._ws_last_update_at = time.time()
@@ -514,6 +519,19 @@ class LineMonitor:
             # triggers edge rescoring for the affected market, and invokes
             # _evaluate_movement for changed prices.
             await self._process_snapshot(sport_key, snap)
+            # Piggy-back live-edge detector eval. Only fires when the
+            # event has a live_game_state row — function no-ops otherwise,
+            # so there's no penalty for pre-game events. Isolate errors:
+            # detector failures must NOT break odds ingestion.
+            try:
+                for game in (snap.get("games") or [])[:5]:
+                    eid = str(game.get("id") or "").strip()
+                    if not eid:
+                        continue
+                    from tools.live_state import evaluate_detectors_for_event
+                    await evaluate_detectors_for_event(eid, db_path=self.db_path)
+            except Exception as e:
+                logger.debug(f"WS-path live-edge eval failed: {e}")
         except Exception as e:
             logger.warning(f"WS update handler failed: {e}")
 

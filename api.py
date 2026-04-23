@@ -156,6 +156,7 @@ queue: Optional[TaskQueue] = None
 orchestrator_instance: Optional[Orchestrator] = None
 monitor: Optional[HealthMonitor] = None
 line_monitor: Optional[LineMonitor] = None
+live_state_collector = None  # tools.live_state.LiveStateCollector | None
 clv_tracker: Optional[CLVTracker] = None
 autonomous: Optional[AutonomousLoop] = None
 telegram_listener: Optional[TelegramListener] = None
@@ -171,6 +172,7 @@ learned_correlation_store: Optional[LearnedCorrelationStore] = None
 worker_task: Optional[asyncio.Task] = None
 wal_checkpoint_task: Optional[asyncio.Task] = None
 restart_signal_task: Optional[asyncio.Task] = None
+live_state_task: Optional[asyncio.Task] = None
 
 
 def _is_internal_query(query: str) -> bool:
@@ -500,7 +502,7 @@ async def task_worker():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle manager."""
-    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task
+    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task, live_state_collector, live_state_task
 
     # Start memory profiling only when explicitly requested — tracemalloc tracks every
     # allocation in C-level metadata (~50-100 bytes each), which adds 55-110 MB of invisible
@@ -656,6 +658,37 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Odds WebSocket failed to start: {e}")
 
+    # Live in-game state collector — polls ESPN every 30s for games
+    # in progress, stores snapshots, and fires live-edge detectors.
+    # Env-gated (default ON) and wrapped in try/except so a failure
+    # here can NEVER break the rest of startup. If the DB migration
+    # hasn't been applied yet, the collector self-disables and logs.
+    live_state_collector = None
+    live_state_task = None
+    if os.environ.get("CALLISTO_LIVE_STATE_ENABLED", "1") == "1":
+        try:
+            from tools.live_state import start_collector as _start_live_collector
+            live_state_collector = await _start_live_collector(db_path=DB_PATH)
+            if live_state_collector is not None:
+                # start_collector already called create_task inside the
+                # collector; we don't need a second task. Expose the
+                # module's task via the collector so shutdown can find it.
+                live_state_task = live_state_collector._task
+                logger.info(
+                    "Live state collector started "
+                    f"(sports={list(live_state_collector.sports)}, interval=30s)"
+                )
+            else:
+                logger.warning(
+                    "Live state collector not started — table missing or disabled"
+                )
+        except Exception as e:
+            logger.warning(f"Live state collector failed to start: {e}")
+            live_state_collector = None
+            live_state_task = None
+    else:
+        logger.info("Live state collector disabled via CALLISTO_LIVE_STATE_ENABLED=0")
+
     worker_task = asyncio.create_task(task_worker())
     wal_checkpoint_task = asyncio.create_task(wal_checkpoint_loop())
     # Signal-file consumer — decouples restart from watchdog liveness.
@@ -716,6 +749,13 @@ async def lifespan(app: FastAPI):
             await restart_signal_task
         except asyncio.CancelledError:
             pass
+    # Live state collector — cancelled via stop_collector so the HTTP
+    # client is closed cleanly. Failure here must NOT stop shutdown.
+    try:
+        from tools.live_state import stop_collector as _stop_live_collector
+        await _stop_live_collector()
+    except Exception as e:
+        logger.debug(f"Live state collector shutdown failed: {e}")
     # Cancel orphaned restart task if shutdown beat it (audit H-14).
     if _restart_task and not _restart_task.done():
         _restart_task.cancel()
@@ -3271,6 +3311,23 @@ async def full_system_status():
     status["research_loop"] = research_loop.get_status() if research_loop else None
     status["claude_code"] = claude_stats()
     status["line_monitor"] = (await line_monitor.get_status()) if line_monitor else None
+
+    # Live in-game state collector — exposes running bool, active games,
+    # and 24h counters so we can verify from /system/full-status that
+    # the detector path is actually firing.
+    try:
+        from tools.live_state import (
+            get_collector_status as _live_status,
+            get_collector_counters_24h as _live_counters,
+        )
+        live_status = _live_status()
+        try:
+            live_status.update(await _live_counters(db_path=DB_PATH))
+        except Exception as e:
+            logger.debug(f"live_state 24h counters failed: {e}")
+        status["live_state_collector"] = live_status
+    except Exception as e:
+        status["live_state_collector"] = {"error": f"{e!r}"}
 
     # Add hypothesis summary — ground-truth from DB, not in-memory counters
     if hypothesis_manager:
