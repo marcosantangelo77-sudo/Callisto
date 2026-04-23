@@ -5597,24 +5597,45 @@ class ResearchLoop:
         return result
 
     async def _phase_live_execute(self) -> None:
-        """Execute bets on live (proven) hypotheses using the bet executor.
+        """Execute bets on live (proven) hypotheses.
 
-        feat/portfolio-kelly-live-loop (audit 2026-04-22): the per-signal loop
-        was the #1 blow-up risk — 22 LIVE hyps could each take 5% of bankroll
-        on one MLB game. Now the loop:
-          1. Collects ALL pending signals across ALL LIVE hyps into a batch.
-          2. Builds a correlation matrix from backtest_events history.
-          3. Calls compute_portfolio_stakes ONCE per cycle with per-game and
-             per-sport caps.
-          4. Executes each bet with the pre-computed ``stake_override``.
-          5. Runs the drawdown kill-switch check before ANY execution.
+        Combined flow (feat/portfolio-kelly-live-loop + feat/order-management-telegram):
+          1. Run drawdown kill-switch check BEFORE any execution.
+          2. Collect ALL pending signals across ALL LIVE hyps into a batch.
+          3. Build correlation matrix from backtest_events history.
+          4. Call ``compute_portfolio_stakes`` ONCE per cycle with per-game
+             and per-sport caps.
+          5. For each sized bet:
+             - If ``CALLISTO_USE_ORDER_MANAGER=1`` (default): submit via
+               :mod:`tools.order_manager` for Telegram approval, passing the
+               portfolio-sized stake.
+             - Else: execute directly via the legacy Playwright executor with
+               the pre-computed ``stake_override``.
         """
+        import os as _os
+        use_order_manager = _os.getenv("CALLISTO_USE_ORDER_MANAGER", "1") == "1"
+
         try:
             from tools.bet_executor import BetExecutor  # noqa: F401
         except ImportError:
             return
 
-        # Check if executor is available (initialized externally)
+        order_manager = None
+        if use_order_manager:
+            try:
+                from tools.order_manager import get_manager as _get_om
+                order_manager = await _get_om()
+                if not order_manager.is_enabled:
+                    # order_manager configured but disabled — fall back to
+                    # direct executor path below.
+                    order_manager = None
+            except Exception as e:
+                logger.warning(f"order_manager unavailable, falling back: {e}")
+                order_manager = None
+
+        # Executor is always required: we need it for drawdown check,
+        # bankroll read, and compute_portfolio_stakes even when the final
+        # submission hop is the Telegram-approved order_manager.
         executor = getattr(self, "_bet_executor", None)
         if not executor or not executor.is_enabled:
             return
@@ -5733,7 +5754,13 @@ class ResearchLoop:
             bets=batch, bankroll=bankroll, correlation_matrix=corr_matrix,
         )
 
-        # ---- Phase 4: execute each sized bet via stake_override ----
+        # ---- Phase 4: submit each sized bet ----
+        # If the order_manager is enabled (default), route the portfolio-
+        # sized stake through Telegram-approved submit_order(). Otherwise
+        # execute directly via the Playwright bet_executor with
+        # stake_override=stake. In BOTH paths, the stake has already been
+        # capped by compute_portfolio_stakes (per-game, per-sport, Kelly,
+        # drawdown-aware).
         for i, sized_row in enumerate(sized):
             if not self._running:
                 break
@@ -5742,27 +5769,50 @@ class ResearchLoop:
                 continue
             h, signal = signal_by_index[i]
             try:
-                result = await executor.execute_bet(
-                    sport=h["sport"],
-                    team=signal.get("team", ""),
-                    market=signal.get("market", h.get("market_type", "")),
-                    side=signal.get("side", ""),
-                    odds=signal.get("book_odds_american", 0),
-                    fair_prob=signal.get("model_fair_prob", 0.5),
-                    edge=signal.get("edge", 0),
-                    hypothesis_id=h["hypothesis_id"],
-                    event_id=signal.get("event_id", ""),
-                    game_description=signal.get("game_description", ""),
-                    stake_override=stake,
-                )
-                if result.get("success"):
-                    logger.info(
-                        f"LIVE BET PLACED: {signal.get('team')} "
-                        f"${result.get('stake', 0):.2f} @ {signal.get('book_odds_american')} "
-                        f"(portfolio-sized, n={sized_row.get('signals_n', 0)})"
-                    )
+                if order_manager is not None:
+                    stake_units = stake / bankroll if bankroll > 0 else 0.0
+                    try:
+                        order_id = await order_manager.submit_order(
+                            hypothesis_id=h["hypothesis_id"],
+                            signal=signal,
+                            stake_units=stake_units,
+                            stake_dollars=stake,
+                            book=signal.get("book", "draftkings"),
+                            odds_snapshot_id=signal.get("odds_snapshot_id"),
+                            edge=signal.get("edge"),
+                            fair_prob=signal.get("model_fair_prob"),
+                            clv_prior=signal.get("clv_prior"),
+                        )
+                        logger.info(
+                            f"ORDER SUBMITTED for approval: order_id={order_id} "
+                            f"hyp={h['hypothesis_id']} {signal.get('side')} "
+                            f"${stake:.2f} @ {signal.get('book_odds_american')} "
+                            f"(portfolio-sized, n={sized_row.get('signals_n', 0)})"
+                        )
+                    except Exception as e:
+                        logger.warning(f"submit_order failed: {e}")
                 else:
-                    logger.warning(f"Live bet failed: {result.get('reason', 'unknown')}")
+                    result = await executor.execute_bet(
+                        sport=h["sport"],
+                        team=signal.get("team", ""),
+                        market=signal.get("market", h.get("market_type", "")),
+                        side=signal.get("side", ""),
+                        odds=signal.get("book_odds_american", 0),
+                        fair_prob=signal.get("model_fair_prob", 0.5),
+                        edge=signal.get("edge", 0),
+                        hypothesis_id=h["hypothesis_id"],
+                        event_id=signal.get("event_id", ""),
+                        game_description=signal.get("game_description", ""),
+                        stake_override=stake,
+                    )
+                    if result.get("success"):
+                        logger.info(
+                            f"LIVE BET PLACED: {signal.get('team')} "
+                            f"${result.get('stake', 0):.2f} @ {signal.get('book_odds_american')} "
+                            f"(portfolio-sized, n={sized_row.get('signals_n', 0)})"
+                        )
+                    else:
+                        logger.warning(f"Live bet failed: {result.get('reason', 'unknown')}")
             except Exception as e:
                 logger.warning(f"Live execution failed for {h['hypothesis_id']}: {e}")
 

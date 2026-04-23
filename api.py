@@ -45,6 +45,11 @@ from tools.pipeline_integrity import get_checker as get_integrity_checker, initi
 from tools.learned_correlations import LearnedCorrelationStore
 from tools.correlation import set_learned_store, SPORT_CORRELATIONS
 from tools.state_paths import restart_signal_path
+from tools.order_manager import (
+    OrderManager,
+    reconcile_filled_orders,
+    get_manager as _get_order_manager,
+)
 
 load_dotenv()
 
@@ -172,6 +177,8 @@ learned_correlation_store: Optional[LearnedCorrelationStore] = None
 worker_task: Optional[asyncio.Task] = None
 wal_checkpoint_task: Optional[asyncio.Task] = None
 restart_signal_task: Optional[asyncio.Task] = None
+order_cron_task: Optional[asyncio.Task] = None
+order_manager_instance: Optional[OrderManager] = None
 
 
 def _is_internal_query(query: str) -> bool:
@@ -702,10 +709,45 @@ async def task_worker():
             await asyncio.sleep(5)
 
 
+async def order_cron_loop() -> None:
+    """Periodic maintenance for the orders table.
+
+    Every 60s:   expire pending_approval rows past their TTL.
+    Every 300s:  reconcile ``filled`` rows against ``game_results`` and
+                 auto-settle those that have resolved.
+    """
+    global order_manager_instance
+    ticks = 0
+    while True:
+        try:
+            await asyncio.sleep(60)
+            ticks += 1
+            if order_manager_instance is None:
+                continue
+            try:
+                expired = await order_manager_instance.expire_stale()
+                if expired:
+                    logger.info(f"order cron: expired {len(expired)} stale orders")
+            except Exception as e:
+                logger.warning(f"order cron expire_stale failed: {e}")
+            if ticks % 5 == 0:  # every 5 min
+                try:
+                    stats = await reconcile_filled_orders(order_manager_instance)
+                    if stats.get("settled"):
+                        logger.info(f"order cron: reconcile {stats}")
+                except Exception as e:
+                    logger.warning(f"order cron reconcile failed: {e}")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"order_cron_loop iteration error: {e}", exc_info=True)
+            await asyncio.sleep(10)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle manager."""
-    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task
+    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task, order_cron_task, order_manager_instance
 
     # Start memory profiling only when explicitly requested — tracemalloc tracks every
     # allocation in C-level metadata (~50-100 bytes each), which adds 55-110 MB of invisible
@@ -774,6 +816,11 @@ async def lifespan(app: FastAPI):
     # CLV tracker — bet tracking and closing line value measurement
     clv_tracker = CLVTracker()
     await clv_tracker.initialize()
+
+    # Order management — Telegram-approved manual placement (supersedes
+    # the Playwright executor when CALLISTO_USE_ORDER_MANAGER=1, default).
+    order_manager_instance = await _get_order_manager()
+    app.state.order_manager = order_manager_instance
 
     # Hypothesis testing framework
     hypothesis_manager = HypothesisManager()
@@ -866,6 +913,7 @@ async def lifespan(app: FastAPI):
     # Signal-file consumer — decouples restart from watchdog liveness.
     restart_signal_task = asyncio.create_task(restart_signal_watcher())
     sla_watchdog_task = asyncio.create_task(ingestion_sla_watchdog_loop())
+    order_cron_task = asyncio.create_task(order_cron_loop())
     logger.info(
         f"Callisto API started on port {CALLISTO_PORT} "
         f"(WAL ckpt 5m, restart-signal watcher active, ingestion SLA watchdog 5m)"
@@ -907,6 +955,12 @@ async def lifespan(app: FastAPI):
         sla_watchdog_task.cancel()
         try:
             await sla_watchdog_task
+        except asyncio.CancelledError:
+            pass
+    if order_cron_task:
+        order_cron_task.cancel()
+        try:
+            await order_cron_task
         except asyncio.CancelledError:
             pass
     if worker_task:
@@ -3974,21 +4028,175 @@ async def executor_status():
 
 @app.post("/executor/enable", dependencies=[Depends(require_admin)])
 async def executor_enable():
-    """Enable the bet executor — live bets will be placed."""
+    """Enable both the order manager and the legacy bet executor.
+
+    The order_manager is the default active subsystem
+    (CALLISTO_USE_ORDER_MANAGER=1); bet_executor is kept enabled as
+    fallback. Flipping either flag off is an explicit /pause via the
+    subsystem-specific endpoint below.
+    """
     ex = await _get_executor()
     ex.enable()
     # Wire into research loop if available
     if hasattr(app.state, "research_loop"):
         app.state.research_loop._bet_executor = ex
-    return {"status": "enabled", "message": "Bet executor is now LIVE — bets will be placed automatically"}
+    om = order_manager_instance
+    if om is not None:
+        om.enable()
+    return {
+        "status": "enabled",
+        "order_manager": om.is_enabled if om else None,
+        "bet_executor": ex.is_enabled,
+        "message": "Order manager + bet executor are LIVE",
+    }
 
 
 @app.post("/executor/disable", dependencies=[Depends(require_admin_or_loopback)])
 async def executor_disable():
-    """Disable the bet executor — no bets will be placed."""
+    """Disable both subsystems — no orders will be submitted or placed."""
     ex = await _get_executor()
     ex.disable()
-    return {"status": "disabled", "message": "Bet executor disabled — no bets will be placed"}
+    om = order_manager_instance
+    if om is not None:
+        om.disable()
+    return {
+        "status": "disabled",
+        "message": "Order manager + bet executor disabled",
+    }
+
+
+@app.get("/orders", dependencies=[Depends(require_admin_or_loopback)])
+async def orders_list(state: Optional[str] = None, limit: int = 50):
+    """List orders, optionally filtered by state."""
+    if order_manager_instance is None:
+        raise HTTPException(503, "order_manager not initialised")
+    rows = await order_manager_instance.list_orders(state=state, limit=limit)
+    return {
+        "count": len(rows),
+        "orders": [
+            {
+                "order_id": o.order_id,
+                "hypothesis_id": o.hypothesis_id,
+                "signal_id": o.signal_id,
+                "sport": o.sport,
+                "event_id": o.event_id,
+                "market": o.market,
+                "side": o.side,
+                "price_american": o.price_american,
+                "stake_units": o.stake_units,
+                "stake_dollars": o.stake_dollars,
+                "state": o.state,
+                "book": o.book,
+                "placed_at": o.placed_at,
+                "settled_at": o.settled_at,
+                "pnl_dollars": o.pnl_dollars,
+                "expires_at": o.expires_at,
+                "created_at": o.created_at,
+                "bet_id": o.bet_id,
+                "edge": o.edge,
+            }
+            for o in rows
+        ],
+    }
+
+
+@app.get("/orders/{order_id}", dependencies=[Depends(require_admin_or_loopback)])
+async def orders_get(order_id: str):
+    """Fetch one order including full state history."""
+    from tools.order_manager import OrderNotFound
+    if order_manager_instance is None:
+        raise HTTPException(503, "order_manager not initialised")
+    try:
+        o = await order_manager_instance.get_order(order_id)
+    except OrderNotFound:
+        raise HTTPException(404, f"order {order_id} not found")
+    return {
+        "order_id": o.order_id,
+        "hypothesis_id": o.hypothesis_id,
+        "signal_id": o.signal_id,
+        "odds_snapshot_id": o.odds_snapshot_id,
+        "sport": o.sport,
+        "event_id": o.event_id,
+        "market": o.market,
+        "side": o.side,
+        "price_american": o.price_american,
+        "stake_units": o.stake_units,
+        "stake_dollars": o.stake_dollars,
+        "state": o.state,
+        "state_history": o.state_history,
+        "book": o.book,
+        "placed_at": o.placed_at,
+        "settled_at": o.settled_at,
+        "pnl_dollars": o.pnl_dollars,
+        "expires_at": o.expires_at,
+        "created_at": o.created_at,
+        "bet_id": o.bet_id,
+        "edge": o.edge,
+        "fair_prob": o.fair_prob,
+    }
+
+
+@app.post("/orders/{order_id}/approve", dependencies=[Depends(require_admin)])
+async def orders_approve(order_id: str):
+    from tools.order_manager import OrderNotFound, InvalidTransition
+    if order_manager_instance is None:
+        raise HTTPException(503, "order_manager not initialised")
+    try:
+        o = await order_manager_instance.approve(order_id, reason="http_approve")
+    except OrderNotFound:
+        raise HTTPException(404, f"order {order_id} not found")
+    except InvalidTransition as e:
+        raise HTTPException(409, str(e))
+    return {"status": "approved", "order_id": o.order_id, "state": o.state}
+
+
+@app.post("/orders/{order_id}/reject", dependencies=[Depends(require_admin)])
+async def orders_reject(order_id: str, reason: str = "http_reject"):
+    from tools.order_manager import OrderNotFound, InvalidTransition
+    if order_manager_instance is None:
+        raise HTTPException(503, "order_manager not initialised")
+    try:
+        o = await order_manager_instance.reject(order_id, reason=reason)
+    except OrderNotFound:
+        raise HTTPException(404, f"order {order_id} not found")
+    except InvalidTransition as e:
+        raise HTTPException(409, str(e))
+    return {"status": "rejected", "order_id": o.order_id, "state": o.state}
+
+
+@app.post("/orders/{order_id}/fill", dependencies=[Depends(require_admin)])
+async def orders_fill(order_id: str, actual_price: Optional[int] = None):
+    from tools.order_manager import OrderNotFound, InvalidTransition
+    if order_manager_instance is None:
+        raise HTTPException(503, "order_manager not initialised")
+    try:
+        o = await order_manager_instance.mark_filled(
+            order_id, actual_price=actual_price, reason="http_fill"
+        )
+    except OrderNotFound:
+        raise HTTPException(404, f"order {order_id} not found")
+    except InvalidTransition as e:
+        raise HTTPException(409, str(e))
+    return {"status": "filled", "order_id": o.order_id, "state": o.state,
+            "price_american": o.price_american}
+
+
+@app.post("/orders/reconcile", dependencies=[Depends(require_admin_or_loopback)])
+async def orders_reconcile():
+    """Trigger the settlement reconciler immediately (cron path)."""
+    if order_manager_instance is None:
+        raise HTTPException(503, "order_manager not initialised")
+    stats = await reconcile_filled_orders(order_manager_instance)
+    return {"status": "ok", **stats}
+
+
+@app.post("/orders/expire", dependencies=[Depends(require_admin_or_loopback)])
+async def orders_expire():
+    """Trigger the expiry sweep immediately."""
+    if order_manager_instance is None:
+        raise HTTPException(503, "order_manager not initialised")
+    expired = await order_manager_instance.expire_stale()
+    return {"status": "ok", "expired": expired, "count": len(expired)}
 
 
 @app.post("/executor/login", dependencies=[Depends(require_admin)])

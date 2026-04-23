@@ -307,6 +307,7 @@ class TelegramListener:
         """Route an incoming message to the appropriate handler."""
         logger.info(f"Telegram received: {text}")
         cmd = text.lower().strip()
+        head = cmd.split()[0] if cmd else ""
 
         # Commands that don't need the GPU — respond instantly
         INSTANT_COMMANDS = {
@@ -318,7 +319,16 @@ class TelegramListener:
             "/help": self._cmd_help,
         }
 
+        # Order-management commands route through tools.telegram_bot.
+        ORDER_COMMANDS = {
+            "/approve", "/reject", "/submitted", "/fill",
+            "/order_status", "/pause_all", "/resume_all",
+        }
+
         try:
+            if head in ORDER_COMMANDS:
+                await self._cmd_order(text)
+                return
             handler = INSTANT_COMMANDS.get(cmd)
             if handler:
                 await handler()
@@ -332,6 +342,30 @@ class TelegramListener:
         except Exception as e:
             logger.error(f"Telegram command error: {e}")
             await send_alert(f"Error: {str(e)[:200]}", parse_mode="")
+
+    async def _cmd_order(self, text: str) -> None:
+        """Dispatch /approve /reject /fill /submitted /order_status /pause_all /resume_all."""
+        try:
+            from tools.order_manager import get_manager
+            from tools.telegram_bot import handle_order_command
+        except ImportError as e:
+            await send_alert(f"Order subsystem unavailable: {e}", parse_mode="")
+            return
+
+        manager = await get_manager()
+
+        async def _send(msg: str) -> None:
+            await send_alert(msg, parse_mode="HTML")
+
+        bet_executor = None
+        try:
+            # Soft import — fine if the executor isn't initialised.
+            import api as _api
+            bet_executor = getattr(_api, "_executor", None)
+        except Exception:
+            bet_executor = None
+
+        await handle_order_command(text, manager, _send, bet_executor=bet_executor)
 
     async def _cmd_smart_query(self, text: str) -> None:
         """
