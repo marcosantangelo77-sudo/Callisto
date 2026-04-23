@@ -1,18 +1,13 @@
-FROM sentinel:latest
+FROM qwen3.5:4b
 
-SYSTEM You are The Sentinel operating under the Aluft Gianne Protocol. You monitor, classify signals, assign domain tags — FINANCIAL, TECHNICAL, SIGNAL, SYNTHESIS, or GENERAL. You never draw conclusions. You only classify, tag, and escalate. Be fast and brief. Respond with JSON only.
+SYSTEM You are The Sentinel — the monitoring and classification agent in the Callisto system. Classify queries into exactly one domain: FINANCIAL, TECHNICAL, SIGNAL, SYNTHESIS, or GENERAL. Respond ONLY with JSON. No explanation. No reasoning.
 
-# VRAM-optimized for RTX 5060 Ti (16GB)
-# DeepSeek-R1 14B Q4_K_M: 9GB — fits fully in VRAM
-# 2K context is plenty for classification tasks
-# Thinking disabled (/no_think) — Sentinel classifies, doesn't reason
+# Qwen3.5 4B: ~3GB — ultra fast JSON classification
+# Replaces DeepSeek-R1 14B (9GB) — 3x smaller, 2x faster, no think hack needed
+# Temperature 0.0 for deterministic classification
 PARAMETER num_ctx 2048
 PARAMETER num_batch 512
 PARAMETER num_gpu 99
-PARAMETER num_thread 8
-PARAMETER num_predict 256
-PARAMETER temperature 0.1
-PARAMETER stop <｜begin▁of▁sentence｜>
-PARAMETER stop <｜end▁of▁sentence｜>
-PARAMETER stop <｜User｜>
-PARAMETER stop <｜Assistant｜>
+PARAMETER num_predict 32
+PARAMETER temperature 0.0
+PARAMETER stop <|im_end|>

@@ -1,0 +1,48 @@
+{
+  "pipeline_issues": [
+    "CRITICAL: Anti-predictive hypotheses never auto-rejected. IC < -0.05 blocks promotion but does NOT trigger rejection — hypotheses sit in backtesting forever as zombies consuming eval resources. The top 4 by signals (nba_blowout_loss_bounce_favorite_ml IC=-0.318, nhl_road_streak_bunker_underdog_ml IC=-0.168, nhl_long_road_trip_dog_ml IC=-0.181, nhl_sandwich_spot_total_over IC=-0.077) are ALL anti-predictive. FIX DEPLOYED: added AUTO_REJECT_IC=-0.15 with 15+ signals and AUTO_REJECT_IC_STRONG=-0.25 with 10+ signals to hypothesis.py.",
+    "STRUCTURAL: Identical event sets — nba_blowout_fav_spread_regression and nba_dominant_win_letdown_favorite_spread tested SAME 47 events with 3 signals. Root cause: missing game_filters in model_config causing regex fallback to match broadly. These are untestable without proper structured filters.",
+    "RESOURCE: Memory leak at 186MB/hr (443MB RSS at 0.7hr uptime). Known root cause: resolve_unfiltered. System will OOM crash within 3-4 hours. Restart will buy time but not fix the leak.",
+    "THROUGHPUT: 101 draft hypotheses stuck >48h. Draft-to-backtesting pipeline clogged because 34 slots are occupied, many by anti-predictive zombies that should have been rejected. Clearing zombies frees slots for fresh hypotheses.",
+    "STALLS: 5 stalls in 20 cycles (25% stall rate), each burning 10-15 min. Last session reduced eval batch to 8 but stalls persist. High-event-count hypotheses (134-165 events) hitting 600s timeout."
+  ],
+  "reject_ids": [
+    "nba_blowout_loss_bounce_favorite_ml",
+    "nhl_road_streak_bunker_underdog_ml",
+    "nhl_long_road_trip_dog_ml",
+    "nba_dominant_win_letdown_favorite_spread",
+    "nhl_sandwich_opponent_dog_spread",
+    "nba_dominant_win_complacency_fade"
+  ],
+  "promising_sports": ["baseball_mlb", "icehockey_nhl"],
+  "new_hypotheses": [
+    {
+      "name": "mlb_opener_strategy_total_over",
+      "thesis": "When an MLB team deploys an opener (reliever starting, typically throwing 1-2 innings before a bulk pitcher), F5 overs are mispriced because oddsmakers set the line based on the scheduled bulk pitcher's ERA rather than the 2-3 relievers who actually face the first 15+ batters. Opener strategies correlate with bullpen fatigue and run-scoring volatility in innings 2-4.",
+      "sport": "baseball_mlb",
+      "market_type": "totals",
+      "edge_threshold": 0.012
+    },
+    {
+      "name": "nhl_goalie_pull_strategy_3p_total",
+      "thesis": "Teams trailing by 1 in the 3rd period pull their goalie with 2-3 minutes remaining, creating a 6v5 that generates ~2.5x the shot rate but also allows empty-net goals. Oddsmakers price live 3rd period totals on base scoring rate, not on pull probability which is near-certain for 1-goal deficits after 15:00 of the 3rd. The over on 3rd period totals when the score differential is exactly 1 should be systematically underpriced.",
+      "sport": "icehockey_nhl",
+      "market_type": "totals",
+      "edge_threshold": 0.012
+    },
+    {
+      "name": "mlb_catcher_framing_f5_total",
+      "thesis": "Elite pitch-framing catchers (top-10 by framing runs above average) expand the effective strike zone by 0.5-1.0 inches, generating 2-4 extra called strikes per game. When a top-10 framing catcher faces a bottom-10 framing catcher, the differential in called strike rate creates a measurable F5 scoring asymmetry that soft books do not price because catcher framing data is not in standard oddsmaking models.",
+      "sport": "baseball_mlb",
+      "market_type": "totals",
+      "edge_threshold": 0.012
+    },
+    {
+      "name": "nhl_schedule_trap_regulation_win",
+      "thesis": "When a contending team (top-8 in conference) plays a non-contender the night BEFORE a divisional rival matchup, the contender's regulation win probability drops ~8-12% due to subconscious energy conservation. Oddsmakers price the H2H line but do NOT adjust the regulation win market (-1.5 puck line), creating mispricing in the exact-score/regulation-win alt spread.",
+      "sport": "icehockey_nhl",
+      "market_type": "spreads",
+      "edge_threshold": 0.015
+    }
+  ]
+}
