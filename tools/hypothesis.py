@@ -1661,6 +1661,64 @@ class HypothesisManager:
             except Exception as e:
                 logger.debug(f"regime-diversity gate error for {hypothesis_id}: {e}")
 
+        # ── ML BACKTEST GATE (paper_trading → live only) ──
+        # feat/ml-backtest-promotion (2026-04-23): if a trained ML model exists
+        # under models/{sport}_{ml_market}_*.joblib that matches the hypothesis
+        # and its drift sidecar isn't flagged stale, run ml_backtest and fail
+        # promotion when hit_rate / CLV / Sharpe thresholds are breached.
+        # Thresholds live in tools.ml_promotion_gate (MIN_HIT_RATE,
+        # MIN_CLV_BPS, MIN_SHARPE, MIN_SIGNALS_FOR_CLV).
+        # Fall-through semantics:
+        #   * no model              → skip, hand-crafted gate decides
+        #   * drift-stale model     → skip, hand-crafted gate decides, warn
+        #   * model + fresh drift   → ML thresholds are ADDITIVE to the hand
+        #                             crafted gate (both must pass)
+        ml_gate_result: dict = {}
+        if transition == "paper_trading→live":
+            try:
+                from tools.ml_promotion_gate import (
+                    evaluate_ml_gate,
+                    record_ml_backtest_report,
+                )
+                ml_gate_result = evaluate_ml_gate(
+                    hypothesis_id=hypothesis_id,
+                    sport=h.get("sport"),
+                    market_type=h.get("market_type"),
+                    model_config=h.get("model_config")
+                        if isinstance(h.get("model_config"), dict) else None,
+                )
+                if ml_gate_result.get("applicable"):
+                    if not ml_gate_result.get("ready"):
+                        for _r in ml_gate_result.get("reasons", []):
+                            if _r.startswith("FAIL"):
+                                checks.append(f"ML-GATE {_r}")
+                        ready = False
+                    else:
+                        for _r in ml_gate_result.get("reasons", []):
+                            checks.append(f"ML-GATE {_r}")
+                elif ml_gate_result.get("stale_model"):
+                    checks.append(
+                        f"ML-GATE SKIP: stale model "
+                        f"{os.path.basename(ml_gate_result['stale_model'])} — "
+                        f"fell through to hand-crafted gate"
+                    )
+                elif ml_gate_result.get("error"):
+                    checks.append(
+                        f"ML-GATE WARN: {ml_gate_result['error']} — "
+                        f"fell through to hand-crafted gate"
+                    )
+                # Persist the ML evidence regardless of gate outcome.
+                try:
+                    await record_ml_backtest_report(
+                        self._db,
+                        hypothesis_id=hypothesis_id,
+                        gate_result=ml_gate_result,
+                    )
+                except Exception as _e:
+                    logger.debug(f"ml_backtest_reports write failed: {_e}")
+            except Exception as e:
+                logger.warning(f"ML gate error for {hypothesis_id}: {e}")
+
         next_stage = STAGE_ORDER[STAGE_ORDER.index(status) + 1] if ready else None
 
         return {
@@ -1672,6 +1730,7 @@ class HypothesisManager:
             "checks": checks,
             "portfolio_overlap": portfolio_overlap,
             "simulation": sim_result,
+            "ml_gate": ml_gate_result or None,
             "report_summary": {
                 "n": n,
                 "p_value": round(p, 6),
