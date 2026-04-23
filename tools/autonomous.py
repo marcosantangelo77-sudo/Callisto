@@ -1398,6 +1398,14 @@ class ResearchLoop:
         self._last_hypothesis_gen = 0.0
         self._last_claude_call = 0.0
 
+        # Diagnostics — visibility into silent 0-work paths. Operators can
+        # inspect these via /system/full-status to see WHY a phase produced
+        # nothing this cycle (eligibility gate, cadence skip, empty queue).
+        self._last_eligibility_result: Optional[dict] = None
+        self._last_data_collect_skip: Optional[dict] = None
+        self._last_hypothesis_gen_skip: Optional[dict] = None
+        self._last_backtest_skip: Optional[dict] = None
+
         # Bulk backfill tracking — one-time 30-day seed when data is thin
         self._bulk_backfill_done = False
 
@@ -3163,10 +3171,23 @@ class ResearchLoop:
         from datetime import datetime, timedelta, timezone
 
         now = time.time()
-        if now - self._last_data_collect < DATA_COLLECTION_INTERVAL:
+        elapsed = now - self._last_data_collect
+        if elapsed < DATA_COLLECTION_INTERVAL:
+            remaining = max(0.0, DATA_COLLECTION_INTERVAL - elapsed)
+            self._last_data_collect_skip = {
+                "at": now,
+                "last_run_at": self._last_data_collect,
+                "interval_s": DATA_COLLECTION_INTERVAL,
+                "next_in_s": remaining,
+            }
+            logger.debug(
+                f"Research: data collection cadence skip — "
+                f"{remaining:.0f}s until next run (interval={DATA_COLLECTION_INTERVAL}s)"
+            )
             return
 
         self._last_data_collect = now
+        self._last_data_collect_skip = None
 
         # Determine how far back to collect
         # First collection: 7-day window. Subsequent: 2-day window (today + yesterday)
@@ -3661,8 +3682,21 @@ class ResearchLoop:
         generation is the fallback when Claude is rate-limited.
         """
         now = time.time()
-        if now - self._last_hypothesis_gen < HYPOTHESIS_GEN_INTERVAL:
+        elapsed = now - self._last_hypothesis_gen
+        if elapsed < HYPOTHESIS_GEN_INTERVAL:
+            remaining = max(0.0, HYPOTHESIS_GEN_INTERVAL - elapsed)
+            self._last_hypothesis_gen_skip = {
+                "at": now,
+                "last_run_at": self._last_hypothesis_gen,
+                "interval_s": HYPOTHESIS_GEN_INTERVAL,
+                "next_in_s": remaining,
+            }
+            logger.debug(
+                f"Research: hypothesis gen cadence skip — "
+                f"{remaining:.0f}s until next run (interval={HYPOTHESIS_GEN_INTERVAL}s)"
+            )
             return
+        self._last_hypothesis_gen_skip = None
 
         # When spinning, generate hypotheses biased toward TESTABLE patterns.
         # Previously this disabled generation entirely, creating a permanent
@@ -3761,13 +3795,40 @@ class ResearchLoop:
                     and s in sports_with_odds
                 ]
                 ineligible_sports = []
+                blocked_by_games: dict[str, int] = {}
+                blocked_by_odds: list[str] = []
                 for s in RESEARCH_SPORTS:
                     gc = game_counts_by_sport.get(s, 0)
                     if gc < MIN_GAMES_FOR_HYPOTHESIS:
                         ineligible_sports.append(f"{s} ({gc} games)")
+                        blocked_by_games[s] = gc
                     elif s not in sports_with_odds:
                         ineligible_sports.append(f"{s} ({gc} games, NO odds data)")
-                if ineligible_sports:
+                        blocked_by_odds.append(s)
+
+                self._last_eligibility_result = {
+                    "at": time.time(),
+                    "cycle": self._cycles,
+                    "research_sports": list(RESEARCH_SPORTS),
+                    "min_games_for_hypothesis": MIN_GAMES_FOR_HYPOTHESIS,
+                    "eligible_sports": list(eligible_sports),
+                    "game_counts_by_sport": dict(game_counts_by_sport),
+                    "sports_with_odds": sorted(sports_with_odds),
+                    "blocked_by_games": blocked_by_games,
+                    "blocked_by_odds": list(blocked_by_odds),
+                }
+
+                if not eligible_sports:
+                    logger.warning(
+                        "Research: NO eligible sports for hypothesis generation — "
+                        f"checked {list(RESEARCH_SPORTS)} against "
+                        f"MIN_GAMES_FOR_HYPOTHESIS={MIN_GAMES_FOR_HYPOTHESIS} and "
+                        f"sports_with_odds={sorted(sports_with_odds)}. "
+                        f"Blocked by game count: {blocked_by_games}. "
+                        f"Blocked by missing odds data (games OK): {blocked_by_odds}. "
+                        "Claude will be prompted with an empty list and return 0 hypotheses."
+                    )
+                elif ineligible_sports:
                     logger.info(
                         f"Research: sports excluded from hypothesis gen "
                         f"(need >={MIN_GAMES_FOR_HYPOTHESIS} games AND odds data): {ineligible_sports}"
@@ -4498,7 +4559,14 @@ class ResearchLoop:
         drafts = await self.hypothesis_manager.list_hypotheses(status="draft")
 
         if not drafts:
+            self._last_backtest_skip = {
+                "at": time.time(),
+                "reason": "no_draft_hypotheses",
+                "draft_count": 0,
+            }
+            logger.debug("Research: backtest phase skipped — 0 draft hypotheses to test")
             return
+        self._last_backtest_skip = None
 
         # ── Pre-filter: skip drafts that already have 0-event backtest runs ──
         # Hypotheses with prior 0-event runs are likely untestable with current
@@ -7915,6 +7983,16 @@ class ResearchLoop:
         except Exception:
             pass
 
+        now = time.time()
+        next_data_collection_in_s = max(
+            0.0,
+            DATA_COLLECTION_INTERVAL - (now - self._last_data_collect),
+        ) if self._last_data_collect else 0.0
+        next_hypothesis_gen_in_s = max(
+            0.0,
+            HYPOTHESIS_GEN_INTERVAL - (now - self._last_hypothesis_gen),
+        ) if self._last_hypothesis_gen else 0.0
+
         return {
             "running": self._running,
             "paused": self._paused,
@@ -7932,6 +8010,14 @@ class ResearchLoop:
             "pipeline_integrity": integrity_report,
             "work_queue": work_queue_status,
             "claude_downtime": self._downtime_tracker.get_status(),
+            "eligibility": self._last_eligibility_result,
+            "next_data_collection_in_s": next_data_collection_in_s,
+            "next_hypothesis_gen_in_s": next_hypothesis_gen_in_s,
+            "last_skips": {
+                "data_collect": self._last_data_collect_skip,
+                "hypothesis_gen": self._last_hypothesis_gen_skip,
+                "backtest": self._last_backtest_skip,
+            },
             "progress": {
                 "spinning_detected": self._spinning_detected,
                 "consecutive_no_progress": self._consecutive_no_progress,
