@@ -968,7 +968,13 @@ class HypothesisManager:
 
         return report
 
-    async def check_promotion_readiness(self, hypothesis_id: str, *, stage_override: str | None = None) -> dict:
+    async def check_promotion_readiness(
+        self,
+        hypothesis_id: str,
+        *,
+        stage_override: str | None = None,
+        status_override: str | None = None,
+    ) -> dict:
         """Check if a hypothesis meets criteria to advance to next stage.
 
         Args:
@@ -977,12 +983,23 @@ class HypothesisManager:
                 0 paper trades but sufficient backtest evidence — without
                 this, the readiness check would evaluate on empty
                 paper_trade data and always fail (the deadlock bug).
+            status_override: Evaluate the gate as if the hypothesis were
+                in ``status_override`` instead of its real status.  Added
+                2026-04-22 for the LIVE-cascade migration script: LIVE
+                rows were grandfathered past the new paper→live gates,
+                and we need to re-run the exact paper→live gate against
+                the current state without flipping the row first.  Does
+                not mutate the DB; only affects this evaluation.
         """
         h = await self.get_hypothesis(hypothesis_id)
         if not h:
             return {"error": "Hypothesis not found"}
 
-        status = h["status"]
+        status = status_override or h["status"]
+        # Only allow status_override to downgrade LIVE → paper_trading for
+        # the cascade use case; don't let callers fake a draft.
+        if status_override and status_override not in ("backtesting", "paper_trading"):
+            return {"ready": False, "reason": f"invalid status_override={status_override!r}"}
         if status in ("live", "retired", "rejected"):
             return {"ready": False, "reason": f"Cannot promote from {status}"}
 
