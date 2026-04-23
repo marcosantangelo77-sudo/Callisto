@@ -5498,21 +5498,37 @@ class ResearchLoop:
                 logger.debug(f"Narrative scan failed for {sport}: {e}")
 
     async def _phase_live_execute(self) -> None:
-        """Execute bets on live (proven) hypotheses using the bet executor.
+        """Execute bets on live (proven) hypotheses.
 
-        Scans live odds for signals matching live hypotheses, then places
-        real bets via Playwright browser automation on DraftKings.
-        Only runs if the executor is enabled and logged in.
+        Default path (``CALLISTO_USE_ORDER_MANAGER=1``): submit a pending
+        order via :mod:`tools.order_manager`, which pings Marco for approval
+        on Telegram. Fallback path: legacy Playwright executor.
+
+        Only runs if the active subsystem is enabled.
         """
-        try:
-            from tools.bet_executor import BetExecutor
-        except ImportError:
-            return
+        import os as _os
+        use_order_manager = _os.getenv("CALLISTO_USE_ORDER_MANAGER", "1") == "1"
 
-        # Check if executor is available (initialized externally)
-        executor = getattr(self, "_bet_executor", None)
-        if not executor or not executor.is_enabled:
-            return
+        order_manager = None
+        executor = None
+        if use_order_manager:
+            try:
+                from tools.order_manager import get_manager as _get_om
+                order_manager = await _get_om()
+                if not order_manager.is_enabled:
+                    return
+            except Exception as e:
+                logger.warning(f"order_manager unavailable, falling back: {e}")
+                order_manager = None
+
+        if order_manager is None:
+            try:
+                from tools.bet_executor import BetExecutor  # noqa: F401
+            except ImportError:
+                return
+            executor = getattr(self, "_bet_executor", None)
+            if not executor or not executor.is_enabled:
+                return
 
         live = await self.hypothesis_manager.list_hypotheses(status="live")
         if not live:
@@ -5564,28 +5580,56 @@ class ResearchLoop:
                     if not self._running:
                         break
 
-                    result = await executor.execute_bet(
-                        sport=sport,
-                        team=signal.get("team", ""),
-                        market=signal.get("market", market),
-                        side=signal.get("side", ""),
-                        odds=signal.get("book_odds_american", 0),
-                        fair_prob=signal.get("model_fair_prob", 0.5),
-                        edge=signal.get("edge", 0),
-                        hypothesis_id=h["hypothesis_id"],
-                        event_id=signal.get("event_id", ""),
-                        game_description=signal.get("game_description", ""),
-                    )
-
-                    if result.get("success"):
-                        logger.info(
-                            f"LIVE BET PLACED: {signal.get('team')} "
-                            f"${result.get('stake', 0):.2f} @ {signal.get('book_odds_american')}"
-                        )
+                    if order_manager is not None:
+                        # Size via quarter-Kelly roughly — delegate actual
+                        # sizing to whatever the hypothesis level already
+                        # recorded. Stake is stored in both units (of
+                        # bankroll) and dollars so downstream analytics can
+                        # pick either.
+                        stake_units = float(signal.get("stake_units") or signal.get("kelly_u") or 1.0)
+                        stake_dollars = float(signal.get("stake_dollars") or (stake_units * 100.0))
+                        try:
+                            order_id = await order_manager.submit_order(
+                                hypothesis_id=h["hypothesis_id"],
+                                signal=signal,
+                                stake_units=stake_units,
+                                stake_dollars=stake_dollars,
+                                book=signal.get("book", "draftkings"),
+                                odds_snapshot_id=signal.get("odds_snapshot_id"),
+                                edge=signal.get("edge"),
+                                fair_prob=signal.get("model_fair_prob"),
+                                clv_prior=signal.get("clv_prior"),
+                            )
+                            logger.info(
+                                f"ORDER SUBMITTED for approval: order_id={order_id} "
+                                f"hyp={h['hypothesis_id']} {signal.get('side')} "
+                                f"@ {signal.get('book_odds_american')}"
+                            )
+                        except Exception as e:
+                            logger.warning(f"submit_order failed: {e}")
                     else:
-                        logger.warning(
-                            f"Live bet failed: {result.get('reason', 'unknown')}"
+                        result = await executor.execute_bet(
+                            sport=sport,
+                            team=signal.get("team", ""),
+                            market=signal.get("market", market),
+                            side=signal.get("side", ""),
+                            odds=signal.get("book_odds_american", 0),
+                            fair_prob=signal.get("model_fair_prob", 0.5),
+                            edge=signal.get("edge", 0),
+                            hypothesis_id=h["hypothesis_id"],
+                            event_id=signal.get("event_id", ""),
+                            game_description=signal.get("game_description", ""),
                         )
+
+                        if result.get("success"):
+                            logger.info(
+                                f"LIVE BET PLACED: {signal.get('team')} "
+                                f"${result.get('stake', 0):.2f} @ {signal.get('book_odds_american')}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Live bet failed: {result.get('reason', 'unknown')}"
+                            )
 
             except Exception as e:
                 logger.warning(f"Live execution failed for {h['hypothesis_id']}: {e}")
