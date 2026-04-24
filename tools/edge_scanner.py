@@ -24,6 +24,25 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
+
+def _emit_edges_metric(edges: list, sport: str, market: str) -> None:
+    """Increment the edge-detection counter by the number of edges found.
+
+    Isolated so a metrics-registry import failure can never disrupt edge
+    scanning itself — edge scanning must continue even if observability is
+    broken.
+    """
+    if not edges:
+        return
+    try:
+        from tools.metrics import record_edge_detected
+        record_edge_detected(
+            sport or "unknown", market or "unknown", count=len(edges),
+        )
+    except Exception:
+        pass
+
+
 from tools.odds_api import (
     calculate_implied_probability,
     calculate_ev,
@@ -356,6 +375,7 @@ def scan_cross_book_edges(games: list[dict], market: str = "spreads", sport: str
 
     # Sort by implied range descending — biggest disagreements first
     edges.sort(key=lambda x: x["implied_range"], reverse=True)
+    _emit_edges_metric(edges, sport, market)
     return edges
 
 
@@ -659,6 +679,7 @@ def scan_alt_line_edges(games: list[dict], sport: str = "") -> list[dict]:
                 edges[-1]["alt_point"] = point
 
     edges.sort(key=lambda x: x["implied_range"], reverse=True)
+    _emit_edges_metric(edges, sport, "alt_lines")
     return edges
 
 
@@ -1037,6 +1058,7 @@ def scan_vig_edges(games: list[dict], market: str = "spreads") -> list[dict]:
                     })
 
     vig_edges.sort(key=lambda x: x["vig_pct"])
+    _emit_edges_metric(vig_edges, "", f"vig:{market}")
     return vig_edges
 
 
@@ -1227,6 +1249,7 @@ def scan_pace_model_total_edges(
             f"Pace model total edges ({sport}): {len(edges)} found, "
             f"best edge: {edges[0]['edge_pct']:.1f}% {edges[0]['direction']}"
         )
+    _emit_edges_metric(edges, sport, "pace_totals")
     return edges
 
 

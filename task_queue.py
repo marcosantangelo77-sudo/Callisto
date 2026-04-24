@@ -19,6 +19,19 @@ load_dotenv()
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
+
+def _record_lock_hit(operation: str) -> None:
+    """Mirror SQLite 'database is locked' retries into the metrics registry.
+
+    Isolated helper so the retry loop body doesn't depend on the metrics
+    module being importable — failures here are swallowed.
+    """
+    try:
+        from tools.metrics import record_db_lock_hit
+        record_db_lock_hit(operation)
+    except Exception:
+        pass
+
 TASK_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS task_queue (
     task_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -132,6 +145,7 @@ class TaskQueue:
                 return cursor.lastrowid
             except Exception as e:
                 if "locked" in str(e).lower() and attempt < 7:
+                    _record_lock_hit("task_queue")
                     wait = min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5)
                     await _asyncio.sleep(wait)
                 else:
@@ -193,6 +207,7 @@ class TaskQueue:
                 return {"task_id": task_id, "query": query, "priority": priority}
             except Exception as e:
                 if "locked" in str(e).lower() and attempt < 7:
+                    _record_lock_hit("task_queue")
                     wait = min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5)
                     await _asyncio.sleep(wait)
                 else:
@@ -243,6 +258,7 @@ class TaskQueue:
                 return
             except Exception as e:
                 if "locked" in str(e).lower() and attempt < 7:
+                    _record_lock_hit("task_queue")
                     await _asyncio.sleep(min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5))
                 else:
                     raise
@@ -278,6 +294,7 @@ class TaskQueue:
                 return
             except Exception as e:
                 if "locked" in str(e).lower() and attempt < 7:
+                    _record_lock_hit("task_queue")
                     await _asyncio.sleep(min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5))
                 else:
                     raise
@@ -329,6 +346,7 @@ class TaskQueue:
                     return
                 except Exception as e:
                     if "locked" in str(e).lower() and attempt < 7:
+                        _record_lock_hit("task_queue")
                         await _asyncio.sleep(
                             min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5)
                         )

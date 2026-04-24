@@ -214,7 +214,13 @@ class BetExecutor:
             "SELECT balance FROM bankroll ORDER BY timestamp DESC LIMIT 1"
         )
         row = await cursor.fetchone()
-        return row[0] if row else 0.0
+        balance = row[0] if row else 0.0
+        try:
+            from tools.metrics import set_bankroll as _metrics_set_bankroll
+            _metrics_set_bankroll(float(balance or 0.0))
+        except Exception:
+            pass
+        return balance
 
     async def get_daily_stakes(self) -> float:
         """Get total stakes placed today."""
@@ -1043,6 +1049,15 @@ class BetExecutor:
                 except Exception:
                     pass
                 raise
+        try:
+            from tools.metrics import (
+                record_bet_placed,
+                set_bankroll as _metrics_set_bankroll,
+            )
+            record_bet_placed(sport, market, bookmaker)
+            _metrics_set_bankroll(max(0.0, float(bankroll - stake)))
+        except Exception:
+            pass
         return bet_id
 
     # ------------------------------------------------------------------

@@ -183,6 +183,12 @@ def _enter_cooldown(error_msg: str) -> None:
     _total_rate_limits += 1
     _last_error = error_msg
 
+    try:
+        from tools.metrics import record_claude_call
+        record_claude_call("rate_limited")
+    except Exception:
+        pass
+
     # Exponential backoff with cap
     _current_backoff = min(
         INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** (_consecutive_failures - 1)),
@@ -205,6 +211,11 @@ def _mark_success() -> None:
     _consecutive_failures = 0
     _current_backoff = INITIAL_BACKOFF
     _total_successful += 1
+    try:
+        from tools.metrics import record_claude_call
+        record_claude_call("ok")
+    except Exception:
+        pass
     # Clean up persistent cooldown file
     try:
         os.remove(_COOLDOWN_FILE)
@@ -332,6 +343,11 @@ async def claude_code_query(
     # that guarantees no cloud calls happen in local-only mode.
     if os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes"):
         logger.info("Claude Code blocked by CALLISTO_LOCAL_ONLY kill switch")
+        try:
+            from tools.metrics import record_claude_call
+            record_claude_call("blocked")
+        except Exception:
+            pass
         return {
             "content": "",
             "source_class": "PRIMARY",
@@ -349,6 +365,11 @@ async def claude_code_query(
             f"Claude Code unavailable — {remaining:.0f}s remaining in cooldown. "
             f"Skipping escalation."
         )
+        try:
+            from tools.metrics import record_claude_call
+            record_claude_call("skipped_cooldown")
+        except Exception:
+            pass
         return {
             "content": "",
             "source_class": "PRIMARY",
@@ -430,6 +451,11 @@ async def claude_code_query(
                     "cooldown_remaining": round(get_cooldown_remaining(), 1),
                 }
 
+            try:
+                from tools.metrics import record_claude_call
+                record_claude_call("error")
+            except Exception:
+                pass
             return {
                 "content": "",
                 "source_class": "PRIMARY",
@@ -456,6 +482,11 @@ async def claude_code_query(
 
     except asyncio.TimeoutError:
         logger.error(f"Claude Code #{call_num} timed out after {timeout}s")
+        try:
+            from tools.metrics import record_claude_call
+            record_claude_call("timeout")
+        except Exception:
+            pass
         # Timeouts could be rate-limit related (queue congestion)
         return {
             "content": "",
@@ -467,6 +498,11 @@ async def claude_code_query(
         }
     except FileNotFoundError:
         logger.error(f"Claude Code CLI not found: {CLAUDE_CMD}")
+        try:
+            from tools.metrics import record_claude_call
+            record_claude_call("cli_missing")
+        except Exception:
+            pass
         return {
             "content": "",
             "source_class": "PRIMARY",
@@ -492,6 +528,11 @@ async def claude_code_query(
                 "cooldown_remaining": round(get_cooldown_remaining(), 1),
             }
 
+        try:
+            from tools.metrics import record_claude_call
+            record_claude_call("error")
+        except Exception:
+            pass
         return {
             "content": "",
             "source_class": "PRIMARY",
