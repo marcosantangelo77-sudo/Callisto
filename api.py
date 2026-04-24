@@ -1057,8 +1057,10 @@ async def lifespan(app: FastAPI):
     try:
         from tools.odds_ws import stop_odds_stream
         await stop_odds_stream()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(
+            f"stop_odds_stream failed during shutdown: {type(e).__name__}: {e}"
+        )
     await telegram_listener.stop()
     if system_health:
         system_health.write_health_file()
@@ -2159,8 +2161,11 @@ async def dead_numbers_endpoint(sport: str):
                 analysis["game"] = f"{away} @ {home}"
                 analysis["team"] = team
                 spread_analyses.append(analysis)
-            except (ValueError, KeyError):
-                pass
+            except (ValueError, KeyError) as e:
+                logger.debug(
+                    f"dn_analyze_spread skipped for {team} {primary_spread}: "
+                    f"{type(e).__name__}: {e}"
+                )
 
             # Find dead number steals
             if len(lines_for_dn) >= 2:
@@ -2170,8 +2175,11 @@ async def dead_numbers_endpoint(sport: str):
                         s["game"] = f"{away} @ {home}"
                         s["team"] = team
                     all_steals.extend(steals)
-                except (ValueError, KeyError):
-                    pass
+                except (ValueError, KeyError) as e:
+                    logger.debug(
+                        f"find_dead_number_steals skipped for {team}: "
+                        f"{type(e).__name__}: {e}"
+                    )
 
                 # Rank line shopping opportunities
                 try:
@@ -2180,8 +2188,11 @@ async def dead_numbers_endpoint(sport: str):
                         s["game"] = f"{away} @ {home}"
                         s["team"] = team
                     all_shopping.extend(shopping)
-                except (ValueError, KeyError):
-                    pass
+                except (ValueError, KeyError) as e:
+                    logger.debug(
+                        f"rank_line_shopping_opportunities skipped for {team}: "
+                        f"{type(e).__name__}: {e}"
+                    )
 
     all_steals.sort(key=lambda x: x.get("prob_difference", 0), reverse=True)
     all_shopping.sort(key=lambda x: x.get("prob_difference", 0), reverse=True)
@@ -2282,8 +2293,8 @@ async def line_analysis_endpoint(sport: str):
     # Compute bet timing for the sport
     try:
         timing_info = la_timing(sport=sport)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"la_timing failed for sport={sport}: {type(e).__name__}: {e}")
 
     for game in games:
         home = game.get("home_team", "")
@@ -2335,8 +2346,11 @@ async def line_analysis_endpoint(sport: str):
                     cv["game"] = f"{away} @ {home}"
                     cv["team"] = team_name
                     contrarian_picks.append(cv)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(
+                    f"contrarian pick computation skipped for {team_name}: "
+                    f"{type(e).__name__}: {e}"
+                )
 
         # Steam detection from snapshot price data
         # (Note: steam detection works best across multiple snapshots over time;
@@ -3636,8 +3650,8 @@ async def _build_health_report() -> dict:
         if queue is not None and getattr(queue, "_db", None) is not None:
             try:
                 await queue._db.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"queue WAL commit refresh (health) failed: {type(e).__name__}: {e}")
             row = await queue._db.execute_fetchall(
                 """SELECT COUNT(*),
                           COALESCE(MIN(created_at), 0)
@@ -4066,8 +4080,8 @@ async def list_tasks(
     # Refresh WAL snapshot to see externally-committed rows
     try:
         await queue._db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"queue WAL commit refresh (/tasks) failed: {type(e).__name__}: {e}")
     limit = max(1, min(int(limit), 500))
     rows = await queue._db.execute_fetchall(
         """SELECT task_id, query, status, priority, session_id,
@@ -4410,8 +4424,12 @@ async def admin_sql(request: Request, _auth: None = Depends(require_admin)):
                 raw_conn = getattr(db, "_conn", None)
                 if raw_conn is not None:
                     raw_conn.set_progress_handler(_timeout_handler, 10_000)
-            except Exception:
-                pass
+            except Exception as e:
+                # Progress handler is best-effort — query still runs, just without timeout.
+                logger.warning(
+                    f"sqlite progress handler install failed — query will run "
+                    f"without 10s timeout: {type(e).__name__}: {e}"
+                )
             try:
                 cursor = await db.execute(sql)
                 rows = await cursor.fetchall()
@@ -4423,8 +4441,10 @@ async def admin_sql(request: Request, _auth: None = Depends(require_admin)):
                 try:
                     if raw_conn is not None:
                         raw_conn.set_progress_handler(None, 0)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(
+                        f"sqlite progress handler clear failed: {type(e).__name__}: {e}"
+                    )
             cols = [d[0] for d in cursor.description] if cursor.description else []
             return {
                 "columns": cols,
