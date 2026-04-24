@@ -497,7 +497,8 @@ def should_use_bridge(task_type: str) -> bool:
     True iff local-only mode is active AND the task type benefits from
     a tool-using agent AND the bridge binary exists.
     """
-    if os.getenv("CALLISTO_LOCAL_ONLY", "").lower() not in ("1", "true", "yes"):
+    from tools.local_only import is_local_only
+    if not is_local_only():
         return False
     if task_type not in TOOL_USE_TASK_TYPES:
         return False

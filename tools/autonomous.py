@@ -1446,7 +1446,8 @@ class ResearchLoop:
 
         # Mode control
         self._paused = False
-        self._local_only = os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes")
+        from tools.local_only import is_local_only
+        self._local_only = is_local_only()
 
     async def start(self) -> None:
         """Start the research loop."""
