@@ -346,11 +346,8 @@ class LineMonitor:
 
     async def initialize(self) -> None:
         """Create tables for odds snapshots and alerts."""
-        self._db = await aiosqlite.connect(self.db_path)
-        # Tag for WriteCoordinator routing (single-writer pattern).
-        from tools.db_writer import tag_connection as _tag
-        _tag(self._db, self.db_path)
-        await self._db.execute("PRAGMA busy_timeout = 120000")  # 2 min — 5 min caused cascading WAL stalls
+        from tools.schema import open_db
+        self._db = await open_db(self.db_path)
         # SECURITY (audit C-6): per-statement DDL avoids EXCLUSIVE lock contention.
         for stmt in (
             """CREATE TABLE IF NOT EXISTS odds_snapshots (

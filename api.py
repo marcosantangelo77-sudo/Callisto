@@ -294,20 +294,46 @@ async def _maybe_auto_followup(parent_task_id: int, result: dict) -> None:
         logger.warning(f"Auto-followup check failed (non-fatal): {e}")
 
 
-async def wal_checkpoint_loop():
+_wal_health_state: dict = {
+    "last_checkpoint_ts": None,
+    "last_checkpoint_duration_s": None,
+    "last_wal_pages_before": None,
+    "last_wal_pages_after": None,
+    "last_wal_mb_before": None,
+    "last_wal_mb_after": None,
+    "last_checkpointed": None,
+    "last_mode": None,
+    "last_truncate_ts": None,
+    "last_truncate_pages_before": None,
+    "last_truncate_pages_after": None,
+    "checkpoint_errors_total": 0,
+    "checkpoints_total": 0,
+    "truncates_total": 0,
+    "maintenance_started_ts": time.time(),
+    "db_path": DB_PATH,
+}
+
+WAL_MAINTENANCE_INTERVAL_S = int(os.getenv("CALLISTO_WAL_MAINTENANCE_INTERVAL_S", "600"))
+WAL_TRUNCATE_PAGE_THRESHOLD = int(os.getenv("CALLISTO_WAL_TRUNCATE_PAGE_THRESHOLD", "5000"))
+
+
+async def wal_maintenance_loop():
     """Periodic WAL checkpoint + memory guardian.
 
-    Every 5 minutes:
-    1. Checkpoint WAL to prevent bloat
-    2. Check process memory — if RSS > 2GB, signal graceful restart
-       The watchdog will pick us back up with fresh memory.
+    Every ``CALLISTO_WAL_MAINTENANCE_INTERVAL_S`` seconds (default 10 min):
+    1. Memory guardian: if RSS > 2GB, signal graceful restart.
+    2. PASSIVE checkpoint: flush committed pages back to the main DB.
+    3. If WAL > WAL_TRUNCATE_PAGE_THRESHOLD pages (default 5000), run
+       TRUNCATE to reset the WAL file on disk.
+
+    All metrics (page counts, duration, success/failure) are captured in
+    ``_wal_health_state`` so /admin/db/health can expose them.
     """
-    MEMORY_RESTART_MB = 2048  # 2GB — restart before Windows kills us at ~3-4GB
+    MEMORY_RESTART_MB = 2048
     while True:
         try:
-            await asyncio.sleep(300)  # 5 minutes
+            await asyncio.sleep(WAL_MAINTENANCE_INTERVAL_S)
 
-            # ── Memory Guardian ──
             try:
                 import psutil
                 rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
@@ -316,52 +342,74 @@ async def wal_checkpoint_loop():
                         f"MEMORY GUARDIAN: RSS={rss_mb:.0f}MB > {MEMORY_RESTART_MB}MB — "
                         f"requesting graceful restart to prevent OOM crash"
                     )
-                    # Signal the watchdog to restart us (off-OneDrive state dir)
                     restart_file = restart_signal_path()
                     with open(restart_file, "w", encoding="utf-8") as f:
                         f.write(f"memory_guardian: RSS={rss_mb:.0f}MB at {datetime.now()}")
-                    # Give the signal file a moment to be detected, then exit cleanly
                     await asyncio.sleep(2)
                     logger.warning("MEMORY GUARDIAN: exiting for restart")
-                    os._exit(0)  # Clean exit — watchdog restarts us
+                    os._exit(0)
                 elif rss_mb > MEMORY_RESTART_MB * 0.75:
                     logger.info(f"Memory check: {rss_mb:.0f}MB (warning threshold: {MEMORY_RESTART_MB}MB)")
             except ImportError:
-                pass  # psutil not installed
-            async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("PRAGMA busy_timeout = 60000")
-                cursor = await db.execute("PRAGMA wal_checkpoint(PASSIVE)")
-                row = await cursor.fetchone()
-                if row:
-                    busy, log_pages, checkpointed = row
-                    wal_size_mb = (log_pages * 4096) / (1024 * 1024)
-                    logger.info(
-                        f"WAL checkpoint: busy={busy}, log={log_pages} pages "
-                        f"({wal_size_mb:.1f} MB), checkpointed={checkpointed}"
-                    )
-                    # If PASSIVE couldn't checkpoint enough, try TRUNCATE with
-                    # a dedicated connection and longer busy_timeout. PASSIVE
-                    # never works when aiosqlite holds persistent readers.
-                    if log_pages > 5000 and checkpointed < log_pages // 2:
-                        async with aiosqlite.connect(DB_PATH) as trunc_db:
-                            await trunc_db.execute("PRAGMA busy_timeout = 30000")
-                            cursor2 = await trunc_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                            row2 = await cursor2.fetchone()
-                            if row2:
-                                t_busy, t_log, t_ckpt = row2
-                                logger.info(
-                                    f"WAL TRUNCATE checkpoint: busy={t_busy}, "
-                                    f"log={t_log}, checkpointed={t_ckpt}"
-                                )
-                                if t_busy and t_log > 0:
-                                    logger.warning(
-                                        f"WAL TRUNCATE could not complete: {t_log} pages remain. "
-                                        f"Persistent readers are preventing checkpoint."
+                pass
+
+            started = time.monotonic()
+            try:
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute("PRAGMA busy_timeout = 60000")
+                    cursor = await db.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                    row = await cursor.fetchone()
+                    if row:
+                        busy, log_pages, checkpointed = row
+                        wal_size_mb = (log_pages * 4096) / (1024 * 1024)
+                        _wal_health_state["last_mode"] = "PASSIVE"
+                        _wal_health_state["last_wal_pages_before"] = log_pages
+                        _wal_health_state["last_wal_pages_after"] = max(log_pages - (checkpointed or 0), 0)
+                        _wal_health_state["last_wal_mb_before"] = round(wal_size_mb, 3)
+                        _wal_health_state["last_checkpointed"] = checkpointed
+                        logger.info(
+                            f"WAL checkpoint PASSIVE: busy={busy} log={log_pages} pages "
+                            f"({wal_size_mb:.1f} MB) checkpointed={checkpointed}"
+                        )
+                        if log_pages > WAL_TRUNCATE_PAGE_THRESHOLD:
+                            async with aiosqlite.connect(DB_PATH) as trunc_db:
+                                await trunc_db.execute("PRAGMA busy_timeout = 30000")
+                                cursor2 = await trunc_db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                                row2 = await cursor2.fetchone()
+                                if row2:
+                                    t_busy, t_log, t_ckpt = row2
+                                    _wal_health_state["last_mode"] = "TRUNCATE"
+                                    _wal_health_state["last_truncate_ts"] = time.time()
+                                    _wal_health_state["last_truncate_pages_before"] = log_pages
+                                    _wal_health_state["last_truncate_pages_after"] = t_log
+                                    _wal_health_state["last_wal_pages_after"] = t_log
+                                    _wal_health_state["last_wal_mb_after"] = round((t_log * 4096) / (1024 * 1024), 3)
+                                    _wal_health_state["truncates_total"] = _wal_health_state.get("truncates_total", 0) + 1
+                                    logger.info(
+                                        f"WAL TRUNCATE: busy={t_busy} log={t_log} "
+                                        f"(was {log_pages}) checkpointed={t_ckpt} "
+                                        f"threshold={WAL_TRUNCATE_PAGE_THRESHOLD}"
                                     )
+                                    if t_busy and t_log > 0:
+                                        logger.warning(
+                                            f"WAL TRUNCATE incomplete: {t_log} pages remain — "
+                                            f"persistent readers blocking checkpoint"
+                                        )
+                        else:
+                            _wal_health_state["last_wal_mb_after"] = _wal_health_state["last_wal_mb_before"]
+                _wal_health_state["last_checkpoint_ts"] = time.time()
+                _wal_health_state["last_checkpoint_duration_s"] = round(time.monotonic() - started, 3)
+                _wal_health_state["checkpoints_total"] = _wal_health_state.get("checkpoints_total", 0) + 1
+            except Exception as ckpt_err:
+                _wal_health_state["checkpoint_errors_total"] = _wal_health_state.get("checkpoint_errors_total", 0) + 1
+                logger.warning(f"WAL checkpoint failed (non-fatal): {ckpt_err}")
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.warning(f"WAL checkpoint failed (non-fatal): {e}")
+            logger.warning(f"wal_maintenance_loop iteration error: {e}")
+
+
+wal_checkpoint_loop = wal_maintenance_loop
 
 
 async def restart_signal_watcher():
@@ -1156,7 +1204,7 @@ async def lifespan(app: FastAPI):
         logger.info("Live state collector disabled via CALLISTO_LIVE_STATE_ENABLED=0")
 
     worker_task = asyncio.create_task(task_worker())
-    wal_checkpoint_task = asyncio.create_task(wal_checkpoint_loop())
+    wal_checkpoint_task = asyncio.create_task(wal_maintenance_loop())
     # Signal-file consumer — decouples restart from watchdog liveness.
     restart_signal_task = asyncio.create_task(restart_signal_watcher())
     sla_watchdog_task = asyncio.create_task(ingestion_sla_watchdog_loop())
@@ -1173,7 +1221,8 @@ async def lifespan(app: FastAPI):
         logger.warning(f"prop_resolution_loop failed to start: {e}")
     logger.info(
         f"Callisto API started on port {CALLISTO_PORT} "
-        f"(WAL ckpt 5m, restart-signal watcher active, ingestion SLA watchdog 5m, "
+        f"(WAL maintenance {WAL_MAINTENANCE_INTERVAL_S}s, "
+        f"restart-signal watcher active, ingestion SLA watchdog 5m, "
         f"prop resolver 15m)"
     )
 
@@ -4030,6 +4079,77 @@ async def db_migrations_status():
     except Exception as e:
         logger.error(f"/admin/db/migrations failed: {e!r}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"migration status error: {e!s}")
+
+
+@app.get("/admin/db/health", dependencies=[Depends(require_admin_or_loopback)])
+async def admin_db_health():
+    """DB health snapshot: WAL size, page count, checkpoint stats, busy-timeout hits.
+
+    Read-only — safe to poll. Returns:
+      - wal_size_mb / wal_page_count: current on-disk WAL size
+      - db_size_mb / db_page_count / page_size: main DB file
+      - last_checkpoint_*: metrics from the most recent wal_maintenance pass
+      - busy_timeout_hits: count of "database is locked" retries in the last hour
+      - coordinator: WriteCoordinator per-DB stats (queue depth, writes, slow ops)
+      - file_sizes: direct stat() of .db, .db-wal, .db-shm
+    """
+    from tools.db_utils import busy_timeout_stats
+    from tools.db_writer import all_stats as _writer_stats
+
+    out: dict = {
+        "db_path": DB_PATH,
+        "busy_timeout_hits": busy_timeout_stats(3600.0),
+        "maintenance": dict(_wal_health_state),
+        "coordinator": _writer_stats(),
+        "config": {
+            "interval_s": WAL_MAINTENANCE_INTERVAL_S,
+            "truncate_threshold_pages": WAL_TRUNCATE_PAGE_THRESHOLD,
+        },
+    }
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("PRAGMA busy_timeout = 5000")
+            page_size_row = await (await db.execute("PRAGMA page_size")).fetchone()
+            page_count_row = await (await db.execute("PRAGMA page_count")).fetchone()
+            wal_row = await (await db.execute("PRAGMA wal_checkpoint(PASSIVE)")).fetchone()
+            journal_row = await (await db.execute("PRAGMA journal_mode")).fetchone()
+            freelist_row = await (await db.execute("PRAGMA freelist_count")).fetchone()
+            page_size = page_size_row[0] if page_size_row else 4096
+            page_count = page_count_row[0] if page_count_row else 0
+            freelist = freelist_row[0] if freelist_row else 0
+            wal_busy, wal_log_pages, wal_ckpt = (wal_row or (0, 0, 0))
+            out["page_size"] = page_size
+            out["db_page_count"] = page_count
+            out["db_size_mb"] = round((page_count * page_size) / (1024 * 1024), 3)
+            out["wal_page_count"] = wal_log_pages
+            out["wal_size_mb"] = round((wal_log_pages * page_size) / (1024 * 1024), 3)
+            out["wal_checkpoint_busy"] = wal_busy
+            out["wal_checkpointed_now"] = wal_ckpt
+            out["journal_mode"] = journal_row[0] if journal_row else None
+            out["freelist_pages"] = freelist
+            if page_count:
+                out["fragmentation_ratio"] = round(freelist / max(page_count, 1), 4)
+            else:
+                out["fragmentation_ratio"] = 0.0
+    except Exception as e:
+        out["pragma_error"] = f"{type(e).__name__}: {e}"
+
+    try:
+        import os.path as _p
+        files = {}
+        for suffix in ("", "-wal", "-shm"):
+            p = DB_PATH + suffix
+            if _p.exists(p):
+                files[suffix or "db"] = {
+                    "path": p,
+                    "size_bytes": os.path.getsize(p),
+                    "size_mb": round(os.path.getsize(p) / (1024 * 1024), 3),
+                }
+        out["file_sizes"] = files
+    except Exception as e:
+        out["file_sizes_error"] = f"{type(e).__name__}: {e}"
+
+    return out
 
 
 @app.get("/health/deep")

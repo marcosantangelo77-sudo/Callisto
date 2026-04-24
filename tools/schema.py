@@ -15,36 +15,34 @@ load_dotenv()
 
 
 async def open_db(db_path: str = None) -> aiosqlite.Connection:
-    """Open a DB connection with WAL mode and busy_timeout.
+    """Open a DB connection with the canonical Callisto pragma set.
 
     Use this instead of raw aiosqlite.connect() everywhere. The connection is
     tagged with ``_callisto_db_path`` so ``tools.db_utils.execute_with_retry``
     can route writes through the matching ``WriteCoordinator`` (single-writer
     pattern, see ``tools/db_writer.py``). When no coordinator is running the
     connection still works as a regular aiosqlite connection.
+
+    Canonical pragmas (feat/db-wal-health):
+        journal_mode=WAL, busy_timeout=120000, synchronous=NORMAL,
+        foreign_keys=ON, wal_autocheckpoint=1000, journal_size_limit=64MB,
+        cache_size=-512, mmap_size=0.
     """
     if db_path is None:
-        db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+        from tools.state_paths import db_path as _resolve_db_path
+        db_path = _resolve_db_path()
     db = await aiosqlite.connect(db_path)
-    # Tag the connection so coordinator routing works without a path lookup.
     try:
         db._callisto_db_path = os.path.abspath(db_path)
     except Exception:
         pass
-    await db.execute("PRAGMA busy_timeout = 60000")   # 60s — prevents 'database is locked' during bulk writes
-    await db.execute("PRAGMA journal_mode = WAL")      # WAL mode for concurrent reads during writes
-    await db.execute("PRAGMA synchronous = NORMAL")    # Safe with WAL, reduces fsync overhead
-    await db.execute("PRAGMA wal_autocheckpoint = 1000")  # Checkpoint after 1000 pages (~4MB) — prevents WAL bloat
-    await db.execute("PRAGMA journal_size_limit = 67108864")  # 64MB WAL cap — SQLite tries harder to checkpoint
-    await db.execute("PRAGMA cache_size = -512")        # 512KB page cache (default -2000 = 2MB) — reduces RSS per conn
-    await db.execute("PRAGMA mmap_size = 0")           # Disable mmap — prevents WAL from being memory-mapped into RSS
-    # Foreign keys are a per-connection pragma in SQLite. Enabling here
-    # makes FOREIGN KEY declarations in SCHEMA_SQL actually enforced for
-    # inserts/updates/deletes via this connection. Audit found 1 orphan
-    # row in hypothesis_stats pre-fix; migration 004 cleans existing
-    # orphans so turning this on doesn't retroactively break writes.
-    # Set CALLISTO_DISABLE_FK=1 to opt out (useful during bulk imports
-    # that must temporarily bypass cascades).
+    await db.execute("PRAGMA journal_mode = WAL")
+    await db.execute("PRAGMA busy_timeout = 120000")
+    await db.execute("PRAGMA synchronous = NORMAL")
+    await db.execute("PRAGMA wal_autocheckpoint = 1000")
+    await db.execute("PRAGMA journal_size_limit = 67108864")
+    await db.execute("PRAGMA cache_size = -512")
+    await db.execute("PRAGMA mmap_size = 0")
     if os.getenv("CALLISTO_DISABLE_FK", "0") != "1":
         await db.execute("PRAGMA foreign_keys = ON")
     return db
