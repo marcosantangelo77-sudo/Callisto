@@ -379,12 +379,27 @@ async def escalate_with_ladder(
         dict with keys: content, model_used, quality, ladder_step, error (if all failed)
     """
     from tools.claude_code import claude_code_query, is_available as claude_available
+    from tools.local_only import is_local_only
 
     hermes_caller = kwargs.get("hermes_caller", "default")
 
     ladder = MODEL_LADDER.get(task_type, MODEL_LADDER["reasoning"])
+    # Nuclear kill switch: when CALLISTO_LOCAL_ONLY=1, strip every
+    # claude_code rung from the ladder outright. This guarantees we
+    # never even attempt a subprocess spawn, regardless of what
+    # claude_code.is_available() decides to return (belt-and-braces:
+    # that function also blocks, but this path makes the invariant
+    # visible at the dispatch layer too).
+    if is_local_only():
+        stripped = [c for c in ladder if c.get("model") != "claude_code"]
+        if stripped != ladder:
+            logger.debug(
+                f"Ladder: CALLISTO_LOCAL_ONLY=1 — stripped claude_code rungs "
+                f"for task_type={task_type}"
+            )
+            ladder = stripped
     # Preserve Claude credits outside the Max hours window.
-    if not _in_claude_hours():
+    elif not _in_claude_hours():
         demoted = _demote_claude_in_ladder(ladder)
         if demoted is not ladder:
             logger.debug(

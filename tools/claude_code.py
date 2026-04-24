@@ -221,7 +221,8 @@ def is_available() -> bool:
     work and continue with local-only phases.
     """
     # Hard kill switch: CALLISTO_LOCAL_ONLY=1 means NO Claude calls anywhere
-    if os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes"):
+    from tools.local_only import is_local_only
+    if is_local_only():
         return False
 
     global _available, _cooldown_until, _call_count, _last_reset
@@ -330,17 +331,13 @@ async def claude_code_query(
     # regardless of skip_availability_check, hermes_caller, or any
     # other flag a caller might set. This is the single choke point
     # that guarantees no cloud calls happen in local-only mode.
-    if os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes"):
+    from tools.local_only import is_local_only, local_only_result
+    if is_local_only():
         logger.info("Claude Code blocked by CALLISTO_LOCAL_ONLY kill switch")
-        return {
-            "content": "",
-            "source_class": "PRIMARY",
-            "model": CLAUDE_MODEL,
-            "call_number": 0,
-            "error": "blocked_by_local_only",
-            "rate_limited": False,
-            "quality": "none",
-        }
+        return local_only_result(
+            reason="claude_code_query blocked",
+            extra={"model": CLAUDE_MODEL},
+        )
 
     # Pre-flight availability check
     if not skip_availability_check and not is_available():
@@ -527,17 +524,13 @@ def claude_code_sync(prompt: str, system_context: str = "") -> dict:
     orchestrator routes tool calls straight through it.
     """
     # HARD KILL SWITCH — same guarantee as claude_code_query above.
-    if os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes"):
+    from tools.local_only import is_local_only, local_only_result
+    if is_local_only():
         logger.info("claude_code_sync blocked by CALLISTO_LOCAL_ONLY kill switch")
-        return {
-            "content": "",
-            "source_class": "PRIMARY",
-            "model": CLAUDE_MODEL,
-            "call_number": 0,
-            "error": "blocked_by_local_only",
-            "rate_limited": False,
-            "quality": "none",
-        }
+        return local_only_result(
+            reason="claude_code_sync blocked",
+            extra={"model": CLAUDE_MODEL},
+        )
 
     try:
         loop = asyncio.get_running_loop()
