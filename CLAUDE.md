@@ -43,17 +43,35 @@ State files (off OneDrive, `$STATE_DIR = %LOCALAPPDATA%\Callisto` by default):
 API logs stay on OneDrive for cross-machine diagnostics: `logs/api_stdout_*.log`, `logs/api_stderr_*.log`.
 
 ## API Quick Reference (localhost:8420)
-- `GET /health` — agent status, odds credits, monitors
-- `GET /system/full-status` — everything: hypotheses, research loop, embeddings, data
+Core + research:
+- `GET /health` — agent status, odds credits, monitors, local-only flag
+- `GET /health/livez`, `GET /health/readyz`, `GET /health/detailed`, `GET /health/deep` — liveness/readiness/integrity probes
+- `GET /system/full-status` — everything: hypotheses, research loop, embeddings, data, eligibility block
 - `GET /tasks?limit=N` — recent task queue
-- `GET /task/{id}` — specific task result
+- `GET /task/{id}` — specific task result; `GET /task/{id}/chain` — auto-followup chain
 - `POST /task` — submit research query to AGP pipeline
 - `POST /context/sync` — push session context to Callisto
-- `POST /admin/restart` — graceful restart (watchdog brings it back with new code)
-- `GET /odds/edges` — current cross-book edges
+- `GET /world/{domain}` — query domain memory (FINANCIAL, TECHNICAL, SIGNAL, SYNTHESIS, GENERAL)
+
+Odds, edges, bets:
+- `GET /odds/edges` — current cross-book edges; `GET /edges/live` — live in-game edges
 - `GET /odds/opportunities` — +EV opportunities
 - `GET /odds/movements` — recent line movements
-- `GET /world/{domain}` — query domain memory (FINANCIAL, TECHNICAL, SIGNAL, SYNTHESIS, GENERAL)
+- `GET /odds/scrapers/health` — per-scraper freshness + failure counters
+- `GET /bets/risk-report` — exposure, correlation, drawdown snapshot
+- `GET /bets/clv-report`, `GET /bets/clv-forecast`, `GET /bets/bankroll`
+
+News / signals:
+- `GET /news/impact/recent` — recent news+injury impact scores (PR #13 ingestion loop)
+
+Admin / observability:
+- `POST /admin/restart` — graceful restart (watchdog brings it back with new code)
+- `GET /admin/db/health` — WAL size, checkpoint stats, busy-timeout hits, writer queue
+- `GET /admin/db/migrations` — applied/pending migrations, schema version, checksum drift
+- `GET /metrics` — Prometheus text exposition
+- `GET /metrics/json` — same registry as JSON for ad-hoc curling
+
+Full list: `grep -nE '^@app\.(get|post|put|patch|delete)' api.py` (~200 routes).
 
 ## Key Rules
 - Never bypass AGP for research — submit to /task
