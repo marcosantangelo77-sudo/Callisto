@@ -17,7 +17,9 @@ Blending formula:
 import logging
 import math
 import os
+from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 import aiosqlite
@@ -26,12 +28,45 @@ logger = logging.getLogger("callisto.learned_correlations")
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
-# Minimum observations before learned estimate is used in blending
 MIN_OBSERVATIONS_FOR_BLEND = 10
-# Full data weight achieved at this many observations
 FULL_WEIGHT_AT_N = 100
-# Max CI width before falling back to prior
 MAX_CI_WIDTH = 0.3
+
+SPORT_PRIOR_FALLBACK: dict[str, float] = {
+    "nfl": 0.05,
+    "ncaaf": 0.05,
+    "nba": 0.08,
+    "ncaab": 0.08,
+    "wnba": 0.08,
+    "mlb": 0.03,
+    "nhl": 0.04,
+    "soccer": 0.10,
+}
+DEFAULT_UNKNOWN_SPORT_FALLBACK = 0.0
+
+
+_CORR_HITS: dict[str, int] = defaultdict(int)
+
+
+def record_correlation_hit(source: str) -> None:
+    _CORR_HITS[source] = _CORR_HITS.get(source, 0) + 1
+
+
+def get_correlation_hits() -> dict[str, int]:
+    return dict(_CORR_HITS)
+
+
+def reset_correlation_hits() -> None:
+    _CORR_HITS.clear()
+
+
+def sport_prior_fallback(sport: str) -> float:
+    key = (sport or "").strip().lower()
+    for prefix in ("americanfootball_", "basketball_", "baseball_", "icehockey_"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+            break
+    return SPORT_PRIOR_FALLBACK.get(key, DEFAULT_UNKNOWN_SPORT_FALLBACK)
 
 
 @dataclass
@@ -58,6 +93,8 @@ class LearnedCorrelationStore:
         self.db_path = db_path
         self._db: Optional[aiosqlite.Connection] = None
         self._cache: dict[tuple[str, str, str], CorrelationEstimate] = {}
+        self._last_trained_at: Optional[str] = None
+        self._last_training_observations: int = 0
 
     async def initialize(self) -> None:
         self._db = await aiosqlite.connect(self.db_path)
@@ -182,16 +219,32 @@ class LearnedCorrelationStore:
         est = self._cache.get((sport, market_a, market_b))
         if est is None:
             est = self._cache.get((sport, market_b, market_a))
-        if est is None or est.n < MIN_OBSERVATIONS_FOR_BLEND:
-            return prior
 
-        # Check CI width — too uncertain means fall back to prior
+        if est is None:
+            if prior != 0.0:
+                record_correlation_hit("prior")
+                return prior
+            fb = sport_prior_fallback(sport)
+            record_correlation_hit("fallback")
+            return fb
+
+        if est.n < MIN_OBSERVATIONS_FOR_BLEND:
+            if prior != 0.0:
+                record_correlation_hit("prior")
+                return prior
+            record_correlation_hit("fallback")
+            return sport_prior_fallback(sport)
+
         ci_width = est.ci_high - est.ci_low
         if ci_width > MAX_CI_WIDTH:
-            return prior
+            if prior != 0.0:
+                record_correlation_hit("prior")
+                return prior
+            record_correlation_hit("fallback")
+            return sport_prior_fallback(sport)
 
-        # Bayesian shrinkage: weight learned estimate by sample size
         weight = min(1.0, est.n / FULL_WEIGHT_AT_N)
+        record_correlation_hit("learned")
         return (1 - weight) * prior + weight * est.pearson_r
 
     async def get_all_learned(self) -> list[dict]:
@@ -394,7 +447,6 @@ class LearnedCorrelationStore:
         return observations
 
     def get_stats(self) -> dict:
-        """Return learned correlation statistics."""
         estimates = list(self._cache.values())
         return {
             "total_pairs": len(estimates),
@@ -404,4 +456,101 @@ class LearnedCorrelationStore:
                 round(sum(e.n for e in estimates) / len(estimates), 1)
                 if estimates else 0
             ),
+        }
+
+    def per_sport_metadata(self) -> dict[str, dict]:
+        buckets: dict[str, list[CorrelationEstimate]] = {}
+        for est in self._cache.values():
+            buckets.setdefault(est.sport, []).append(est)
+        out: dict[str, dict] = {}
+        for sport, ests in buckets.items():
+            trained = [e for e in ests if e.n >= MIN_OBSERVATIONS_FOR_BLEND]
+            sample_total = sum(e.n for e in ests)
+            mean_rho = (
+                sum(e.pearson_r for e in trained) / len(trained)
+                if trained else 0.0
+            )
+            out[sport] = {
+                "pairs": len(ests),
+                "trained_pairs": len(trained),
+                "total_observations": sample_total,
+                "mean_correlation": round(mean_rho, 4),
+                "max_n": max((e.n for e in ests), default=0),
+            }
+        return out
+
+    def verify_symmetry(self) -> dict:
+        mismatches: list[dict] = []
+        for (sport, a, b), est in self._cache.items():
+            rev = self._cache.get((sport, b, a))
+            if rev is None:
+                continue
+            if abs(est.pearson_r - rev.pearson_r) > 1e-9:
+                mismatches.append({
+                    "sport": sport,
+                    "pair": f"{a}|{b}",
+                    "forward": round(est.pearson_r, 6),
+                    "reverse": round(rev.pearson_r, 6),
+                })
+        return {
+            "symmetric": not mismatches,
+            "mismatches": mismatches[:10],
+            "total_mismatches": len(mismatches),
+        }
+
+    def metadata(self) -> dict:
+        return {
+            "last_trained_at": self._last_trained_at,
+            "last_training_observations": self._last_training_observations,
+            "min_observations_for_blend": MIN_OBSERVATIONS_FOR_BLEND,
+            "full_weight_at_n": FULL_WEIGHT_AT_N,
+            "max_ci_width": MAX_CI_WIDTH,
+            "per_sport": self.per_sport_metadata(),
+            "correlation_hits": get_correlation_hits(),
+            "symmetry": self.verify_symmetry(),
+        }
+
+    async def train_from_recent_games(
+        self,
+        db: "aiosqlite.Connection",
+        sports: Optional[list[str]] = None,
+        lookback_days: int = 14,
+    ) -> dict:
+        total_obs = 0
+        per_sport: dict[str, int] = {}
+        today = datetime.now(timezone.utc).date()
+        if sports is None:
+            cursor = await db.execute(
+                "SELECT DISTINCT sport FROM game_results WHERE game_date >= date('now', ?)",
+                (f"-{lookback_days} days",),
+            )
+            sports = [r[0] for r in await cursor.fetchall() if r and r[0]]
+        for sport in sports:
+            cursor = await db.execute(
+                "SELECT DISTINCT game_date FROM game_results "
+                "WHERE sport = ? AND game_date >= date('now', ?)",
+                (sport, f"-{lookback_days} days"),
+            )
+            dates = [r[0] for r in await cursor.fetchall() if r and r[0]]
+            sport_obs = 0
+            for d in dates:
+                try:
+                    obs = await self.update_from_game_data(db, sport, d)
+                    sport_obs += obs
+                except Exception as e:
+                    logger.debug(f"training failed for {sport} {d}: {e}")
+            per_sport[sport] = sport_obs
+            total_obs += sport_obs
+        self._last_trained_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self._last_training_observations = total_obs
+        _ = today
+        logger.info(
+            f"Correlation training: {total_obs} observations "
+            f"across {len(per_sport)} sports over {lookback_days}d"
+        )
+        return {
+            "last_trained_at": self._last_trained_at,
+            "total_observations": total_obs,
+            "per_sport_observations": per_sport,
+            "lookback_days": lookback_days,
         }

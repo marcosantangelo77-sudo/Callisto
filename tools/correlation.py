@@ -359,25 +359,33 @@ def get_correlation(
             sport_key = sport_key[len(prefix):]
             break
 
+    from tools.learned_correlations import (
+        record_correlation_hit,
+        sport_prior_fallback,
+    )
+
     matrix = SPORT_CORRELATIONS.get(sport_key)
     if matrix is None:
         logger.warning(f"No correlation matrix for sport '{sport}'. Assuming independence.")
+        record_correlation_hit("fallback")
         return 0.0
 
-    # Check both orderings for hardcoded prior
     prior = matrix.get((norm_a, norm_b))
     if prior is None:
         prior = matrix.get((norm_b, norm_a))
+    has_prior = prior is not None
     if prior is None:
         prior = 0.0
 
-    # Blend with learned estimate if available
-    # Use explicit parameter first, fall back to module-level singleton
     store = learned_store if learned_store is not None else _learned_store
     if store is not None:
         return store.get_blended(sport_key, norm_a, norm_b, prior)
 
-    return prior
+    if has_prior:
+        record_correlation_hit("prior")
+        return prior
+    record_correlation_hit("fallback")
+    return sport_prior_fallback(sport_key)
 
 
 def _american_to_implied(odds: int) -> float:

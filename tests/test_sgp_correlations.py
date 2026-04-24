@@ -40,9 +40,10 @@ def test_reverse_order_lookup():
     assert forward == reverse
 
 
-def test_unknown_pair_returns_zero():
+def test_unknown_pair_falls_back_to_sport_prior():
+    from tools.learned_correlations import sport_prior_fallback
     rho = sc.get_correlation("nfl", "this_doesnt_exist", "neither_does_this")
-    assert rho == 0.0
+    assert rho == sport_prior_fallback("nfl")
 
 
 def test_unknown_sport_returns_zero():

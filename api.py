@@ -183,6 +183,40 @@ order_cron_task: Optional[asyncio.Task] = None
 prop_resolver_task: Optional[asyncio.Task] = None
 order_manager_instance: Optional[OrderManager] = None
 live_state_task: Optional[asyncio.Task] = None
+correlation_learner_task: Optional[asyncio.Task] = None
+
+CORRELATION_LEARN_INTERVAL_SECONDS = int(
+    os.environ.get("CALLISTO_CORR_LEARN_INTERVAL_SECONDS", "3600")
+)
+CORRELATION_LEARN_LOOKBACK_DAYS = int(
+    os.environ.get("CALLISTO_CORR_LEARN_LOOKBACK_DAYS", "14")
+)
+
+
+async def correlation_learning_loop():
+    """Periodically retrain learned correlations from recent completed games.
+
+    Reactive updates via autonomous.py already happen per finished game — this
+    loop provides a backstop refresh so the metadata last_trained_at timestamp
+    stays current and per-sport aggregates are recomputed even when the
+    reactive handler is throttled or missed a window.
+    """
+    await asyncio.sleep(60)
+    while True:
+        try:
+            if learned_correlation_store and learned_correlation_store._db:
+                await learned_correlation_store.train_from_recent_games(
+                    learned_correlation_store._db,
+                    lookback_days=CORRELATION_LEARN_LOOKBACK_DAYS,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"correlation_learning_loop error: {e}")
+        try:
+            await asyncio.sleep(CORRELATION_LEARN_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            raise
 
 
 def _is_internal_query(query: str) -> bool:
@@ -814,7 +848,7 @@ async def order_cron_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle manager."""
-    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task, order_cron_task, order_manager_instance, live_state_collector, live_state_task, prop_resolver_task
+    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task, order_cron_task, order_manager_instance, live_state_collector, live_state_task, prop_resolver_task, correlation_learner_task
 
     # Start memory profiling only when explicitly requested — tracemalloc tracks every
     # allocation in C-level metadata (~50-100 bytes each), which adds 55-110 MB of invisible
@@ -1020,6 +1054,7 @@ async def lifespan(app: FastAPI):
 
     worker_task = asyncio.create_task(task_worker())
     wal_checkpoint_task = asyncio.create_task(wal_checkpoint_loop())
+    correlation_learner_task = asyncio.create_task(correlation_learning_loop())
     # Signal-file consumer — decouples restart from watchdog liveness.
     restart_signal_task = asyncio.create_task(restart_signal_watcher())
     sla_watchdog_task = asyncio.create_task(ingestion_sla_watchdog_loop())
@@ -1088,6 +1123,12 @@ async def lifespan(app: FastAPI):
         prop_resolver_task.cancel()
         try:
             await prop_resolver_task
+        except asyncio.CancelledError:
+            pass
+    if correlation_learner_task:
+        correlation_learner_task.cancel()
+        try:
+            await correlation_learner_task
         except asyncio.CancelledError:
             pass
     if worker_task:
@@ -4043,6 +4084,13 @@ async def full_system_status():
             }
         except Exception as e:
             logger.warning(f"Failed to get system health for full-status: {e}")
+
+    if learned_correlation_store is not None:
+        try:
+            status["correlations"] = learned_correlation_store.metadata()
+        except Exception as e:
+            logger.warning(f"Failed to get correlation metadata for full-status: {e}")
+            status["correlations"] = {"error": f"{e!r}"}
 
     return status
 
