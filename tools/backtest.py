@@ -248,8 +248,11 @@ class BacktestEngine:
                         f"Backtest {hypothesis_id}: clamped MLB start_date to "
                         f"{start_date} (skip spring training)"
                     )
-            except ValueError:
-                pass
+            except ValueError as e:
+                logger.warning(
+                    f"Backtest {hypothesis_id}: MLB start_date parse failed "
+                    f"for {start_date!r}: {e} — leaving start_date unchanged"
+                )
 
         # ── HYPOTHESIS-AWARE FILTERING ──
         # Parse line-based filters from thesis text, model_config, and name (Tier 1)
@@ -808,8 +811,11 @@ class BacktestEngine:
                     if _write_db:
                         try:
                             await _write_db.close()
-                        except Exception:
-                            pass
+                        except Exception as _close_e:
+                            logger.debug(
+                                f"Backtest {run_id}: deferred-write DB close after error "
+                                f"swallowed: {type(_close_e).__name__}: {_close_e}"
+                            )
                     if "locked" in str(_bw_e).lower() and _bt_write_attempt < 4:
                         _wait = min(2 * (2 ** _bt_write_attempt), 15) + _rnd_bt.uniform(0, 1)
                         logger.warning(
@@ -3378,8 +3384,11 @@ class BacktestEngine:
                     factors = json.loads(model_factors)
                     home_team = factors.get("home_team", "")
                     away_team = factors.get("away_team", "")
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.debug(
+                        f"model_factors JSON parse failed (falling back to "
+                        f"game_id split): {type(e).__name__}: {e}"
+                    )
 
             if not home_team or not away_team:
                 continue
@@ -3976,8 +3985,11 @@ class BacktestEngine:
                 try:
                     factors = _json.loads(row[12]) if row[12] else {}
                     books_counts.append(factors.get("books_used", 0))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(
+                        f"paper_signal model_factors parse failed for signal_id "
+                        f"{row[0] if row else '?'}: {type(e).__name__}: {e}"
+                    )
             min_books_seen = min(books_counts) if books_counts else 0
             max_books_seen = max(books_counts) if books_counts else 0
         else:

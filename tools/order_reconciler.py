@@ -887,8 +887,11 @@ async def detect_voided_orders(manager: OrderManager) -> dict:
                         ("void", stake, voided_order.bet_id),
                     )
                     await db.commit()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        f"bets mirror void update failed for bet_id="
+                        f"{voided_order.bet_id}: {type(e).__name__}: {e}"
+                    )
 
             voided.append(order_id)
             try:

@@ -830,8 +830,11 @@ def _scan_line_group(
                 try:
                     dead_num_info["is_dead_number"] = _is_dead_number(best_point, _dn_sport)
                     dead_num_info["key_number_importance"] = _key_number_value(best_point, _dn_sport)
-                except (ValueError, KeyError):
-                    pass
+                except (ValueError, KeyError) as e:
+                    logger.debug(
+                        f"Dead-number info skipped for {_dn_sport} "
+                        f"point={best_point}: {type(e).__name__}: {e}"
+                    )
 
     # Line shopping analysis: compare best vs worst spread across books
     line_shopping_info: dict = {}
@@ -850,8 +853,11 @@ def _scan_line_group(
                         "crossed_key_numbers": lsv.get("crossed_key_numbers", []),
                         "recommendation": lsv.get("recommendation", ""),
                     }
-                except (ValueError, KeyError):
-                    pass
+                except (ValueError, KeyError) as e:
+                    logger.debug(
+                        f"line_shopping_value failed for {_dn_sport} "
+                        f"{best_pt}/{worst_pt}: {type(e).__name__}: {e}"
+                    )
 
     fair_probs = None
     market_hold = None
@@ -861,8 +867,12 @@ def _scan_line_group(
             fair_probs = _nvp(best_line["price"], worst_line["price"])
             dec_odds = [_atd(l["price"]) for l in all_lines[:2]]
             market_hold = round(_ch(dec_odds), 4)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(
+            f"fair_probs/market_hold computation failed for "
+            f"{best_line.get('bookmaker')}/{worst_line.get('bookmaker')}: "
+            f"{type(e).__name__}: {e}"
+        )
 
     edges.append({
         "game": f"{away} @ {home}",
@@ -1475,8 +1485,11 @@ def _compute_market_hold(game: dict, market_key: str) -> dict:
                             "overround": round(calculate_overround(decimal_odds), 4),
                             "hold": round(calculate_hold(decimal_odds), 4),
                         }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(
+            f"overround/hold lookup failed for market_key={market_key!r}: "
+            f"{type(e).__name__}: {e}"
+        )
     return {"overround": None, "hold": None}
 
 

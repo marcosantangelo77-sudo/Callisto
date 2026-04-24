@@ -232,6 +232,7 @@ def _compute_backoff(attempt: int, retry_after: Optional[str]) -> float:
     import random
     if retry_after:
         # Retry-After is either an integer-seconds value or an HTTP date.
+        # If it's an HTTP date (rare), we can't parse it here — fall through to exponential.
         try:
             return min(_BACKOFF_MAX_SECONDS, float(retry_after))
         except (TypeError, ValueError):
@@ -275,8 +276,12 @@ async def _api_get(endpoint: str, params: Optional[dict] = None) -> dict | list:
             body = ""
             try:
                 body = e.response.text[:300]
-            except Exception:
-                pass
+            except Exception as _body_e:
+                # Best-effort: body read can fail on streaming/empty responses.
+                logger.debug(
+                    f"odds_api_io: response body read failed while logging "
+                    f"HTTP {status}: {type(_body_e).__name__}: {_body_e}"
+                )
 
             if status == 429 and attempt < _BACKOFF_MAX_RETRIES:
                 retry_after = e.response.headers.get("Retry-After")
@@ -1354,8 +1359,11 @@ async def get_historical_snapshot(
     if override is not None:
         try:
             minutes_before_commence = int(override)
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                f"CALLISTO_BACKTEST_LEAD_MINUTES={override!r} is not an int — "
+                f"using default {minutes_before_commence}: {e}"
+            )
 
     bm_list = [b.strip() for b in (bookmakers or _SELECTED_BOOKMAKERS).split(",") if b.strip()]
     commence_dt = _parse_iso(commence_time) if commence_time else None

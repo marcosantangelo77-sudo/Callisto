@@ -1206,8 +1206,11 @@ class BetExecutor:
             except Exception:
                 try:
                     await self._db.rollback()
-                except Exception:
-                    pass
+                except Exception as _rb_e:
+                    logger.warning(
+                        f"executor record_bet rollback failed after primary error: "
+                        f"{type(_rb_e).__name__}: {_rb_e}"
+                    )
                 raise
         try:
             from tools.metrics import (
