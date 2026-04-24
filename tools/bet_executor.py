@@ -89,6 +89,76 @@ REGIME_SAFETY_ENABLED = os.getenv("CALLISTO_REGIME_SAFETY", "1") == "1"
 _REGIME_MIN_MULT = 0.1   # never zero-size a live bet; use safety gate for that
 _REGIME_MAX_MULT = 1.5   # cap upside even in the best regime
 
+# --- News-impact sizing multiplier (feat/news-injury-quality) ---
+# If a recent (<24h, decayed_impact-weighted) high-severity news event maps
+# to the same sport/team, nudge the Kelly stake up (fresh under-reaction =
+# model thinks the line is stale) or down (line already moved = news priced
+# in, edge overstated). Bounded tight so the multiplier can't dominate
+# the primary edge/confidence/variance signal.
+NEWS_SIZING_ENABLED = os.getenv("CALLISTO_NEWS_SIZING", "1") == "1"
+_NEWS_MULT_MIN = 0.75    # max haircut when news is stale / line moved
+_NEWS_MULT_MAX = 1.25    # max bump for fresh actionable under-reaction
+_NEWS_LOOKBACK_MIN = int(os.getenv("CALLISTO_NEWS_SIZING_LOOKBACK_MIN", "180"))
+
+
+async def fetch_news_sizing_multiplier(
+    sport: Optional[str],
+    team: Optional[str] = None,
+    player: Optional[str] = None,
+    lookback_minutes: Optional[int] = None,
+) -> float:
+    """Map recent news impact scores to a stake multiplier in [0.75, 1.25].
+
+    Fresh actionable under-reaction with non-stale decayed_impact pushes
+    the multiplier toward 1.25. If the line already moved (line_moved=1)
+    then the news is priced in — we haircut toward 0.75 because the edge
+    the model quoted is likely overstated against current odds.
+
+    Failure modes (no table, no rows, import error) degrade to 1.0 so
+    sizing never fails closed due to this feature. Disable entirely via
+    CALLISTO_NEWS_SIZING=0.
+    """
+    if not NEWS_SIZING_ENABLED or not sport:
+        return 1.0
+    try:
+        from tools.news_impact import get_recent_impact_scores
+        rows = await get_recent_impact_scores(
+            db_path=DB_PATH,
+            sport=sport,
+            team=team,
+            player=player,
+            since_minutes=lookback_minutes or _NEWS_LOOKBACK_MIN,
+            only_actionable=False,
+            limit=20,
+        )
+    except Exception as e:
+        logger.debug(f"news sizing multiplier fetch failed for {sport}: {e}")
+        return 1.0
+    if not rows:
+        return 1.0
+
+    # Use the best (highest decayed_impact) matching row as the anchor.
+    rows.sort(key=lambda r: float(r.get("decayed_impact") or 0.0), reverse=True)
+    top = rows[0]
+    decayed = float(top.get("decayed_impact") or 0.0)
+    is_stale = int(top.get("is_stale") or 0) == 1
+    line_moved = int(top.get("line_moved") or 0) == 1
+    is_actionable = int(top.get("is_actionable") or 0) == 1
+
+    if is_stale or decayed <= 0.0:
+        return 1.0
+
+    # Bump for actionable (confirmed/severe + under-reaction) when line hasn't moved.
+    # Haircut when line has already moved (edge priced in, quoted edge stale).
+    if is_actionable and not line_moved:
+        # Scale bump proportional to decayed_impact: 0.0 → 1.0, 0.25+ → 1.25.
+        bump = min(decayed / 0.25, 1.0) * (_NEWS_MULT_MAX - 1.0)
+        return 1.0 + bump
+    if line_moved and decayed >= 0.05:
+        haircut = min(decayed / 0.25, 1.0) * (1.0 - _NEWS_MULT_MIN)
+        return max(_NEWS_MULT_MIN, 1.0 - haircut)
+    return 1.0
+
 
 def _clamped_regime_multiplier(sport: str) -> float:
     """Fetch current_regime_multiplier(sport) and clamp to [_REGIME_MIN_MULT, _REGIME_MAX_MULT].
@@ -290,6 +360,7 @@ class BetExecutor:
         confidence: float = 0.6,
         p_push: float = 0.0,
         variance_estimate: float = None,
+        news_multiplier: float = 1.0,
     ) -> float:
         """
         Compute bet stake using dynamic Kelly with AGP confidence tiers,
@@ -332,6 +403,14 @@ class BetExecutor:
             stake_fraction = min(adjusted, MAX_BET_PCT)
             stake = round(bankroll * stake_fraction, 2)
 
+            # News multiplier: applied after Kelly, before floor. Clamped
+            # to [_NEWS_MULT_MIN, _NEWS_MULT_MAX] so it can't dominate.
+            nm = max(_NEWS_MULT_MIN, min(_NEWS_MULT_MAX, float(news_multiplier)))
+            if nm != 1.0:
+                stake = round(stake * nm, 2)
+                # Re-check MAX_BET_PCT ceiling after the bump.
+                stake = min(stake, round(bankroll * MAX_BET_PCT, 2))
+
             if stake < MIN_BET_AMOUNT:
                 return 0.0
             return stake
@@ -348,6 +427,12 @@ class BetExecutor:
         )
 
         stake = result["stake"]
+
+        # News multiplier: applied after Kelly, before cap/floor. Clamped
+        # so a misbehaving upstream value can't blow past portfolio caps.
+        nm = max(_NEWS_MULT_MIN, min(_NEWS_MULT_MAX, float(news_multiplier)))
+        if nm != 1.0:
+            stake = round(stake * nm, 2)
 
         # Additional cap at max bet percentage of bankroll
         max_stake = bankroll * MAX_BET_PCT
