@@ -256,8 +256,11 @@ class PipelineIntegrityChecker:
                         if updated.tzinfo is None:
                             updated = updated.replace(tzinfo=timezone.utc)
                         oldest_age_hours = (datetime.now(timezone.utc) - updated).total_seconds() / 3600
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as e:
+                        logger.debug(
+                            f"integrity: paper_signal updated timestamp parse "
+                            f"failed for {oldest[2]!r}: {e}"
+                        )
 
                 if total_trades == 0 and oldest_age_hours > PAPER_TRADE_STALL_HOURS:
                     self._issues.append(IntegrityIssue(
@@ -671,8 +674,11 @@ class PipelineIntegrityChecker:
                                         "backtest_period_start": backtest_start,
                                     },
                                 ))
-                        except ValueError:
-                            pass
+                        except ValueError as e:
+                            logger.debug(
+                                f"integrity: training/backtest period parse failed "
+                                f"for hypothesis {h_id}: {e}"
+                            )
                     elif status in ("backtesting", "paper_trading", "live"):
                         # Active hypothesis with no temporal metadata at all
                         if not training_end:

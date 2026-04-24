@@ -2418,8 +2418,11 @@ class HypothesisManager:
                 try:
                     from tools import knowledge_wiki as _kw
                     _kw._wiki_writes_failed += 1
-                except Exception:
-                    pass
+                except Exception as _kw_e:
+                    logger.debug(
+                        f"knowledge_wiki counter bump failed: "
+                        f"{type(_kw_e).__name__}: {_kw_e}"
+                    )
 
             results.append(outcome)
 

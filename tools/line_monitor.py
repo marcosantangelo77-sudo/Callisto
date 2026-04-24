@@ -603,8 +603,8 @@ class LineMonitor:
         if self._ws_client is not None:
             try:
                 base.update({"ws_client": self._ws_client.get_status()})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"ws_client.get_status() failed: {type(e).__name__}: {e}")
         return base
 
     async def wait_for_drain(self, timeout: float = 60) -> bool:
@@ -1393,8 +1393,11 @@ class LineMonitor:
                         await get_event_bus().publish(EVENT_LINE_MOVED, {
                             "sport": sport, **mov,
                         })
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            f"event_bus EVENT_LINE_MOVED publish failed for {sport}: "
+                            f"{type(e).__name__}: {e}"
+                        )
 
             # Detect sharp money (one book moved, others didn't)
             sharp_signals = detect_sharp_money(old_snapshot, new_snapshot)
@@ -1415,8 +1418,11 @@ class LineMonitor:
                                 moved_books=moved,
                                 stale_books=stale,
                             )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(
+                                f"telegram alert_sharp_move failed for {sport} "
+                                f"{sig.get('market', '?')}: {type(e).__name__}: {e}"
+                            )
                 # Cap alerts to prevent unbounded growth
                 if len(self._alerts) > 100:
                     self._alerts = self._alerts[-100:]
@@ -1928,10 +1934,11 @@ class LineMonitor:
                         "SELECT COUNT(*) FROM closing_lines"
                     )).fetchone()
                     db_closing_lines = row3[0] if row3 else 0
-                except Exception:
-                    pass  # Table may not exist yet
-        except Exception:
-            pass
+                except Exception as e:
+                    # Table may not exist yet in fresh DBs — debug only.
+                    logger.debug(f"closing_lines count query failed: {type(e).__name__}: {e}")
+        except Exception as e:
+            logger.debug(f"line_monitor get_status DB counts failed: {type(e).__name__}: {e}")
 
         return {
             "running": self._running,

@@ -552,8 +552,11 @@ class AutonomousLoop:
                     try:
                         result["is_dead_number"] = _is_dead_number(best_point, _dn_sport)
                         result["key_number_value"] = _key_number_value(best_point, _dn_sport)
-                    except (ValueError, KeyError):
-                        pass
+                    except (ValueError, KeyError) as e:
+                        logger.debug(
+                            f"Dead-number enrichment skipped for {_dn_sport} "
+                            f"point={best_point}: {type(e).__name__}: {e}"
+                        )
 
         # --- Public side estimation and contrarian value ---
         try:
@@ -741,8 +744,11 @@ class AutonomousLoop:
                             if ct_dt.tzinfo is None:
                                 ct_dt = ct_dt.replace(tzinfo=timezone.utc)
                             hours_to_game = max(0, (ct_dt - datetime.now(timezone.utc)).total_seconds() / 3600)
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as e:
+                            logger.debug(
+                                f"hours_to_game parse failed for commence_time={ct!r}: "
+                                f"{type(e).__name__}: {e}"
+                            )
 
                     # Score confidence (psychology + line analysis + injury)
                     conf = score_edge(
@@ -900,8 +906,11 @@ class AutonomousLoop:
                 f"BET TIMING: {timing.get('optimal_window', 'N/A')} "
                 f"(estimated edge: {timing.get('historical_edge_pct', 0):.1f}%)"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                f"optimal_bet_timing failed for {sport}/{market}: "
+                f"{type(e).__name__}: {e}"
+            )
 
         la_section = (
             f"\nLine Analysis Signals:\n" + "\n".join(f"  * {l}" for l in la_lines) + "\n"
@@ -1998,8 +2007,11 @@ class ResearchLoop:
             bus = get_event_bus()
             bus.unsubscribe(EVENT_GAME_COMPLETED, self._on_game_completed)
             bus.unsubscribe(EVENT_GAME_LINEUP_WINDOW, self._on_game_lineup_window)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                f"Event bus unsubscribe failed during shutdown: "
+                f"{type(e).__name__}: {e}"
+            )
         # Record final downtime stats
         await self._downtime_tracker.record_to_hermes()
         logger.info(
@@ -2175,8 +2187,11 @@ class ResearchLoop:
                         )
                         rejected += 1
                         self._rejections += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            f"Deferred deep_work reject failed for {hid}: "
+                            f"{type(e).__name__}: {e}"
+                        )
                 created = 0
                 for nh in parsed.get("new_hypotheses", []):
                     try:
@@ -2207,8 +2222,12 @@ class ResearchLoop:
                             model_config=_ddw_config,
                         )
                         created += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            f"Deferred deep_work create_hypothesis failed for "
+                            f"{nh.get('name', 'deferred_deep')}: "
+                            f"{type(e).__name__}: {e}"
+                        )
                 if rejected or created:
                     self._hypotheses_generated += created
                     logger.info(
@@ -2251,8 +2270,11 @@ class ResearchLoop:
                         )
                         rejected += 1
                         self._rejections += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            f"Deferred interpret reject failed for {hid}: "
+                            f"{type(e).__name__}: {e}"
+                        )
                 modified = 0
                 for mod in parsed.get("modify", []):
                     try:
@@ -2265,8 +2287,11 @@ class ResearchLoop:
                             )
                             await db.commit()
                             modified += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            f"Deferred interpret modify threshold failed for "
+                            f"{mod.get('id')}: {type(e).__name__}: {e}"
+                        )
                 if rejected or modified:
                     logger.info(
                         f"Deferred drain interpret: rejected {rejected}, modified {modified}"
@@ -2285,8 +2310,11 @@ class ResearchLoop:
                                  imp.get("suggestion", ""), imp.get("priority", "medium")),
                             )
                             stored += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            f"Deferred system_improvement insert failed: "
+                            f"{type(e).__name__}: {e}"
+                        )
                 if stored and db:
                     await db.commit()
                     logger.info(f"Deferred drain: stored {stored} system improvements")
@@ -2788,16 +2816,16 @@ class ResearchLoop:
             try:
                 from tools.pipeline_integrity import get_checker
                 get_checker().record_phase_result("self_repair", True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"pipeline_integrity record_phase_result failed (self_repair ok): {e}")
 
         except Exception as e:
             logger.error(f"Self-repair phase failed: {e}", exc_info=True)
             try:
                 from tools.pipeline_integrity import get_checker
                 get_checker().record_phase_result("self_repair", False)
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f"pipeline_integrity record_phase_result failed (self_repair fail): {e2}")
 
     async def _phase_self_diagnose(self) -> None:
         """
@@ -2967,8 +2995,10 @@ class ResearchLoop:
                         )
                         logger.warning(msg)
                         issues.append({"key": issue_key, "severity": "WARNING", "message": msg})
-                except ValueError:
-                    pass
+                except ValueError as e:
+                    logger.debug(
+                        f"DIAG: game_contexts timestamp parse failed for {row[0]!r}: {e}"
+                    )
             else:
                 issue_key = "no_game_contexts"
                 msg = "DIAG: no game_contexts found at all — data collection has never succeeded"
@@ -2995,8 +3025,8 @@ class ResearchLoop:
                             )
                             logger.warning(msg)
                             issues.append({"key": issue_key, "severity": "WARNING", "message": msg})
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as e:
+                        logger.debug(f"DIAG: parse of odds_snapshots timestamp {row[0]!r} failed: {e}")
             except Exception as e:
                 # odds_snapshots table may be in a different DB (line_monitor's)
                 logger.info(f"DIAG: odds_snapshots freshness check skipped: {e}")
@@ -3016,13 +3046,15 @@ class ResearchLoop:
             if now - self._last_claude_call < CLAUDE_ESCALATION_COOLDOWN:
                 logger.debug("DIAG: skipping Claude escalation — cooldown active")
             elif self._claude_ok():
-                # Load error patterns for institutional memory
+                # Load error patterns for institutional memory (optional file — missing is OK)
                 _error_patterns = ""
                 try:
                     with open("memory/error_patterns.md", "r") as f:
                         _error_patterns = f.read()[:1500]
-                except Exception:
+                except FileNotFoundError:
                     pass
+                except OSError as e:
+                    logger.debug(f"error_patterns.md read failed: {type(e).__name__}: {e}")
 
                 diag_report = (
                     "CALLISTO SELF-DIAGNOSTIC — CRITICAL ISSUES DETECTED\n\n"
@@ -3623,8 +3655,12 @@ class ResearchLoop:
                         existing_names = await self.hypothesis_manager.get_all_names()
                         if hypo_name in existing_names:
                             continue
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            f"hypothesis_manager.get_all_names() failed while checking "
+                            f"duplicate injury hypothesis {hypo_name}: "
+                            f"{type(e).__name__}: {e}"
+                        )
 
                     ppg_inc = stat_chg.get("ppg_increase", stat_chg.get("projected_ppg_increase", 0))
                     description = (
@@ -4291,8 +4327,11 @@ class ResearchLoop:
                         logger.info(
                             f"Research: template gen skipping sports with <{MIN_GAMES_FOR_HYPOTHESIS} games: {_skipped}"
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        f"Template gen eligibility check failed (falling back to all "
+                        f"RESEARCH_SPORTS): {type(e).__name__}: {e}"
+                    )
             logger.info("Research: using template fallback for hypothesis generation")
             for sport in _template_eligible:
                 try:
@@ -4436,8 +4475,11 @@ class ResearchLoop:
                                 f"STALE: {table} last update {age_hours:.1f}h ago "
                                 f"(threshold: {max_hours}h)"
                             )
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as e:
+                        logger.debug(
+                            f"Validation: freshness parse failed for {table} "
+                            f"({row[0]!r}): {e}"
+                        )
 
         except Exception as e:
             logger.debug(f"Validation phase error: {e}")
@@ -4458,8 +4500,11 @@ class ResearchLoop:
                         confidence=0.9,
                         source="pipeline_validator",
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    f"Hermes record_learning for pipeline_validation failed: "
+                    f"{type(e).__name__}: {e}"
+                )
 
             # Record sentinel flags for anomaly tracking
             try:
@@ -4471,8 +4516,11 @@ class ResearchLoop:
                         description=issue,
                         severity=severity,
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    f"record_sentinel_flag for pipeline_validation failed: "
+                    f"{type(e).__name__}: {e}"
+                )
 
     async def _phase_backtest(self) -> None:
         """Backtest draft hypotheses — enforcing temporal isolation.
@@ -4864,8 +4912,11 @@ class ResearchLoop:
                         await self.hypothesis_manager.update_status(
                             h["hypothesis_id"], "draft", "auto:duplicate_backtest"
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to revert duplicate hypothesis {h['hypothesis_id']} "
+                            f"back to draft: {type(e).__name__}: {e}"
+                        )
                     continue
 
                 # Handle spring training — don't penalize, just skip until season starts
@@ -5015,8 +5066,12 @@ class ResearchLoop:
                     f"TEMPORAL OVERLAP: backtest starts {bs} but training ends {te}. "
                     f"Backtest results are contaminated by training data."
                 )
-        except ValueError:
-            pass
+        except ValueError as e:
+            # Malformed training/backtest dates: can't verify isolation — surface it.
+            logger.warning(
+                f"Temporal isolation check: unparseable dates "
+                f"training_end={training_end!r} backtest_start={backtest_start!r}: {e}"
+            )
 
         return None
 
@@ -6036,18 +6091,23 @@ class ResearchLoop:
                     entry["z_score"] = sig_result.get("z_score", 0)
                     entry["p_value"] = sig_result.get("p_value", 1.0)
                     entry["significant"] = sig_result.get("significant", False)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        f"local_significance_test failed for hypothesis "
+                        f"{entry.get('id')}: {type(e).__name__}: {e}"
+                    )
 
             hypo_data.append(entry)
 
-        # Load error patterns for institutional memory
+        # Load error patterns for institutional memory (optional file — missing is OK)
         error_patterns = ""
         try:
             with open("memory/error_patterns.md", "r") as f:
                 error_patterns = f.read()[:1500]  # Cap at 1500 chars to save context
-        except Exception:
+        except FileNotFoundError:
             pass
+        except OSError as e:
+            logger.debug(f"error_patterns.md read failed: {type(e).__name__}: {e}")
 
         prompt = (
             f"CALLISTO BACKTEST INTERPRETATION — Cycle #{self._cycles}\n\n"
@@ -6097,8 +6157,11 @@ class ResearchLoop:
                         )
                         rejected += 1
                         self._rejections += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            f"local_fallback_interpret reject failed for {hid}: "
+                            f"{type(e).__name__}: {e}"
+                        )
                 if rejected:
                     logger.info(
                         f"Research: local fallback interpretation rejected {rejected} "
@@ -6364,8 +6427,11 @@ class ResearchLoop:
                             f"_phase_review_live: held {name} — wiki recovery "
                             f"precedents: {[a.get('topic') for a in recov]}"
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(
+                        f"_phase_review_live: wiki priors lookup failed for "
+                        f"{r.get('hypothesis_id')}: {type(e).__name__}: {e}"
+                    )
 
     async def _phase_paper_trade(self) -> None:
         """Generate paper trade signals for promoted hypotheses.
@@ -6672,8 +6738,11 @@ class ResearchLoop:
                     cursor = await db.execute("SELECT COUNT(*), SUM(CASE WHEN signals_generated > 0 THEN 1 ELSE 0 END) FROM backtest_runs")
                     row = await cursor.fetchone()
                     bt_total, bt_signals = row[0] or 0, row[1] or 0
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(
+                        f"deep_work backtest_runs summary query failed (using 0/0): "
+                        f"{type(e).__name__}: {e}"
+                    )
 
                 local_prompt = (
                     f"You are diagnosing a sports betting research pipeline.\n"
@@ -6712,8 +6781,11 @@ class ResearchLoop:
                         )
                         rejected += 1
                         self._rejections += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            f"local_fallback_deep_work reject failed for {hid}: "
+                            f"{type(e).__name__}: {e}"
+                        )
                 if rejected:
                     logger.info(f"Research: local fallback rejected {rejected} hypotheses")
             except Exception as e:
@@ -7144,8 +7216,8 @@ class ResearchLoop:
         try:
             from tools.pipeline_integrity import get_checker
             get_checker().record_phase_result("granger_analysis", True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"pipeline_integrity record_phase_result failed (granger_analysis): {e}")
 
     async def _phase_regime_analysis(self) -> None:
         """Regime analysis phase — detect regime changes, recency bias, mean reversion.
@@ -7268,8 +7340,8 @@ class ResearchLoop:
         try:
             from tools.pipeline_integrity import get_checker
             get_checker().record_phase_result("regime_analysis", True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"pipeline_integrity record_phase_result failed (regime_analysis): {e}")
 
     def get_regime_for_team(self, sport: str, team_name: str) -> Optional[dict]:
         """Look up cached regime analysis for a team.
@@ -7322,15 +7394,15 @@ class ResearchLoop:
             try:
                 from tools.pipeline_integrity import get_checker
                 get_checker().record_phase_result("knowledge_compile", True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"pipeline_integrity record_phase_result failed (knowledge_compile ok): {e}")
         except Exception as e:
             logger.warning(f"Knowledge compile phase failed: {e}")
             try:
                 from tools.pipeline_integrity import get_checker
                 get_checker().record_phase_result("knowledge_compile", False)
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f"pipeline_integrity record_phase_result failed (knowledge_compile fail): {e2}")
 
     async def _phase_knowledge_lint(self) -> None:
         """Knowledge wiki lint — detect contradictions, stale claims, orphans.
@@ -7366,21 +7438,24 @@ class ResearchLoop:
                         f"Stale: {stats.get('stale_articles', 0)}, "
                         f"Orphans: {stats.get('orphan_articles', 0)}"
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        f"telegram alert for wiki lint contradictions failed: "
+                        f"{type(e).__name__}: {e}"
+                    )
 
             try:
                 from tools.pipeline_integrity import get_checker
                 get_checker().record_phase_result("knowledge_lint", True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"pipeline_integrity record_phase_result failed (knowledge_lint ok): {e}")
         except Exception as e:
             logger.warning(f"Knowledge lint phase failed: {e}")
             try:
                 from tools.pipeline_integrity import get_checker
                 get_checker().record_phase_result("knowledge_lint", False)
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f"pipeline_integrity record_phase_result failed (knowledge_lint fail): {e2}")
 
     async def _phase_system_improvement(self) -> None:
         """Self-improvement phase — runs every SYSTEM_IMPROVEMENT_INTERVAL cycles.
@@ -7610,8 +7685,11 @@ class ResearchLoop:
                     source_cnt = (await (await db.execute(f"SELECT COUNT(*) FROM {source_query}")).fetchone())[0]
                     if target_cnt == 0 and source_cnt > 0:
                         findings.append(f"ORPHAN: {target} empty — {msg}")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(
+                        f"Watchdog: orphan check failed for {target} vs "
+                        f"{source_query}: {type(e).__name__}: {e}"
+                    )
 
             # 2. Feature coverage audit — enrichment rate
             try:
@@ -7628,8 +7706,8 @@ class ResearchLoop:
                         f"COVERAGE: Only {enriched}/{total} ({enriched/total:.0%}) "
                         f"recent games enriched with rest_days"
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Watchdog: rest_days coverage audit failed: {type(e).__name__}: {e}")
 
             # 3. Signal quality audit — check for phantom signals
             try:
@@ -7638,8 +7716,8 @@ class ResearchLoop:
                 )).fetchone())[0]
                 if phantom > 0:
                     findings.append(f"PHANTOM: {phantom} signals with >20% edge still in DB")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Watchdog: phantom signal audit failed: {type(e).__name__}: {e}")
 
         except Exception as e:
             logger.debug(f"System watchdog error: {e}")
@@ -7659,8 +7737,11 @@ class ResearchLoop:
                         confidence=0.9,
                         source="system_watchdog",
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    f"Hermes record_learning for watchdog findings failed: "
+                    f"{type(e).__name__}: {e}"
+                )
         else:
             logger.info("System watchdog: all checks passed")
 
@@ -7912,8 +7993,8 @@ class ResearchLoop:
             work_queue_status = asyncio.get_event_loop().run_until_complete(
                 self._work_queue.get_status()
             ) if not asyncio.get_event_loop().is_running() else {}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"get_status: work_queue status fetch failed: {type(e).__name__}: {e}")
 
         return {
             "running": self._running,

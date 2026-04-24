@@ -340,8 +340,12 @@ class DataCollector:
                             rest_days = (game_dt - prev_date).days
                             context[f"{side}_rest_days"] = rest_days
                             context[f"{side}_b2b"] = rest_days <= 1
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as e:
+                            logger.debug(
+                                f"rest_days parse failed for {side} "
+                                f"prev_date={prev_row[0][:10]!r} game_date={game_date_fmt!r}: "
+                                f"{type(e).__name__}: {e}"
+                            )
             except Exception as e:
                 logger.debug(f"Rest day computation failed: {e}")
 
@@ -399,8 +403,11 @@ class DataCollector:
                         "home_team": home_team, "away_team": away_team,
                         "home_score": home_score, "away_score": away_score,
                     })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        f"event_bus EVENT_GAME_COMPLETED publish failed for "
+                        f"{sport}/{event_id}: {type(e).__name__}: {e}"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to store game {event_id}: {e}")
 
@@ -597,13 +604,19 @@ class DataCollector:
                 parts = str(min_str).split(":")
                 try:
                     minutes = int(parts[0]) + int(parts[1]) / 60
-                except (ValueError, IndexError):
-                    pass
+                except (ValueError, IndexError) as e:
+                    logger.debug(
+                        f"minutes parse (MM:SS) failed for {min_str!r}: "
+                        f"{type(e).__name__}: {e}"
+                    )
             else:
                 try:
                     minutes = float(min_str)
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as e:
+                    logger.debug(
+                        f"minutes parse (float) failed for {min_str!r}: "
+                        f"{type(e).__name__}: {e}"
+                    )
 
             for espn_key, stat_type in mappings.items():
                 if espn_key in stat_map and stat_type != "minutes":
