@@ -570,6 +570,11 @@ class HypothesisManager:
                 )
                 await self._db.commit()
                 logger.info(f"Hypothesis created: {hid} — {name}")
+                try:
+                    from tools.metrics import record_hypothesis_created
+                    record_hypothesis_created(sport)
+                except Exception:
+                    pass
                 return hid
             except Exception as e:
                 if "locked" in str(e).lower() and attempt < 7:
@@ -690,6 +695,19 @@ class HypothesisManager:
                     f"Hypothesis {hypothesis_id} → {new_status} (by {promoted_by}, expected={expected_status!r})"
                 )
                 _fire_sharpening_hook(self, hypothesis_id, expected_status, new_status)
+                try:
+                    from tools.metrics import (
+                        record_hypothesis_promoted,
+                        record_hypothesis_rejected,
+                    )
+                    if new_status == "rejected":
+                        record_hypothesis_rejected(promoted_by or "auto_promote")
+                    else:
+                        record_hypothesis_promoted(
+                            expected_status or "unknown", new_status,
+                        )
+                except Exception:
+                    pass
             return {
                 "hypothesis_id": hypothesis_id,
                 "new_status": new_status,
@@ -706,6 +724,17 @@ class HypothesisManager:
         await commit_with_retry(self._db, operation="hypothesis update_status")
         logger.info(f"Hypothesis {hypothesis_id} → {new_status} (by {promoted_by})")
         _fire_sharpening_hook(self, hypothesis_id, prev_status, new_status)
+        try:
+            from tools.metrics import (
+                record_hypothesis_promoted,
+                record_hypothesis_rejected,
+            )
+            if new_status == "rejected":
+                record_hypothesis_rejected(promoted_by or "manual")
+            else:
+                record_hypothesis_promoted(prev_status or "unknown", new_status)
+        except Exception:
+            pass
         return {"hypothesis_id": hypothesis_id, "new_status": new_status, "changed": True}
 
     # ── STATISTICAL EVALUATION ──

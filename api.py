@@ -51,6 +51,11 @@ from tools.order_manager import (
     detect_voided_orders,
     get_manager as _get_order_manager,
 )
+from tools.metrics import (
+    get_registry as _metrics_registry,
+    observe_task_duration as _metrics_observe_task_duration,
+    record_task_submission as _metrics_record_task_submission,
+)
 
 load_dotenv()
 
@@ -772,6 +777,7 @@ async def task_worker():
             task_id = task["task_id"]
             query = task["query"]
             skip_search = _is_internal_query(query)
+            _worker_pickup_ts = time.time()
 
             # Classify and resolve per-task budget. The classifier is
             # keyword-based; miscategorizations merely spend extra wall-
@@ -789,6 +795,12 @@ async def task_worker():
             if research_loop and research_loop._local_only:
                 logger.info(f"Task {task_id} skipped — local_only mode, orchestrator would call Claude")
                 await queue.fail_task(task_id, "local_only mode — Claude unavailable")
+                try:
+                    _metrics_observe_task_duration(
+                        "failed", max(0.0, time.time() - _worker_pickup_ts)
+                    )
+                except Exception:
+                    pass
                 continue
 
             try:
@@ -800,6 +812,12 @@ async def task_worker():
                 )
                 session_id = result.get("session_id")
                 await queue.complete_task(task_id, result, session_id=session_id)
+                try:
+                    _metrics_observe_task_duration(
+                        "completed", float(telemetry.get("elapsed_s") or 0.0)
+                    )
+                except Exception:
+                    pass
                 logger.info(
                     f"Task {task_id} completed in {telemetry['elapsed_s']:.1f}s "
                     f"(type={task_type.value}, extensions={telemetry['extensions']}), "
@@ -849,6 +867,12 @@ async def task_worker():
                     "error": err_msg,
                 }
                 await queue.timeout_task(task_id, err_msg, result=partial)
+                try:
+                    _metrics_observe_task_duration(
+                        "timeout", float(t.get("elapsed_s") or (time.time() - _worker_pickup_ts))
+                    )
+                except Exception:
+                    pass
             except asyncio.TimeoutError:
                 # Fallback path — shouldn't happen since _run_session_with_adaptive_timeout
                 # wraps into _AdaptiveTimeout, but be defensive.
@@ -858,9 +882,21 @@ async def task_worker():
                 )
                 logger.error(f"Task {task_id} TIMEOUT (bare): {err_msg}")
                 await queue.timeout_task(task_id, err_msg)
+                try:
+                    _metrics_observe_task_duration(
+                        "timeout", max(0.0, time.time() - _worker_pickup_ts)
+                    )
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error(f"Task {task_id} failed: {e}", exc_info=True)
                 await queue.fail_task(task_id, str(e))
+                try:
+                    _metrics_observe_task_duration(
+                        "failed", max(0.0, time.time() - _worker_pickup_ts)
+                    )
+                except Exception:
+                    pass
 
         except asyncio.CancelledError:
             break
@@ -1401,9 +1437,18 @@ async def submit_task(
 
         task_id = await queue.submit_task(submission.query, submission.priority)
 
+        try:
+            _metrics_record_task_submission(submission.priority, source="api")
+        except Exception:
+            pass
+
         if short_circuit_result is not None:
             try:
                 await queue.complete_task(task_id, short_circuit_result)
+                try:
+                    _metrics_observe_task_duration("short_circuit", 0.0)
+                except Exception:
+                    pass
                 logger.info(
                     f"Task {task_id} SHORT-CIRCUITED via wiki "
                     f"(topic={short_circuit_result.get('wiki_topic')}, "
@@ -4172,6 +4217,66 @@ async def full_system_status():
             logger.warning(f"Failed to get system health for full-status: {e}")
 
     return status
+
+
+# ---------------------------------------------------------------------------
+# Observability — Prometheus-text + JSON metrics exposition
+# ---------------------------------------------------------------------------
+
+@app.get("/metrics")
+async def metrics_prometheus():
+    """Prometheus text exposition format, version 0.0.4.
+
+    Intentionally unauthenticated on loopback (same treatment as /health):
+    metrics are for local scrapers and the ops dashboard. If you expose
+    the API over a network, gate this at the reverse proxy.
+    """
+    from fastapi.responses import Response
+    # Best-effort live gauges — refresh right before serving.
+    try:
+        from tools.metrics import set_db_connection_count
+        # Count tracked writers / common open handles. aiosqlite doesn't
+        # expose a global registry, so this is a cheap heuristic from the
+        # WriteCoordinator stats where present.
+        open_conns = 0
+        try:
+            from tools.db_writer import all_stats as _wstats
+            for coord in _wstats() or []:
+                if coord.get("running"):
+                    open_conns += 1
+        except Exception:
+            pass
+        set_db_connection_count(open_conns)
+    except Exception:
+        pass
+    try:
+        if queue is not None and getattr(queue, "_db", None) is not None:
+            try:
+                row = await queue._db.execute_fetchall(
+                    """SELECT status, COUNT(*)
+                         FROM task_queue
+                        WHERE status IN ('PENDING','PROCESSING')
+                        GROUP BY status"""
+                )
+                # No dedicated gauge for queue depth yet — kept here as a
+                # future-extension hook; omitted from the core metrics list
+                # to avoid double-counting the `status`-only histograms.
+                _ = row
+            except Exception:
+                pass
+    except Exception:
+        pass
+    body = _metrics_registry().render_prometheus()
+    return Response(
+        content=body,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
+@app.get("/metrics/json")
+async def metrics_json():
+    """Structured JSON snapshot of every metric — consumed by the ops dashboard."""
+    return _metrics_registry().render_json()
 
 
 # ---------------------------------------------------------------------------

@@ -138,6 +138,26 @@ async def _write_run_start(source: str, started_at: str) -> Optional[int]:
         return None
 
 
+def _emit_metrics(
+    source: str, status: str, duration_ms: int, reason: Optional[str] = None,
+) -> None:
+    """Mirror terminal-status tags into the in-process metrics registry.
+
+    Isolated in its own helper so the wrapped ingestion function never sees
+    a metrics-registry crash — the outer ``except Exception`` here is the
+    same belt-and-braces guarantee as the DB-write paths above.
+    """
+    try:
+        from tools.metrics import (
+            observe_scraper_latency,
+            record_ingestion_result,
+        )
+        observe_scraper_latency(source, duration_ms / 1000.0)
+        record_ingestion_result(source, status, reason)
+    except Exception:
+        logger.debug("metrics emit skipped", exc_info=True)
+
+
 async def _write_run_finish(
     run_id: Optional[int],
     source: str,
@@ -244,6 +264,7 @@ def tracked_ingestion(
                     run_id, resolved_source, started_at, status, 0, duration_ms,
                     error_class, error_message,
                 )
+                _emit_metrics(resolved_source, status, duration_ms, error_class)
                 raise
             except asyncio.CancelledError:
                 # Cooperative cancel — record as such, then propagate.
@@ -252,6 +273,7 @@ def tracked_ingestion(
                     run_id, resolved_source, started_at, "failed", 0, duration_ms,
                     "CancelledError", "cancelled",
                 )
+                _emit_metrics(resolved_source, "failed", duration_ms, "CancelledError")
                 raise
             except Exception as e:
                 status = "failed"
@@ -262,6 +284,7 @@ def tracked_ingestion(
                     run_id, resolved_source, started_at, status, 0, duration_ms,
                     error_class, error_message,
                 )
+                _emit_metrics(resolved_source, status, duration_ms, error_class)
                 raise
 
             # Function returned normally. Inspect the payload to distinguish
@@ -285,6 +308,9 @@ def tracked_ingestion(
             await _write_run_finish(
                 run_id, resolved_source, started_at, status, rows, duration_ms,
                 error_class, error_message, extra,
+            )
+            _emit_metrics(
+                resolved_source, status, duration_ms, error_class or error_message,
             )
             return result
 
