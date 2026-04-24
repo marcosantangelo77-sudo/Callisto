@@ -1031,6 +1031,15 @@ async def lifespan(app: FastAPI):
     # Startup — ensure DB schema is up to date (now uses patched aiosqlite).
     await ensure_schema()
 
+    # SECURITY (audit 2026-04-23): best-effort tighten DB / credential file
+    # perms to owner-only. No-op on Windows when chmod isn't meaningful.
+    try:
+        from tools.file_perms import harden_paths
+        harden_paths([DB_PATH, "memory/callisto.db-wal", "memory/callisto.db-shm",
+                      ".env", "credentials.json"])
+    except Exception as _perm_err:
+        logger.debug(f"file perm hardening skipped: {_perm_err!r}")
+
     # Followup hardening columns (feat/auto-followup-hardening).
     # Adds followup_depth / parent_task_id / root_task_id / cost_usd to
     # task_queue so _maybe_auto_followup can enforce depth + budget caps
@@ -1805,6 +1814,9 @@ async def get_snapshots(sport: str, limit: int = 10):
 @app.post("/odds/snapshot/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def force_snapshot(sport: str):
     """Force an immediate odds snapshot for a sport."""
+    from tools.sport_validation import is_allowed_sport
+    if not is_allowed_sport(sport):
+        raise HTTPException(status_code=400, detail=f"Unsupported sport '{sport}'")
     result = await line_monitor.force_snapshot(sport)
     return {
         "sport": sport,
@@ -1973,6 +1985,9 @@ async def parlay_scan(sport: str):
     the correlation engine (build_correlated_parlay) to find SGP edges where
     books misprice correlated legs as independent.
     """
+    from tools.sport_validation import is_allowed_sport
+    if not is_allowed_sport(sport):
+        raise HTTPException(status_code=400, detail=f"Unsupported sport '{sport}'")
     from tools.odds_api import get_odds as _get_odds, get_alternate_lines as _get_alt
     from tools.parlay_scanner import find_correlated_parlay_edges
     from tools.correlation import build_correlated_parlay

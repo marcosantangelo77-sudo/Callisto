@@ -325,8 +325,11 @@ def build_dashboard_subapp(
         host = request.client.host if request.client else ""
         if host in ("127.0.0.1", "::1", "localhost"):
             return await call_next(request)
-        token = request.headers.get("X-Dashboard-Token") or request.query_params.get("token")
-        if token != DASHBOARD_TOKEN:
+        token = request.headers.get("X-Dashboard-Token") or request.query_params.get("token") or ""
+        # SECURITY (audit 2026-04-23): timing-safe comparison. Plain `!=`
+        # leaks match-prefix length via timing on a shared-host deploy.
+        import secrets as _secrets
+        if not _secrets.compare_digest(token, DASHBOARD_TOKEN):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         return await call_next(request)
 
