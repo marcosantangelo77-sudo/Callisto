@@ -55,6 +55,26 @@ API logs stay on OneDrive for cross-machine diagnostics: `logs/api_stdout_*.log`
 - `GET /odds/movements` — recent line movements
 - `GET /world/{domain}` — query domain memory (FINANCIAL, TECHNICAL, SIGNAL, SYNTHESIS, GENERAL)
 
+## Verifying the Local-Only Kill Switch (E2E)
+`CALLISTO_LOCAL_ONLY=1` must be provably safe before it is ever used as
+the main operating mode. To prove this end-to-end:
+```bash
+bash scripts/local_only_e2e.sh
+# or directly:
+python scripts/local_only_e2e.py --port 8421
+```
+The script spins up `api.py` as an isolated subprocess (temp
+`CALLISTO_STATE_DIR`, temp DB, port 8421) with the kill switch on,
+exercises every loop and subsystem (task pipeline, research/collect +
+generate, backtest, odds snapshot, odds reads, metrics), stops the
+process gracefully, then grep-audits the captured logs for any
+`anthropic.com` URL or `claude` subprocess spawn marker. On PASS it
+writes an ISO-8601 timestamp to `$STATE_DIR/local_only_verified_at`,
+which is surfaced at `GET /health#local_only_verified_at`. The pytest
+wrapper is `tests/test_local_only_e2e.py` (marker: `slow`; honors
+`CALLISTO_SKIP_E2E=1`). Exit 0 = PASS; non-zero = any leak, error, or
+subsystem regression.
+
 ## Key Rules
 - Never bypass AGP for research — submit to /task
 - Every session starts by syncing with Callisto state

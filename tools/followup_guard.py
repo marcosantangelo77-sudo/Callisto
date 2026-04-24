@@ -138,6 +138,28 @@ async def ensure_followup_columns(db: aiosqlite.Connection) -> None:
     import between ``tools.schema`` (which calls into multiple subsystems)
     and the followup guard.
     """
+    # On a truly fresh DB, task_queue.py has not yet created the table
+    # (that happens during TaskQueue.initialize, after the lifespan early
+    # phase). Create it inline with the same shape as ``task_queue.py``
+    # so ADD COLUMN does not fail with "no such table: task_queue" and
+    # spam ERROR lines before startup even finishes.
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS task_queue (
+            task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            query TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING'
+                CHECK(status IN ('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'TIMEOUT')),
+            priority INTEGER NOT NULL DEFAULT 0,
+            result TEXT,
+            error TEXT,
+            session_id TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            started_at TEXT,
+            completed_at TEXT
+        )"""
+    )
+    await db.commit()
+
     cols = [
         ("followup_depth", "INTEGER NOT NULL DEFAULT 0"),
         ("parent_task_id", "INTEGER"),

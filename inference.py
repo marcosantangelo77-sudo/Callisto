@@ -36,7 +36,16 @@ def _get_hermes_validator():
     from validator import validate_function_call_schema
     return validate_function_call_schema
 
-load_dotenv(override=True)
+# NOTE(2026-04-23, feat/local-only-e2e): previously called with
+# override=True so a system-wide OLLAMA_HOST=0.0.0.0 could be replaced
+# by whatever .env said. That global override silently clobbered EVERY
+# caller-set env var — including CALLISTO_PORT / CALLISTO_STATE_DIR /
+# CALLISTO_LOCAL_ONLY when the module was imported lazily from api.py,
+# breaking any subprocess that wanted to override them. The narrow
+# OLLAMA_HOST concern is handled just below (the bind-string rewrite
+# already handles 0.0.0.0 explicitly), so we no longer need the global
+# override and can cooperate with caller env.
+load_dotenv()
 
 # OLLAMA_HOST may be set system-wide as a bind address (e.g. 0.0.0.0).
 # For client connections, always use localhost unless explicitly configured with a scheme.
