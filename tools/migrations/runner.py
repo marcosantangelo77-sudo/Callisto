@@ -312,15 +312,15 @@ def apply_pending_migrations(db_path: str) -> dict:
         _release_lock(conn, commit=True)
 
         applied_now = get_applied_versions(conn)
+        durations_ms: dict[int, float] = {}
 
         for mig in migrations:
             if mig.version in applied_now:
                 skipped.append(mig.version)
                 continue
             logger.info(f"Applying migration {mig.version:03d}_{mig.name}")
+            start_ns = time.monotonic_ns()
             conn.execute("BEGIN IMMEDIATE")
-            # Re-check inside the tx: a peer process may have applied the
-            # same migration between our applied_now snapshot and now.
             already = conn.execute(
                 "SELECT 1 FROM schema_migrations WHERE version = ?",
                 (mig.version,),
@@ -343,14 +343,23 @@ def apply_pending_migrations(db_path: str) -> dict:
                     ),
                 )
                 conn.execute("COMMIT")
-            except Exception:
+            except Exception as ex:
                 try:
                     conn.execute("ROLLBACK")
                 except sqlite3.OperationalError:
                     pass
+                logger.error(
+                    f"Migration {mig.version:03d}_{mig.name} FAILED and was "
+                    f"rolled back: {ex!r}"
+                )
                 raise
+            duration_ms = (time.monotonic_ns() - start_ns) / 1e6
+            durations_ms[mig.version] = round(duration_ms, 2)
             applied.append(mig.version)
-            logger.info(f"Applied migration {mig.version:03d}_{mig.name}")
+            logger.info(
+                f"Applied migration {mig.version:03d}_{mig.name} "
+                f"in {duration_ms:.1f}ms"
+            )
     finally:
         conn.close()
 
@@ -363,4 +372,88 @@ def apply_pending_migrations(db_path: str) -> dict:
         "skipped": skipped,
         "bootstrapped": bootstrapped,
         "total_versions": [m.version for m in migrations],
+        "durations_ms": durations_ms,
+    }
+
+
+def get_migration_status(db_path: str) -> dict:
+    """Read-only status report: applied list, pending list, and schema version.
+
+    Does not acquire the migration lock or apply anything — safe to call
+    from a live request handler. Returns a dict shaped for JSON responses:
+
+    ``{
+        "schema_version": <highest applied version or 0>,
+        "applied": [{"version", "name", "applied_at", "bootstrap", "checksum"}],
+        "pending": [{"version", "name", "module"}],
+        "known_versions": [list of all discovered migration versions],
+        "drift": [{"version", "name", "stored_checksum", "current_checksum"}]
+    }``
+
+    ``drift`` lists migrations where the committed source file's SHA-256 no
+    longer matches the checksum recorded at apply time — a signal that
+    someone edited a migration after the fact, which means the DB may not
+    match the code.
+    """
+    migrations = discover_migrations()
+    mig_by_version = {m.version: m for m in migrations}
+
+    applied_rows: list[dict] = []
+    drift: list[dict] = []
+    schema_version = 0
+
+    conn = sqlite3.connect(db_path, isolation_level=None, timeout=30.0)
+    try:
+        conn.execute("PRAGMA busy_timeout = 5000")
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='schema_migrations'"
+        ).fetchone()
+        applied_versions: set[int] = set()
+        if has_table:
+            ensure_migration_table(conn)
+            rows = conn.execute(
+                "SELECT version, name, applied_at, bootstrap, checksum "
+                "FROM schema_migrations ORDER BY version"
+            ).fetchall()
+            for version, name, applied_at, bootstrap, checksum in rows:
+                v = int(version)
+                applied_versions.add(v)
+                applied_rows.append({
+                    "version": v,
+                    "name": name,
+                    "applied_at": applied_at,
+                    "bootstrap": bool(bootstrap),
+                    "checksum": checksum,
+                })
+                if applied_at is not None and v > schema_version:
+                    schema_version = v
+                mig = mig_by_version.get(v)
+                if mig and checksum and mig.source_checksum and \
+                        checksum != mig.source_checksum:
+                    drift.append({
+                        "version": v,
+                        "name": name,
+                        "stored_checksum": checksum,
+                        "current_checksum": mig.source_checksum,
+                    })
+    finally:
+        conn.close()
+
+    pending = [
+        {
+            "version": m.version,
+            "name": m.name,
+            "module": m.module_name,
+        }
+        for m in migrations
+        if m.version not in applied_versions
+    ]
+
+    return {
+        "schema_version": schema_version,
+        "applied": applied_rows,
+        "pending": pending,
+        "known_versions": [m.version for m in migrations],
+        "drift": drift,
     }

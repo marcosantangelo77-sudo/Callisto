@@ -44,6 +44,7 @@ from .runner import (
     discover_migrations,
     ensure_migration_table,
     get_applied_versions,
+    get_migration_status,
 )
 
 __all__ = [
@@ -53,4 +54,5 @@ __all__ = [
     "discover_migrations",
     "ensure_migration_table",
     "get_applied_versions",
+    "get_migration_status",
 ]

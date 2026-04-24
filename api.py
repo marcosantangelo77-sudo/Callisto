@@ -3971,6 +3971,22 @@ async def writer_stats():
     return {"coordinators": _writer_stats()}
 
 
+@app.get("/admin/db/migrations", dependencies=[Depends(require_admin_or_loopback)])
+async def db_migrations_status():
+    """Migration state for the live DB.
+
+    Returns applied list, pending list, schema version, and any
+    checksum-drift entries (source file edited after apply). Read-only —
+    does not acquire the migration lock.
+    """
+    from tools.migrations import get_migration_status
+    try:
+        return get_migration_status(DB_PATH)
+    except Exception as e:
+        logger.error(f"/admin/db/migrations failed: {e!r}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"migration status error: {e!s}")
+
+
 @app.get("/health/deep")
 async def health_deep():
     """
