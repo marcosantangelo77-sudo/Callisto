@@ -45,7 +45,17 @@ MAX_BET_PCT = float(os.getenv("EXECUTOR_MAX_BET_PCT", "0.05"))       # 5% of ban
 # 25% bankroll exposed at any moment is the documented ceiling; raise via env.
 MAX_OPEN_EXPOSURE_PCT = float(os.getenv("EXECUTOR_MAX_OPEN_EXPOSURE_PCT", "0.25"))
 DAILY_LOSS_LIMIT_PCT = float(os.getenv("EXECUTOR_DAILY_LOSS_PCT", "0.20"))  # 20% of bankroll
+# feat/bet-execution-hardening (2026-04-23): sum of stakes placed today cap.
+# Daily loss already covers losses; this covers the case where losses have not
+# been resolved yet but the bettor is still hemorrhaging stake into pending
+# slips. When the cap fires, placements refuse until midnight UTC.
+MAX_DAILY_RISK_PCT = float(os.getenv("CALLISTO_MAX_DAILY_RISK_PCT", "0.30"))
+# Default minimum edge for paper/default path.
 MIN_EDGE_TO_EXECUTE = float(os.getenv("EXECUTOR_MIN_EDGE", "0.02"))  # 2% minimum EV
+# feat/bet-execution-hardening: harder gate for LIVE execution. Paper signals
+# log at 2% edge; real placements demand 3% by default so friction (slippage,
+# odds-change mid-slip, settlement lag) doesn't swallow the edge.
+LIVE_MIN_EDGE = float(os.getenv("EXECUTOR_LIVE_MIN_EDGE", "0.03"))
 KELLY_FRACTION = float(os.getenv("EXECUTOR_KELLY_FRACTION", "0.25")) # Quarter Kelly
 MIN_BET_AMOUNT = float(os.getenv("EXECUTOR_MIN_BET", "1.00"))       # $1 minimum
 
@@ -245,6 +255,19 @@ class BetExecutor:
         row = await cursor.fetchone()
         return float(row[0]) if row else 0.0
 
+    async def get_daily_risk(self) -> float:
+        """Sum of stakes placed today (whether still pending or resolved).
+
+        feat/bet-execution-hardening: used by MAX_DAILY_RISK_PCT gate.
+        """
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        cursor = await self._db.execute(
+            "SELECT COALESCE(SUM(stake), 0) FROM bets WHERE placed_at >= ?",
+            (today,),
+        )
+        row = await cursor.fetchone()
+        return float(row[0]) if row else 0.0
+
     async def get_daily_losses(self) -> float:
         """Get net losses today (negative = losing)."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -383,6 +406,30 @@ class BetExecutor:
         """
         if not bets:
             return []
+
+        # feat/bet-execution-hardening (2026-04-23): dedup within the batch.
+        # Two signals targeting the same (event_id, market_type, side) should
+        # be treated as one position — otherwise a correlated-signal swarm
+        # on one game double-sizes the bet. We keep the FIRST occurrence
+        # (callers sort by priority upstream) and drop subsequent rows with
+        # the same key.
+        seen_keys: set[tuple[str, str, str]] = set()
+        deduped: list[dict] = []
+        for b in bets:
+            key = (
+                str(b.get("event_id", "") or ""),
+                str(b.get("market_type", "") or ""),
+                str(b.get("side", b.get("description", ""))),
+            )
+            if key != ("", "", "") and key in seen_keys:
+                logger.info(
+                    "portfolio_dedup: skipping duplicate %s (hyp=%s)",
+                    key, b.get("hypothesis_id", "?"),
+                )
+                continue
+            seen_keys.add(key)
+            deduped.append(b)
+        bets = deduped
 
         # --- Regime multipliers per sport in the batch (cached for this call) ---
         # Compute once per distinct sport so a 20-bet batch hits the regime
@@ -572,15 +619,27 @@ class BetExecutor:
         """
         Run all safety checks before placing a bet.
 
-        Returns (ok, reason).
+        Returns (ok, reason). When the bet is blocked the reason string is
+        prefixed with the canonical circuit-breaker id from
+        ``tools.risk_limits`` so the executor log is grep-able for each gate.
         """
+        from tools.risk_limits import (
+            CB_EXECUTOR_DISABLED, CB_LIVE_MIN_EDGE, CB_MAX_SINGLE_BET,
+            CB_DAILY_LOSS, CB_DAILY_RISK,
+        )
+
         # Executor must be enabled
         if not self._enabled:
-            return False, "Executor is disabled"
+            return False, f"[{CB_EXECUTOR_DISABLED}] Executor is disabled"
 
-        # Minimum edge
-        if edge < MIN_EDGE_TO_EXECUTE:
-            return False, f"Edge {edge:.3f} below minimum {MIN_EDGE_TO_EXECUTE}"
+        # Minimum edge — LIVE executions use the stricter LIVE_MIN_EDGE (default 3%)
+        # instead of the paper/default 2% so slippage + settlement lag don't
+        # swallow marginal edges.
+        if edge < LIVE_MIN_EDGE:
+            return False, (
+                f"[{CB_LIVE_MIN_EDGE}] Edge {edge:.3f} below live minimum "
+                f"{LIVE_MIN_EDGE:.3f} (paper threshold {MIN_EDGE_TO_EXECUTE:.3f})"
+            )
 
         # Bankroll check
         bankroll = await self.get_bankroll()
@@ -588,12 +647,28 @@ class BetExecutor:
             return False, "No bankroll"
 
         if stake > bankroll * MAX_BET_PCT:
-            return False, f"Stake ${stake:.2f} exceeds {MAX_BET_PCT*100:.0f}% of bankroll ${bankroll:.2f}"
+            return False, (
+                f"[{CB_MAX_SINGLE_BET}] Stake ${stake:.2f} exceeds "
+                f"{MAX_BET_PCT*100:.0f}% of bankroll ${bankroll:.2f}"
+            )
 
-        # Daily loss limit
+        # Daily loss limit (net P/L).
         daily_losses = await self.get_daily_losses()
         if daily_losses < -(bankroll * DAILY_LOSS_LIMIT_PCT):
-            return False, f"Daily loss limit hit: ${daily_losses:.2f} (limit: ${bankroll * DAILY_LOSS_LIMIT_PCT:.2f})"
+            return False, (
+                f"[{CB_DAILY_LOSS}] Daily loss limit hit: ${daily_losses:.2f} "
+                f"(limit: ${bankroll * DAILY_LOSS_LIMIT_PCT:.2f})"
+            )
+
+        # Daily risk cap (total stakes placed today, win or lose).
+        daily_risk = await self.get_daily_risk()
+        daily_risk_cap = bankroll * MAX_DAILY_RISK_PCT
+        if daily_risk + stake > daily_risk_cap:
+            return False, (
+                f"[{CB_DAILY_RISK}] Daily risk cap hit: ${daily_risk:.2f} "
+                f"staked today + ${stake:.2f} > ${daily_risk_cap:.2f} "
+                f"({MAX_DAILY_RISK_PCT:.0%} of bankroll)"
+            )
 
         # Sport support
         if sport not in DK_SPORT_SLUGS:
@@ -1242,16 +1317,24 @@ class BetExecutor:
         """Return executor status for health checks."""
         bankroll = await self.get_bankroll() if self._db else 0
         daily_losses = await self.get_daily_losses() if self._db else 0
+        daily_risk = await self.get_daily_risk() if self._db else 0
+        open_exposure = await self.get_open_exposure() if self._db else 0
         return {
             "enabled": self._enabled,
             "logged_in": self._logged_in,
             "browser_active": self._page is not None,
             "bankroll": bankroll,
+            "open_exposure": open_exposure,
+            "open_exposure_cap": bankroll * MAX_OPEN_EXPOSURE_PCT,
             "daily_losses": daily_losses,
             "daily_loss_limit": bankroll * DAILY_LOSS_LIMIT_PCT,
+            "daily_risk": daily_risk,
+            "daily_risk_cap": bankroll * MAX_DAILY_RISK_PCT,
             "max_single_bet_pct": MAX_BET_PCT,
             "kelly_fraction": KELLY_FRACTION,
-            "min_edge": MIN_EDGE_TO_EXECUTE,
+            "min_edge_paper": MIN_EDGE_TO_EXECUTE,
+            "min_edge_live": LIVE_MIN_EDGE,
+            "max_drawdown_pct": MAX_DRAWDOWN_PCT,
         }
 
     async def shutdown(self):
