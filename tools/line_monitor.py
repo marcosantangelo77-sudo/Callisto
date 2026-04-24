@@ -1499,6 +1499,8 @@ class LineMonitor:
                                         closing_point=float(point) if point is not None else None,
                                         source=src_key,
                                         sport=sport,
+                                        line=float(point) if point is not None else None,
+                                        commence_time=commence_time_str,
                                     )
                                     closing_count += 1
                                 except Exception as e:
