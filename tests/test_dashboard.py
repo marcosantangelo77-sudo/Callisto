@@ -414,3 +414,143 @@ def test_alerts_reads_available_tables(tmp_path):
         assert body["count"] == 1
         assert body["alerts"][0]["message"] == "test breach"
         assert body["alerts"][0]["_source_table"] == "alerts"
+
+
+# ---------------------------------------------------------------------------
+# New observability proxies
+# ---------------------------------------------------------------------------
+
+
+def test_metrics_proxy_online(empty_db):
+    stub = FakeUpstream({
+        "/metrics/json": (True, {
+            "process_start_epoch": 0,
+            "uptime_seconds": 123.0,
+            "metric_count": 1,
+            "metrics": [
+                {"name": "callisto_tasks_submitted_total", "type": "counter",
+                 "description": "", "samples": [{"labels": {"priority": "1", "source": "api"}, "value": 5}]}
+            ],
+        }),
+    })
+    app = _build(stub, empty_db)
+    with TestClient(app) as c:
+        r = c.get("/api/metrics")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["online"] is True
+        assert body["uptime_seconds"] == 123.0
+        assert body["metrics"][0]["name"].startswith("callisto_tasks")
+
+
+def test_metrics_proxy_offline(empty_db):
+    app = _build(FakeUpstream(), empty_db)
+    with TestClient(app) as c:
+        r = c.get("/api/metrics")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["online"] is False
+        assert body["metrics"] == []
+
+
+def test_db_health_proxy(empty_db):
+    stub = FakeUpstream({
+        "/admin/db/health": (True, {"wal_size_mb": 3.2, "db_size_mb": 120.0, "busy_timeout_hits": 0}),
+    })
+    app = _build(stub, empty_db)
+    with TestClient(app) as c:
+        r = c.get("/api/db/health")
+        assert r.status_code == 200
+        assert r.json()["wal_size_mb"] == 3.2
+
+
+def test_db_migrations_proxy(empty_db):
+    stub = FakeUpstream({
+        "/admin/db/migrations": (True, {"schema_version": 13, "applied": [], "pending": [{"version": 14, "name": "x"}]}),
+    })
+    app = _build(stub, empty_db)
+    with TestClient(app) as c:
+        r = c.get("/api/db/migrations")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["schema_version"] == 13
+        assert len(body["pending"]) == 1
+
+
+def test_scrapers_health_proxy(empty_db):
+    stub = FakeUpstream({
+        "/odds/scrapers/health": (True, {
+            "healthy": True, "total": 1, "stale_count": 0, "never_pulled_count": 0,
+            "scrapers": [{"name": "dk", "healthy": True, "staleness_s": 10,
+                          "last_successful_pull": 12345, "success_count": 1, "error_count": 0,
+                          "consecutive_errors": 0, "last_error": None}],
+        }),
+    })
+    app = _build(stub, empty_db)
+    with TestClient(app) as c:
+        r = c.get("/api/scrapers/health")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["online"] is True
+        assert body["scrapers"][0]["name"] == "dk"
+
+
+def test_risk_report_proxy(empty_db):
+    stub = FakeUpstream({
+        "/bets/risk-report": (True, {
+            "bankroll": 1000.0,
+            "rolling_peak": 1100.0,
+            "drawdown_pct": 0.09,
+            "open_exposure": {"amount": 50.0, "cap": 300.0, "utilization": 0.16},
+            "daily_risk":    {"stakes_today": 100.0, "cap": 200.0, "utilization": 0.5},
+            "daily_pnl":     {"net": -25.0, "loss_cap": 150.0, "utilization": 0.16},
+            "per_sport": {"nba": {"exposure": 50.0, "cap": 200.0, "utilization": 0.25}},
+            "tripped_breakers": [],
+        }),
+    })
+    app = _build(stub, empty_db)
+    with TestClient(app) as c:
+        r = c.get("/api/risk-report")
+        body = r.json()
+        assert r.status_code == 200
+        assert body["bankroll"] == 1000.0
+        assert "nba" in body["per_sport"]
+
+
+def test_eligibility_extracts_block(empty_db):
+    stub = FakeUpstream({
+        "/system/full-status": (True, {
+            "autonomous_loop": {
+                "research_sports": ["basketball_nba", "baseball_mlb"],
+                "eligibility": {
+                    "eligible_sports": ["basketball_nba"],
+                    "blocked_by_games": {"baseball_mlb": 0},
+                    "blocked_by_odds": [],
+                    "min_games_for_hypothesis": 3,
+                    "at": 1_700_000_000.0,
+                    "cycle": 7,
+                },
+            },
+        }),
+    })
+    app = _build(stub, empty_db)
+    with TestClient(app) as c:
+        r = c.get("/api/eligibility")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["online"] is True
+        assert body["eligibility"]["eligible_sports"] == ["basketball_nba"]
+        assert "baseball_mlb" in body["eligibility"]["blocked_by_games"]
+
+
+def test_tasks_proxy_handles_list_and_dict(empty_db):
+    stub = FakeUpstream({
+        "/tasks?limit=25": (True, {"tasks": [{"id": 1, "status": "completed", "query": "x"}], "count": 1}),
+    })
+    app = _build(stub, empty_db)
+    with TestClient(app) as c:
+        r = c.get("/api/tasks")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["online"] is True
+        assert body["tasks"][0]["status"] == "completed"

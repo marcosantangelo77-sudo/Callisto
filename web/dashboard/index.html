@@ -19,42 +19,89 @@
     </div>
   </header>
 
+  <div id="critical-ribbon" class="ribbon ribbon-critical hidden">
+    <strong>CRITICAL:</strong>
+    <span id="critical-ribbon-body"></span>
+  </div>
+
   <div id="offline-banner" class="banner banner-offline hidden">
     Callisto API at <code id="offline-target">localhost:8420</code> is unreachable. Showing last-known / DB-fallback data.
   </div>
 
   <main class="grid">
-    <!-- 1. Live state -->
     <section class="panel" id="panel-state">
       <h2>Live state</h2>
       <div class="panel-body" id="state-body">Loading...</div>
     </section>
 
-    <!-- 2. LIVE hypotheses -->
+    <section class="panel" id="panel-metrics">
+      <h2>Metrics <span class="count" id="metrics-count"></span></h2>
+      <div class="panel-body" id="metrics-body">Loading...</div>
+    </section>
+
+    <section class="panel" id="panel-risk">
+      <h2>Risk report</h2>
+      <div class="panel-body" id="risk-body">Loading...</div>
+    </section>
+
+    <section class="panel" id="panel-eligibility">
+      <h2>Hypothesis-gen eligibility</h2>
+      <div class="panel-body" id="eligibility-body">Loading...</div>
+    </section>
+
     <section class="panel wide" id="panel-hyps">
       <h2>LIVE hypotheses <span class="count" id="hyp-count"></span></h2>
       <div class="panel-body" id="hyps-body">Loading...</div>
     </section>
 
-    <!-- 3. Recent orders -->
+    <section class="panel wide" id="panel-scrapers">
+      <h2>Scraper health <span class="count" id="scraper-count"></span></h2>
+      <div class="panel-body" id="scrapers-body">Loading...</div>
+    </section>
+
+    <section class="panel" id="panel-dbhealth">
+      <h2>DB health</h2>
+      <div class="panel-body" id="dbhealth-body">Loading...</div>
+    </section>
+
+    <section class="panel" id="panel-migrations">
+      <h2>Schema migrations</h2>
+      <div class="panel-body" id="migrations-body">Loading...</div>
+    </section>
+
     <section class="panel wide" id="panel-orders">
       <h2>Recent orders <span class="count" id="orders-count"></span></h2>
       <div class="panel-body" id="orders-body">Loading...</div>
     </section>
 
-    <!-- 4. Portfolio -->
     <section class="panel" id="panel-portfolio">
       <h2>Portfolio</h2>
       <div class="panel-body" id="portfolio-body">Loading...</div>
     </section>
 
-    <!-- 5. Data ingestion -->
     <section class="panel wide" id="panel-ingestion">
       <h2>Data ingestion</h2>
       <div class="panel-body" id="ingestion-body">Loading...</div>
     </section>
 
-    <!-- 6. Alerts -->
+    <section class="panel wide" id="panel-tasks">
+      <h2>
+        Recent tasks
+        <span class="count" id="tasks-count"></span>
+      </h2>
+      <div class="panel-toolbar">
+        <input
+          type="text"
+          id="task-filter"
+          class="filter-input"
+          placeholder="filter by status or query substring..."
+          autocomplete="off"
+        />
+        <span class="muted" id="task-filter-hint"></span>
+      </div>
+      <div class="panel-body" id="tasks-body">Loading...</div>
+    </section>
+
     <section class="panel" id="panel-alerts">
       <h2>Alerts</h2>
       <div class="panel-body" id="alerts-body">Loading...</div>
@@ -62,7 +109,7 @@
   </main>
 
   <footer class="footer">
-    <span>Auto-refresh every 15s &middot; read-only</span>
+    <span>Auto-refresh: state 15s &middot; metrics 30s &middot; health 60s &middot; read-only</span>
     <span id="build-info" class="muted"></span>
   </footer>
 

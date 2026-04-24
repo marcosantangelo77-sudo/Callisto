@@ -202,3 +202,177 @@ table.tbl tr:hover { background: #151a20; }
   font-size: 12px;
   padding: 8px 0;
 }
+
+/* Critical alerts ribbon */
+.ribbon {
+  padding: 8px 18px;
+  font-size: 12px;
+  font-weight: bold;
+  border-bottom: 1px solid #2a313a;
+}
+.ribbon-critical {
+  background: #4a0b0b;
+  color: #ffb5b5;
+  border-bottom-color: #8a1f1f;
+  animation: ribbon-pulse 2s ease-in-out infinite;
+}
+.ribbon-critical strong { color: #ff7777; margin-right: 8px; letter-spacing: 0.5px; }
+@keyframes ribbon-pulse {
+  0%, 100% { background: #4a0b0b; }
+  50%      { background: #5f1313; }
+}
+
+/* Sub-headers inside panels */
+.sub-h {
+  color: #8a95a3;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin: 6px 0 4px;
+}
+
+.panel-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 4px 0 8px;
+}
+.filter-input {
+  flex: 1;
+  background: #0c0f13;
+  color: #dde3ea;
+  border: 1px solid #2a313a;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.filter-input:focus { border-color: #7dd3fc; }
+
+/* Metric tiles */
+.metric-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.tile {
+  background: #181c22;
+  border: 1px solid #1f2630;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.tile-label {
+  color: #8a95a3;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.tile-value {
+  color: #e6edf3;
+  font-size: 16px;
+  font-weight: bold;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+.tile-sub { font-size: 10.5px; margin-top: 2px; }
+
+.metric-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+}
+.tbl-compact th, .tbl-compact td {
+  padding: 2px 6px;
+  font-size: 11.5px;
+}
+.tbl-compact td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Risk meters */
+.meter { margin: 4px 0; }
+.meter-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  margin-bottom: 2px;
+}
+.meter-bar {
+  background: #0c0f13;
+  border: 1px solid #1f2630;
+  border-radius: 3px;
+  height: 8px;
+  overflow: hidden;
+}
+.meter-fill { height: 100%; transition: width 0.5s ease; }
+.meter-green  { background: linear-gradient(90deg, #0f6b45, #5dd39e); }
+.meter-yellow { background: linear-gradient(90deg, #8a6a15, #f1c069); }
+.meter-red    { background: linear-gradient(90deg, #8a1f1f, #ef6b6b); }
+
+/* Scraper traffic-light grid */
+.scraper-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 6px;
+}
+.scraper-card {
+  background: #181c22;
+  border: 1px solid #1f2630;
+  border-left: 3px solid #2a313a;
+  border-radius: 4px;
+  padding: 6px 8px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.scraper-green  { border-left-color: #5dd39e; }
+.scraper-yellow { border-left-color: #f1c069; }
+.scraper-red    { border-left-color: #ef6b6b; }
+.scraper-muted  { border-left-color: #2a313a; }
+.scraper-light {
+  width: 10px; height: 10px; border-radius: 50%;
+  margin-top: 4px; flex: 0 0 auto;
+}
+.scraper-light-green  { background: #5dd39e; box-shadow: 0 0 6px #5dd39e66; }
+.scraper-light-yellow { background: #f1c069; box-shadow: 0 0 6px #f1c06966; }
+.scraper-light-red    { background: #ef6b6b; box-shadow: 0 0 6px #ef6b6b66; }
+.scraper-light-muted  { background: #2a313a; }
+.scraper-body { flex: 1; min-width: 0; }
+.scraper-name {
+  font-weight: bold;
+  font-size: 12px;
+  color: #e6edf3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scraper-meta { font-size: 10.5px; }
+.scraper-err {
+  color: #ef6b6b;
+  font-size: 10.5px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Sparklines */
+.spark-wrap { display: block; margin-top: 2px; }
+.spark { display: inline-block; }
+.spark polyline { stroke: #7dd3fc; }
+.spark-empty { fill: #8a95a3; font-size: 10px; }
+
+/* Migrations */
+.mig-list {
+  list-style: none;
+  margin: 2px 0 6px;
+  padding: 0;
+  font-size: 11.5px;
+}
+.mig-list li {
+  padding: 2px 0;
+  border-bottom: 1px solid #1f2630;
+}
+.mig-list li:last-child { border-bottom: none; }
+.mig-pending { margin-top: 6px; }
+.mig-drift { margin-top: 6px; }

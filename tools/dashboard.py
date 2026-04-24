@@ -505,6 +505,76 @@ def build_dashboard_subapp(
         items = _read_alerts(app.state.db_path, limit=limit)
         return {"count": len(items), "alerts": items}
 
+    @app.get("/api/metrics")
+    async def metrics_snapshot():
+        """Thin proxy to the main API's /metrics/json for the ops panels."""
+        ok, payload = await _client().get("/metrics/json")
+        if not ok:
+            return {"online": False, "error": payload, "metrics": []}
+        if not isinstance(payload, dict):
+            return {"online": False, "error": {"reason": "malformed_payload"}, "metrics": []}
+        return {"online": True, **payload}
+
+    @app.get("/api/db/health")
+    async def db_health():
+        ok, payload = await _client().get("/admin/db/health")
+        if not ok:
+            return {"online": False, "error": payload}
+        return {"online": True, **(payload if isinstance(payload, dict) else {})}
+
+    @app.get("/api/db/migrations")
+    async def db_migrations():
+        ok, payload = await _client().get("/admin/db/migrations")
+        if not ok:
+            return {"online": False, "error": payload}
+        return {"online": True, **(payload if isinstance(payload, dict) else {})}
+
+    @app.get("/api/scrapers/health")
+    async def scrapers_health_api():
+        ok, payload = await _client().get("/odds/scrapers/health")
+        if not ok:
+            return {"online": False, "error": payload, "scrapers": []}
+        return {"online": True, **(payload if isinstance(payload, dict) else {})}
+
+    @app.get("/api/risk-report")
+    async def risk_report():
+        ok, payload = await _client().get("/bets/risk-report")
+        if not ok:
+            return {"online": False, "error": payload}
+        return {"online": True, **(payload if isinstance(payload, dict) else {})}
+
+    @app.get("/api/eligibility")
+    async def eligibility():
+        """Surface the hypothesis-gen eligibility block from /system/full-status."""
+        ok, payload = await _client().get("/system/full-status")
+        if not ok or not isinstance(payload, dict):
+            return {"online": False, "error": payload if not ok else "malformed"}
+        auto = payload.get("autonomous_loop") or {}
+        elig = auto.get("eligibility") if isinstance(auto, dict) else None
+        return {
+            "online": True,
+            "eligibility": elig,
+            "research_sports": (auto or {}).get("research_sports") if isinstance(auto, dict) else None,
+        }
+
+    @app.get("/api/health/deep")
+    async def health_deep_proxy():
+        ok, payload = await _client().get("/health/deep")
+        if not ok:
+            return {"online": False, "error": payload}
+        return {"online": True, **(payload if isinstance(payload, dict) else {})}
+
+    @app.get("/api/tasks")
+    async def tasks_list(limit: int = 25):
+        ok, payload = await _client().get(f"/tasks?limit={limit}")
+        if not ok:
+            return {"online": False, "error": payload, "tasks": []}
+        if isinstance(payload, dict):
+            return {"online": True, **payload}
+        if isinstance(payload, list):
+            return {"online": True, "tasks": payload, "count": len(payload)}
+        return {"online": True, "tasks": [], "count": 0}
+
     return app
 
 
