@@ -4483,6 +4483,13 @@ async def full_system_status():
         except Exception as e:
             logger.warning(f"Failed to get hypothesis summary for full-status: {e}")
 
+    # Hypothesis-generation quality telemetry (schema/dedup gate)
+    try:
+        from tools.hypothesis_generator import get_quality_metrics_snapshot
+        status["hypothesis_quality"] = get_quality_metrics_snapshot()
+    except Exception as e:
+        logger.debug(f"Failed to get hypothesis_quality snapshot: {e}")
+
     # Add embedding stats
     if vector_store:
         try:
