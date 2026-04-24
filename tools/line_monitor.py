@@ -405,7 +405,12 @@ class LineMonitor:
                 -- the provider's pre-computed +EV feed), or 'arbitrage' (cross-book
                 -- guaranteed-profit opportunities). Added 2026-04-18 to unify the
                 -- two writer paths (line_monitor + autonomous) on one schema.
-                source TEXT DEFAULT 'line_movement'
+                source TEXT DEFAULT 'line_movement',
+                -- steam_only flags rows surfaced by line-movement consensus
+                -- alone, without independent model ratification. Kept inline
+                -- on the CREATE so fresh DBs don't race the ensure_schema
+                -- ADD COLUMN step, which runs before this table exists.
+                steam_only INTEGER DEFAULT 0
             )""",
             "CREATE INDEX IF NOT EXISTS idx_snapshots_sport_ts ON odds_snapshots(sport, timestamp)",
             "CREATE INDEX IF NOT EXISTS idx_movements_sport ON line_movements(sport, detected_at)",

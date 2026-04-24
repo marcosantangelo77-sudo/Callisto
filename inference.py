@@ -36,7 +36,16 @@ def _get_hermes_validator():
     from validator import validate_function_call_schema
     return validate_function_call_schema
 
-load_dotenv(override=True)
+# NOTE(2026-04-23, feat/local-only-e2e): previously called with
+# override=True so a system-wide OLLAMA_HOST=0.0.0.0 could be replaced
+# by whatever .env said. That global override silently clobbered EVERY
+# caller-set env var — including CALLISTO_PORT / CALLISTO_STATE_DIR /
+# CALLISTO_LOCAL_ONLY when the module was imported lazily from api.py,
+# breaking any subprocess that wanted to override them. The narrow
+# OLLAMA_HOST concern is handled just below (the bind-string rewrite
+# already handles 0.0.0.0 explicitly), so we no longer need the global
+# override and can cooperate with caller env.
+load_dotenv()
 
 # OLLAMA_HOST may be set system-wide as a bind address (e.g. 0.0.0.0).
 # For client connections, always use localhost unless explicitly configured with a scheme.
@@ -379,12 +388,27 @@ async def escalate_with_ladder(
         dict with keys: content, model_used, quality, ladder_step, error (if all failed)
     """
     from tools.claude_code import claude_code_query, is_available as claude_available
+    from tools.local_only import is_local_only
 
     hermes_caller = kwargs.get("hermes_caller", "default")
 
     ladder = MODEL_LADDER.get(task_type, MODEL_LADDER["reasoning"])
+    # Nuclear kill switch: when CALLISTO_LOCAL_ONLY=1, strip every
+    # claude_code rung from the ladder outright. This guarantees we
+    # never even attempt a subprocess spawn, regardless of what
+    # claude_code.is_available() decides to return (belt-and-braces:
+    # that function also blocks, but this path makes the invariant
+    # visible at the dispatch layer too).
+    if is_local_only():
+        stripped = [c for c in ladder if c.get("model") != "claude_code"]
+        if stripped != ladder:
+            logger.debug(
+                f"Ladder: CALLISTO_LOCAL_ONLY=1 — stripped claude_code rungs "
+                f"for task_type={task_type}"
+            )
+            ladder = stripped
     # Preserve Claude credits outside the Max hours window.
-    if not _in_claude_hours():
+    elif not _in_claude_hours():
         demoted = _demote_claude_in_ladder(ladder)
         if demoted is not ladder:
             logger.debug(

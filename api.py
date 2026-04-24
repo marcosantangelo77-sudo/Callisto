@@ -3612,6 +3612,28 @@ async def _build_health_report() -> dict:
             "error": f"integrity check failed: {e}",
         }
 
+    # Local-only kill switch visibility — surface so operators and tests
+    # can see at a glance whether Claude / Anthropic paths are blocked.
+    try:
+        from tools.local_only import is_local_only
+        report["local_only"] = is_local_only()
+    except Exception:
+        report["local_only"] = False
+
+    # Last successful E2E verification of local-only mode (see
+    # scripts/local_only_e2e.py). The E2E writes a marker file into the
+    # state dir on PASS; operators can consult this to know when the
+    # kill switch was last proven end-to-end. Missing file => never run.
+    try:
+        from tools.state_paths import state_dir as _state_dir
+        marker = _state_dir() / "local_only_verified_at"
+        if marker.exists():
+            report["local_only_verified_at"] = marker.read_text(encoding="utf-8").strip() or None
+        else:
+            report["local_only_verified_at"] = None
+    except Exception:
+        report["local_only_verified_at"] = None
+
     # Watchdog self-monitoring
     _health_gap = _time.time() - getattr(app.state, "_last_health_ping", _time.time())
     if _health_gap > 300 and getattr(app.state, "_health_ping_count", 0) > 5:
