@@ -111,13 +111,19 @@ MARKET_CLV_DECAY = {
 # Helper: American odds -> decimal odds
 # =========================================================================
 def _american_to_decimal(american: int | float) -> float:
-    """Convert American odds to decimal odds."""
+    """Convert American odds to decimal odds.
+
+    feat/bet-execution-hardening (2026-04-23): was silently returning 2.0
+    for odds==0. The rest of the codebase (``tools.math_utils``,
+    ``tools.odds_api``) treats 0 as invalid. Kelly math must match —
+    otherwise a sizing call with a bogus odds value produces a legitimate-
+    looking stake instead of failing.
+    """
+    if american == 0:
+        raise ValueError("American odds cannot be 0")
     if american > 0:
         return 1.0 + (american / 100.0)
-    elif american < 0:
-        return 1.0 + (100.0 / abs(american))
-    else:
-        return 2.0  # even money
+    return 1.0 + (100.0 / abs(american))
 
 
 def _confidence_tier_from_score(score: float) -> str:

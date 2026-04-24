@@ -210,14 +210,71 @@ class CLVTracker:
         edge_estimate: Optional[float] = None,
         notes: str = "",
         tags: str = "",
+        external_id: Optional[str] = None,
     ) -> int:
         """
         Record a bet at placement time.
 
         Returns the bet ID for later CLV measurement.
+
+        feat/bet-execution-hardening (2026-04-23): accepts an optional
+        ``external_id`` for idempotent retries. When set, a second call
+        with the same external_id returns the existing bet_id instead of
+        inserting a duplicate row. The identifier is stored in ``tags``
+        as ``ext:<id>`` so the existing schema doesn't need migration.
+
+        When no external_id is provided, we fall back to a (event_id, team,
+        market, bookmaker, placement_odds, stake) fingerprint within the
+        last hour — same-signal retries land on the same row, while
+        genuine re-entries (same matchup hours later) still create a new
+        bet.
         """
         now = datetime.now(timezone.utc).isoformat()
         implied = calculate_implied_probability(placement_odds)
+
+        # --- Idempotency check ---
+        ext_tag = f"ext:{external_id}" if external_id else ""
+        if external_id:
+            try:
+                cur = await self._db.execute(
+                    "SELECT id FROM bets WHERE tags LIKE ? LIMIT 1",
+                    (f"%{ext_tag}%",),
+                )
+                existing = await cur.fetchone()
+                if existing:
+                    logger.info(
+                        f"Idempotent record_bet: external_id={external_id} "
+                        f"maps to existing bet_id={existing[0]}"
+                    )
+                    return existing[0]
+            except Exception as e:
+                logger.debug(f"idempotency lookup (external_id) failed: {e}")
+        else:
+            # Fingerprint fallback — guards against accidental double-submits
+            # from the same signal when the caller forgot to pass external_id.
+            try:
+                cur = await self._db.execute(
+                    "SELECT id FROM bets WHERE event_id = ? AND team = ? "
+                    "AND market = ? AND bookmaker = ? AND placement_odds = ? "
+                    "AND ABS(stake - ?) < 0.01 "
+                    "AND placed_at > datetime('now', '-1 hour') LIMIT 1",
+                    (event_id, team, market, bookmaker, placement_odds, stake),
+                )
+                existing = await cur.fetchone()
+                if existing:
+                    logger.warning(
+                        f"record_bet dedup: same ({event_id}, {team}, {market}, "
+                        f"{bookmaker}, {placement_odds}, ${stake}) within last hour "
+                        f"-> returning existing bet_id={existing[0]}"
+                    )
+                    return existing[0]
+            except Exception as e:
+                logger.debug(f"idempotency fingerprint check failed: {e}")
+
+        # Persist external_id as a tag so we can rediscover it later.
+        merged_tags = tags
+        if ext_tag:
+            merged_tags = f"{tags},{ext_tag}" if tags else ext_tag
 
         # Calculate Kelly if we have an edge estimate
         kelly = 0.0
@@ -240,7 +297,7 @@ class CLVTracker:
             (
                 now, sport, event_id, game_description, "single", team, market,
                 bookmaker, placement_odds, placement_point, round(implied, 4),
-                stake, edge_estimate, round(kelly, 4), notes, tags,
+                stake, edge_estimate, round(kelly, 4), notes, merged_tags,
             ),
             max_retries=10,
             operation="clv_tracker record_bet",

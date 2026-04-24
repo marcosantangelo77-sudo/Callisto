@@ -529,7 +529,15 @@ def detect_line_movement(snapshot_old: dict, snapshot_new: dict) -> list[dict]:
 
 
 def calculate_implied_probability(american_odds: int) -> float:
-    """Convert American odds to implied probability."""
+    """Convert American odds to implied probability.
+
+    feat/bet-execution-hardening (2026-04-23): 0 is not a valid American
+    odds value — every bet must have a positive OR negative price. Returning
+    0.0 from this function silently corrupted downstream edge calculations
+    (0.0 implied == "100% edge" for any fair_prob > 0). Now raises ValueError.
+    """
+    if american_odds == 0:
+        raise ValueError("American odds cannot be 0")
     if american_odds > 0:
         return 100 / (american_odds + 100)
     else:
