@@ -4388,6 +4388,55 @@ async def reset_claude_rate_limit():
     return reset_rate_limit()
 
 
+@app.get(
+    "/admin/self-repair/status",
+    dependencies=[Depends(require_admin_or_loopback)],
+)
+async def self_repair_status():
+    """Last recovery per type, success/failure, cooldown remaining.
+
+    Reads self_repair_log (migration 015) for the latest invocation per
+    registered recovery. Safe to poll; never mutates state.
+    """
+    from tools.self_repair import get_repair_engine
+    engine = get_repair_engine()
+    try:
+        return await engine.get_expanded_status()
+    except Exception as e:
+        logger.error(f"/admin/self-repair/status failed: {e!r}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"self_repair status error: {e!s}",
+        )
+
+
+@app.post(
+    "/admin/self-repair/trigger/{recovery_name}",
+    dependencies=[Depends(require_admin)],
+)
+async def self_repair_trigger(recovery_name: str):
+    """Manually invoke a named recovery, bypassing its cooldown.
+
+    Admin-gated (hard token) — recoveries can mutate state (mark tasks
+    FAILED, force checkpoint, dispatch generation cycles). The row in
+    self_repair_log carries trigger='manual' so manual invocations show
+    up alongside auto runs.
+    """
+    from tools.self_repair import get_repair_engine
+    engine = get_repair_engine()
+    try:
+        result = await engine.trigger_recovery(recovery_name, manual=True)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(
+            f"/admin/self-repair/trigger/{recovery_name} failed: {e!r}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"recovery_name": recovery_name, "result": result}
+
+
 @app.get("/system/full-status")
 async def full_system_status():
     """

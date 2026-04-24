@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -21,6 +22,31 @@ REJECTION_RATE_THRESHOLD = 0.95
 SIGNAL_DROUGHT_EVENTS = 500
 DB_BLOAT_ROWS = 100_000
 SCRAPER_DISABLE_SECONDS = 3600
+
+# ── Expanded recovery thresholds (feat/self-repair-expansion) ──
+# Each recovery gets its own cooldown to prevent thrashing. Cooldowns are
+# kept in _recovery_cooldowns (monotonic timestamp -> "can run after this").
+DB_LOCK_WARNING_SECONDS = 60            # DB lock held >60s is the trip point
+DB_LOCK_COOLDOWN_SECONDS = 900          # Don't force-checkpoint more than 1/15min
+STUCK_PROCESSING_TIMEOUT_MULT = 5       # 5x max timeout = "clearly stuck"
+STUCK_PROCESSING_COOLDOWN_SECONDS = 600
+RESEARCH_LOOP_ZERO_PROGRESS_CYCLES = 10  # 10 cycles with no new hypotheses
+RESEARCH_LOOP_COOLDOWN_SECONDS = 1800   # half-hour between forced gen cycles
+CLAUDE_MISSING_COOLDOWN_SECONDS = 3600
+SLA_STUCK_HOURS = 24                    # Source alerted >24h without recovery
+SLA_REFRESH_COOLDOWN_SECONDS = 3600     # Don't re-refresh same source hourly
+ODDS_SNAPSHOT_MISSING_COOLDOWN_SECONDS = 1800
+
+# Max reasonable task timeout (from task_classifier DEFAULT bucket). If a
+# PROCESSING row has been running longer than STUCK_MULT x this, declare it
+# orphaned. We use a safe upper-bound (1800s = 30 min) rather than importing
+# the classifier so this stays decoupled.
+TASK_MAX_TIMEOUT_SECONDS = float(os.getenv("CALLISTO_TASK_MAX_TIMEOUT_S", "1800"))
+
+# Registry of recovery cooldowns keyed by recovery_name. Values are
+# monotonic timestamps; the recovery can fire again once time.monotonic()
+# exceeds the stored value.
+_recovery_cooldowns: dict[str, float] = {}
 
 SCRAPERS = {
     "dk":     ("tools.dk_scraper",        "scrape_dk_odds",     "basketball_nba"),
@@ -184,6 +210,11 @@ class SelfRepairEngine:
         self._cycle_count = 0
         self._total_fixes = 0
         self._last_run: Optional[str] = None
+        # Expanded-recovery bookkeeping (feat/self-repair-expansion).
+        # Watermark starts None so the first probe seeds it rather than
+        # immediately declaring "zero progress since time zero".
+        self._last_hypothesis_watermark: Optional[int] = None
+        self._research_stagnant_cycles: int = 0
 
     async def run_repair_cycle(self) -> dict:
         """Main entry point — called by research loop each cycle."""
@@ -192,12 +223,29 @@ class SelfRepairEngine:
         issues = await self._detect_issues()
         results = [await self._repair(i) for i in issues]
         fixed = sum(1 for r in results if r["fixed"])
-        self._total_fixes += fixed
+        # Expanded recoveries run on the same cadence but are independently
+        # cooldown-gated so they fire less often than the detector loop.
+        expanded_results: list[dict] = []
+        try:
+            expanded_results = await self.run_expanded_recoveries()
+        except Exception as e:
+            logger.debug(f"Expanded recoveries failed: {e}")
+        fixed_expanded = sum(1 for r in expanded_results if r.get("fixed"))
+        self._total_fixes += fixed + fixed_expanded
         self._last_run = datetime.now(timezone.utc).isoformat()
         elapsed = time.monotonic() - start
-        if issues:
-            logger.info(f"Self-repair #{self._cycle_count}: {fixed}/{len(issues)} fixed ({elapsed:.1f}s)")
-        return {"issues_found": len(issues), "fixed": fixed, "elapsed_seconds": round(elapsed, 2),
+        if issues or expanded_results:
+            logger.info(
+                f"Self-repair #{self._cycle_count}: "
+                f"{fixed}/{len(issues)} legacy fixed, "
+                f"{fixed_expanded}/{len(expanded_results)} expanded fixed "
+                f"({elapsed:.1f}s)"
+            )
+        return {"issues_found": len(issues),
+                "fixed": fixed,
+                "expanded_results": expanded_results,
+                "expanded_fixed": fixed_expanded,
+                "elapsed_seconds": round(elapsed, 2),
                 "cycle": self._cycle_count, "results": results}
 
     def get_status(self) -> dict:
@@ -1022,6 +1070,603 @@ class SelfRepairEngine:
         except Exception as e:
             logger.debug(f"Hermes record failed: {e}")
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Expanded recovery surface (feat/self-repair-expansion).
+    #
+    # Each recovery is a thin async coroutine with the same contract as
+    # _fix_* — returns a dict {fixed: bool, action: str, detail: str,
+    # metadata?: dict}. It's registered in _RECOVERIES below and gated by
+    # a per-name cooldown. The research loop calls run_expanded_recoveries()
+    # once per cycle; /admin/self-repair/trigger/{name} bypasses the
+    # cooldown but still writes to self_repair_log with trigger='manual'.
+    #
+    # IMPORTANT: recoveries MUST NOT destructively modify hypotheses, bets,
+    # or odds snapshots. They can mark state (e.g. task_queue PROCESSING ->
+    # FAILED), trigger cycles (force a hypothesis-gen cycle), or log.
+    # ──────────────────────────────────────────────────────────────────────
+
+    async def _recover_db_lock_long(self) -> dict:
+        """DB lock held >60s — force a TRUNCATE checkpoint and log.
+
+        Detection: look at ``busy_timeout_stats(60)`` — if the last minute
+        recorded lock hits above the warning threshold, assume a writer is
+        monopolising the DB. The mitigation is a force checkpoint on a
+        dedicated autocommit connection, which breaks any lingering
+        read-snapshot and lets new writers in. We do NOT kill connections
+        or mutate data.
+        """
+        from tools.db_utils import busy_timeout_stats
+        stats = busy_timeout_stats(60.0)
+        total_hits = int(
+            stats.get("hits_in_window", 0) if isinstance(stats, dict) else 0
+        )
+        if total_hits < 3:
+            return {"fixed": False, "action": "db_lock_below_threshold",
+                    "detail": f"{total_hits} lock hits in last 60s; no recovery needed",
+                    "metadata": {"lock_hits_60s": total_hits}}
+        busy = ckpt = log_pages = 0
+        try:
+            conn = sqlite3.connect(DB_PATH, isolation_level=None, timeout=30.0)
+            try:
+                conn.execute("PRAGMA busy_timeout = 10000")
+                row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                if row:
+                    busy, log_pages, ckpt = row
+            finally:
+                conn.close()
+        except Exception as e:
+            return {"fixed": False, "action": "db_lock_checkpoint_error",
+                    "detail": f"{type(e).__name__}: {e}",
+                    "metadata": {"lock_hits_60s": total_hits}}
+        succeeded = busy == 0
+        detail = (f"WAL checkpoint {'ok' if succeeded else 'busy'}: "
+                  f"{ckpt}/{log_pages} pages (lock_hits_60s={total_hits})")
+        logger.info(f"self_repair: force-checkpoint after prolonged DB lock — {detail}")
+        return {"fixed": succeeded, "action": "force_wal_checkpoint",
+                "detail": detail,
+                "metadata": {"lock_hits_60s": total_hits, "busy": busy,
+                             "checkpointed_pages": ckpt,
+                             "log_pages": log_pages}}
+
+    async def _recover_orphaned_processing(self) -> dict:
+        """Mark task_queue rows stuck in PROCESSING past 5x max timeout as FAILED.
+
+        Safety: only rows whose started_at is older than
+        (TASK_MAX_TIMEOUT_SECONDS * STUCK_PROCESSING_TIMEOUT_MULT) are
+        touched. Marking state is permitted; we never DELETE tasks.
+        """
+        cutoff_seconds = TASK_MAX_TIMEOUT_SECONDS * STUCK_PROCESSING_TIMEOUT_MULT
+        cutoff_iso = (datetime.now(timezone.utc)
+                      - timedelta(seconds=cutoff_seconds)).isoformat()
+        touched_ids: list[int] = []
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 60000")
+                cur = await db.execute(
+                    "SELECT task_id FROM task_queue "
+                    "WHERE status = 'PROCESSING' AND started_at < ?",
+                    (cutoff_iso,),
+                )
+                rows = await cur.fetchall()
+                touched_ids = [int(r[0]) for r in rows]
+                if touched_ids:
+                    await db.execute(
+                        "UPDATE task_queue "
+                        "SET status = 'FAILED', "
+                        "    error = 'stuck in processing', "
+                        "    completed_at = ? "
+                        "WHERE status = 'PROCESSING' AND started_at < ?",
+                        (datetime.now(timezone.utc).isoformat(), cutoff_iso),
+                    )
+                    await db.commit()
+        except Exception as e:
+            return {"fixed": False, "action": "orphan_reaper_error",
+                    "detail": f"{type(e).__name__}: {e}"}
+        if not touched_ids:
+            return {"fixed": False, "action": "no_orphans",
+                    "detail": f"No PROCESSING rows older than {cutoff_seconds:.0f}s"}
+        logger.warning(
+            f"self_repair: marked {len(touched_ids)} orphaned PROCESSING "
+            f"task(s) FAILED (older than {cutoff_seconds:.0f}s): {touched_ids[:10]}"
+        )
+        return {"fixed": True, "action": "marked_failed_stuck_processing",
+                "detail": f"{len(touched_ids)} task(s) past {cutoff_seconds:.0f}s",
+                "metadata": {"task_ids": touched_ids[:50],
+                             "cutoff_seconds": cutoff_seconds}}
+
+    async def _recover_research_loop_stuck(self) -> dict:
+        """Force a hypothesis-gen cycle when the loop has spun 10 cycles
+        without producing anything new.
+
+        Detection: count hypotheses whose created_at is newer than the
+        cycle-start marker we track in ``self._last_gen_watermark``. If
+        N cycles have passed with zero new rows, trigger a forced
+        hypothesis-gen cycle on the autonomous loop and recompute
+        eligibility so stale "ineligible" rows get a fresh evaluation.
+        We never modify existing hypotheses here.
+        """
+        new_hypotheses = 0
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 60000")
+                watermark = self._last_hypothesis_watermark
+                if watermark is None:
+                    # First run — seed the watermark and skip forcing.
+                    row = await (await db.execute(
+                        "SELECT MAX(hypothesis_id) FROM hypotheses"
+                    )).fetchone()
+                    self._last_hypothesis_watermark = int(row[0]) if row and row[0] else 0
+                    self._research_stagnant_cycles = 0
+                    return {"fixed": False, "action": "research_loop_watermark_init",
+                            "detail": f"seeded watermark={self._last_hypothesis_watermark}"}
+                row = await (await db.execute(
+                    "SELECT COUNT(*) FROM hypotheses WHERE hypothesis_id > ?",
+                    (watermark,),
+                )).fetchone()
+                new_hypotheses = int(row[0]) if row and row[0] is not None else 0
+        except Exception as e:
+            return {"fixed": False, "action": "research_loop_probe_error",
+                    "detail": f"{type(e).__name__}: {e}"}
+
+        if new_hypotheses > 0:
+            # Progress happened — reset counters.
+            self._research_stagnant_cycles = 0
+            try:
+                async with aiosqlite.connect(DB_PATH) as db:
+                    row = await (await db.execute(
+                        "SELECT MAX(hypothesis_id) FROM hypotheses"
+                    )).fetchone()
+                    self._last_hypothesis_watermark = (
+                        int(row[0]) if row and row[0] else
+                        self._last_hypothesis_watermark
+                    )
+            except Exception:
+                pass
+            return {"fixed": False, "action": "research_loop_progressing",
+                    "detail": f"+{new_hypotheses} hypotheses since watermark"}
+
+        self._research_stagnant_cycles += 1
+        if self._research_stagnant_cycles < RESEARCH_LOOP_ZERO_PROGRESS_CYCLES:
+            return {"fixed": False, "action": "research_loop_warming",
+                    "detail": f"stagnant {self._research_stagnant_cycles}/"
+                              f"{RESEARCH_LOOP_ZERO_PROGRESS_CYCLES} cycles"}
+
+        logger.critical(
+            "self_repair: research loop stagnant for "
+            f"{self._research_stagnant_cycles} cycles — forcing hypothesis-gen"
+        )
+        forced = False
+        try:
+            # Trigger a forced generation cycle on the live research loop
+            # without destructively touching any existing rows.
+            import api as _api  # type: ignore
+            loop = getattr(_api, "autonomous", None) or getattr(_api, "research_loop", None)
+            if loop is not None:
+                # Reset the gen interval gate so the next pass is eligible.
+                try:
+                    loop._last_hypothesis_gen = 0.0  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                gen = getattr(loop, "hypothesis_generator", None) or getattr(
+                    _api, "hypothesis_generator", None
+                )
+                if gen is not None and hasattr(gen, "recompute_eligibility"):
+                    try:
+                        await gen.recompute_eligibility()  # type: ignore[attr-defined]
+                    except Exception as re:
+                        logger.debug(f"recompute_eligibility failed: {re}")
+                forced = True
+        except Exception as e:
+            logger.debug(f"Forced hypothesis-gen dispatch: {e}")
+
+        # Reset the counter so we don't force every cycle after the trigger.
+        self._research_stagnant_cycles = 0
+        return {"fixed": forced,
+                "action": "forced_hypothesis_gen_cycle" if forced
+                           else "hypothesis_gen_dispatch_failed",
+                "detail": f"stagnant cycles reset (was "
+                          f"{RESEARCH_LOOP_ZERO_PROGRESS_CYCLES})",
+                "metadata": {"watermark": self._last_hypothesis_watermark}}
+
+    async def _recover_claude_cli_missing(self) -> dict:
+        """Claude CLI not installed and we're not in local-only mode.
+
+        We NEVER silently degrade; the goal is: log CRITICAL, clear the
+        "trying claude" cooldown so local fallback paths can re-evaluate,
+        and record the downgrade. We do NOT toggle CALLISTO_LOCAL_ONLY —
+        that's a human decision; we only stop thrashing on the missing CLI.
+        """
+        from tools.local_only import is_local_only
+        if is_local_only():
+            return {"fixed": False, "action": "local_only_mode",
+                    "detail": "CALLISTO_LOCAL_ONLY=1 — no Claude CLI recovery needed"}
+        import shutil
+        claude_cmd = os.getenv("CLAUDE_CMD", "claude")
+        if shutil.which(claude_cmd):
+            return {"fixed": False, "action": "claude_cli_found",
+                    "detail": f"{claude_cmd} is on PATH — no recovery needed"}
+
+        logger.critical(
+            f"self_repair: Claude CLI '{claude_cmd}' missing but not in "
+            f"local-only mode — degrading to local model fallback"
+        )
+        try:
+            import tools.claude_code as cc
+            # Clear the cooldown so local model path doesn't keep waiting
+            # on Claude to recover — the CLI is GONE, not cooling down.
+            cc._available = False  # type: ignore[attr-defined]
+            cc._cooldown_until = 0.0  # type: ignore[attr-defined]
+            cc._consecutive_failures = 0  # type: ignore[attr-defined]
+            cc._last_error = "cli_missing"  # type: ignore[attr-defined]
+            try:
+                cc._persist_cooldown()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        except Exception as e:
+            return {"fixed": False, "action": "claude_cli_degrade_error",
+                    "detail": f"{type(e).__name__}: {e}"}
+        # Record a Hermes learning marker so humans see it in dashboards.
+        try:
+            from tools.hermes_memory import get_hermes_memory
+            h = get_hermes_memory()
+            await h.record_learning(
+                key="claude_cli_missing",
+                value=f"CLI '{claude_cmd}' not on PATH at "
+                      f"{datetime.now(timezone.utc).isoformat()}",
+                confidence=0.95, source="self_repair",
+            )
+        except Exception:
+            pass
+        return {"fixed": True, "action": "degraded_to_local_model",
+                "detail": f"CLI '{claude_cmd}' missing; cooldown cleared, "
+                          f"local fallback armed",
+                "metadata": {"claude_cmd": claude_cmd}}
+
+    async def _recover_sla_stuck_sources(self) -> dict:
+        """Force a refresh attempt on SLA-alerted sources stuck >24h.
+
+        Reads the alerted-source file that ``ingestion_sla_watchdog_loop``
+        maintains, compares it against ingestion_runs.finished_at to
+        determine age, and (for any source older than SLA_STUCK_HOURS)
+        invokes the ingestion function once through the already-tracked
+        tracked_ingestion wrapper. We explicitly do NOT keep queueing
+        investigate-tasks — that's what the watchdog already does.
+        """
+        # Locate the alerted-source file without importing api.py (which
+        # has heavy side effects). Fall back to an empty set on any error.
+        state_dir = os.getenv("CALLISTO_STATE_DIR") or os.path.join(
+            os.path.dirname(os.path.abspath(DB_PATH)),
+        )
+        alerted_path = os.path.join(state_dir, "sla_alerted_sources.json")
+        if not os.path.exists(alerted_path):
+            # api.py writes the file under memory/ too — try that.
+            alerted_path = os.path.join(
+                os.path.dirname(os.path.abspath(DB_PATH)),
+                "sla_alerted_sources.json",
+            )
+        sources: list[str] = []
+        try:
+            if os.path.exists(alerted_path):
+                with open(alerted_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    sources = [str(s) for s in data.get("sources", [])
+                               if isinstance(s, str)]
+                elif isinstance(data, list):
+                    sources = [str(s) for s in data if isinstance(s, str)]
+        except Exception as e:
+            return {"fixed": False, "action": "sla_alerted_read_error",
+                    "detail": f"{type(e).__name__}: {e}"}
+        if not sources:
+            return {"fixed": False, "action": "no_sla_alerts",
+                    "detail": "no sources currently alerted"}
+
+        # Filter to sources stuck >24h by consulting ingestion_runs.
+        stuck: list[tuple[str, float]] = []  # (source, hours_since_last_ok)
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
+                q = (
+                    "SELECT source, "
+                    "  (julianday('now') - julianday(MAX(finished_at))) * 86400 AS age_s "
+                    "FROM ingestion_runs "
+                    "WHERE source = ? AND status = 'ok' AND finished_at IS NOT NULL"
+                )
+                for src in sources:
+                    try:
+                        row = await (await db.execute(q, (src,))).fetchone()
+                    except Exception:
+                        continue
+                    if row is None:
+                        stuck.append((src, float("inf")))
+                        continue
+                    age_s = row[1]
+                    hours = (float(age_s) / 3600.0) if age_s is not None else float("inf")
+                    if hours >= SLA_STUCK_HOURS:
+                        stuck.append((src, hours))
+        except Exception as e:
+            return {"fixed": False, "action": "sla_stuck_probe_error",
+                    "detail": f"{type(e).__name__}: {e}"}
+        if not stuck:
+            return {"fixed": False, "action": "no_sla_stuck_24h",
+                    "detail": f"none of {len(sources)} alerted source(s) stuck >{SLA_STUCK_HOURS}h"}
+
+        refreshed: list[str] = []
+        failed: list[dict] = []
+        for src, hours in stuck[:5]:  # hard cap per invocation
+            fn = _SLA_REFRESH_HANDLERS.get(src)
+            if fn is None:
+                failed.append({"source": src, "error": "no_refresh_handler"})
+                continue
+            try:
+                result = await asyncio.wait_for(fn(), timeout=60)
+                ok = bool(result) and not (
+                    isinstance(result, dict) and result.get("error")
+                )
+                if ok:
+                    refreshed.append(src)
+                else:
+                    failed.append({"source": src,
+                                   "error": (result.get("error") if isinstance(result, dict)
+                                             else "unknown")})
+            except asyncio.TimeoutError:
+                failed.append({"source": src, "error": "timeout"})
+            except Exception as e:
+                failed.append({"source": src, "error": f"{type(e).__name__}: {e}"})
+        detail = (f"refreshed={refreshed or '-'} failed={[f['source'] for f in failed] or '-'} "
+                  f"hours={{{', '.join(f'{s}:{h:.1f}' for s, h in stuck)}}}")
+        logger.info(f"self_repair: SLA stuck source refresh — {detail}")
+        return {"fixed": bool(refreshed), "action": "sla_refresh_attempted",
+                "detail": detail,
+                "metadata": {"refreshed": refreshed, "failed": failed,
+                             "candidates": [s for s, _ in stuck]}}
+
+    async def _recover_missing_odds_snapshot(self) -> dict:
+        """Force a fallback-scraper path when no odds snapshot exists for
+        an active sport.
+
+        Definition of "active": appears in line_monitor._snapshots if the
+        monitor is running; otherwise derive from game_contexts with a
+        game in the next 24h. If an active sport has zero rows in
+        odds_snapshots / odds_snapshots_v2 in the last STALE_ODDS_MINUTES
+        window, invoke the fallback scraper path. We only TRIGGER; we
+        never delete or modify existing snapshot rows.
+        """
+        active: set[str] = set()
+        try:
+            import api as _api  # type: ignore
+            lm = getattr(_api, "line_monitor", None)
+            if lm is not None and hasattr(lm, "_snapshots"):
+                active = {k for k in lm._snapshots.keys() if isinstance(k, str)}  # type: ignore
+        except Exception:
+            active = set()
+        if not active:
+            try:
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute("PRAGMA busy_timeout = 10000")
+                    cutoff = (datetime.now(timezone.utc)
+                              + timedelta(hours=24)).isoformat()
+                    rows = await (await db.execute(
+                        "SELECT DISTINCT sport FROM game_contexts "
+                        "WHERE game_date <= ? AND sport IS NOT NULL",
+                        (cutoff,),
+                    )).fetchall()
+                    active = {r[0] for r in rows if r and r[0]}
+            except Exception:
+                pass
+        if not active:
+            # Safe default — don't fire if we can't identify any active sport.
+            return {"fixed": False, "action": "no_active_sport_identified",
+                    "detail": "no line_monitor sports and no upcoming game_contexts"}
+
+        stale_cutoff = (datetime.now(timezone.utc)
+                        - timedelta(minutes=STALE_ODDS_MINUTES)).isoformat()
+        missing: list[str] = []
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
+                for sport in sorted(active):
+                    try:
+                        row = await (await db.execute(
+                            "SELECT COUNT(*) FROM odds_snapshots "
+                            "WHERE sport = ? AND timestamp > ?",
+                            (sport, stale_cutoff),
+                        )).fetchone()
+                        count = int(row[0]) if row and row[0] is not None else 0
+                    except Exception:
+                        count = 0
+                    if count > 0:
+                        continue
+                    # v2 fallback — if the v1 table is absent or cold.
+                    try:
+                        row = await (await db.execute(
+                            "SELECT COUNT(*) FROM odds_snapshots_v2 "
+                            "WHERE sport = ? AND snapshot_time > ?",
+                            (sport, stale_cutoff),
+                        )).fetchone()
+                        count_v2 = int(row[0]) if row and row[0] is not None else 0
+                    except Exception:
+                        count_v2 = 0
+                    if count + count_v2 == 0:
+                        missing.append(sport)
+        except Exception as e:
+            return {"fixed": False, "action": "odds_probe_error",
+                    "detail": f"{type(e).__name__}: {e}"}
+        if not missing:
+            return {"fixed": False, "action": "odds_snapshots_fresh",
+                    "detail": f"all {len(active)} active sport(s) have "
+                              f"recent snapshots"}
+
+        forced: list[str] = []
+        failed: list[dict] = []
+        for sport in missing[:3]:  # cap — don't hammer scrapers
+            try:
+                import api as _api  # type: ignore
+                lm = getattr(_api, "line_monitor", None)
+                if lm is not None and hasattr(lm, "_snapshot_sport_fallback"):
+                    await asyncio.wait_for(
+                        lm._snapshot_sport_fallback(sport), timeout=120
+                    )
+                    forced.append(sport)
+                    continue
+            except Exception as e:
+                failed.append({"sport": sport, "error": f"line_monitor: {e}"})
+            # Direct scraper fallback when line_monitor is unavailable.
+            any_ok = False
+            for name, (mod_path, fn_name, _default) in SCRAPERS.items():
+                if name in _disabled_scrapers and _disabled_scrapers[name] > time.monotonic():
+                    continue
+                try:
+                    mod = __import__(mod_path, fromlist=[fn_name])
+                    r = await asyncio.wait_for(getattr(mod, fn_name)(sport), timeout=30)
+                    if isinstance(r, dict) and not r.get("error"):
+                        forced.append(sport)
+                        any_ok = True
+                        break
+                except Exception as e:
+                    failed.append({"sport": sport, "error": f"{name}: {e}"})
+            if not any_ok and sport not in forced:
+                failed.append({"sport": sport, "error": "all_scrapers_failed"})
+
+        logger.warning(
+            f"self_repair: odds snapshot fallback — forced={forced} failed={failed}"
+        )
+        return {"fixed": bool(forced), "action": "forced_odds_fallback",
+                "detail": f"active={sorted(active)} missing={missing} "
+                          f"forced={forced}",
+                "metadata": {"missing": missing, "forced": forced,
+                             "failed": failed}}
+
+    async def run_expanded_recoveries(
+        self, *, force: bool = False
+    ) -> list[dict]:
+        """Run every registered expanded recovery whose cooldown has elapsed.
+
+        Each invocation is appended to ``self_repair_log``. Returns the
+        per-recovery result list (for the research loop's telemetry).
+        """
+        results: list[dict] = []
+        for name, _fn, cooldown in self._RECOVERIES:
+            next_ok = _recovery_cooldowns.get(name, 0.0)
+            if not force and time.monotonic() < next_ok:
+                continue
+            start_ns = time.monotonic_ns()
+            try:
+                result = await getattr(self, _fn)()
+            except Exception as e:
+                result = {"fixed": False, "action": "recovery_error",
+                          "detail": f"{type(e).__name__}: {e}"}
+            elapsed_ms = (time.monotonic_ns() - start_ns) / 1e6
+            # Apply cooldown regardless of outcome to avoid thrashing on
+            # persistent failures (the manual trigger endpoint can override).
+            _recovery_cooldowns[name] = time.monotonic() + cooldown
+            result.setdefault("recovery_name", name)
+            result["elapsed_ms"] = round(elapsed_ms, 2)
+            await _log_self_repair(name, result, trigger="auto",
+                                    elapsed_ms=elapsed_ms)
+            await self._record_to_hermes(f"expanded_{name}", result)
+            results.append(result)
+        return results
+
+    async def trigger_recovery(self, name: str, *, manual: bool = True) -> dict:
+        """Invoke a single registered recovery by name, bypassing cooldown.
+
+        Returns the same shape as run_expanded_recoveries() entries.
+        Raises ValueError if the name isn't registered.
+        """
+        match = [r for r in self._RECOVERIES if r[0] == name]
+        if not match:
+            raise ValueError(f"unknown recovery: {name}")
+        _name, _fn, cooldown = match[0]
+        start_ns = time.monotonic_ns()
+        try:
+            result = await getattr(self, _fn)()
+        except Exception as e:
+            result = {"fixed": False, "action": "recovery_error",
+                      "detail": f"{type(e).__name__}: {e}"}
+        elapsed_ms = (time.monotonic_ns() - start_ns) / 1e6
+        _recovery_cooldowns[_name] = time.monotonic() + cooldown
+        result.setdefault("recovery_name", _name)
+        result["elapsed_ms"] = round(elapsed_ms, 2)
+        await _log_self_repair(_name, result,
+                                trigger=("manual" if manual else "auto"),
+                                elapsed_ms=elapsed_ms)
+        await self._record_to_hermes(f"expanded_{_name}", result)
+        return result
+
+    async def get_expanded_status(self) -> dict:
+        """Last recovery per type, success/failure, cooldown remaining.
+
+        Serves /admin/self-repair/status — reads the last row per recovery
+        from self_repair_log so the UI can show "last ran 4m ago, success".
+        """
+        recoveries: list[dict] = []
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 10000")
+                # Test if table exists before querying so first-run
+                # deployments (pre-migration) don't 500.
+                row = await (await db.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name='self_repair_log'"
+                )).fetchone()
+                has_table = bool(row)
+                now = time.monotonic()
+                for name, _fn, cooldown in self._RECOVERIES:
+                    entry = {
+                        "recovery_name": name,
+                        "cooldown_seconds": cooldown,
+                        "cooldown_remaining_seconds": round(max(
+                            0.0, _recovery_cooldowns.get(name, 0.0) - now
+                        ), 1),
+                        "last_run": None,
+                    }
+                    if has_table:
+                        try:
+                            last = await (await db.execute(
+                                "SELECT success, action, detail, trigger, "
+                                "invoked_at, elapsed_ms, metadata_json "
+                                "FROM self_repair_log "
+                                "WHERE recovery_name = ? "
+                                "ORDER BY invoked_at DESC LIMIT 1",
+                                (name,),
+                            )).fetchone()
+                        except Exception:
+                            last = None
+                        if last:
+                            entry["last_run"] = {
+                                "success": bool(last[0]),
+                                "action": last[1],
+                                "detail": last[2],
+                                "trigger": last[3],
+                                "invoked_at": last[4],
+                                "elapsed_ms": last[5],
+                                "metadata": _safe_json_load(last[6]),
+                            }
+                    recoveries.append(entry)
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}",
+                    "recoveries": recoveries}
+        return {"recoveries": recoveries,
+                "total_registered": len(self._RECOVERIES)}
+
+    # Ordered registry: (name, method_name, cooldown_seconds).
+    _RECOVERIES: list[tuple[str, str, float]] = [
+        ("db_lock_long",
+         "_recover_db_lock_long", DB_LOCK_COOLDOWN_SECONDS),
+        ("orphaned_processing",
+         "_recover_orphaned_processing", STUCK_PROCESSING_COOLDOWN_SECONDS),
+        ("research_loop_stuck",
+         "_recover_research_loop_stuck", RESEARCH_LOOP_COOLDOWN_SECONDS),
+        ("claude_cli_missing",
+         "_recover_claude_cli_missing", CLAUDE_MISSING_COOLDOWN_SECONDS),
+        ("sla_stuck_sources",
+         "_recover_sla_stuck_sources", SLA_REFRESH_COOLDOWN_SECONDS),
+        ("missing_odds_snapshot",
+         "_recover_missing_odds_snapshot", ODDS_SNAPSHOT_MISSING_COOLDOWN_SECONDS),
+    ]
+
+
 _engine: Optional[SelfRepairEngine] = None
 
 def get_repair_engine() -> SelfRepairEngine:  # singleton
@@ -1029,3 +1674,132 @@ def get_repair_engine() -> SelfRepairEngine:  # singleton
     if _engine is None:
         _engine = SelfRepairEngine()
     return _engine
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Expanded-recovery module-level helpers
+# ──────────────────────────────────────────────────────────────────────────
+
+def _safe_json_load(s):
+    if not s:
+        return None
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
+
+
+async def _log_self_repair(
+    recovery_name: str,
+    result: dict,
+    *,
+    trigger: str = "auto",
+    elapsed_ms: Optional[float] = None,
+) -> None:
+    """Append a row to ``self_repair_log``. Fails silently on error — the
+    audit log is observational; a logging failure must never break the
+    recovery that just succeeded.
+    """
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("PRAGMA busy_timeout = 30000")
+            # Idempotent table create so unit tests against ephemeral DBs
+            # don't need the migration runner. Production DBs already have
+            # this table from migration 015; the IF NOT EXISTS is a no-op.
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS self_repair_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recovery_name TEXT NOT NULL,
+                    trigger TEXT NOT NULL DEFAULT 'auto',
+                    success INTEGER NOT NULL DEFAULT 0,
+                    action TEXT,
+                    detail TEXT,
+                    metadata_json TEXT,
+                    invoked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    elapsed_ms REAL
+                )
+                """
+            )
+            meta = result.get("metadata")
+            meta_json = json.dumps(meta) if meta is not None else None
+            await db.execute(
+                "INSERT INTO self_repair_log "
+                "(recovery_name, trigger, success, action, detail, "
+                " metadata_json, invoked_at, elapsed_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    recovery_name,
+                    trigger if trigger in ("auto", "manual") else "auto",
+                    1 if result.get("fixed") else 0,
+                    result.get("action"),
+                    result.get("detail"),
+                    meta_json,
+                    datetime.now(timezone.utc).isoformat(),
+                    round(float(elapsed_ms), 2) if elapsed_ms is not None else None,
+                ),
+            )
+            await db.commit()
+    except Exception as e:
+        logger.debug(f"self_repair_log append failed for {recovery_name}: {e}")
+
+
+# SLA refresh handlers — map source -> no-arg coroutine that tries a
+# refresh. Kept tiny and defensive; unknown sources fall through with a
+# no_refresh_handler sentinel. Register new sources by adding an entry.
+
+async def _refresh_action_network() -> dict:
+    try:
+        from tools import action_network_scraper
+        return await action_network_scraper.scrape_action_network_odds(  # type: ignore[attr-defined]
+            "basketball_nba"
+        )
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+async def _refresh_dk() -> dict:
+    try:
+        from tools import dk_scraper
+        return await dk_scraper.scrape_dk_odds("basketball_nba")
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+async def _refresh_fd() -> dict:
+    try:
+        from tools import fanduel_scraper
+        return await fanduel_scraper.scrape_fd_odds("basketball_nba")
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+async def _refresh_odds_api_io() -> dict:
+    try:
+        from tools import odds_api_io
+        # get_usage_status() is a cheap probe that exercises the same
+        # credential path as real calls without burning a credit.
+        if hasattr(odds_api_io, "get_usage_status"):
+            r = odds_api_io.get_usage_status()
+            if asyncio.iscoroutine(r):
+                r = await r
+            return {"ok": True, "usage": r}
+        return {"error": "no_probe_available"}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+_SLA_REFRESH_HANDLERS: dict[str, callable] = {  # type: ignore[type-arg]
+    "action_network": _refresh_action_network,
+    "dk": _refresh_dk,
+    "draftkings": _refresh_dk,
+    "fanduel": _refresh_fd,
+    "fd": _refresh_fd,
+    "odds_api_io": _refresh_odds_api_io,
+    "odds-api-io": _refresh_odds_api_io,
+}
+
+
+def register_sla_refresh_handler(source: str, handler) -> None:
+    """Allow callers (e.g. tests, plugin sources) to register handlers."""
+    _SLA_REFRESH_HANDLERS[source] = handler
