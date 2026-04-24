@@ -350,6 +350,115 @@ def _american_to_implied(american: Optional[int]) -> Optional[float]:
     return (-a) / ((-a) + 100.0)
 
 
+def _parse_clock_seconds(value: Any) -> Optional[int]:
+    """Return ESPN clock value as integer seconds remaining in the period.
+
+    ESPN returns ``clock``/``displayClock`` in several shapes across sports
+    and endpoints:
+      - ``float`` / ``int`` already expressed as seconds (common in the
+        summary payload for MLB / NHL).
+      - ``"10:35"`` — mm:ss string.
+      - ``"0.0"`` / numeric string — seconds as string.
+      - ``"00:00.0"`` — NHL overtime / shootout variant.
+
+    Returns None when the value cannot be parsed. Callers treat None as
+    "no clock signal" rather than assuming 0, so the detector does not
+    fire prematurely on malformed payloads.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    s = str(value).strip()
+    if not s:
+        return None
+    if ":" in s:
+        parts = s.split(":")
+        try:
+            mins = int(float(parts[0]))
+            secs = float(parts[1]) if len(parts) > 1 else 0.0
+            return max(0, mins * 60 + int(secs))
+        except (ValueError, TypeError):
+            return None
+    try:
+        return max(0, int(float(s)))
+    except (ValueError, TypeError):
+        return None
+
+
+def _extract_competition_block(summary: dict) -> tuple[dict, dict]:
+    """Return (competition, status) dicts from an ESPN summary payload.
+
+    Falls back across the handful of shapes ESPN returns depending on
+    endpoint (summary vs scoreboard-event vs fastcast). Missing blocks
+    return ``{}`` so downstream ``.get`` calls stay safe.
+    """
+    comps = (summary.get("header") or {}).get("competitions") or []
+    if not comps:
+        comps = summary.get("competitions") or []
+    comp = comps[0] if comps else {}
+    status = comp.get("status") or summary.get("status") or {}
+    return comp, status
+
+
+def _extract_scores_home_away(comp: dict) -> tuple[int, int]:
+    """Return ``(home_score, away_score)`` from an ESPN competition dict.
+
+    Unknown sides default to 0 — detectors gate on score differentials,
+    so a silently-zero side simply fails the trigger rather than faking
+    a lead."""
+    home = away = 0
+    for team in comp.get("competitors") or []:
+        try:
+            score = int(float(team.get("score") or 0))
+        except (ValueError, TypeError):
+            score = 0
+        side = (team.get("homeAway") or "").lower()
+        if side == "home":
+            home = score
+        elif side == "away":
+            away = score
+    return home, away
+
+
+def nba_extract_state(summary: dict) -> dict:
+    """Pull the fields the NBA late-overreaction detector needs.
+
+    Returns dict with keys: ``period`` (int 1-4, 5+ = OT),
+    ``time_remaining_s`` (int or None), ``home_score`` (int),
+    ``away_score`` (int).
+
+    Missing fields default to 0 / None so the signal function can gate
+    on them without raising.
+    """
+    comp, status = _extract_competition_block(summary)
+    try:
+        period = int(status.get("period") or 0)
+    except (ValueError, TypeError):
+        period = 0
+    clock = status.get("clock")
+    if clock is None:
+        clock = status.get("displayClock")
+    time_remaining_s = _parse_clock_seconds(clock)
+    home_score, away_score = _extract_scores_home_away(comp)
+    return {
+        "period": period,
+        "time_remaining_s": time_remaining_s,
+        "home_score": home_score,
+        "away_score": away_score,
+    }
+
+
+def nhl_extract_state(summary: dict) -> dict:
+    """Pull the fields the NHL late-overreaction detector needs.
+
+    Same shape as ``nba_extract_state`` — the two sports share the
+    ESPN summary schema; they differ only in period count (3 vs 4)
+    and score magnitudes.
+    """
+    return nba_extract_state(summary)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Detector B: NBA / NHL late-game over-reaction
 # ──────────────────────────────────────────────────────────────────────
@@ -644,7 +753,9 @@ __all__ = [
     "KILL_SWITCH_WINDOW_S",
     "mlb_extract_state",
     "mlb_quiet_innings_signal",
+    "nba_extract_state",
     "nba_late_overreaction_signal",
+    "nhl_extract_state",
     "nhl_late_overreaction_signal",
     "prop_reactivity_signal",
     "emit_edge",

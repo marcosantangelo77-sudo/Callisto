@@ -98,6 +98,28 @@ BACKOFF_STEPS_S = (30.0, 60.0, 120.0, 300.0)
 _states_collected_counter = 0  # lifetime; "_24h" is derived from DB
 _edges_emitted_counter = 0     # lifetime
 
+# Per-sport detector activity — lets the dashboard show which sports are
+# contributing edges vs merely collecting state. Resets at import alongside
+# the lifetime counters. Keys are internal sport slugs ("baseball_mlb",
+# "basketball_nba", "icehockey_nhl"); values carry counts + last-eval time.
+_per_sport_telemetry: dict[str, dict[str, Any]] = {}
+
+
+def _sport_tel(sport: str) -> dict[str, Any]:
+    """Return the mutable telemetry dict for a sport, creating if needed."""
+    tel = _per_sport_telemetry.get(sport)
+    if tel is None:
+        tel = {
+            "games_observed": 0,
+            "states_collected": 0,
+            "edges_emitted": 0,
+            "last_eval_ts": None,
+            "detector_fires": 0,
+            "detector_errors": 0,
+        }
+        _per_sport_telemetry[sport] = tel
+    return tel
+
 # Set True once we've verified the live_game_states table exists. If the
 # migration hasn't run (fresh DB), the collector self-disables and the
 # lifespan logs a warning instead of crashing.
@@ -388,20 +410,58 @@ async def _evaluate_detectors(
     db_path: str,
     now: datetime,
 ) -> int:
-    """Run applicable detectors against the freshly-stored state.
+    """Dispatch to the right detector(s) for this sport's freshly-stored state.
 
-    Returns the number of live-edge rows persisted. Currently we wire
-    the MLB quiet-innings detector because it has a well-defined pure
-    signal that doesn't require the live-odds WS (it reads the pre-game
-    and live totals from DB). NBA/NHL detectors fire on the WS path
-    (see ``line_monitor._handle_ws_update``) because they need the
-    live_spread_home price which only arrives via the odds firehose.
+    Returns the number of live-edge rows persisted.
+
+    Dispatch registry — one entry per sport:
+      - ``baseball_mlb`` -> ``mlb_quiet_innings`` (totals over-reaction)
+      - ``basketball_nba`` -> ``nba_late_overreaction`` (spread compression)
+      - ``icehockey_nhl`` -> ``nhl_late_overreaction`` (puck-line compression)
+
+    Sports without a registered detector return 0 silently so unrelated
+    polls stay cheap. The MLB path reads pre-game totals from
+    ``odds_snapshots``; the NBA/NHL paths read the latest live spread
+    (home side) from the same table. When the requisite odds row is
+    missing we bail without firing — the poll will retry on the next tick.
     """
-    if sport != "baseball_mlb":
+    tel = _sport_tel(sport)
+    tel["last_eval_ts"] = now.isoformat()
+    try:
+        handler = _SPORT_DETECTOR_REGISTRY.get(sport)
+    except Exception:
+        handler = None
+    if handler is None:
         return 0
     try:
+        emitted = await handler(
+            event_id=event_id,
+            state=state,
+            prev_state=prev_state,
+            db_path=db_path,
+            now=now,
+        )
+    except Exception as e:
+        tel["detector_errors"] = int(tel.get("detector_errors") or 0) + 1
+        logger.warning(f"detector handler failed for {sport}/{event_id}: {e}")
+        return 0
+    if emitted:
+        tel["detector_fires"] = int(tel.get("detector_fires") or 0) + int(emitted)
+        tel["edges_emitted"] = int(tel.get("edges_emitted") or 0) + int(emitted)
+    return int(emitted or 0)
+
+
+async def _detect_mlb(
+    *,
+    event_id: str,
+    state: dict,
+    prev_state: Optional[dict],
+    db_path: str,
+    now: datetime,
+) -> int:
+    """MLB quiet-innings detector — totals over-reaction."""
+    try:
         from tools.live_edges import (
-            LiveEdge,
             mlb_extract_state,
             mlb_quiet_innings_signal,
             emit_edge,
@@ -416,8 +476,6 @@ async def _evaluate_detectors(
         logger.debug(f"mlb_extract_state failed: {e}")
         return 0
 
-    # Look up the pre-game + live totals lines from odds_snapshots. If
-    # either is missing we cannot fire the signal — leave silently.
     pregame_total, live_total, live_over_price, bookmaker = await _lookup_mlb_totals(
         db_path=db_path, event_id=event_id, now=now,
     )
@@ -441,6 +499,135 @@ async def _evaluate_detectors(
         logger.debug(f"emit_edge failed for {event_id}: {e}")
         return 0
     return 1 if new_id else 0
+
+
+async def _detect_nba(
+    *,
+    event_id: str,
+    state: dict,
+    prev_state: Optional[dict],
+    db_path: str,
+    now: datetime,
+) -> int:
+    """NBA end-of-Q3 over-reaction — live spread compression beyond
+    realistic Q4 regression. Requires a live spread + price from
+    ``odds_snapshots``; bails silently when odds aren't present."""
+    try:
+        from tools.live_edges import (
+            nba_extract_state,
+            nba_late_overreaction_signal,
+            emit_edge,
+        )
+    except Exception as e:
+        logger.debug(f"live_edges import failed: {e}")
+        return 0
+
+    try:
+        parsed = nba_extract_state(state)
+    except Exception as e:
+        logger.debug(f"nba_extract_state failed: {e}")
+        return 0
+
+    period = int(parsed.get("period") or 0)
+    time_remaining_s = parsed.get("time_remaining_s")
+    if time_remaining_s is None:
+        return 0
+    live_spread_home, live_home_price, bookmaker = await _lookup_live_spread_home(
+        db_path=db_path, event_id=event_id, now=now,
+    )
+    if live_spread_home is None or live_home_price is None:
+        return 0
+
+    edge = nba_late_overreaction_signal(
+        period=period,
+        time_remaining_s=int(time_remaining_s),
+        home_score=int(parsed.get("home_score") or 0),
+        away_score=int(parsed.get("away_score") or 0),
+        live_spread_home=float(live_spread_home),
+        live_home_price=int(live_home_price),
+    )
+    if edge is None:
+        return 0
+    edge.event_id = event_id
+    edge.bookmaker = bookmaker or ""
+    try:
+        new_id = await emit_edge(edge, db_path=db_path, now=now)
+    except Exception as e:
+        logger.debug(f"emit_edge failed for {event_id}: {e}")
+        return 0
+    return 1 if new_id else 0
+
+
+async def _detect_nhl(
+    *,
+    event_id: str,
+    state: dict,
+    prev_state: Optional[dict],
+    db_path: str,
+    now: datetime,
+) -> int:
+    """NHL end-of-P2 over-reaction — live puck line compression.
+
+    Puck lines live in ``odds_snapshots`` under ``market_type='spreads'``
+    for NHL (odds-api models puck line as the spreads market). Same
+    lookup shape as NBA.
+    """
+    try:
+        from tools.live_edges import (
+            nhl_extract_state,
+            nhl_late_overreaction_signal,
+            emit_edge,
+        )
+    except Exception as e:
+        logger.debug(f"live_edges import failed: {e}")
+        return 0
+
+    try:
+        parsed = nhl_extract_state(state)
+    except Exception as e:
+        logger.debug(f"nhl_extract_state failed: {e}")
+        return 0
+
+    period = int(parsed.get("period") or 0)
+    time_remaining_s = parsed.get("time_remaining_s")
+    if time_remaining_s is None:
+        return 0
+    live_puck_line_home, live_home_price, bookmaker = await _lookup_live_spread_home(
+        db_path=db_path, event_id=event_id, now=now,
+    )
+    if live_puck_line_home is None or live_home_price is None:
+        return 0
+
+    edge = nhl_late_overreaction_signal(
+        period=period,
+        time_remaining_s=int(time_remaining_s),
+        home_score=int(parsed.get("home_score") or 0),
+        away_score=int(parsed.get("away_score") or 0),
+        live_puck_line_home=float(live_puck_line_home),
+        live_home_price=int(live_home_price),
+    )
+    if edge is None:
+        return 0
+    edge.event_id = event_id
+    edge.bookmaker = bookmaker or ""
+    try:
+        new_id = await emit_edge(edge, db_path=db_path, now=now)
+    except Exception as e:
+        logger.debug(f"emit_edge failed for {event_id}: {e}")
+        return 0
+    return 1 if new_id else 0
+
+
+# Sport -> detector handler registry. Extending live-state to a new sport
+# is a matter of (a) adding ESPN mapping in LIVE_SPORTS, (b) writing an
+# extractor + pure-signal function in live_edges.py, and (c) registering
+# the handler here. The gate used to be ``if sport == "baseball_mlb"``;
+# this dispatch table is the direct replacement.
+_SPORT_DETECTOR_REGISTRY: dict[str, Any] = {
+    "baseball_mlb": _detect_mlb,
+    "basketball_nba": _detect_nba,
+    "icehockey_nhl": _detect_nhl,
+}
 
 
 async def _lookup_mlb_totals(
@@ -490,6 +677,108 @@ async def _lookup_mlb_totals(
     pregame_total = _extract_total_point(first["response_json"])
     live_total, live_over_price, book = _extract_live_over(last["response_json"])
     return pregame_total, live_total, live_over_price, book
+
+
+async def _lookup_live_spread_home(
+    *,
+    db_path: str,
+    event_id: str,
+    now: datetime,
+) -> tuple[Optional[float], Optional[int], Optional[str]]:
+    """Return (live_spread_home_point, live_home_price, bookmaker) pulled
+    from the most-recent ``odds_snapshots`` row of ``market_type='spreads'``
+    for this event.
+
+    Shared by NBA (spread in points) and NHL (puck line in goals) — both
+    are encoded as ``market_type='spreads'`` by the odds feed. Caller
+    interprets the numeric unit.
+
+    Any element of the tuple is None when the snapshot is missing or the
+    blob lacks the needed fields. A None return triggers the detector to
+    skip this tick; the next poll will retry.
+    """
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='odds_snapshots' LIMIT 1"
+            )
+            if not await cur.fetchone():
+                return None, None, None
+            cur = await db.execute(
+                "SELECT response_json, fetched_at FROM odds_snapshots "
+                "WHERE event_id = ? AND market_type = 'spreads' "
+                "ORDER BY fetched_at DESC LIMIT 1",
+                (event_id,),
+            )
+            last = await cur.fetchone()
+    except Exception as e:
+        logger.debug(f"_lookup_live_spread_home query failed: {e}")
+        return None, None, None
+
+    if not last:
+        return None, None, None
+    return _extract_home_spread(last["response_json"])
+
+
+def _extract_home_spread(
+    response_json: Optional[str],
+) -> tuple[Optional[float], Optional[int], Optional[str]]:
+    """Pull the HOME spread point, HOME price (American), and book from a
+    snapshot blob.
+
+    The odds-api snapshot shape is ``{"bookmakers":[{"key","markets":[
+    {"key":"spreads","outcomes":[{"name":<team>,"point":float,"price":int}
+    ,...]}]}]}``. The HOME outcome is identified by the team name
+    matching the blob's top-level ``home_team`` when present; otherwise
+    we fall back to the first outcome with a negative point (the
+    favored side is usually the home side in US betting data), then to
+    the first outcome outright. Returns (None, None, None) when the
+    blob is missing or malformed."""
+    if not response_json:
+        return None, None, None
+    try:
+        blob = json.loads(response_json)
+    except Exception:
+        return None, None, None
+    if not isinstance(blob, dict):
+        return None, None, None
+    home_team = (blob.get("home_team") or "").strip().lower()
+    for bm in blob.get("bookmakers") or []:
+        for mkt in bm.get("markets") or []:
+            if mkt.get("key") != "spreads":
+                continue
+            outcomes = mkt.get("outcomes") or []
+            picked: Optional[dict] = None
+            if home_team:
+                for oc in outcomes:
+                    if (oc.get("name") or "").strip().lower() == home_team:
+                        picked = oc
+                        break
+            if picked is None:
+                for oc in outcomes:
+                    pt = oc.get("point")
+                    if pt is not None:
+                        try:
+                            if float(pt) < 0:
+                                picked = oc
+                                break
+                        except (ValueError, TypeError):
+                            continue
+            if picked is None and outcomes:
+                picked = outcomes[0]
+            if picked is None:
+                continue
+            try:
+                return (
+                    float(picked.get("point")),
+                    int(picked.get("price")),
+                    bm.get("key") or bm.get("title") or "",
+                )
+            except (TypeError, ValueError):
+                continue
+    return None, None, None
 
 
 def _extract_total_point(response_json: Optional[str]) -> Optional[float]:
@@ -613,6 +902,8 @@ async def poll_sport(sport: str, db_path: str = DB_PATH) -> dict:
 
     stored = 0
     hit_rl = False
+    tel = _sport_tel(sport)
+    tel["games_observed"] = len(events)
     for ev in events:
         eid = str(ev.get("id") or "").strip()
         if not eid:
@@ -631,6 +922,7 @@ async def poll_sport(sport: str, db_path: str = DB_PATH) -> dict:
             stored += 1
         except Exception as e:
             logger.warning(f"store_state failed for {sport}/{eid}: {e}")
+    tel["states_collected"] = int(tel.get("states_collected") or 0) + stored
 
     if not hit_rl:
         _clear_backoff(sport)
@@ -686,6 +978,22 @@ class LiveStateCollector:
         logger.info("Live state collector stopped")
 
     def status(self) -> dict:
+        # Per-sport snapshot — include every sport we're configured to
+        # poll even if it has zero activity, so dashboards can render a
+        # stable row-per-sport table. Registry keys surface which sports
+        # have an active detector wired vs which are snapshot-only.
+        per_sport: dict[str, dict[str, Any]] = {}
+        for s in self.sports:
+            tel = _per_sport_telemetry.get(s) or {}
+            per_sport[s] = {
+                "games_observed": int(tel.get("games_observed") or 0),
+                "states_collected": int(tel.get("states_collected") or 0),
+                "edges_emitted": int(tel.get("edges_emitted") or 0),
+                "detector_fires": int(tel.get("detector_fires") or 0),
+                "detector_errors": int(tel.get("detector_errors") or 0),
+                "last_eval_ts": tel.get("last_eval_ts"),
+                "detector_wired": s in _SPORT_DETECTOR_REGISTRY,
+            }
         return {
             "running": self._running,
             "sports": list(self.sports),
@@ -694,6 +1002,8 @@ class LiveStateCollector:
             "active_games_polling": self._last_active_games,
             "states_collected_lifetime": _states_collected_counter,
             "edges_emitted_lifetime": _edges_emitted_counter,
+            "detectors_wired": sorted(_SPORT_DETECTOR_REGISTRY.keys()),
+            "per_sport": per_sport,
             "backoff_sports": {
                 s: max(0.0, round(_sport_backoff_until[s] - time.time(), 1))
                 for s in _sport_backoff_until
