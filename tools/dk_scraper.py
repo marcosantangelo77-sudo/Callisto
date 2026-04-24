@@ -16,9 +16,16 @@ from typing import Optional
 
 import httpx
 
-# curl_cffi is the preferred HTTP client — it impersonates a real browser TLS
-# fingerprint and bypasses Akamai/Cloudflare bot detection on the nash endpoint.
-# If not installed, we fall back to httpx (which will 403 on old endpoints).
+from tools.scraper_utils import (
+    classify_status,
+    mark_error,
+    mark_success,
+    pick_user_agent,
+    register_scraper,
+    retry_async,
+    retry_sync,
+)
+
 try:
     from curl_cffi.requests import Session as CffiSession
     _HAS_CURL_CFFI = True
@@ -26,6 +33,9 @@ except ImportError:
     _HAS_CURL_CFFI = False
 
 logger = logging.getLogger("callisto.dk_scraper")
+
+_SCRAPER_NAME = "dk_scraper"
+register_scraper(_SCRAPER_NAME)
 
 # ---------------------------------------------------------------------------
 # Nash endpoint (primary — no Akamai blocking)
@@ -355,33 +365,39 @@ async def close_client() -> None:
 
 
 async def _rate_limited_get(url: str) -> httpx.Response:
-    """GET with rate limiting via legacy httpx — 1 request per 2 seconds."""
-    global _last_request_time
-    now = time.monotonic()
-    elapsed = now - _last_request_time
-    if elapsed < _RATE_LIMIT_SECONDS:
-        await asyncio.sleep(_RATE_LIMIT_SECONDS - elapsed)
-    _last_request_time = time.monotonic()
+    """GET with rate limiting + retry. 1 request per 2 seconds, 4 attempts max."""
+    async def _once() -> httpx.Response:
+        global _last_request_time
+        now = time.monotonic()
+        elapsed = now - _last_request_time
+        if elapsed < _RATE_LIMIT_SECONDS:
+            await asyncio.sleep(_RATE_LIMIT_SECONDS - elapsed)
+        _last_request_time = time.monotonic()
 
-    client = _get_client()
-    resp = await client.get(url)
-    resp.raise_for_status()
-    return resp
+        client = _get_client()
+        resp = await client.get(url)
+        classify_status(resp.status_code, resp.headers.get("Retry-After"))
+        return resp
+
+    return await retry_async(_once, scraper=_SCRAPER_NAME)
 
 
 def _cffi_get_sync(url: str) -> dict:
     """Synchronous GET via curl_cffi with Chrome impersonation. Returns parsed JSON."""
-    session = _get_cffi_session()
-    resp = session.get(url, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
+    def _once() -> dict:
+        session = _get_cffi_session()
+        resp = session.get(url, timeout=15)
+        classify_status(resp.status_code, resp.headers.get("Retry-After") if hasattr(resp, "headers") else None)
+        return resp.json()
+
+    return retry_sync(_once, scraper=_SCRAPER_NAME)
 
 
 async def _nash_get(url: str) -> dict:
     """
     Async wrapper around the synchronous curl_cffi GET.
     Uses asyncio.to_thread() so the event loop isn't blocked.
-    Rate-limited to 1 request per 2 seconds.
+    Rate-limited to 1 request per 2 seconds. Retries handled inside _cffi_get_sync.
     """
     global _last_request_time
     now = time.monotonic()
@@ -790,8 +806,10 @@ async def scrape_dk_odds(sport: str) -> dict:
             data = await _nash_get(nash_url)
             result = _normalize_nash_response(data, sport)
             logger.info(f"DK Nash scrape {sport}: {result['game_count']} games found")
+            mark_success(_SCRAPER_NAME)
             return result
         except Exception as e:
+            mark_error(_SCRAPER_NAME, f"nash {sport}: {e}")
             logger.warning(f"DK Nash scrape failed for {sport}, falling back to legacy: {e}")
             # Fall through to legacy path
 
@@ -841,6 +859,7 @@ async def scrape_dk_odds(sport: str) -> dict:
             })
 
         logger.info(f"DK legacy scrape {sport}: {len(games)} games found")
+        mark_success(_SCRAPER_NAME)
         return {
             "sport": sport,
             "game_count": len(games),
@@ -851,12 +870,15 @@ async def scrape_dk_odds(sport: str) -> dict:
 
     except httpx.HTTPStatusError as e:
         logger.error(f"DK scrape HTTP error for {sport}: {e.response.status_code}")
+        mark_error(_SCRAPER_NAME, f"legacy {sport}: HTTP {e.response.status_code}")
         return {"error": f"DK HTTP {e.response.status_code}", "games": []}
     except httpx.TimeoutException:
         logger.error(f"DK scrape timeout for {sport}")
+        mark_error(_SCRAPER_NAME, f"legacy {sport}: timeout")
         return {"error": "DK request timeout", "games": []}
     except Exception as e:
         logger.error(f"DK scrape failed for {sport}: {e}")
+        mark_error(_SCRAPER_NAME, f"legacy {sport}: {e}")
         return {"error": str(e), "games": []}
 
 

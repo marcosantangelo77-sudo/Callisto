@@ -17,7 +17,18 @@ from typing import Optional
 
 import httpx
 
+from tools.scraper_utils import (
+    classify_status,
+    mark_error,
+    mark_success,
+    register_scraper,
+    retry_async,
+)
+
 logger = logging.getLogger("callisto.fanduel_scraper")
+
+_SCRAPER_NAME = "fanduel_scraper"
+register_scraper(_SCRAPER_NAME)
 
 # FanDuel API base — their public sportsbook API
 FD_API_BASE = "https://sbapi.nj.sportsbook.fanduel.com/api"
@@ -72,17 +83,20 @@ async def close_client() -> None:
 
 
 async def _rate_limited_get(url: str, params: dict = None) -> httpx.Response:
-    """GET with rate limiting — 1 request per 2 seconds."""
-    global _last_request_time
-    now = time.monotonic()
-    wait = _RATE_LIMIT_SECONDS - (now - _last_request_time)
-    if wait > 0:
-        await asyncio.sleep(wait)
+    """GET with rate limiting + retry/backoff on 5xx and 429."""
+    async def _once() -> httpx.Response:
+        global _last_request_time
+        now = time.monotonic()
+        wait = _RATE_LIMIT_SECONDS - (now - _last_request_time)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        client = _get_client()
+        resp = await client.get(url, params=params)
+        _last_request_time = time.monotonic()
+        classify_status(resp.status_code, resp.headers.get("Retry-After"))
+        return resp
 
-    client = _get_client()
-    resp = await client.get(url, params=params)
-    _last_request_time = time.monotonic()
-    return resp
+    return await retry_async(_once, scraper=_SCRAPER_NAME)
 
 
 async def scrape_fd_odds(sport: str) -> dict:
@@ -113,18 +127,18 @@ async def scrape_fd_odds(sport: str) -> dict:
         }
 
         resp = await _rate_limited_get(url, params)
-        resp.raise_for_status()
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception as e:
+            mark_error(_SCRAPER_NAME, f"json decode {sport}: {e}")
+            logger.warning(f"FanDuel malformed JSON for {sport}: {e}")
+            return {"error": f"json decode: {e}", "games": []}
 
         games = []
-        # Parse FanDuel's response structure
-        attachments = data.get("attachments", {})
-        events = attachments.get("events", {})
-        all_markets = attachments.get("markets", {})
+        attachments = data.get("attachments") or {}
+        events = attachments.get("events") or {}
+        all_markets = attachments.get("markets") or {}
 
-        # Group markets by eventId — the CUSTOM endpoint does NOT put a
-        # "markets" array inside each event object.  Instead, each market
-        # has an "eventId" field that maps back to the event.
         from collections import defaultdict
         markets_by_event: dict[str, dict[str, dict]] = defaultdict(dict)
         for mid, mkt in all_markets.items():
@@ -133,9 +147,6 @@ async def scrape_fd_odds(sport: str) -> dict:
                 markets_by_event[eid][mid] = mkt
 
         for event_id, event in events.items():
-            # Build a per-event markets dict.
-            # Prefer the event's own "markets" list (old format) if present,
-            # otherwise use our grouped-by-eventId lookup.
             event_market_ids = event.get("markets", [])
             if event_market_ids:
                 event_markets = {
@@ -151,6 +162,7 @@ async def scrape_fd_odds(sport: str) -> dict:
                 games.append(game)
 
         logger.info(f"FanDuel scraper: {len(games)} games for {sport}")
+        mark_success(_SCRAPER_NAME)
         return {
             "sport": sport,
             "games": games,
@@ -162,9 +174,11 @@ async def scrape_fd_odds(sport: str) -> dict:
 
     except httpx.HTTPStatusError as e:
         logger.warning(f"FanDuel HTTP error for {sport}: {e.response.status_code}")
+        mark_error(_SCRAPER_NAME, f"{sport}: HTTP {e.response.status_code}")
         return {"error": f"HTTP {e.response.status_code}", "games": []}
     except Exception as e:
         logger.warning(f"FanDuel scraper error for {sport}: {e}")
+        mark_error(_SCRAPER_NAME, f"{sport}: {e}")
         return {"error": str(e), "games": []}
 
 

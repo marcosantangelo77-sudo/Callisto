@@ -26,7 +26,18 @@ from typing import Optional
 import aiosqlite
 import httpx
 
+from tools.scraper_utils import (
+    classify_status,
+    mark_error,
+    mark_success,
+    register_scraper,
+    retry_async,
+)
+
 logger = logging.getLogger("callisto.tci")
+
+_SCRAPER_NAME = "tci_scraper"
+register_scraper(_SCRAPER_NAME)
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
@@ -146,11 +157,24 @@ async def _get_client() -> httpx.AsyncClient:
 
 
 async def _espn_get(url: str) -> dict:
-    """Rate-limited ESPN API request."""
-    client = await _get_client()
-    resp = await client.get(url)
-    resp.raise_for_status()
-    return resp.json()
+    """Rate-limited ESPN API request with retry/backoff on 5xx and 429."""
+    async def _once() -> dict:
+        client = await _get_client()
+        resp = await client.get(url)
+        classify_status(resp.status_code, resp.headers.get("Retry-After"))
+        try:
+            payload = resp.json()
+        except Exception:
+            mark_error(_SCRAPER_NAME, "malformed JSON")
+            raise
+        mark_success(_SCRAPER_NAME)
+        return payload
+
+    try:
+        return await retry_async(_once, scraper=_SCRAPER_NAME)
+    except Exception as e:
+        mark_error(_SCRAPER_NAME, str(e))
+        raise
 
 
 async def get_team_roster(

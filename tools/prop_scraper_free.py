@@ -25,9 +25,24 @@ import aiosqlite
 import httpx
 from dotenv import load_dotenv
 
+from tools.scraper_utils import (
+    classify_status,
+    mark_error,
+    mark_success,
+    register_scraper,
+    retry_async,
+    retry_sync,
+)
+
 load_dotenv()
 
 logger = logging.getLogger("callisto.prop_scraper_free")
+
+_SCRAPER_DK_PROPS = "dk_props"
+_SCRAPER_FD_PROPS = "fd_props"
+_SCRAPER_MGM_PROPS = "mgm_props"
+for _n in (_SCRAPER_DK_PROPS, _SCRAPER_FD_PROPS, _SCRAPER_MGM_PROPS):
+    register_scraper(_n)
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
@@ -197,7 +212,7 @@ def _get_cffi_session():
 
 
 async def _cffi_get(url: str) -> dict:
-    """Rate-limited GET via curl_cffi with Chrome TLS impersonation."""
+    """Rate-limited GET via curl_cffi with Chrome TLS impersonation + retry."""
     global _last_dk_request
     now = time.monotonic()
     wait = _RATE_LIMIT - (now - _last_dk_request)
@@ -206,10 +221,12 @@ async def _cffi_get(url: str) -> dict:
     _last_dk_request = time.monotonic()
 
     def _do():
-        session = _get_cffi_session()
-        resp = session.get(url, timeout=15)
-        resp.raise_for_status()
-        return resp.json()
+        def _once():
+            session = _get_cffi_session()
+            resp = session.get(url, timeout=15)
+            classify_status(resp.status_code, resp.headers.get("Retry-After") if hasattr(resp, "headers") else None)
+            return resp.json()
+        return retry_sync(_once, scraper=_SCRAPER_DK_PROPS)
 
     return await asyncio.to_thread(_do)
 
@@ -469,6 +486,7 @@ async def scrape_dk_props(sport: str) -> dict:
                 continue
 
         logger.info(f"DK props {sport}: {len(props)} prop lines")
+        mark_success(_SCRAPER_DK_PROPS)
         return {
             "sport": sport,
             "props": props,
@@ -478,6 +496,7 @@ async def scrape_dk_props(sport: str) -> dict:
 
     except Exception as e:
         logger.warning(f"DK prop scrape failed for {sport}: {e}")
+        mark_error(_SCRAPER_DK_PROPS, f"{sport}: {e}")
         return {"error": str(e), "props": []}
 
 
@@ -563,15 +582,19 @@ def _get_fd_client() -> httpx.AsyncClient:
 
 
 async def _fd_rate_limited_get(url: str, params: dict = None) -> httpx.Response:
-    global _last_fd_request
-    now = time.monotonic()
-    wait = _RATE_LIMIT - (now - _last_fd_request)
-    if wait > 0:
-        await asyncio.sleep(wait)
-    client = _get_fd_client()
-    resp = await client.get(url, params=params)
-    _last_fd_request = time.monotonic()
-    return resp
+    async def _once() -> httpx.Response:
+        global _last_fd_request
+        now = time.monotonic()
+        wait = _RATE_LIMIT - (now - _last_fd_request)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        client = _get_fd_client()
+        resp = await client.get(url, params=params)
+        _last_fd_request = time.monotonic()
+        classify_status(resp.status_code, resp.headers.get("Retry-After"))
+        return resp
+
+    return await retry_async(_once, scraper=_SCRAPER_FD_PROPS)
 
 
 def _classify_fd_prop(market_type: str) -> Optional[str]:
@@ -726,6 +749,7 @@ async def scrape_fd_props(sport: str) -> dict:
                     })
 
         logger.info(f"FD props {sport}: {len(all_props)} prop lines")
+        mark_success(_SCRAPER_FD_PROPS)
         return {
             "sport": sport,
             "props": all_props,
@@ -735,6 +759,7 @@ async def scrape_fd_props(sport: str) -> dict:
 
     except Exception as e:
         logger.warning(f"FD prop scrape failed for {sport}: {e}")
+        mark_error(_SCRAPER_FD_PROPS, f"{sport}: {e}")
         return {"error": str(e), "props": []}
 
 
@@ -832,25 +857,29 @@ async def _mgm_rate_limited_get(url: str, params: dict) -> dict:
 
     if _HAS_CURL_CFFI:
         def _do():
-            session = _get_mgm_cffi_session()
-            # Build URL with params
-            from urllib.parse import urlencode
-            full_url = f"{url}?{urlencode(params)}"
-            resp = session.get(full_url, timeout=15)
-            resp.raise_for_status()
-            return resp.json()
+            def _once():
+                session = _get_mgm_cffi_session()
+                from urllib.parse import urlencode
+                full_url = f"{url}?{urlencode(params)}"
+                resp = session.get(full_url, timeout=15)
+                classify_status(resp.status_code, resp.headers.get("Retry-After") if hasattr(resp, "headers") else None)
+                return resp.json()
+            return retry_sync(_once, scraper=_SCRAPER_MGM_PROPS)
         return await asyncio.to_thread(_do)
     else:
-        # Fallback to httpx (may 403)
         _mgm_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "Accept": "application/json",
             "Referer": "https://sports.nj.betmgm.com/",
         }
-        async with httpx.AsyncClient(timeout=15.0, headers=_mgm_headers, follow_redirects=True, max_redirects=5) as client:
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            return resp.json()
+
+        async def _once() -> dict:
+            async with httpx.AsyncClient(timeout=15.0, headers=_mgm_headers, follow_redirects=True, max_redirects=5) as client:
+                resp = await client.get(url, params=params)
+                classify_status(resp.status_code, resp.headers.get("Retry-After"))
+                return resp.json()
+
+        return await retry_async(_once, scraper=_SCRAPER_MGM_PROPS)
 
 
 def _classify_mgm_prop(market_name: str) -> Optional[str]:
@@ -1024,6 +1053,7 @@ async def scrape_mgm_props(sport: str) -> dict:
                     })
 
         logger.info(f"BetMGM props {sport}: {len(props)} prop lines")
+        mark_success(_SCRAPER_MGM_PROPS)
         return {
             "sport": sport,
             "props": props,
@@ -1033,6 +1063,7 @@ async def scrape_mgm_props(sport: str) -> dict:
 
     except Exception as e:
         logger.warning(f"BetMGM prop scrape failed for {sport}: {e}")
+        mark_error(_SCRAPER_MGM_PROPS, f"{sport}: {e}")
         return {"error": str(e), "props": []}
 
 

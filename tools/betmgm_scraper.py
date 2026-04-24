@@ -17,7 +17,18 @@ from typing import Optional
 
 import httpx
 
+from tools.scraper_utils import (
+    classify_status,
+    mark_error,
+    mark_success,
+    register_scraper,
+    retry_async,
+)
+
 logger = logging.getLogger("callisto.betmgm_scraper")
+
+_SCRAPER_NAME = "betmgm_scraper"
+register_scraper(_SCRAPER_NAME)
 
 # ---------------------------------------------------------------------------
 # BetMGM CDS API configuration
@@ -93,18 +104,21 @@ async def close_client() -> None:
 
 
 async def _rate_limited_get(url: str, params: dict | None = None) -> httpx.Response:
-    """GET with rate limiting — 1 request per 2 seconds."""
-    global _last_request_time
-    now = time.monotonic()
-    elapsed = now - _last_request_time
-    if elapsed < _RATE_LIMIT_SECONDS:
-        await asyncio.sleep(_RATE_LIMIT_SECONDS - elapsed)
-    _last_request_time = time.monotonic()
+    """GET with rate-limit + retry/backoff."""
+    async def _once() -> httpx.Response:
+        global _last_request_time
+        now = time.monotonic()
+        elapsed = now - _last_request_time
+        if elapsed < _RATE_LIMIT_SECONDS:
+            await asyncio.sleep(_RATE_LIMIT_SECONDS - elapsed)
+        _last_request_time = time.monotonic()
 
-    client = _get_client()
-    resp = await client.get(url, params=params)
-    resp.raise_for_status()
-    return resp
+        client = _get_client()
+        resp = await client.get(url, params=params)
+        classify_status(resp.status_code, resp.headers.get("Retry-After"))
+        return resp
+
+    return await retry_async(_once, scraper=_SCRAPER_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +445,7 @@ async def scrape_betmgm_odds(sport: str) -> dict:
             games.append(parsed)
 
         logger.info(f"BetMGM scrape {sport}: {len(games)} games found")
+        mark_success(_SCRAPER_NAME)
         return {
             "sport": sport,
             "game_count": len(games),
@@ -441,12 +456,15 @@ async def scrape_betmgm_odds(sport: str) -> dict:
 
     except httpx.HTTPStatusError as e:
         logger.error(f"BetMGM scrape HTTP error for {sport}: {e.response.status_code}")
+        mark_error(_SCRAPER_NAME, f"{sport}: HTTP {e.response.status_code}")
         return {"error": f"BetMGM HTTP {e.response.status_code}", "games": []}
     except httpx.TimeoutException:
         logger.error(f"BetMGM scrape timeout for {sport}")
+        mark_error(_SCRAPER_NAME, f"{sport}: timeout")
         return {"error": "BetMGM request timeout", "games": []}
     except Exception as e:
         logger.error(f"BetMGM scrape failed for {sport}: {e}")
+        mark_error(_SCRAPER_NAME, f"{sport}: {e}")
         return {"error": str(e), "games": []}
 
 

@@ -19,9 +19,15 @@ from typing import Optional
 
 import httpx
 
-# curl_cffi is the preferred HTTP client — it impersonates a real browser TLS
-# fingerprint and bypasses Cloudflare/Akamai bot detection.
-# If not installed, we fall back to httpx.
+from tools.scraper_utils import (
+    classify_status,
+    mark_error,
+    mark_success,
+    register_scraper,
+    retry_async,
+    retry_sync,
+)
+
 try:
     from curl_cffi.requests import Session as CffiSession
     _HAS_CURL_CFFI = True
@@ -29,6 +35,9 @@ except ImportError:
     _HAS_CURL_CFFI = False
 
 logger = logging.getLogger("callisto.action_network_scraper")
+
+_SCRAPER_NAME = "action_network_scraper"
+register_scraper(_SCRAPER_NAME)
 
 # ---------------------------------------------------------------------------
 # API configuration
@@ -309,15 +318,18 @@ async def close_client() -> None:
 
 def _cffi_get_sync(url: str) -> dict:
     """Synchronous GET via curl_cffi with Chrome impersonation. Returns parsed JSON."""
-    session = _get_cffi_session()
-    resp = session.get(url, headers=_HEADERS, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
+    def _once() -> dict:
+        session = _get_cffi_session()
+        resp = session.get(url, headers=_HEADERS, timeout=15)
+        classify_status(resp.status_code, resp.headers.get("Retry-After") if hasattr(resp, "headers") else None)
+        return resp.json()
+
+    return retry_sync(_once, scraper=_SCRAPER_NAME)
 
 
 async def _rate_limited_get(url: str) -> dict:
     """
-    Async GET with rate limiting. Prefers curl_cffi, falls back to httpx.
+    Async GET with rate limiting + retry. Prefers curl_cffi, falls back to httpx.
     Returns parsed JSON dict.
     """
     global _last_request_time
@@ -329,11 +341,14 @@ async def _rate_limited_get(url: str) -> dict:
 
     if _HAS_CURL_CFFI:
         return await asyncio.to_thread(_cffi_get_sync, url)
-    else:
+
+    async def _once() -> dict:
         client = _get_client()
         resp = await client.get(url)
-        resp.raise_for_status()
+        classify_status(resp.status_code, resp.headers.get("Retry-After"))
         return resp.json()
+
+    return await retry_async(_once, scraper=_SCRAPER_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -511,6 +526,7 @@ async def scrape_action_network(sport: str, date_str: Optional[str] = None) -> d
         data = await _rate_limited_get(url)
     except Exception as e:
         logger.error(f"Action Network request failed for {sport}: {e}")
+        mark_error(_SCRAPER_NAME, f"{sport}: {e}")
         return {
             "sport": sport,
             "game_count": 0,
@@ -519,8 +535,7 @@ async def scrape_action_network(sport: str, date_str: Optional[str] = None) -> d
             "error": str(e),
         }
 
-    # Parse games
-    raw_games = data.get("games", [])
+    raw_games = (data or {}).get("games") or []
     games = []
     for raw_game in raw_games:
         parsed = _parse_game(raw_game, sport)
@@ -531,6 +546,7 @@ async def scrape_action_network(sport: str, date_str: Optional[str] = None) -> d
         f"Action Network {sport}: {len(games)} games with odds "
         f"(from {len(raw_games)} total games)"
     )
+    mark_success(_SCRAPER_NAME)
 
     return {
         "sport": sport,
@@ -657,13 +673,14 @@ async def get_public_betting(sport: str, date_str: Optional[str] = None) -> dict
         data = await _rate_limited_get(url)
     except Exception as e:
         logger.error(f"Action Network public betting request failed for {sport}: {e}")
+        mark_error(_SCRAPER_NAME, f"public {sport}: {e}")
         return {
             "sport": sport,
             "games": [],
             "error": str(e),
         }
 
-    raw_games = data.get("games", [])
+    raw_games = (data or {}).get("games") or []
     results = []
     for raw_game in raw_games:
         parsed = _extract_public_betting(raw_game, sport)
@@ -671,6 +688,7 @@ async def get_public_betting(sport: str, date_str: Optional[str] = None) -> dict
             results.append(parsed)
 
     logger.info(f"Action Network public betting {sport}: {len(results)} games with data")
+    mark_success(_SCRAPER_NAME)
 
     return {
         "sport": sport,
