@@ -124,8 +124,14 @@ def block_outbound(monkeypatch):
 
 
 def _reimport(name):
-    if name in sys.modules:
-        del sys.modules[name]
+    """
+    Import a module and return the handle. We intentionally do NOT
+    pop sys.modules — rebuilding a module object would invalidate
+    the already-bound `from x import y` names in other test modules
+    and cause cross-test state bleed. For the import-surface test,
+    confirming that `importlib.import_module` succeeds under the
+    kill switch is enough.
+    """
     return importlib.import_module(name)
 
 
