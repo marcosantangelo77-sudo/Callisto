@@ -27,6 +27,14 @@ from dotenv import load_dotenv
 
 from tools.embeddings import VectorStore, embed_text, embed_batch, cosine_similarity
 from tools.hypothesis import HypothesisManager
+from tools.hypothesis_quality import (
+    hypothesis_quality_check,
+    get_metrics as get_quality_metrics,
+    DUPLICATE_SIM as QUALITY_DUPLICATE_SIM,
+    RECENT_N_FOR_DEDUP,
+    MIN_SAMPLE as QUALITY_MIN_SAMPLE,
+    RejectReason,
+)
 
 load_dotenv()
 
@@ -45,6 +53,14 @@ PRIOR_CORPUS_SIM: float = 0.80
 WIKI_CONTEXT_TOP_K: int = 8
 # How many recent rejected hypotheses to show as negative examples
 NEGATIVE_EXAMPLES_N: int = 4
+
+
+def get_quality_metrics_snapshot() -> dict:
+    """Public accessor used by api.py /system/full-status."""
+    try:
+        return get_quality_metrics().snapshot()
+    except Exception as e:
+        return {"error": f"quality-metrics snapshot failed: {e}"}
 
 
 # ──────────────────────────────────────────────────
@@ -787,6 +803,22 @@ class HypothesisGenerator:
                 model_config["training_period_end"] = training_period_end
                 model_config["forward_test_start"] = forward_test_start
 
+                q = hypothesis_quality_check({
+                    "name": name,
+                    "thesis": thesis,
+                    "sport": sport,
+                    "market_type": market_type,
+                    "model_config": model_config,
+                    "edge_threshold": edge_threshold,
+                    "variables": combo,
+                })
+                if not q.accepted:
+                    logger.warning(
+                        "template hypothesis rejected by quality gate: "
+                        "name=%r reasons=%s", name, q.reasons,
+                    )
+                    continue
+
                 try:
                     hid = await self.hypothesis_manager.create_hypothesis(
                         name=name,
@@ -961,15 +993,31 @@ class HypothesisGenerator:
             f"You are Callisto's hypothesis engine. Given the following data summary "
             f"for {sport}, generate 3-5 novel, testable betting hypotheses.\n\n"
             f"DATA SUMMARY:\n{data_summary}\n\n"
+            f"Each hypothesis MUST be SPECIFIC, FALSIFIABLE, and QUANTITATIVELY SCOPED. "
+            f"Gut picks, vague narratives, and claims without a numeric threshold are "
+            f"AUTOMATICALLY REJECTED by the downstream quality gate.\n\n"
             f"For each hypothesis, return JSON with:\n"
-            f"- name: short descriptive name\n"
-            f"- thesis: detailed testable claim\n"
+            f"- name: short descriptive name (no marketing/hype language)\n"
+            f"- thesis: 2-3 sentence testable claim that names (a) the sport, "
+            f"(b) the market, (c) the direction (over/under/home/away/yes/no/etc.), "
+            f"(d) the specific condition set (e.g. 'home team on 2+ days rest, "
+            f"away opponent on 1 day'), and (e) the expected edge as a percentage. "
+            f"Must contain at least one explicit numeric threshold.\n"
             f"- market_type: one of (spreads, totals, h2h, player_points, "
             f"player_rebounds, player_assists, player_threes, "
-            f"player_points_rebounds_assists)\n"
-            f"- edge_threshold: minimum edge to flag (decimal, e.g., 0.03)\n"
+            f"player_points_rebounds_assists, pitcher_strikeouts, batter_hits, "
+            f"skater_shots_on_goal, goalie_saves, first_inning_nrfi_yrfi)\n"
+            f"- direction: one of (over, under, home, away, yes, no, "
+            f"favorite, underdog, nrfi, yrfi)\n"
+            f"- edge_threshold: minimum edge to flag (decimal, 0.003-0.30)\n"
+            f"- min_sample_size: integer >= {QUALITY_MIN_SAMPLE}\n"
+            f"- significance_level: p-value threshold, default 0.05\n"
+            f"- stat_test: one of (binomial, chi_squared, logistic_regression, "
+            f"t_test, fisher_exact, poisson)\n"
             f"- model_config: dict with devig_method, target_book, "
-            f"consensus_min_books, and any context_factors\n\n"
+            f"consensus_min_books, and context_factors (non-empty list)\n\n"
+            f"BANNED PHRASING — do NOT use: 'gut feeling', 'teams usually', "
+            f"'tend to', 'seems like', 'feels like', 'sure thing', 'lock'.\n\n"
             f"Return ONLY a JSON array. No explanation text."
         )
 
@@ -1007,7 +1055,12 @@ class HypothesisGenerator:
         training_period_end = str(training_cutoff)
         forward_test_start = str(training_cutoff + timedelta(days=1))
 
+        prior_embs, prior_names = await self._load_recent_hypothesis_embeddings(
+            sport=sport, limit=RECENT_N_FOR_DEDUP,
+        )
+
         created = []
+        rejected = []
         for h_raw in hypotheses_raw:
             try:
                 mc = h_raw.get("model_config", {
@@ -1021,11 +1074,46 @@ class HypothesisGenerator:
                 mc["training_period_end"] = training_period_end
                 mc["forward_test_start"] = forward_test_start
 
+                name = h_raw.get("name", "Unnamed")
+                thesis_txt = h_raw.get("thesis", "")
+                market_type = h_raw.get("market_type", "spreads")
+
+                cand_emb = None
+                try:
+                    if thesis_txt:
+                        cand_emb = await embed_text(thesis_txt)
+                except Exception as e:
+                    logger.debug(f"embed_text failed for claude candidate: {e}")
+
+                q = hypothesis_quality_check(
+                    {
+                        "name": name,
+                        "thesis": thesis_txt,
+                        "sport": sport,
+                        "market_type": market_type,
+                        "model_config": mc,
+                        "edge_threshold": h_raw.get("edge_threshold"),
+                        "min_sample_size": h_raw.get("min_sample_size"),
+                        "significance_level": h_raw.get("significance_level"),
+                        "direction": h_raw.get("direction"),
+                        "stat_test": h_raw.get("stat_test"),
+                    },
+                    candidate_emb=cand_emb,
+                    prior_embs=prior_embs,
+                )
+                if not q.accepted:
+                    rejected.append({"name": name, "reasons": q.reasons})
+                    logger.warning(
+                        "claude hypothesis rejected: name=%r reasons=%s",
+                        name, q.reasons,
+                    )
+                    continue
+
                 hid = await self.hypothesis_manager.create_hypothesis(
-                    name=h_raw.get("name", "Unnamed"),
-                    thesis=h_raw.get("thesis", ""),
+                    name=name,
+                    thesis=thesis_txt,
                     sport=sport,
-                    market_type=h_raw.get("market_type", "spreads"),
+                    market_type=market_type,
                     model_config=mc,
                     edge_threshold=float(h_raw.get("edge_threshold", 0.02)),
                     notes=(
@@ -1036,11 +1124,14 @@ class HypothesisGenerator:
                 )
                 created.append({
                     "hypothesis_id": hid,
-                    "name": h_raw.get("name"),
+                    "name": name,
                     "source": "claude_code",
                     "training_period_end": training_period_end,
                     "forward_test_start": forward_test_start,
                 })
+                if cand_emb is not None:
+                    prior_embs.append(cand_emb)
+                    prior_names.append(name)
             except Exception as e:
                 logger.warning(f"Failed to create Claude hypothesis: {e}")
 
@@ -1264,6 +1355,10 @@ class HypothesisGenerator:
         training_period_end = str(training_cutoff)
         forward_test_start = str(training_cutoff + timedelta(days=1))
 
+        corpus_embs, corpus_names = await self._load_recent_hypothesis_embeddings(
+            sport=sport, limit=RECENT_N_FOR_DEDUP,
+        )
+
         created: list[dict] = []
         rejected_log = drop_reasons[:]
         for i in kept_indices:
@@ -1302,6 +1397,39 @@ class HypothesisGenerator:
                 except (TypeError, ValueError):
                     edge = 0.02
 
+                cand_emb_for_corpus = (
+                    cand_embs[i] if i < len(cand_embs) else None
+                )
+                q = hypothesis_quality_check(
+                    {
+                        "name": name,
+                        "thesis": thesis_txt,
+                        "sport": sport,
+                        "market_type": market,
+                        "model_config": mc,
+                        "edge_threshold": edge,
+                        "direction": c.get("direction"),
+                        "stat_test": c.get("stat_test"),
+                        "min_sample_size": c.get("min_signals")
+                                           or c.get("min_sample_size"),
+                        "significance_level": c.get("significance_level"),
+                        "cohort_filter": c.get("cohort_filter"),
+                    },
+                    candidate_emb=cand_emb_for_corpus,
+                    prior_embs=corpus_embs,
+                    duplicate_threshold=QUALITY_DUPLICATE_SIM,
+                )
+                if not q.accepted:
+                    rejected_log.append({
+                        "reason": f"quality_gate: {q.reasons}",
+                        "candidate": c,
+                    })
+                    logger.warning(
+                        "wiki-grounded hypothesis rejected: name=%r reasons=%s",
+                        name, q.reasons,
+                    )
+                    continue
+
                 hid = await self.hypothesis_manager.create_hypothesis(
                     name=name,
                     thesis=thesis_txt,
@@ -1322,6 +1450,9 @@ class HypothesisGenerator:
                     "market_type": market,
                     "source": "wiki_grounded",
                 })
+                if cand_emb_for_corpus is not None:
+                    corpus_embs.append(cand_emb_for_corpus)
+                    corpus_names.append(name)
             except Exception as e:
                 logger.warning(f"grounded generator persist failed: {e}")
                 rejected_log.append({"reason": f"persist_error: {e}",
@@ -1413,6 +1544,50 @@ class HypothesisGenerator:
         except Exception:
             return []
 
+    async def _load_recent_hypothesis_embeddings(
+        self, sport: Optional[str] = None, limit: int = RECENT_N_FOR_DEDUP,
+    ) -> tuple[list[list[float]], list[str]]:
+        """Embed the last N hypothesis thesis strings for corpus-wide dedup.
+
+        Non-fatal on any failure — returns empty lists so callers can still
+        create hypotheses even if the embedding service is down.
+        """
+        if self._db is None:
+            await self.initialize()
+        try:
+            if sport:
+                cur = await self._db.execute(
+                    "SELECT name, thesis FROM hypotheses "
+                    "WHERE sport = ? AND thesis IS NOT NULL AND thesis != '' "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (sport, limit),
+                )
+            else:
+                cur = await self._db.execute(
+                    "SELECT name, thesis FROM hypotheses "
+                    "WHERE thesis IS NOT NULL AND thesis != '' "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                )
+            rows = await cur.fetchall()
+        except Exception as e:
+            logger.debug(f"recent-hypothesis fetch failed: {e}")
+            return [], []
+
+        names = [r[0] for r in rows if r and r[1]]
+        texts = [r[1] for r in rows if r and r[1]]
+        if not texts:
+            return [], []
+        try:
+            embs = await embed_batch(texts)
+        except Exception as e:
+            logger.debug(f"recent-hypothesis embed_batch failed: {e}")
+            return [], []
+        if len(embs) != len(names):
+            n = min(len(embs), len(names))
+            return list(embs[:n]), list(names[:n])
+        return list(embs), list(names)
+
     # ── helper: prompt construction ───────────────────────────────
     def _build_grounded_prompt(
         self,
@@ -1454,26 +1629,39 @@ class HypothesisGenerator:
             f"Generate exactly {n_candidates} DISTINCT candidate hypotheses "
             f"as a JSON array. Each item MUST have:\n"
             f"  - name:               short unique slug\n"
-            f"  - market:             specific market key\n"
+            f"  - market:             specific market key (spreads, totals, h2h, "
+            f"player_points, pitcher_strikeouts, etc.)\n"
+            f"  - direction:          one of (over, under, home, away, yes, no, "
+            f"favorite, underdog, nrfi, yrfi)\n"
             f"  - cohort_filter:      SQL-expressible WHERE clause over "
-            f"game_contexts / player_stats\n"
+            f"game_contexts / player_stats (condition set)\n"
             f"  - signal_logic:       why the edge exists, mechanism\n"
-            f"  - min_signals:        integer ≥ 20\n"
+            f"  - min_signals:        integer ≥ {QUALITY_MIN_SAMPLE} "
+            f"(minimum sample size for backtest)\n"
+            f"  - significance_level: p-value threshold (≤ 0.10)\n"
+            f"  - stat_test:          one of (binomial, chi_squared, "
+            f"logistic_regression, t_test, fisher_exact, poisson)\n"
             f"  - ic_prior_estimate:  float in [0.005, 0.08]\n"
+            f"  - edge_threshold:     float (decimal, 0.003-0.30)\n"
             f"  - variance_justification: one sentence — why this is NOT a "
             f"duplicate of any wiki article or rejected hypothesis above\n"
-            f"  - thesis_statement:   2-3 sentence backtestable claim\n"
-            f"  - edge_threshold:     float (decimal, e.g., 0.02)\n"
+            f"  - thesis_statement:   2-3 sentence backtestable claim — MUST "
+            f"contain at least one explicit numeric threshold\n"
             f"  - model_config:       dict (devig_method, target_book, "
-            f"consensus_min_books, context_factors list)\n\n"
+            f"consensus_min_books, context_factors list (non-empty))\n\n"
             f"HARD RULES:\n"
-            f"1. Reject vague wording. 'Team plays better when rested' is "
-            f"BANNED; say exactly which column, threshold, and side.\n"
+            f"1. BANNED PHRASING: 'gut feeling', 'teams usually', 'tend to', "
+            f"'seems like', 'feels like', 'sure thing', 'lock', 'hunch', "
+            f"'obviously', 'should just'. Say exactly which column, "
+            f"threshold, and side.\n"
             f"2. Every candidate must be DIFFERENT from the others — do not "
             f"vary only one numeric threshold.\n"
             f"3. Prefer specific official/umpire/ref/coach/venue/microstructure "
             f"triggers over blanket team-level claims.\n"
-            f"4. Return ONLY the JSON array. No explanation text, no code "
+            f"4. Each thesis must name: sport, market, direction, condition "
+            f"set, expected edge %, stat_test, p-value threshold, min sample.\n"
+            f"5. No narrative filler. If you can't quantify it, don't submit it.\n"
+            f"6. Return ONLY the JSON array. No explanation text, no code "
             f"fences outside the JSON."
         )
 

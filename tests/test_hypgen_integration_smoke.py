@@ -26,13 +26,28 @@ DIVERSE_CANDIDATES = [
     {
         "name": f"d{i}",
         "market": "totals",
+        "direction": "under",
         "cohort_filter": f"x = {i}",
         "signal_logic": f"axis_{i}",
-        "min_signals": 30,
+        "min_signals": 250,
+        "significance_level": 0.05,
+        "stat_test": "binomial",
         "ic_prior_estimate": 0.03,
         "variance_justification": f"dim {i}",
-        "thesis_statement": f"thesis_{i} about axis {i}",
-        "edge_threshold": 0.02,
+        "thesis_statement": (
+            f"MLB game totals at Coors Field with wind 15+ mph blowing in "
+            f"cover Under at a 55% rate across n>=250 games (dim {i}), "
+            f"versus a 50% implied baseline. Expected edge is 3% on DraftKings, "
+            f"tested via one-sided binomial at p<=0.05."
+        ),
+        "edge_threshold": 0.03,
+        "model_config": {
+            "type": "consensus_devig",
+            "devig_method": "power",
+            "target_book": "draftkings",
+            "consensus_min_books": 3,
+            "context_factors": ["park_factor", "wind_speed"],
+        },
     } for i in range(5)
 ]
 

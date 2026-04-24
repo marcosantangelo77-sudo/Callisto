@@ -54,15 +54,24 @@ FAKE_CANDIDATES = [
     {
         "name": f"candidate_{i}",
         "market": "totals",
+        "direction": "under",
         "cohort_filter": "game_contexts.home_team = 'COL'",
         "signal_logic": f"specific logic {i}",
-        "min_signals": 30,
+        "min_signals": 250,
+        "significance_level": 0.05,
+        "stat_test": "binomial",
         "ic_prior_estimate": 0.02 + i * 0.001,
         "variance_justification": f"unique axis {i}",
-        "thesis_statement": f"thesis {i} for candidate",
-        "edge_threshold": 0.02,
+        "thesis_statement": (
+            f"MLB game totals at Coors Field with wind 15+ mph blowing in "
+            f"cover Under at a 55% rate across n>=250 games (axis {i}), "
+            f"versus 50% implied. Expected edge 3% on DraftKings, tested via "
+            f"one-sided binomial at p<=0.05."
+        ),
+        "edge_threshold": 0.03,
         "model_config": {"devig_method": "power", "target_book": "draftkings",
-                         "consensus_min_books": 3, "context_factors": []},
+                         "consensus_min_books": 3,
+                         "context_factors": ["park_factor", "wind_speed"]},
     }
     for i in range(5)
 ]
