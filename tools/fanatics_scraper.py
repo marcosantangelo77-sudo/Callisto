@@ -65,12 +65,21 @@ from tools.credentials import (
     get_credential,
 )
 
-# Ingestion tracking — every fetch wraps through @tracked_ingestion. Import
-# lazily inside the decorator lookup so unit tests that import this
-# module without the ingestion schema migrated don't explode.
 from tools.ingestion_tracking import tracked_ingestion
+from tools.scraper_utils import (
+    RetryableStatusError,
+    classify_status,
+    mark_error,
+    mark_success,
+    pick_user_agent,
+    register_scraper,
+    retry_async,
+)
 
 logger = logging.getLogger("callisto.fanatics_scraper")
+
+_SCRAPER_NAME = "fanatics_scraper"
+register_scraper(_SCRAPER_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -167,23 +176,31 @@ def _auth_cookie_header() -> Optional[str]:
 
 
 async def _rate_limited_get(url: str) -> httpx.Response:
-    """GET with a token-bucket style rate limit (1 req / 2s)."""
-    global _last_request_time
-    now = time.monotonic()
-    elapsed = now - _last_request_time
-    if elapsed < _RATE_LIMIT_SECONDS:
-        await asyncio.sleep(_RATE_LIMIT_SECONDS - elapsed)
-    _last_request_time = time.monotonic()
+    """GET with rate-limit + retry on 5xx/transient; 4xx returned for caller handling.
 
-    client = _get_client()
-    headers = {}
-    cookie_hdr = _auth_cookie_header()
-    if cookie_hdr:
-        headers["Cookie"] = cookie_hdr
-    resp = await client.get(url, headers=headers)
-    # Don't raise — we want the caller to inspect status so rate-limit /
-    # forbidden cases turn into structured payloads rather than exceptions.
-    return resp
+    Fanatics' 403/429 surface as ``status='rate_limited'`` sentinels in the
+    response, not exceptions -- the caller inspects ``resp.status_code`` so
+    retry would be counter-productive. Only 5xx and network errors retry.
+    """
+    async def _once() -> httpx.Response:
+        global _last_request_time
+        now = time.monotonic()
+        elapsed = now - _last_request_time
+        if elapsed < _RATE_LIMIT_SECONDS:
+            await asyncio.sleep(_RATE_LIMIT_SECONDS - elapsed)
+        _last_request_time = time.monotonic()
+
+        client = _get_client()
+        headers = {"User-Agent": pick_user_agent()}
+        cookie_hdr = _auth_cookie_header()
+        if cookie_hdr:
+            headers["Cookie"] = cookie_hdr
+        resp = await client.get(url, headers=headers)
+        if 500 <= resp.status_code < 600:
+            raise RetryableStatusError(resp.status_code)
+        return resp
+
+    return await retry_async(_once, scraper=_SCRAPER_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -489,15 +506,14 @@ async def _fetch_and_parse(sport: str) -> dict:
         except httpx.TimeoutException:
             last_err = "timeout"
             continue
-        except Exception as e:  # noqa: BLE001 — network layer can raise many types
+        except Exception as e:  # noqa: BLE001
             last_err = f"request-error: {e}"
             continue
 
         status = resp.status_code
-        # Rate-limit / forbidden: surface as a structured sentinel so the
-        # @tracked_ingestion wrapper can tag status='rate_limited'.
         if status in (403, 429):
             logger.info(f"Fanatics {sport}: {status} on {url} — rate-limited / forbidden")
+            mark_error(_SCRAPER_NAME, f"{sport}: HTTP {status}")
             return {
                 "error": f"rate limit (HTTP {status})",
                 "games": [],
@@ -525,6 +541,7 @@ async def _fetch_and_parse(sport: str) -> dict:
                 games.append(parsed)
 
         logger.info(f"Fanatics scrape {sport}: {len(games)} games from {url}")
+        mark_success(_SCRAPER_NAME)
         return {
             "sport": sport,
             "game_count": len(games),
@@ -533,6 +550,7 @@ async def _fetch_and_parse(sport: str) -> dict:
             "credits": {"remaining": None, "used": None, "api_key_set": bool(get_credential("fanatics", FIELD_USERNAME))},
         }
 
+    mark_error(_SCRAPER_NAME, f"{sport}: {last_err or 'all endpoints failed'}")
     return {
         "error": last_err or "all endpoints failed",
         "games": [],

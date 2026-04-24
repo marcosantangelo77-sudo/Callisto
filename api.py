@@ -2029,6 +2029,35 @@ async def odds_status():
     return await line_monitor.get_status()
 
 
+@app.get("/odds/scrapers/health")
+async def scrapers_health():
+    """
+    Liveness report for every registered sportsbook / odds scraper.
+
+    Each scraper tracks `last_successful_pull` and `last_error`; this
+    endpoint surfaces them so the watchdog / dashboard can detect when
+    a primary-fallback scraper has gone stale even though the process
+    is alive.
+    """
+    # Touch the modules so their registry side-effects run regardless of
+    # whether line_monitor has imported them yet in this process.
+    for _mod in (
+        "tools.dk_scraper",
+        "tools.fanduel_scraper",
+        "tools.fanatics_scraper",
+        "tools.betmgm_scraper",
+        "tools.action_network_scraper",
+        "tools.tci_scraper",
+        "tools.prop_scraper_free",
+    ):
+        try:
+            __import__(_mod)
+        except Exception:
+            continue
+    from tools.scraper_utils import all_health
+    return all_health()
+
+
 @app.get("/odds/learned-correlations")
 async def get_learned_correlations():
     """Get learned correlation estimates — Bayesian blend of priors + empirical data."""
