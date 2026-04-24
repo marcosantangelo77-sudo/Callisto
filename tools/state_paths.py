@@ -91,6 +91,20 @@ def watchdog_log_path() -> Path:
     return state_log_dir() / "watchdog.log"
 
 
+def db_path() -> str:
+    """Return the Callisto primary DB path.
+
+    Honours $CALLISTO_DB_PATH first; otherwise uses memory/callisto.db
+    relative to the current working directory. This mirrors the legacy
+    resolution used by tools/schema.py and api.py so all callers can
+    converge on a single accessor without changing behaviour.
+    """
+    override = os.environ.get("CALLISTO_DB_PATH", "").strip()
+    if override:
+        return override
+    return os.path.join("memory", "callisto.db")
+
+
 __all__ = [
     "state_dir",
     "state_log_dir",
@@ -99,4 +113,5 @@ __all__ = [
     "watchdog_lock_path",
     "watchdog_heartbeat_path",
     "watchdog_log_path",
+    "db_path",
 ]

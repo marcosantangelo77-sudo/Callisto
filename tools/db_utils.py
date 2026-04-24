@@ -20,11 +20,48 @@ import asyncio
 import logging
 import random
 import re
+import time
+from collections import deque
 from typing import Optional
 
 import aiosqlite
 
 logger = logging.getLogger("callisto.db_utils")
+
+
+_busy_timeout_events: "deque[float]" = deque(maxlen=10000)
+
+
+def record_busy_timeout(op: str = "") -> None:
+    """Record a single 'database is locked' retry event.
+
+    The event's wall-clock timestamp is pushed onto a bounded deque so
+    /admin/db/health can report the count in the trailing hour without
+    unbounded memory growth. Safe to call from any thread.
+    """
+    try:
+        _busy_timeout_events.append(time.time())
+    except Exception:
+        pass
+
+
+def busy_timeout_stats(window_seconds: float = 3600.0) -> dict:
+    """Return counts of 'database is locked' retries in recent windows."""
+    now = time.time()
+    cutoff = now - window_seconds
+    recent = [t for t in _busy_timeout_events if t >= cutoff]
+    last_5m = [t for t in recent if t >= now - 300]
+    return {
+        "window_seconds": window_seconds,
+        "hits_in_window": len(recent),
+        "hits_last_5m": len(last_5m),
+        "total_tracked": len(_busy_timeout_events),
+        "oldest_tracked_ts": _busy_timeout_events[0] if _busy_timeout_events else None,
+    }
+
+
+def reset_busy_timeout_counter() -> None:
+    _busy_timeout_events.clear()
 
 
 def _coord_for(db: aiosqlite.Connection):
@@ -149,6 +186,7 @@ async def execute_with_retry(
             return cursor
         except Exception as e:
             if "locked" in str(e).lower() and attempt < max_retries - 1:
+                record_busy_timeout(operation or "execute")
                 wait = min(0.5 * (2 ** attempt), 8) + random.uniform(0, 0.5)
                 logger.warning(
                     f"DB locked on {operation or 'execute'} "
@@ -158,7 +196,6 @@ async def execute_with_retry(
                 await asyncio.sleep(wait)
             else:
                 raise
-    # Should never reach here, but just in case
     return await db.execute(sql, params)
 
 
@@ -183,6 +220,7 @@ async def commit_with_retry(
             return
         except Exception as e:
             if "locked" in str(e).lower() and attempt < max_retries - 1:
+                record_busy_timeout(f"commit:{operation or 'unknown'}")
                 wait = min(0.5 * (2 ** attempt), 8) + random.uniform(0, 0.5)
                 logger.warning(
                     f"DB locked on commit ({operation or 'unknown'}) "
@@ -192,6 +230,35 @@ async def commit_with_retry(
                 await asyncio.sleep(wait)
             else:
                 raise
+
+
+async def safe_execute_commit(
+    db: aiosqlite.Connection,
+    sql: str,
+    params: tuple = (),
+    max_retries: int = 5,
+    operation: str = "",
+) -> aiosqlite.Cursor:
+    """Execute + commit under retry with guaranteed rollback on failure.
+
+    Use this at the hot-path call sites that previously did:
+        await self._db.execute(sql, params)
+        await self._db.commit()
+
+    and had no rollback guard — any exception between execute() and commit()
+    leaves the implicit transaction open, which blocks all subsequent writes
+    until the process restarts. This wrapper closes that hole.
+    """
+    try:
+        cursor = await execute_with_retry(db, sql, params, max_retries, operation)
+        await commit_with_retry(db, max_retries, operation)
+        return cursor
+    except Exception:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        raise
 
 
 async def bulk_write(

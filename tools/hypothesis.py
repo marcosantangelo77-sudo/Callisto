@@ -462,14 +462,8 @@ class HypothesisManager:
         self._db: Optional[aiosqlite.Connection] = None
 
     async def initialize(self) -> None:
-        self._db = await aiosqlite.connect(self.db_path)
-        # Tag for WriteCoordinator routing (single-writer pattern).
-        from tools.db_writer import tag_connection as _tag
-        _tag(self._db, self.db_path)
-        await self._db.execute("PRAGMA journal_mode = WAL")
-        await self._db.execute("PRAGMA wal_autocheckpoint = 1000")
-        await self._db.execute("PRAGMA journal_size_limit = 67108864")
-        await self._db.execute("PRAGMA busy_timeout = 120000")
+        from tools.schema import open_db
+        self._db = await open_db(self.db_path)
         logger.info("Hypothesis manager initialized")
 
     async def close(self) -> None:
@@ -557,30 +551,21 @@ class HypothesisManager:
                 f"gap {model_config.get('temporal_split_gap_days', 7)}d"
             )
 
-        for attempt in range(8):
-            try:
-                await self._db.execute(
-                    "INSERT INTO hypotheses "
-                    "(hypothesis_id, name, thesis, sport, market_type, model_config, "
-                    "edge_threshold, status, min_sample_size, significance_level, "
-                    "created_at, updated_at, notes) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)",
-                    (hid, name, thesis, sport, market_type, json.dumps(model_config),
-                     edge_threshold, min_sample_size, significance_level, now, now, notes),
-                )
-                await self._db.commit()
-                logger.info(f"Hypothesis created: {hid} — {name}")
-                return hid
-            except Exception as e:
-                if "locked" in str(e).lower() and attempt < 7:
-                    import asyncio
-                    # Jittered backoff: 0.5, 1, 2, 4, 8, 16, 32s (total ~63s)
-                    import random
-                    wait = min(0.5 * (2 ** attempt), 32) + random.uniform(0, 0.5)
-                    logger.warning(f"DB locked on hypothesis create (attempt {attempt+1}/8), retrying in {wait:.1f}s")
-                    await asyncio.sleep(wait)
-                else:
-                    raise
+        from tools.db_utils import safe_execute_commit
+        await safe_execute_commit(
+            self._db,
+            "INSERT INTO hypotheses "
+            "(hypothesis_id, name, thesis, sport, market_type, model_config, "
+            "edge_threshold, status, min_sample_size, significance_level, "
+            "created_at, updated_at, notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)",
+            (hid, name, thesis, sport, market_type, json.dumps(model_config),
+             edge_threshold, min_sample_size, significance_level, now, now, notes),
+            max_retries=8,
+            operation="hypothesis.create",
+        )
+        logger.info(f"Hypothesis created: {hid} — {name}")
+        return hid
 
     async def get_hypothesis(self, hypothesis_id: str) -> Optional[dict]:
         cursor = await self._db.execute(
@@ -669,8 +654,9 @@ class HypothesisManager:
                 f"Concurrent promoters may overwrite each other. "
                 f"Migrate caller to CAS by passing expected_status=<current>."
             )
+        from tools.db_utils import safe_execute_commit
         if expected_status is not None:
-            cursor = await execute_with_retry(
+            cursor = await safe_execute_commit(
                 self._db,
                 "UPDATE hypotheses SET status = ?, updated_at = ?, "
                 "promoted_at = ?, promoted_by = ? "
@@ -678,7 +664,6 @@ class HypothesisManager:
                 (new_status, now, now, promoted_by, hypothesis_id, expected_status),
                 operation="hypothesis update_status (cas)",
             )
-            await commit_with_retry(self._db, operation="hypothesis update_status (cas)")
             changed = (cursor.rowcount or 0) > 0
             if not changed:
                 logger.info(
@@ -696,14 +681,13 @@ class HypothesisManager:
                 "changed": changed,
                 "expected_status": expected_status,
             }
-        await execute_with_retry(
+        await safe_execute_commit(
             self._db,
             "UPDATE hypotheses SET status = ?, updated_at = ?, "
             "promoted_at = ?, promoted_by = ? WHERE hypothesis_id = ?",
             (new_status, now, now, promoted_by, hypothesis_id),
             operation="hypothesis update_status",
         )
-        await commit_with_retry(self._db, operation="hypothesis update_status")
         logger.info(f"Hypothesis {hypothesis_id} → {new_status} (by {promoted_by})")
         _fire_sharpening_hook(self, hypothesis_id, prev_status, new_status)
         return {"hypothesis_id": hypothesis_id, "new_status": new_status, "changed": True}
@@ -943,28 +927,35 @@ class HypothesisManager:
         report["total_events"] = stats_total_n
         report["total_signals"] = stats_signals_n
 
-        await execute_with_retry(
-            self._db,
-            "DELETE FROM hypothesis_stats WHERE hypothesis_id = ? AND stage = ?",
-            (hypothesis_id, stage),
-            operation="hypothesis evaluate_significance delete",
-        )
-        await execute_with_retry(
-            self._db,
-            "INSERT INTO hypothesis_stats "
-            "(hypothesis_id, stage, computed_at, total_n, signals_n, win, loss, push_, "
-            "hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi_pct, "
-            "sharpe, max_drawdown, p_value, is_significant, "
-            "sortino, brier_score, information_coefficient) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (hypothesis_id, stage, now, stats_total_n, stats_signals_n,
-             wins, losses, pushes,
-             hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi,
-             sr, mdd, p_binomial, is_significant,
-             sortino, brier, ic),
-            operation="hypothesis evaluate_significance insert",
-        )
-        await commit_with_retry(self._db, operation="hypothesis evaluate_significance")
+        try:
+            await execute_with_retry(
+                self._db,
+                "DELETE FROM hypothesis_stats WHERE hypothesis_id = ? AND stage = ?",
+                (hypothesis_id, stage),
+                operation="hypothesis evaluate_significance delete",
+            )
+            await execute_with_retry(
+                self._db,
+                "INSERT INTO hypothesis_stats "
+                "(hypothesis_id, stage, computed_at, total_n, signals_n, win, loss, push_, "
+                "hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi_pct, "
+                "sharpe, max_drawdown, p_value, is_significant, "
+                "sortino, brier_score, information_coefficient) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (hypothesis_id, stage, now, stats_total_n, stats_signals_n,
+                 wins, losses, pushes,
+                 hit_rate, avg_edge, avg_ev, avg_clv, positive_clv_rate, roi,
+                 sr, mdd, p_binomial, is_significant,
+                 sortino, brier, ic),
+                operation="hypothesis evaluate_significance insert",
+            )
+            await commit_with_retry(self._db, operation="hypothesis evaluate_significance")
+        except Exception:
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
+            raise
 
         return report
 
