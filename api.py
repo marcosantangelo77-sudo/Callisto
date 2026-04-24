@@ -3895,6 +3895,29 @@ async def integrity_history(limit: int = 50):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post(
+    "/admin/pipeline-integrity/run",
+    dependencies=[Depends(require_admin_or_loopback)],
+)
+async def admin_pipeline_integrity_run():
+    """On-demand forced run of the full pipeline_integrity suite.
+
+    Unlike /health/deep (which is also a full run), this endpoint is
+    admin-gated and guarantees a synchronous, fresh execution regardless of
+    the autonomous-loop cadence. Returns the same summary dict produced by
+    `PipelineIntegrityChecker.run_all_checks()`, including per-check results
+    in the expansion spec format {name, severity, detail, metric_value}.
+    """
+    try:
+        checker = get_integrity_checker()
+        await checker.ensure_table()
+        result = await checker.run_all_checks()
+        return result
+    except Exception as e:
+        logger.error(f"Forced pipeline integrity run failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/claude/status")
 async def claude_status():
     """Get Claude Code availability and usage stats."""

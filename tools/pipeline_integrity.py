@@ -49,10 +49,55 @@ PHASE_ERROR_RATE_THRESHOLD = 0.50  # > 50% error rate over last 10 runs = broken
 METRIC_STALE_HOURS = 24            # Alert if a metric hasn't changed in this long
 INTEGRITY_CHECK_INTERVAL_CYCLES = 5  # Run every N research loop cycles (coprime with injury=4, regime=7, improvement=11)
 
+# ── Expansion thresholds ──
+STATUS_DOMINANCE_WARN = 0.90       # Alert if >90% of hypotheses in one status
+STATUS_DOMINANCE_MIN_TOTAL = 20    # Only evaluate once there are this many hypotheses
+BACKTEST_STALENESS_DAYS = 7        # paper_trading hypothesis with no backtest in this window = warn
+RESOLUTION_LAG_DAYS = 14           # backtest_events with NULL actual_result older than this = warn
+CLOSING_LINE_COVERAGE_WARN = 0.80  # Warn if <80% of settled paper trades have closing lines
+CLOSING_LINE_COVERAGE_CRITICAL = 0.50
+CLOSING_LINE_MIN_SETTLED = 20      # Need at least this many settled bets to judge coverage
+EDGE_CONVERSION_WARN = 0.01        # <1% of edges converting to bets is suspicious
+EDGE_CONVERSION_MIN_EDGES = 100    # Need this many edges to judge conversion
+HOT_INDEX_COLUMNS = [              # Columns that should be indexed on large tables
+    ("backtest_events", "created_at"),
+    ("backtest_events", "event_id"),
+    ("paper_trades", "created_at"),
+    ("paper_trades", "hypothesis_id"),
+    ("signals", "created_at"),
+    ("hypotheses", "status"),
+    ("hypotheses", "updated_at"),
+]
+
 # ── Issue severity levels ──
 SEVERITY_CRITICAL = "CRITICAL"  # Pipeline is broken, producing wrong output
 SEVERITY_WARNING = "WARNING"    # Pipeline is degraded, may produce wrong output
 SEVERITY_INFO = "INFO"          # Something is unusual but not necessarily broken
+
+# ── Lowercase severity mapping for check_result format ──
+SEVERITY_MAP = {
+    SEVERITY_CRITICAL: "critical",
+    SEVERITY_WARNING: "warn",
+    SEVERITY_INFO: "ok",
+}
+
+
+def _check_result(
+    name: str,
+    severity: str,
+    detail: str,
+    metric_value: float | int,
+) -> dict:
+    """Standard per-check result dict, matching the expansion spec:
+    {"name": str, "severity": "ok|warn|critical", "detail": str,
+     "metric_value": float|int}.
+    """
+    return {
+        "name": name,
+        "severity": severity,
+        "detail": detail,
+        "metric_value": metric_value,
+    }
 
 
 class IntegrityIssue:
@@ -89,6 +134,7 @@ class PipelineIntegrityChecker:
 
     def __init__(self):
         self._issues: list[IntegrityIssue] = []
+        self._check_results: list[dict] = []  # Per-check spec dicts (name/severity/detail/metric_value)
         self._last_run: Optional[str] = None
         self._run_count = 0
         self._phase_errors: dict[str, list[bool]] = defaultdict(list)  # phase -> [success/fail]
@@ -132,6 +178,7 @@ class PipelineIntegrityChecker:
         /system/full-status responses.
         """
         self._issues = []
+        self._check_results = []
         self._run_count += 1
         start_time = time.monotonic()
 
@@ -146,6 +193,16 @@ class PipelineIntegrityChecker:
             ("rejection_rate", self._check_rejection_rate),
             ("temporal_isolation", self._check_temporal_isolation),
             ("calibration_health", self._check_calibration_health),
+            # ── Expansion checks (feat/pipeline-integrity-expansion) ──
+            ("hypothesis_status_distribution", self._check_status_distribution),
+            ("backtest_staleness", self._check_backtest_staleness),
+            ("signal_resolution_lag", self._check_signal_resolution_lag),
+            ("closing_line_coverage", self._check_closing_line_coverage),
+            ("edge_bet_conversion", self._check_edge_bet_conversion),
+            ("migration_drift", self._check_migration_drift),
+            ("db_index_coverage", self._check_db_index_coverage),
+            ("orphaned_records", self._check_orphaned_records),
+            ("schema_version_lag", self._check_schema_version_lag),
         ]
 
         for check_name, check_fn in checks:
@@ -187,6 +244,7 @@ class PipelineIntegrityChecker:
                 "total": len(self._issues),
             },
             "issue_details": [i.to_dict() for i in self._issues],
+            "check_results": list(self._check_results),
         }
 
         if critical_count > 0:
@@ -1030,6 +1088,657 @@ class PipelineIntegrityChecker:
             logger.warning(f"Rejection rate check failed: {e}", exc_info=True)
 
     # ──────────────────────────────────────────────────────────
+    # EXPANSION CHECKS (feat/pipeline-integrity-expansion)
+    # ──────────────────────────────────────────────────────────
+
+    async def _check_status_distribution(self) -> None:
+        """Hypothesis status distribution.
+
+        Alert if >90% of hypotheses are sitting in a single status — indicates
+        the promotion pipeline has stalled (e.g. everything stuck in 'draft'
+        or 'backtesting', nothing reaching paper_trading/live).
+        """
+        check_name = "hypothesis_status_distribution"
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 60000")
+                cursor = await db.execute(
+                    "SELECT status, COUNT(*) FROM hypotheses GROUP BY status"
+                )
+                rows = await cursor.fetchall()
+                counts = {str(r[0]): int(r[1]) for r in rows if r[0] is not None}
+                total = sum(counts.values())
+                if total < STATUS_DOMINANCE_MIN_TOTAL:
+                    self._check_results.append(_check_result(
+                        check_name, "ok",
+                        f"Not enough hypotheses yet ({total}/{STATUS_DOMINANCE_MIN_TOTAL}); "
+                        "skipping distribution check.",
+                        float(total),
+                    ))
+                    return
+
+                dominant_status, dominant_count = max(counts.items(), key=lambda kv: kv[1])
+                share = dominant_count / total if total else 0.0
+
+                if share > STATUS_DOMINANCE_WARN:
+                    severity_enum = SEVERITY_WARNING
+                    self._issues.append(IntegrityIssue(
+                        check_name=check_name,
+                        severity=severity_enum,
+                        message=(
+                            f"{share:.1%} of {total} hypotheses are in status "
+                            f"'{dominant_status}' ({dominant_count}). Promotion "
+                            f"pipeline may be stalled."
+                        ),
+                        details={
+                            "distribution": counts,
+                            "dominant_status": dominant_status,
+                            "dominant_share": share,
+                        },
+                    ))
+                    sev = SEVERITY_MAP[severity_enum]
+                else:
+                    sev = "ok"
+                self._check_results.append(_check_result(
+                    check_name, sev,
+                    f"dominant='{dominant_status}' {dominant_count}/{total} "
+                    f"({share:.1%}); distribution={counts}",
+                    round(share, 4),
+                ))
+        except Exception as e:
+            logger.warning(f"{check_name} failed: {e}", exc_info=True)
+            self._check_results.append(_check_result(
+                check_name, "warn", f"check failed: {e}", 0
+            ))
+
+    async def _check_backtest_staleness(self) -> None:
+        """Paper_trading hypotheses with no backtest run in the last 7 days.
+
+        If a hypothesis was promoted to paper_trading but hasn't been
+        re-backtested recently, its decision criteria may be drifting.
+        """
+        check_name = "backtest_staleness"
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 60000")
+                cutoff = (
+                    datetime.now(timezone.utc) - timedelta(days=BACKTEST_STALENESS_DAYS)
+                ).isoformat()
+
+                # backtest_runs uses started_at/completed_at in the canonical
+                # schema; the tests' _MIN_SCHEMA uses created_at. Fall back
+                # across both so this check works in prod and in tests.
+                cursor = await db.execute(
+                    "PRAGMA table_info(backtest_runs)"
+                )
+                cols = {r[1] for r in await cursor.fetchall()}
+                time_col = next(
+                    (c for c in ("completed_at", "started_at", "created_at") if c in cols),
+                    None,
+                )
+                if time_col is None:
+                    self._check_results.append(_check_result(
+                        check_name, "ok",
+                        "backtest_runs has no recognized timestamp column; skipping.",
+                        0,
+                    ))
+                    return
+                cursor = await db.execute(
+                    f"SELECT h.hypothesis_id, h.name, "
+                    f"(SELECT MAX(br.{time_col}) FROM backtest_runs br "
+                    f" WHERE br.hypothesis_id = h.hypothesis_id) AS last_run "
+                    f"FROM hypotheses h "
+                    f"WHERE h.status = 'paper_trading'"
+                )
+                rows = await cursor.fetchall()
+                stale: list[tuple[str, str, Optional[str]]] = []
+                for h_id, name, last_run in rows:
+                    if last_run is None or str(last_run) < cutoff:
+                        stale.append((h_id, name, last_run))
+
+                total_pt = len(rows)
+                stale_count = len(stale)
+
+                if stale_count > 0:
+                    sev_enum = SEVERITY_WARNING
+                    self._issues.append(IntegrityIssue(
+                        check_name=check_name,
+                        severity=sev_enum,
+                        message=(
+                            f"{stale_count}/{total_pt} paper_trading hypotheses "
+                            f"have no backtest in last {BACKTEST_STALENESS_DAYS} days."
+                        ),
+                        details={
+                            "stale_count": stale_count,
+                            "paper_trading_total": total_pt,
+                            "sample": [
+                                {"hypothesis_id": s[0], "name": s[1], "last_run": s[2]}
+                                for s in stale[:5]
+                            ],
+                        },
+                    ))
+                    sev = SEVERITY_MAP[sev_enum]
+                else:
+                    sev = "ok"
+                self._check_results.append(_check_result(
+                    check_name, sev,
+                    f"{stale_count}/{total_pt} paper_trading hypotheses without "
+                    f"backtest in last {BACKTEST_STALENESS_DAYS}d",
+                    stale_count,
+                ))
+        except Exception as e:
+            logger.warning(f"{check_name} failed: {e}", exc_info=True)
+            self._check_results.append(_check_result(
+                check_name, "warn", f"check failed: {e}", 0
+            ))
+
+    async def _check_signal_resolution_lag(self) -> None:
+        """backtest_events rows with NULL actual_result older than 14 days.
+
+        Indicates the prop_resolver is falling behind on settling historical
+        events — CLV computations and hit-rate rollups go stale.
+        """
+        check_name = "signal_resolution_lag"
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 60000")
+                cutoff = (
+                    datetime.now(timezone.utc) - timedelta(days=RESOLUTION_LAG_DAYS)
+                ).date().isoformat()
+
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM backtest_events "
+                    "WHERE actual_result IS NULL "
+                    "AND signal_generated = 1 "
+                    "AND COALESCE(local_game_date, game_date) < ?",
+                    (cutoff,),
+                )
+                unresolved_old = (await cursor.fetchone())[0] or 0
+
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM backtest_events WHERE signal_generated = 1"
+                )
+                total_signals = (await cursor.fetchone())[0] or 0
+
+                if unresolved_old > 0:
+                    sev_enum = SEVERITY_CRITICAL if unresolved_old > 100 else SEVERITY_WARNING
+                    self._issues.append(IntegrityIssue(
+                        check_name=check_name,
+                        severity=sev_enum,
+                        message=(
+                            f"{unresolved_old} backtest_events with signal_generated=1 "
+                            f"have NULL actual_result and game_date > "
+                            f"{RESOLUTION_LAG_DAYS} days old. prop_resolver is lagging."
+                        ),
+                        details={
+                            "unresolved_old": unresolved_old,
+                            "total_signals": total_signals,
+                            "cutoff_date": cutoff,
+                        },
+                    ))
+                    sev = SEVERITY_MAP[sev_enum]
+                else:
+                    sev = "ok"
+                self._check_results.append(_check_result(
+                    check_name, sev,
+                    f"{unresolved_old} unresolved signals older than "
+                    f"{RESOLUTION_LAG_DAYS}d (of {total_signals} signals)",
+                    unresolved_old,
+                ))
+        except Exception as e:
+            logger.warning(f"{check_name} failed: {e}", exc_info=True)
+            self._check_results.append(_check_result(
+                check_name, "warn", f"check failed: {e}", 0
+            ))
+
+    async def _check_closing_line_coverage(self) -> None:
+        """% of settled paper_trades that have closing_odds populated.
+
+        CLV can only be measured against bets where we captured the close.
+        Low coverage means CLV metrics are based on a biased sub-sample.
+        """
+        check_name = "closing_line_coverage"
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 60000")
+                cursor = await db.execute(
+                    "SELECT COUNT(*), "
+                    "SUM(CASE WHEN closing_odds IS NOT NULL THEN 1 ELSE 0 END) "
+                    "FROM paper_trades WHERE actual_result IS NOT NULL"
+                )
+                row = await cursor.fetchone()
+                settled = int(row[0] or 0)
+                with_close = int(row[1] or 0)
+
+                if settled < CLOSING_LINE_MIN_SETTLED:
+                    self._check_results.append(_check_result(
+                        check_name, "ok",
+                        f"Not enough settled bets ({settled}/{CLOSING_LINE_MIN_SETTLED}); "
+                        "skipping coverage check.",
+                        float(settled),
+                    ))
+                    return
+
+                coverage = with_close / settled if settled else 0.0
+
+                if coverage < CLOSING_LINE_COVERAGE_CRITICAL:
+                    sev_enum = SEVERITY_CRITICAL
+                elif coverage < CLOSING_LINE_COVERAGE_WARN:
+                    sev_enum = SEVERITY_WARNING
+                else:
+                    sev_enum = None
+
+                if sev_enum is not None:
+                    self._issues.append(IntegrityIssue(
+                        check_name=check_name,
+                        severity=sev_enum,
+                        message=(
+                            f"Closing-line coverage is {coverage:.1%} "
+                            f"({with_close}/{settled} settled paper_trades). "
+                            f"CLV metrics are based on an incomplete sample."
+                        ),
+                        details={
+                            "settled": settled,
+                            "with_close": with_close,
+                            "coverage": coverage,
+                        },
+                    ))
+                    sev = SEVERITY_MAP[sev_enum]
+                else:
+                    sev = "ok"
+                self._check_results.append(_check_result(
+                    check_name, sev,
+                    f"{with_close}/{settled} settled bets have closing lines "
+                    f"({coverage:.1%})",
+                    round(coverage, 4),
+                ))
+        except Exception as e:
+            logger.warning(f"{check_name} failed: {e}", exc_info=True)
+            self._check_results.append(_check_result(
+                check_name, "warn", f"check failed: {e}", 0
+            ))
+
+    async def _check_edge_bet_conversion(self) -> None:
+        """Edge -> paper_trade conversion ratio.
+
+        live_edge_surface rows with decision != 'skip' are actionable edges.
+        If we emit 1000 edges but only 2 become paper_trades, something is
+        filtering too aggressively (or downstream executor is broken).
+        """
+        check_name = "edge_bet_conversion"
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 60000")
+
+                tbl = await db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name='live_edge_surface'"
+                )
+                if not await tbl.fetchone():
+                    self._check_results.append(_check_result(
+                        check_name, "ok",
+                        "live_edge_surface table absent — edge conversion not measurable yet.",
+                        0,
+                    ))
+                    return
+
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM live_edge_surface "
+                    "WHERE decision IS NOT NULL AND decision <> 'skip'"
+                )
+                edges = int((await cursor.fetchone())[0] or 0)
+
+                cursor = await db.execute("SELECT COUNT(*) FROM paper_trades")
+                trades = int((await cursor.fetchone())[0] or 0)
+
+                if edges < EDGE_CONVERSION_MIN_EDGES:
+                    self._check_results.append(_check_result(
+                        check_name, "ok",
+                        f"Not enough actionable edges ({edges}/{EDGE_CONVERSION_MIN_EDGES}); "
+                        "skipping conversion check.",
+                        float(edges),
+                    ))
+                    return
+
+                ratio = trades / edges if edges else 0.0
+
+                if ratio < EDGE_CONVERSION_WARN:
+                    sev_enum = SEVERITY_WARNING
+                    self._issues.append(IntegrityIssue(
+                        check_name=check_name,
+                        severity=sev_enum,
+                        message=(
+                            f"Edge → paper_trade conversion is {ratio:.2%} "
+                            f"({trades} trades / {edges} actionable edges). "
+                            f"<1% suggests over-filtering or a broken executor."
+                        ),
+                        details={
+                            "edges": edges,
+                            "trades": trades,
+                            "conversion_ratio": ratio,
+                        },
+                    ))
+                    sev = SEVERITY_MAP[sev_enum]
+                else:
+                    sev = "ok"
+                self._check_results.append(_check_result(
+                    check_name, sev,
+                    f"{trades} paper_trades from {edges} actionable edges "
+                    f"({ratio:.2%})",
+                    round(ratio, 4),
+                ))
+        except Exception as e:
+            logger.warning(f"{check_name} failed: {e}", exc_info=True)
+            self._check_results.append(_check_result(
+                check_name, "warn", f"check failed: {e}", 0
+            ))
+
+    async def _check_migration_drift(self) -> None:
+        """Migration files on disk but absent from schema_migrations table.
+
+        Wires to tools.migrations discovery: we compare the set of
+        ``discover_migrations()`` versions against what's already recorded in
+        ``schema_migrations``. Any file-on-disk version not in the DB means
+        either apply_pending_migrations hasn't run, or the migration failed.
+        """
+        check_name = "migration_drift"
+        try:
+            # Import here to avoid circulars at module load time
+            try:
+                from tools.migrations import discover_migrations  # type: ignore
+            except Exception as import_err:
+                self._check_results.append(_check_result(
+                    check_name, "warn",
+                    f"Could not import tools.migrations: {import_err}",
+                    0,
+                ))
+                return
+
+            try:
+                file_versions = {m.version for m in discover_migrations()}
+            except Exception as disc_err:
+                self._check_results.append(_check_result(
+                    check_name, "warn",
+                    f"discover_migrations() failed: {disc_err}",
+                    0,
+                ))
+                return
+
+            applied_versions: set[int] = set()
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 60000")
+                tbl = await db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name='schema_migrations'"
+                )
+                if await tbl.fetchone():
+                    cursor = await db.execute("SELECT version FROM schema_migrations")
+                    applied_versions = {int(r[0]) for r in await cursor.fetchall()}
+
+            drifted = sorted(file_versions - applied_versions)
+            dangling = sorted(applied_versions - file_versions)
+
+            if drifted:
+                sev_enum = SEVERITY_CRITICAL
+                self._issues.append(IntegrityIssue(
+                    check_name=check_name,
+                    severity=sev_enum,
+                    message=(
+                        f"{len(drifted)} migrations exist on disk but are NOT "
+                        f"recorded in schema_migrations: {drifted}. Run "
+                        f"apply_pending_migrations() or investigate failures."
+                    ),
+                    details={
+                        "drifted_versions": drifted,
+                        "dangling_versions": dangling,
+                        "file_count": len(file_versions),
+                        "applied_count": len(applied_versions),
+                    },
+                ))
+                sev = SEVERITY_MAP[sev_enum]
+            elif dangling:
+                sev_enum = SEVERITY_WARNING
+                self._issues.append(IntegrityIssue(
+                    check_name=check_name,
+                    severity=sev_enum,
+                    message=(
+                        f"{len(dangling)} migrations are recorded in "
+                        f"schema_migrations but have no file on disk: "
+                        f"{dangling}. DB may have been touched by a newer "
+                        f"codebase than is deployed here."
+                    ),
+                    details={
+                        "dangling_versions": dangling,
+                        "file_count": len(file_versions),
+                        "applied_count": len(applied_versions),
+                    },
+                ))
+                sev = SEVERITY_MAP[sev_enum]
+            else:
+                sev = "ok"
+            self._check_results.append(_check_result(
+                check_name, sev,
+                f"files={sorted(file_versions)} applied={sorted(applied_versions)} "
+                f"drifted={drifted} dangling={dangling}",
+                len(drifted),
+            ))
+        except Exception as e:
+            logger.warning(f"{check_name} failed: {e}", exc_info=True)
+            self._check_results.append(_check_result(
+                check_name, "warn", f"check failed: {e}", 0
+            ))
+
+    async def _check_db_index_coverage(self) -> None:
+        """Missing indexes on hot columns.
+
+        For each (table, column) in HOT_INDEX_COLUMNS, confirm SQLite has an
+        index whose first indexed column matches. Missing an index on
+        created_at/event_id/status on a large table causes silent slowdowns.
+        """
+        check_name = "db_index_coverage"
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 60000")
+                cursor = await db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+                existing_tables = {r[0] for r in await cursor.fetchall()}
+
+                missing: list[dict] = []
+                for table, column in HOT_INDEX_COLUMNS:
+                    if table not in existing_tables:
+                        continue
+                    # list indexes on the table
+                    cursor = await db.execute(f"PRAGMA index_list('{table}')")
+                    idx_rows = await cursor.fetchall()
+                    found = False
+                    for idx_row in idx_rows:
+                        # idx_row: (seq, name, unique, origin, partial)
+                        idx_name = idx_row[1]
+                        cursor2 = await db.execute(f"PRAGMA index_info('{idx_name}')")
+                        info_rows = await cursor2.fetchall()
+                        if not info_rows:
+                            continue
+                        # first indexed column is seqno=0
+                        info_rows_sorted = sorted(info_rows, key=lambda r: r[0])
+                        first_col = info_rows_sorted[0][2]
+                        if first_col == column:
+                            found = True
+                            break
+                    if not found:
+                        missing.append({"table": table, "column": column})
+
+                if missing:
+                    sev_enum = SEVERITY_WARNING
+                    self._issues.append(IntegrityIssue(
+                        check_name=check_name,
+                        severity=sev_enum,
+                        message=(
+                            f"{len(missing)} hot columns lack a leading index: "
+                            f"{missing}. Add CREATE INDEX in a migration."
+                        ),
+                        details={"missing": missing},
+                    ))
+                    sev = SEVERITY_MAP[sev_enum]
+                else:
+                    sev = "ok"
+                self._check_results.append(_check_result(
+                    check_name, sev,
+                    f"{len(missing)} missing indexes on hot columns "
+                    f"(checked {len(HOT_INDEX_COLUMNS)} table/column pairs)",
+                    len(missing),
+                ))
+        except Exception as e:
+            logger.warning(f"{check_name} failed: {e}", exc_info=True)
+            self._check_results.append(_check_result(
+                check_name, "warn", f"check failed: {e}", 0
+            ))
+
+    async def _check_orphaned_records(self) -> None:
+        """Records whose parent row does not exist.
+
+        - backtest_events.hypothesis_id with no matching hypotheses row
+        - paper_trades.hypothesis_id with no matching hypotheses row
+        - paper_trades rows whose hypothesis has no backtest_events at all
+        """
+        check_name = "orphaned_records"
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 60000")
+
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM backtest_events be "
+                    "WHERE NOT EXISTS ("
+                    " SELECT 1 FROM hypotheses h "
+                    " WHERE h.hypothesis_id = be.hypothesis_id"
+                    ")"
+                )
+                orphan_bt = int((await cursor.fetchone())[0] or 0)
+
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM paper_trades pt "
+                    "WHERE NOT EXISTS ("
+                    " SELECT 1 FROM hypotheses h "
+                    " WHERE h.hypothesis_id = pt.hypothesis_id"
+                    ")"
+                )
+                orphan_pt_no_hypo = int((await cursor.fetchone())[0] or 0)
+
+                # paper_trades whose hypothesis has no backtest_events at all
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM paper_trades pt "
+                    "WHERE NOT EXISTS ("
+                    " SELECT 1 FROM backtest_events be "
+                    " WHERE be.hypothesis_id = pt.hypothesis_id"
+                    ")"
+                )
+                orphan_pt_no_bt = int((await cursor.fetchone())[0] or 0)
+
+                total_orphans = orphan_bt + orphan_pt_no_hypo + orphan_pt_no_bt
+
+                if orphan_bt > 0 or orphan_pt_no_hypo > 0:
+                    sev_enum = SEVERITY_CRITICAL
+                elif orphan_pt_no_bt > 0:
+                    sev_enum = SEVERITY_WARNING
+                else:
+                    sev_enum = None
+
+                if sev_enum is not None:
+                    self._issues.append(IntegrityIssue(
+                        check_name=check_name,
+                        severity=sev_enum,
+                        message=(
+                            f"Orphaned records: {orphan_bt} backtest_events with "
+                            f"missing hypothesis, {orphan_pt_no_hypo} paper_trades "
+                            f"with missing hypothesis, {orphan_pt_no_bt} paper_trades "
+                            f"whose hypothesis has no backtest_events."
+                        ),
+                        details={
+                            "backtest_events_orphan": orphan_bt,
+                            "paper_trades_no_hypothesis": orphan_pt_no_hypo,
+                            "paper_trades_no_backtest": orphan_pt_no_bt,
+                        },
+                    ))
+                    sev = SEVERITY_MAP[sev_enum]
+                else:
+                    sev = "ok"
+                self._check_results.append(_check_result(
+                    check_name, sev,
+                    f"bt_events_orphan={orphan_bt} pt_no_hypo={orphan_pt_no_hypo} "
+                    f"pt_no_backtest={orphan_pt_no_bt}",
+                    total_orphans,
+                ))
+        except Exception as e:
+            logger.warning(f"{check_name} failed: {e}", exc_info=True)
+            self._check_results.append(_check_result(
+                check_name, "warn", f"check failed: {e}", 0
+            ))
+
+    async def _check_schema_version_lag(self) -> None:
+        """Current DB schema_version vs the max known migration on disk.
+
+        If the DB's highest applied version is behind the newest migration
+        available, the running code may be reading columns that don't exist
+        (or writing to tables that have since been altered).
+        """
+        check_name = "schema_version_lag"
+        try:
+            try:
+                from tools.migrations import discover_migrations  # type: ignore
+                max_known = max((m.version for m in discover_migrations()), default=0)
+            except Exception as import_err:
+                self._check_results.append(_check_result(
+                    check_name, "warn",
+                    f"Could not import tools.migrations: {import_err}",
+                    0,
+                ))
+                return
+
+            current_version = 0
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("PRAGMA busy_timeout = 60000")
+                tbl = await db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name='schema_migrations'"
+                )
+                if await tbl.fetchone():
+                    cursor = await db.execute(
+                        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                    )
+                    current_version = int((await cursor.fetchone())[0] or 0)
+
+            lag = max(0, max_known - current_version)
+            if lag > 0:
+                sev_enum = SEVERITY_CRITICAL if lag > 2 else SEVERITY_WARNING
+                self._issues.append(IntegrityIssue(
+                    check_name=check_name,
+                    severity=sev_enum,
+                    message=(
+                        f"DB schema_version is {current_version}, but the newest "
+                        f"migration on disk is {max_known}. Lag = {lag} versions. "
+                        f"Code may expect columns/tables that don't yet exist."
+                    ),
+                    details={
+                        "db_version": current_version,
+                        "max_known_version": max_known,
+                        "lag": lag,
+                    },
+                ))
+                sev = SEVERITY_MAP[sev_enum]
+            else:
+                sev = "ok"
+            self._check_results.append(_check_result(
+                check_name, sev,
+                f"db_version={current_version} max_known={max_known} lag={lag}",
+                lag,
+            ))
+        except Exception as e:
+            logger.warning(f"{check_name} failed: {e}", exc_info=True)
+            self._check_results.append(_check_result(
+                check_name, "warn", f"check failed: {e}", 0
+            ))
+
+    # ──────────────────────────────────────────────────────────
     # PHASE ERROR TRACKING
     # ──────────────────────────────────────────────────────────
 
@@ -1138,6 +1847,7 @@ class PipelineIntegrityChecker:
             "critical_issues": critical_count,
             "warning_issues": warning_count,
             "issues": all_issues,
+            "check_results": list(self._check_results),
             "phase_error_rates": self.get_phase_error_rates(),
         }
 
