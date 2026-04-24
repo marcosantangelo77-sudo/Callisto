@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -529,6 +530,62 @@ def _dedup_key(sport: str, player_name: str, body_part: Optional[str]) -> tuple:
     )
 
 
+_HEADLINE_PUNCT_RE = re.compile(r"[^a-z0-9\s]")
+_HEADLINE_WS_RE = re.compile(r"\s+")
+
+
+def normalize_headline(text: Optional[str]) -> str:
+    """Canonicalise a headline/body string for cross-feed exact-dedup.
+
+    Two feeds frequently publish the same headline verbatim (or with trivial
+    differences: punctuation, a source byline, whitespace). Content-hashing
+    the normalised form catches duplicates the name+body-part heuristic
+    misses (e.g. team-level coaching decisions that carry no player name).
+    """
+    if not text:
+        return ""
+    low = text.strip().lower()
+    low = _HEADLINE_PUNCT_RE.sub(" ", low)
+    low = _HEADLINE_WS_RE.sub(" ", low).strip()
+    return low
+
+
+def headline_hash(text: Optional[str]) -> Optional[str]:
+    """Stable 16-char hex digest of a headline for cross-feed dedup."""
+    norm = normalize_headline(text)
+    if not norm:
+        return None
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+
+
+def _extract_headline(raw: Any) -> Optional[str]:
+    """Extract a headline-like string from a raw payload dict.
+
+    Supports the shapes the fetchers emit: ESPN's ``details.detail``,
+    RotoWire's ``headline``, scoreboard notes' ``headline``, and falls
+    back to ``str(raw)`` if nothing more specific is available. Returns
+    None for empty payloads.
+    """
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        return raw or None
+    if not isinstance(raw, dict):
+        return None
+    # Check common fields in order of preference.
+    for k in ("headline", "detail", "description", "news"):
+        v = raw.get(k)
+        if isinstance(v, str) and v.strip():
+            return v
+    # Nested ESPN detail block.
+    d = raw.get("details")
+    if isinstance(d, dict):
+        v = d.get("detail")
+        if isinstance(v, str) and v.strip():
+            return v
+    return None
+
+
 def dedupe_injuries(events: list[InjuryEvent]) -> list[dict]:
     """Collapse same-injury events across sources into single rows.
 
@@ -553,14 +610,42 @@ def dedupe_injuries(events: list[InjuryEvent]) -> list[dict]:
             return True
         return a == b
 
-    for ev in events:
+    # Pre-compute headline hashes per event — cross-feed exact-content
+    # dedup catches the "same headline, different source" case that the
+    # name+body-part heuristic misses (e.g. team-level coaching decisions
+    # that carry no player_name at all).
+    ev_hashes: list[Optional[str]] = [
+        headline_hash(_extract_headline(ev.raw)) for ev in events
+    ]
+
+    for i, ev in enumerate(events):
         placed = False
-        for group in groups:
+        for j, group in enumerate(groups):
             head = group[0]
-            if (head.sport == ev.sport
-                    and _bp_compat(head.body_part, ev.body_part)
-                    and fuzzy_match_score(head.player_name, ev.player_name)
-                    >= DEFAULT_CONFIDENCE_THRESHOLD):
+            head_idx = events.index(head)
+            head_hash = ev_hashes[head_idx] if head_idx < len(ev_hashes) else None
+            ev_hash = ev_hashes[i]
+
+            # Content-hash match: identical normalised headline from any
+            # source collapses into the existing group immediately.
+            hash_match = (
+                head.sport == ev.sport
+                and head_hash is not None
+                and ev_hash is not None
+                and head_hash == ev_hash
+            )
+
+            # Fuzzy-name + body-part fallback for cases with differing
+            # body text (e.g. ESPN JSON vs RotoWire blurb).
+            name_match = (
+                head.sport == ev.sport
+                and head.player_name and ev.player_name
+                and _bp_compat(head.body_part, ev.body_part)
+                and fuzzy_match_score(head.player_name, ev.player_name)
+                >= DEFAULT_CONFIDENCE_THRESHOLD
+            )
+
+            if hash_match or name_match:
                 group.append(ev)
                 placed = True
                 break
@@ -802,24 +887,55 @@ _NEWS_COLUMNS = (
 async def persist_news_rows(
     rows: list[dict],
     db_path: Optional[str] = None,
+    *,
+    require_relevance: bool = True,
 ) -> int:
     """Write rows to ``news_events``. Returns number inserted.
 
-    Idempotency: a row is treated as a duplicate of an existing news_events
-    entry if there is a row with the same ``(sport, player_name, body_part,
-    event_type)`` whose ``first_seen_at`` is within the last 6 hours. This
-    prevents the 5-min poller from inserting the same headline 12 times per
-    hour. Dedup-across-sources happens BEFORE this call (in
-    ``dedupe_injuries``); this is the time-window dedupe.
+    Idempotency (two-layer):
+      1. Within-window: same ``(sport, player_name, body_part, event_type)``
+         in the last 6h is a dup (prevents a 5-min poller writing the same
+         row 12 times per hour).
+      2. Content-hash: normalised headline hash in the last 24h also de-dups,
+         catching identical headlines that arrive via different sources
+         or with slightly shifted structured fields.
+
+    Relevance gating (``require_relevance=True``, default):
+      Rows without a sport tag are dropped. News that can't be mapped to a
+      sport is un-JOINable downstream — better to drop at the door than
+      clog the table with unfilterable rows.
+
+    Cross-source dedup happens BEFORE this call in ``dedupe_injuries``;
+    this function is the time-window + content-hash dedupe layer.
     """
     if not rows:
         return 0
     path = db_path or DB_PATH
     inserted = 0
+    dropped_irrelevant = 0
     async with aiosqlite.connect(path) as db:
         await _ensure_schema(db)
         for row in rows:
-            # Within-window dedup: same sport+player+body_part+event_type in last 6h?
+            # ── Relevance gating: drop rows we can't JOIN downstream.
+            if require_relevance:
+                sport = (row.get("sport") or "").strip()
+                # Team/player/event association — need at least one.
+                has_player = bool((row.get("player_name") or "").strip())
+                # Pull team from raw_json if present (coaching rows stash it there).
+                raw = row.get("raw_json")
+                has_team = False
+                if raw:
+                    try:
+                        raw_dict = raw if isinstance(raw, dict) else json.loads(raw)
+                        if isinstance(raw_dict, dict) and raw_dict.get("team"):
+                            has_team = True
+                    except Exception:
+                        pass
+                if not sport or (not has_player and not has_team):
+                    dropped_irrelevant += 1
+                    continue
+
+            # ── Layer 1: structured-key within-window dedup (6h).
             dup = await db.execute(
                 """
                 SELECT id FROM news_events
@@ -835,6 +951,44 @@ async def persist_news_rows(
             )
             if await dup.fetchone():
                 continue
+
+            # ── Layer 2: headline-hash within-day dedup (24h).
+            # Catches cross-source / cross-poll duplicates the structured
+            # key misses (same content, different player_name casing,
+            # different body_part inference, etc.).
+            raw = row.get("raw_json")
+            hline: Optional[str] = None
+            if raw:
+                try:
+                    raw_dict = raw if isinstance(raw, dict) else json.loads(raw)
+                    hline = _extract_headline(raw_dict)
+                except Exception:
+                    hline = None
+            h_hash = headline_hash(hline) if hline else None
+            if h_hash:
+                # Tag the normalised hash into raw_json so we can query by it.
+                try:
+                    raw_dict = raw_dict if isinstance(raw, dict) else json.loads(raw) if raw else {}
+                    if not isinstance(raw_dict, dict):
+                        raw_dict = {}
+                except Exception:
+                    raw_dict = {}
+                raw_dict["_headline_hash"] = h_hash
+                row = {**row, "raw_json": json.dumps(raw_dict, default=str)}
+
+                dup2 = await db.execute(
+                    """
+                    SELECT id FROM news_events
+                    WHERE sport IS ?
+                      AND raw_json LIKE ?
+                      AND first_seen_at > datetime('now', '-24 hours')
+                    LIMIT 1
+                    """,
+                    (row.get("sport"), f'%"_headline_hash": "{h_hash}"%'),
+                )
+                if await dup2.fetchone():
+                    continue
+
             values = tuple(row.get(c) for c in _NEWS_COLUMNS)
             await db.execute(
                 f"INSERT INTO news_events ({', '.join(_NEWS_COLUMNS)}) "
@@ -843,6 +997,8 @@ async def persist_news_rows(
             )
             inserted += 1
         await db.commit()
+    if dropped_irrelevant:
+        logger.info(f"persist_news_rows: dropped {dropped_irrelevant} irrelevant rows")
     return inserted
 
 
@@ -858,4 +1014,6 @@ __all__ = [
     "infer_body_part",
     "persist_news_rows",
     "close_client",
+    "normalize_headline",
+    "headline_hash",
 ]

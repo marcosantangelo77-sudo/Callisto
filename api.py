@@ -181,6 +181,10 @@ wal_checkpoint_task: Optional[asyncio.Task] = None
 restart_signal_task: Optional[asyncio.Task] = None
 order_cron_task: Optional[asyncio.Task] = None
 prop_resolver_task: Optional[asyncio.Task] = None
+news_injury_task: Optional[asyncio.Task] = None
+news_lineup_task: Optional[asyncio.Task] = None
+news_coaching_task: Optional[asyncio.Task] = None
+news_impact_task: Optional[asyncio.Task] = None
 order_manager_instance: Optional[OrderManager] = None
 live_state_task: Optional[asyncio.Task] = None
 
@@ -915,7 +919,7 @@ async def order_cron_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle manager."""
-    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task, order_cron_task, order_manager_instance, live_state_collector, live_state_task, prop_resolver_task
+    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task, order_cron_task, order_manager_instance, live_state_collector, live_state_task, prop_resolver_task, news_injury_task, news_lineup_task, news_coaching_task, news_impact_task
 
     # Start memory profiling only when explicitly requested — tracemalloc tracks every
     # allocation in C-level metadata (~50-100 bytes each), which adds 55-110 MB of invisible
@@ -1135,6 +1139,31 @@ async def lifespan(app: FastAPI):
         )
     except Exception as e:
         logger.warning(f"prop_resolution_loop failed to start: {e}")
+
+    # News / injury ingestion — polls ESPN + RotoWire injury feeds, late
+    # scratches, coaching decisions; scores under-reactions against odds
+    # movements and persists to news_impact_scores for downstream JOINs.
+    # Env-gated so staging can disable: CALLISTO_NEWS_LOOPS_ENABLED=0
+    if os.environ.get("CALLISTO_NEWS_LOOPS_ENABLED", "1") == "1":
+        try:
+            from tools.news_loop import (
+                news_injury_loop,
+                news_lineup_loop,
+                news_coaching_loop,
+                news_impact_loop,
+            )
+            news_injury_task = asyncio.create_task(news_injury_loop(db_path=DB_PATH))
+            news_lineup_task = asyncio.create_task(news_lineup_loop(db_path=DB_PATH))
+            news_coaching_task = asyncio.create_task(news_coaching_loop(db_path=DB_PATH))
+            news_impact_task = asyncio.create_task(news_impact_loop(db_path=DB_PATH))
+            logger.info(
+                "news loops started (injury 5m, lineup 15m, "
+                "coaching 30m, impact 5m)"
+            )
+        except Exception as e:
+            logger.warning(f"news loops failed to start: {e}")
+    else:
+        logger.info("news loops disabled via CALLISTO_NEWS_LOOPS_ENABLED=0")
     logger.info(
         f"Callisto API started on port {CALLISTO_PORT} "
         f"(WAL ckpt 5m, restart-signal watcher active, ingestion SLA watchdog 5m, "
@@ -1191,6 +1220,20 @@ async def lifespan(app: FastAPI):
             await prop_resolver_task
         except asyncio.CancelledError:
             pass
+    for news_task in (news_injury_task, news_lineup_task,
+                      news_coaching_task, news_impact_task):
+        if news_task:
+            news_task.cancel()
+            try:
+                await news_task
+            except asyncio.CancelledError:
+                pass
+    # Release shared httpx client held by news_ingestion
+    try:
+        from tools.news_ingestion import close_client as _close_news_client
+        await _close_news_client()
+    except Exception:
+        pass
     if worker_task:
         worker_task.cancel()
         try:
@@ -1616,6 +1659,46 @@ async def get_opportunities(status: str = "open", limit: int = 20):
     """Get current +EV betting opportunities."""
     opps = await line_monitor.get_ev_opportunities(status=status, limit=limit)
     return {"count": len(opps), "opportunities": opps}
+
+
+@app.get("/news/impact/recent")
+async def get_news_impact_recent(
+    sport: Optional[str] = None,
+    team: Optional[str] = None,
+    player: Optional[str] = None,
+    since_minutes: int = 360,
+    only_actionable: bool = False,
+    limit: int = 50,
+):
+    """Latest scored news impact rows, filterable by sport/team/player.
+
+    ``decayed_impact`` applies a linear 0→24h staleness decay, so rows
+    with high decayed_impact reflect fresh and model-relevant signal.
+    Use ``only_actionable=true`` to restrict to rows the impact scorer
+    gated through (confirmed or moderate+ severity, under-reaction vs
+    the line). Default 6h window.
+    """
+    from tools.news_impact import get_recent_impact_scores
+    rows = await get_recent_impact_scores(
+        db_path=DB_PATH,
+        sport=sport,
+        team=team,
+        player=player,
+        since_minutes=since_minutes,
+        only_actionable=only_actionable,
+        limit=limit,
+    )
+    return {
+        "count": len(rows),
+        "filters": {
+            "sport": sport,
+            "team": team,
+            "player": player,
+            "since_minutes": since_minutes,
+            "only_actionable": only_actionable,
+        },
+        "impact_scores": rows,
+    }
 
 
 @app.get("/odds/snapshots/{sport}")
