@@ -1952,6 +1952,11 @@ class BetSubmission(BaseModel):
     event_id: str = Field(default="", max_length=128)
     edge_estimate: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
     notes: str = Field(default="", max_length=2000)
+    # feat/bet-execution-hardening: callers retrying /bets/record (network
+    # error, client retry) should pass a stable external_id so the record
+    # is created exactly once. The server returns the existing bet_id on
+    # subsequent calls with the same external_id.
+    external_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class BetResolution(BaseModel):
@@ -1961,7 +1966,14 @@ class BetResolution(BaseModel):
 
 @app.post("/bets/record", dependencies=[Depends(require_admin)])
 async def record_bet(bet: BetSubmission):
-    """Record a bet at placement time for CLV tracking."""
+    """Record a bet at placement time for CLV tracking.
+
+    Idempotent when ``external_id`` is supplied: retrying the same payload
+    (e.g. after a transient 500) returns the original ``bet_id`` rather
+    than duplicating the row. Without external_id, a fingerprint on
+    (event_id, team, market, bookmaker, odds, stake) within the last hour
+    acts as a fallback dedup.
+    """
     bet_id = await clv_tracker.record_bet(
         sport=bet.sport,
         game_description=bet.game_description,
@@ -1974,8 +1986,34 @@ async def record_bet(bet: BetSubmission):
         event_id=bet.event_id,
         edge_estimate=bet.edge_estimate,
         notes=bet.notes,
+        external_id=bet.external_id,
     )
-    return {"bet_id": bet_id}
+    return {"bet_id": bet_id, "external_id": bet.external_id}
+
+
+@app.get("/bets/risk-report")
+async def bets_risk_report():
+    """Current exposure, drawdown, and circuit-breaker utilisation.
+
+    feat/bet-execution-hardening (2026-04-23). Safe for loopback monitoring —
+    no auth required (the data is operational telemetry, not secret). Shows:
+      * bankroll / rolling peak / drawdown
+      * open pending exposure vs cap
+      * daily-risk (total stakes today) vs cap
+      * daily-P/L vs loss cap
+      * per-sport and per-game exposure utilisation
+      * which circuit breakers are currently tripped
+      * the full RiskLimits snapshot so operators can see effective env
+    """
+    from tools.risk_limits import compute_risk_report, RiskLimits
+    import aiosqlite as _aiosqlite
+
+    db = await _aiosqlite.connect(DB_PATH)
+    try:
+        report = await compute_risk_report(db, limits=RiskLimits.from_env())
+    finally:
+        await db.close()
+    return report
 
 
 @app.post("/bets/{bet_id}/resolve", dependencies=[Depends(require_admin)])
