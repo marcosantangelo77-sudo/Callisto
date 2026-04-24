@@ -3612,6 +3612,14 @@ async def _build_health_report() -> dict:
             "error": f"integrity check failed: {e}",
         }
 
+    # Local-only kill switch visibility — surface so operators and tests
+    # can see at a glance whether Claude / Anthropic paths are blocked.
+    try:
+        from tools.local_only import is_local_only
+        report["local_only"] = is_local_only()
+    except Exception:
+        report["local_only"] = False
+
     # Watchdog self-monitoring
     _health_gap = _time.time() - getattr(app.state, "_last_health_ping", _time.time())
     if _health_gap > 300 and getattr(app.state, "_health_ping_count", 0) > 5:
