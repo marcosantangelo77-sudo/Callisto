@@ -278,16 +278,15 @@ def _pairwise_correlation_matrix(
     pair_info: list[dict] = []
     for i, j in combinations(range(n), 2):
         rho = get_correlation(sport, legs[i].leg_type, legs[j].leg_type)
-        # Same-team modifier: intra-team correlations are stronger than the
-        # generic prior suggests (the prior is often averaged across team
-        # assignments). If both legs are on the same team and the generic
-        # prior is weak-positive, give it a small bump. This is conservative —
-        # we never reduce correlations.
+        rho_rev = get_correlation(sport, legs[j].leg_type, legs[i].leg_type)
+        if abs(rho - rho_rev) > 1e-9:
+            logger.warning(
+                "non-symmetric correlation detected for %s <-> %s on %s "
+                "(rho=%s, rho_rev=%s); using forward value",
+                legs[i].leg_type, legs[j].leg_type, sport, rho, rho_rev,
+            )
         if rho > 0 and _same_team(legs[i], legs[j]):
             rho = min(1.0, rho + 0.05)
-        # Opposite-team scoring: team_total vs opp_total is negative for NFL
-        # (blowout suppresses) but pace-positive for NBA. Already handled in
-        # _DEFAULTS — we do not modify here.
         mat[i][j] = mat[j][i] = rho
         pair_info.append(
             {

@@ -351,9 +351,58 @@ def load(config_dir: Optional[Path] = None, *, force_reload: bool = False) -> Co
 def get_correlation(sport: str, leg_a: str, leg_b: str) -> float:
     """Return the correlation between two canonical SGP leg archetypes.
 
-    Returns 0.0 (independence) when the pair is not in the table. Never raises.
+    Lookup order:
+      1. learned store (if wired and ``n >= MIN_OBSERVATIONS_FOR_BLEND``)
+      2. archetype table entry (yaml_override > seeded_default) — a 0.0 value
+         in the table is a legitimate override, not a miss.
+      3. sport-specific prior fallback (never naive 0) when the pair is NOT
+         present in the table.
+
+    Returns 0.0 only when the sport is completely unknown. Never raises.
     """
-    return load().get(sport, leg_a, leg_b)
+    sport_key = (sport or "").strip().lower()
+    for prefix in ("americanfootball_", "basketball_", "baseball_", "icehockey_"):
+        if sport_key.startswith(prefix):
+            sport_key = sport_key[len(prefix):]
+            break
+
+    tbl = load()
+    mat = tbl.by_sport.get(sport_key, {})
+    entry = mat.get((leg_a, leg_b))
+    if entry is None:
+        entry = mat.get((leg_b, leg_a))
+    in_table = entry is not None
+    table_rho = float(entry) if in_table else 0.0
+
+    try:
+        from tools.correlation import get_learned_store
+        from tools.learned_correlations import (
+            record_correlation_hit,
+            sport_prior_fallback,
+            MIN_OBSERVATIONS_FOR_BLEND,
+            MAX_CI_WIDTH,
+            FULL_WEIGHT_AT_N,
+        )
+    except Exception:
+        return table_rho if in_table else 0.0
+
+    store = get_learned_store()
+    if store is not None:
+        est = store._cache.get((sport_key, leg_a, leg_b)) or store._cache.get((sport_key, leg_b, leg_a))
+        if est is not None and est.n >= MIN_OBSERVATIONS_FOR_BLEND:
+            ci_width = est.ci_high - est.ci_low
+            if ci_width <= MAX_CI_WIDTH:
+                weight = min(1.0, est.n / FULL_WEIGHT_AT_N)
+                record_correlation_hit("learned")
+                return (1 - weight) * table_rho + weight * est.pearson_r
+
+    if in_table:
+        record_correlation_hit("prior")
+        return table_rho
+
+    fb = sport_prior_fallback(sport_key)
+    record_correlation_hit("fallback")
+    return fb
 
 
 def get_source(sport: str, leg_a: str, leg_b: str) -> str:
