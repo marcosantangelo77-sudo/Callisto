@@ -61,6 +61,36 @@ _RELIABLE_CLOSE_SOURCES: frozenset[str] = canonicalize_book_set(
 )
 
 
+CLOSE_WINDOW_SECONDS: int = int(os.getenv("CALLISTO_CLV_CLOSE_WINDOW", "1800"))
+
+
+def _compute_clv_prob_bp(
+    placement_implied: Optional[float],
+    closing_implied: Optional[float],
+    placement_vig: float = 0.05,
+    closing_vig: float = 0.025,
+) -> Optional[float]:
+    """Canonical CLV computation in probability basis points.
+
+    clv_bps = (close_fair_prob - placement_fair_prob) * 10000
+
+    Positive = the market got LESS generous to our side after us (we beat
+    the close). Negative = we chased the wrong side. Both legs are
+    half-vig devigged so the subtraction is apples-to-apples regardless
+    of which book supplied which side.
+
+    Returns None when either leg is missing — callers must treat None as
+    "cannot assess CLV", not zero.
+    """
+    if placement_implied is None or closing_implied is None:
+        return None
+    placement_fair = _half_vig_devig(placement_implied, placement_vig)
+    close_fair = _half_vig_devig(closing_implied, closing_vig)
+    if placement_fair is None or close_fair is None:
+        return None
+    return round((close_fair - placement_fair) * 10000, 1)
+
+
 def _half_vig_devig(implied: Optional[float], vig: float) -> Optional[float]:
     """Half-vig approximation: fair = implied / (1 + vig/2). Bounded to (0,1).
 
@@ -176,9 +206,13 @@ class CLVTracker:
                 event_id TEXT NOT NULL,
                 sport TEXT,
                 captured_at TEXT NOT NULL,
+                commence_time TEXT,
+                seconds_to_commence INTEGER,
+                within_close_window INTEGER DEFAULT 0,
                 source TEXT DEFAULT 'pinnacle',
                 market TEXT,
                 team TEXT,
+                line REAL,
                 closing_odds INTEGER,
                 closing_point REAL,
                 closing_implied REAL
@@ -186,9 +220,27 @@ class CLVTracker:
             "CREATE INDEX IF NOT EXISTS idx_bets_result ON bets(result, placed_at)",
             "CREATE INDEX IF NOT EXISTS idx_bets_sport ON bets(sport, placed_at)",
             "CREATE INDEX IF NOT EXISTS idx_closing_event ON closing_lines(event_id, market)",
+            "CREATE INDEX IF NOT EXISTS idx_closing_composite "
+            "ON closing_lines(event_id, market, team, line)",
+            "CREATE INDEX IF NOT EXISTS idx_closing_window "
+            "ON closing_lines(event_id, within_close_window, captured_at)",
             "CREATE INDEX IF NOT EXISTS idx_bankroll_ts ON bankroll(timestamp)",
         ):
             await self._db.execute(stmt)
+
+        for alter in (
+            "ALTER TABLE closing_lines ADD COLUMN commence_time TEXT",
+            "ALTER TABLE closing_lines ADD COLUMN seconds_to_commence INTEGER",
+            "ALTER TABLE closing_lines ADD COLUMN within_close_window INTEGER DEFAULT 0",
+            "ALTER TABLE closing_lines ADD COLUMN line REAL",
+            "ALTER TABLE bets ADD COLUMN clv_bps_v2 REAL",
+            "ALTER TABLE bets ADD COLUMN clv_stale INTEGER DEFAULT 0",
+        ):
+            try:
+                await self._db.execute(alter)
+            except Exception:
+                pass
+
         await self._db.commit()
         logger.info("CLV tracker initialized")
 
@@ -263,47 +315,95 @@ class CLVTracker:
         closing_point: Optional[float] = None,
         source: str = "pinnacle",
         sport: str = "",
+        line: Optional[float] = None,
+        commence_time: Optional[str] = None,
     ) -> None:
-        """Record the closing line for an event from a sharp source."""
-        now = datetime.now(timezone.utc).isoformat()
+        """Record the closing line for an event from a sharp source.
+
+        feat/clv-accuracy-hardening (2026-04-23):
+        * Accepts `line` so alt-lines and player props are keyed correctly.
+          Without a line match, a -0.5 run-line snapshot would stomp on the
+          -1.5 run-line of the same event/market/team pair.
+        * Accepts `commence_time`. When provided, writes
+          `seconds_to_commence` and flags `within_close_window=1` iff the
+          capture is within CLOSE_WINDOW_SECONDS of first pitch / tip-off.
+          Downstream CLV math prefers within-window rows over earlier
+          snapshots, preventing "CLV vs a stale pregame line" from masquerading
+          as "CLV vs the true close".
+        * CLV math switched to canonical `_compute_clv_prob_bp`
+          (vig-adjusted, probability-basis-points). The legacy `clv_implied`
+          (raw prob delta) is kept for back-compat; `clv_bps_v2` holds the
+          correct devigged number going forward.
+        """
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
         implied = calculate_implied_probability(closing_odds)
+
+        seconds_to_commence: Optional[int] = None
+        within_window = 0
+        if commence_time:
+            try:
+                commence = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+                seconds_to_commence = int((commence - now_dt).total_seconds())
+                # Accept captures from [-5min, CLOSE_WINDOW_SECONDS] of
+                # commence. Negative = post-start (we occasionally see one
+                # trailing snapshot after tip-off that IS the true close).
+                if -300 <= seconds_to_commence <= CLOSE_WINDOW_SECONDS:
+                    within_window = 1
+            except (ValueError, TypeError):
+                pass
 
         from tools.db_utils import execute_with_retry, commit_with_retry
         await execute_with_retry(
             self._db,
             "INSERT INTO closing_lines "
-            "(event_id, sport, captured_at, source, market, team, "
+            "(event_id, sport, captured_at, commence_time, seconds_to_commence, "
+            "within_close_window, source, market, team, line, "
             "closing_odds, closing_point, closing_implied) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (event_id, sport, now, source, market, team,
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (event_id, sport, now, commence_time, seconds_to_commence,
+             within_window, source, market, team, line,
              closing_odds, closing_point, round(implied, 4)),
             max_retries=10,
             operation="clv_tracker record_closing_line insert",
         )
 
-        # Update any pending bets for this event. LOWER()-based team match —
-        # closing-line capture speaks odds-api-io's casing ("Pinnacle",
-        # "Boston Celtics"), bet_executor wrote the team string as received
-        # from whoever called it, and a single-letter case difference silently
-        # drops every CLV update. Without this, bets stay NULL-closed forever.
+        placement_vig = 0.05
+        closing_vig = _BOOK_VIG_ESTIMATE.get(canonicalize_book(source), 0.025)
+
+        # Update any pending bets for this event. Matches include line when
+        # it's provided — for props/alt-lines, NULL `placement_point` on the
+        # bet still matches thanks to the OR-branch. For straight moneyline
+        # (line==None), the match reduces to event+market+team.
         await execute_with_retry(
             self._db,
             "UPDATE bets SET "
             "closing_odds = ?, closing_point = ?, closing_implied_prob = ?, "
             "closing_source = ?, "
             "clv_odds = placement_odds - ?, "
-            "clv_implied = ? - placement_implied_prob "
+            "clv_implied = ? - placement_implied_prob, "
+            "clv_bps_v2 = CASE "
+            "  WHEN placement_implied_prob IS NOT NULL THEN "
+            "    ROUND(((? / (1.0 + ?/2.0)) - (placement_implied_prob / (1.0 + ?/2.0))) * 10000, 1) "
+            "  ELSE NULL END, "
+            "clv_stale = 0 "
             "WHERE event_id = ? AND market = ? "
-            "AND LOWER(team) = LOWER(?) AND result = 'pending'",
+            "AND LOWER(team) = LOWER(?) "
+            "AND (? IS NULL OR placement_point IS NULL "
+            "     OR ABS(placement_point - ?) < 0.01) "
+            "AND result IN ('pending')",
             (closing_odds, closing_point, round(implied, 4), source,
              closing_odds, round(implied, 4),
-             event_id, market, team),
+             round(implied, 4), closing_vig, placement_vig,
+             event_id, market, team,
+             line, line),
             max_retries=10,
             operation="clv_tracker record_closing_line update",
         )
 
-        # Same LOWER() match for paper trades so their CLV backfill stays
-        # in sync with the real-bet path.
+        # Same line-aware match for paper trades so their CLV backfill stays
+        # in sync with the real-bet path. paper_trades has a `line` column;
+        # nulls still fall through for moneyline.
         await execute_with_retry(
             self._db,
             "UPDATE paper_trades SET "
@@ -311,10 +411,13 @@ class CLVTracker:
             "clv_implied = ? - signal_implied_prob "
             "WHERE event_id = ? AND market = ? "
             "AND LOWER(side) = LOWER(?) "
+            "AND (? IS NULL OR line IS NULL "
+            "     OR ABS(line - ?) < 0.01) "
             "AND signal_implied_prob IS NOT NULL",
             (closing_odds, round(implied, 4),
              round(implied, 4),
-             event_id, market, team),
+             event_id, market, team,
+             line, line),
             max_retries=10,
             operation="clv_tracker record_closing_line paper_trades",
         )
@@ -323,7 +426,8 @@ class CLVTracker:
 
         logger.info(
             f"Closing line recorded: {team} {market} @ {closing_odds} "
-            f"(source={source}, implied={implied:.1%})"
+            f"(source={source}, implied={implied:.1%}, "
+            f"line={line}, within_window={within_window})"
         )
 
     async def resolve_bet(
@@ -445,27 +549,38 @@ class CLVTracker:
         if pinnacle_fair_prob and pinnacle_fair_prob > 0:
             pinnacle_fair_decimal = 1 / pinnacle_fair_prob
 
-        # CANONICAL CLV UNIT: probability-basis-points.
-        #   clv_prob_bp = (closing_implied_prob - placement_implied_prob) * 10000
-        # Positive = we got a better implied price than the close.
-        # This is the ONLY supported unit going forward. The legacy
-        # clv_cents column is preserved for backward-compat readers but
-        # marked deprecated — it previously held American-point deltas
-        # on one path (line 414) and prob×10000 on another (line 419),
-        # producing a column with mixed units that silently poisoned
-        # every aggregate.
+        # CANONICAL CLV UNIT: probability-basis-points, via
+        # `_compute_clv_prob_bp`. Positive = we got a better implied price
+        # than the close. Historical mixed-units (American-points in some
+        # rows, prob×10000 in others) stay in legacy columns; new rows
+        # write the devigged prob-bp number.
         raw_placement_implied = bet.get("placement_implied_prob", 0)
-        placement_fair = (
-            _half_vig_devig(raw_placement_implied, placement_vig)
-            if raw_placement_implied else None
+
+        clv_prob_bp = _compute_clv_prob_bp(
+            placement_implied=raw_placement_implied if raw_placement_implied else None,
+            closing_implied=closing_implied,
+            placement_vig=placement_vig,
+            closing_vig=closing_vig,
         )
 
-        clv_prob_bp = None
-        if pinnacle_fair_prob is not None and placement_fair is not None:
-            clv_prob_bp = round((pinnacle_fair_prob - placement_fair) * 10000, 1)
+        # Pushes: CLV is meaningless on a voided bet. The settlement refunds
+        # the stake irrespective of where the line closed, so folding pushes
+        # into the CLV distribution distorts avg_clv toward zero (or toward
+        # wherever pushes happen to cluster). Store None so downstream
+        # aggregates can skip pushes explicitly.
+        if result == "push":
+            clv_prob_bp = None
 
-        # Legacy clv_cents: populate with prob-bp for NEW rows so mixed-units
-        # data stops accruing. Historical rows keep whatever they have.
+        # 0-stat guard: a player-prop bet whose actual_stat never resolves
+        # (player DNP, stat source silent) must not carry a CLV number. The
+        # closing-line backfill can still find a matching (event, market,
+        # side, line), but without ground truth the CLV would be decorative.
+        # We detect this via result='pending' at _log_clv time — prod never
+        # calls _log_clv on pending bets, but defensive null-out keeps
+        # backfill scripts honest.
+        if result == "pending":
+            clv_prob_bp = None
+
         clv_cents = clv_prob_bp
 
         actual_pnl = change
@@ -562,14 +677,31 @@ class CLVTracker:
         close_fair = _half_vig_devig(closing_implied, closing_vig)
         close_fair_decimal = (1 / close_fair) if close_fair and close_fair > 0 else None
 
-        # CANONICAL CLV UNIT: prob-basis-points. See _log_clv for rationale.
-        # The legacy American-points path (signal_odds - closing_odds) is
-        # intentionally removed: it made clv_cents incompatible with the
-        # other write path and silently poisoned every aggregate that
-        # grouped over bet_id.
-        clv_prob_bp = None
-        if close_fair is not None and signal_fair is not None:
-            clv_prob_bp = round((close_fair - signal_fair) * 10000, 1)
+        # CANONICAL CLV UNIT: prob-basis-points via `_compute_clv_prob_bp`.
+        # Routes through the shared helper so paper and real-bet paths can
+        # never drift out of unit-sync again.
+        clv_prob_bp = _compute_clv_prob_bp(
+            placement_implied=signal_imp,
+            closing_implied=closing_implied,
+            placement_vig=placement_vig,
+            closing_vig=closing_vig,
+        )
+
+        # Pushes / unresolved: see _log_clv — CLV doesn't apply.
+        trade_result = trade.get("actual_result")
+        if trade_result == "push":
+            clv_prob_bp = None
+
+        # 0-stat guard for player props: if actual_stat is NULL on a
+        # prop (signal had a line but no ground truth exists), clear CLV.
+        # For game-level bets with no `actual_stat` concept this is a no-op
+        # because game-level trade rows carry actual_stat=None unconditionally;
+        # we additionally require market to look like a player prop.
+        market_str = (trade.get("market") or "").lower()
+        is_player_prop = market_str.startswith("player_") or bool(trade.get("player"))
+        if is_player_prop and trade.get("actual_stat") is None:
+            clv_prob_bp = None
+
         clv_cents = clv_prob_bp
 
         # We don't know the closing source for paper trades, only that the
@@ -660,6 +792,94 @@ class CLVTracker:
                 f"(of {len(rows)} candidates)"
             )
         return written
+
+    async def refresh_clv_for_event(
+        self, event_id: str, prefer_within_window: bool = True
+    ) -> int:
+        """Refresh CLV on bets/paper_trades for an event after late closing lines arrive.
+
+        When closing_lines arrives (potentially in stages as multiple books
+        report), we don't want to freeze CLV at bet-placement time. This
+        method re-computes `clv_bps_v2` on both `bets` and `paper_trades`
+        using the best available closing line for each (market, team, line)
+        tuple. "Best" = most recent reliable source within the close window;
+        falls back to any snapshot if nothing within the window exists.
+
+        Returns count of rows refreshed.
+        """
+        if not event_id:
+            return 0
+
+        # Prefer within_close_window=1 + reliable source; fall back otherwise.
+        # GROUP BY (market, team, line) picks the latest capture per key.
+        window_filter = "AND within_close_window = 1" if prefer_within_window else ""
+        reliable_list = ",".join(f"'{s}'" for s in _RELIABLE_CLOSE_SOURCES)
+        reliable_clause = reliable_list if reliable_list else "''"
+        sql = (
+            "SELECT market, LOWER(team), line, closing_odds, closing_implied, source "
+            "FROM closing_lines "
+            "WHERE event_id = ? "
+            f"{window_filter} "
+            "AND captured_at = ("
+            "  SELECT MAX(captured_at) FROM closing_lines cl2 "
+            "  WHERE cl2.event_id = closing_lines.event_id "
+            "  AND cl2.market = closing_lines.market "
+            "  AND LOWER(cl2.team) = LOWER(closing_lines.team) "
+            "  AND IFNULL(cl2.line, -99999) = IFNULL(closing_lines.line, -99999) "
+            f"  {window_filter} "
+            ") "
+            "ORDER BY CASE WHEN source IN "
+            f"({reliable_clause}) THEN 0 ELSE 1 END, "
+            "captured_at DESC"
+        )
+        cursor = await self._db.execute(sql, (event_id,))
+        rows = await cursor.fetchall()
+
+        if not rows and prefer_within_window:
+            return await self.refresh_clv_for_event(event_id, prefer_within_window=False)
+
+        from tools.db_utils import execute_with_retry, commit_with_retry
+        refreshed = 0
+        seen: set[tuple] = set()
+        for market, team_lower, line, c_odds, c_imp, source in rows:
+            key = (market, team_lower, line)
+            if key in seen:
+                continue
+            seen.add(key)
+            placement_vig = 0.05
+            closing_vig = _BOOK_VIG_ESTIMATE.get(canonicalize_book(source), 0.025)
+            await execute_with_retry(
+                self._db,
+                "UPDATE bets SET "
+                "closing_odds = ?, closing_implied_prob = ?, closing_source = ?, "
+                "clv_odds = placement_odds - ?, "
+                "clv_implied = ? - placement_implied_prob, "
+                "clv_bps_v2 = CASE "
+                "  WHEN placement_implied_prob IS NOT NULL THEN "
+                "    ROUND(((? / (1.0 + ?/2.0)) - (placement_implied_prob / (1.0 + ?/2.0))) * 10000, 1) "
+                "  ELSE NULL END, "
+                "clv_stale = 0 "
+                "WHERE event_id = ? AND market = ? "
+                "AND LOWER(team) = LOWER(?) "
+                "AND (? IS NULL OR placement_point IS NULL "
+                "     OR ABS(placement_point - ?) < 0.01) "
+                "AND result IN ('pending', 'won', 'lost')",
+                (c_odds, c_imp, source,
+                 c_odds, c_imp,
+                 c_imp, closing_vig, placement_vig,
+                 event_id, market, team_lower,
+                 line, line),
+                max_retries=10,
+                operation="clv_tracker refresh_clv_for_event bets",
+            )
+            refreshed += 1
+
+        if refreshed > 0:
+            await commit_with_retry(
+                self._db, max_retries=10,
+                operation="clv_tracker refresh_clv_for_event",
+            )
+        return refreshed
 
     async def backfill_clv_log(self) -> int:
         """

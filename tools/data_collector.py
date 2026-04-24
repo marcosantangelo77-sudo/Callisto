@@ -1227,10 +1227,16 @@ class DataCollector:
         from tools.db_utils import commit_with_retry
         await commit_with_retry(self._db, operation="data_collector resolve_game_paper_trades")
 
-        # Backfill closing odds from closing_lines table for trades missing them
+        # Backfill closing odds from closing_lines table for trades missing them.
+        # feat/clv-accuracy-hardening: match includes `line` so a -0.5 run-line
+        # trade doesn't pick up the -1.5 closing number from the same event.
+        # Preference order:
+        #   1. within_close_window=1 + reliable source (Pinnacle/LowVig)
+        #   2. within_close_window=1 + any source
+        #   3. any snapshot (pregame, last resort)
         cl_backfilled = 0
         backfill_cursor = await self._db.execute(
-            "SELECT trade_id, event_id, market, side, signal_implied_prob "
+            "SELECT trade_id, event_id, market, side, line, signal_implied_prob "
             "FROM paper_trades "
             "WHERE sport = ? AND game_date = ? AND closing_odds IS NULL",
             (sport, game_date),
@@ -1238,14 +1244,18 @@ class DataCollector:
         backfill_trades = await backfill_cursor.fetchall()
 
         for bt in backfill_trades:
-            bt_id, bt_event, bt_market, bt_side, bt_signal_imp = bt
+            bt_id, bt_event, bt_market, bt_side, bt_line, bt_signal_imp = bt
             cl_cursor = await self._db.execute(
                 "SELECT closing_odds, closing_implied FROM closing_lines "
-                "WHERE event_id = ? AND market = ? AND team = ? "
-                "ORDER BY CASE WHEN source = 'Pinnacle' THEN 0 "
-                "WHEN source = 'LowVig.ag' THEN 1 ELSE 2 END, "
+                "WHERE event_id = ? AND market = ? AND LOWER(team) = LOWER(?) "
+                "AND (? IS NULL OR line IS NULL OR ABS(line - ?) < 0.01) "
+                "ORDER BY within_close_window DESC, "
+                "CASE WHEN source IN ('pinnacle', 'Pinnacle') THEN 0 "
+                "WHEN source IN ('lowvig.ag', 'LowVig.ag', 'lowvig') THEN 1 "
+                "WHEN source IN ('betfair_exchange', 'Betfair Exchange') THEN 2 "
+                "ELSE 3 END, "
                 "captured_at DESC LIMIT 1",
-                (bt_event, bt_market, bt_side),
+                (bt_event, bt_market, bt_side, bt_line, bt_line),
             )
             cl_row = await cl_cursor.fetchone()
 
