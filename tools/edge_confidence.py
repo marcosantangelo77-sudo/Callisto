@@ -16,11 +16,21 @@ Within each ceiling, the score is determined by evidence strength:
     - Cross-method consistency
 """
 
+import json
 import logging
-from dataclasses import dataclass
+import math
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("callisto.edge_confidence")
+
+_CALIBRATOR_PATH_ENV = "CALLISTO_EDGE_CALIBRATOR_PATH"
+_DEFAULT_CALIBRATOR_PATH = "memory/edge_calibrator.json"
+_CALIBRATOR_CACHE: Optional["_CalibratorBase"] = None
+_CALIBRATOR_CACHE_MTIME: Optional[float] = None
+_CALIBRATOR_LOAD_FAILED: bool = False
 
 # AGP confidence ceilings (must match orchestrator.py)
 CEILING_PRIMARY = 1.0
@@ -62,6 +72,311 @@ class EdgeConfidence:
     ceiling: float
     factors: dict       # Breakdown of what contributed to the score
     reasoning: str      # Human-readable explanation
+    raw_prob: Optional[float] = None
+    calibrated_prob: Optional[float] = None
+    calibrator_name: Optional[str] = None
+
+
+class _CalibratorBase:
+    kind = "base"
+
+    def predict(self, p):
+        raise NotImplementedError
+
+    def to_dict(self) -> dict:
+        raise NotImplementedError
+
+    @staticmethod
+    def from_dict(d: dict) -> "_CalibratorBase":
+        kind = d.get("kind")
+        if kind == "platt":
+            return PlattCalibrator.from_dict(d)
+        if kind == "isotonic":
+            return IsotonicCalibrator.from_dict(d)
+        if kind == "identity":
+            return IdentityCalibrator()
+        raise ValueError(f"Unknown calibrator kind: {kind}")
+
+
+class IdentityCalibrator(_CalibratorBase):
+    kind = "identity"
+
+    def predict(self, p):
+        try:
+            import numpy as _np
+            arr = _np.asarray(p, dtype=float)
+            return _np.clip(arr, 0.0, 1.0)
+        except Exception:
+            if p is None:
+                return None
+            return max(0.0, min(1.0, float(p)))
+
+    def to_dict(self) -> dict:
+        return {"kind": "identity"}
+
+    @staticmethod
+    def from_dict(d: dict) -> "IdentityCalibrator":
+        return IdentityCalibrator()
+
+
+class PlattCalibrator(_CalibratorBase):
+    """Logistic regression on a single input feature (logit of raw prob).
+
+    Transforms raw probability p -> sigmoid(a * logit(p) + b). Fitted by
+    minimizing negative log-likelihood via gradient descent (pure numpy —
+    no sklearn). Numerically stable with logit clipping on the boundary.
+    """
+    kind = "platt"
+
+    def __init__(self, a: float = 1.0, b: float = 0.0, n_train: int = 0):
+        self.a = float(a)
+        self.b = float(b)
+        self.n_train = int(n_train)
+
+    def predict(self, p):
+        import numpy as _np
+        arr = _np.asarray(p, dtype=float)
+        eps = 1e-6
+        clipped = _np.clip(arr, eps, 1.0 - eps)
+        logit = _np.log(clipped / (1.0 - clipped))
+        z = self.a * logit + self.b
+        out = 1.0 / (1.0 + _np.exp(-z))
+        if arr.ndim == 0:
+            return float(out)
+        return out
+
+    @classmethod
+    def fit(cls, probs, outcomes, *, lr: float = 0.1, max_iter: int = 2000, tol: float = 1e-7) -> "PlattCalibrator":
+        import numpy as _np
+        p = _np.asarray(probs, dtype=float)
+        y = _np.asarray(outcomes, dtype=float)
+        if p.shape != y.shape:
+            raise ValueError(f"probs and outcomes shape mismatch: {p.shape} vs {y.shape}")
+        if len(p) < 4:
+            return cls(a=1.0, b=0.0, n_train=int(len(p)))
+        eps = 1e-6
+        p_clipped = _np.clip(p, eps, 1.0 - eps)
+        x = _np.log(p_clipped / (1.0 - p_clipped))
+        n_pos = float(y.sum())
+        n_neg = float(len(y) - n_pos)
+        if n_pos == 0 or n_neg == 0:
+            return cls(a=1.0, b=0.0, n_train=int(len(p)))
+        y_smooth = _np.where(y > 0.5, (n_pos + 1.0) / (n_pos + 2.0), 1.0 / (n_neg + 2.0))
+        a, b = 1.0, 0.0
+        prev_loss = float("inf")
+        for _ in range(max_iter):
+            z = a * x + b
+            z = _np.clip(z, -30.0, 30.0)
+            pred = 1.0 / (1.0 + _np.exp(-z))
+            diff = pred - y_smooth
+            grad_a = float(_np.mean(diff * x))
+            grad_b = float(_np.mean(diff))
+            a -= lr * grad_a
+            b -= lr * grad_b
+            loss = float(-_np.mean(y_smooth * _np.log(pred + 1e-12) + (1.0 - y_smooth) * _np.log(1.0 - pred + 1e-12)))
+            if abs(prev_loss - loss) < tol:
+                break
+            prev_loss = loss
+        return cls(a=a, b=b, n_train=int(len(p)))
+
+    def to_dict(self) -> dict:
+        return {"kind": "platt", "a": self.a, "b": self.b, "n_train": self.n_train}
+
+    @staticmethod
+    def from_dict(d: dict) -> "PlattCalibrator":
+        return PlattCalibrator(a=d.get("a", 1.0), b=d.get("b", 0.0), n_train=d.get("n_train", 0))
+
+
+class IsotonicCalibrator(_CalibratorBase):
+    """Monotonic step-function calibration via Pool Adjacent Violators."""
+    kind = "isotonic"
+
+    def __init__(self, x_thresholds=None, y_values=None, n_train: int = 0):
+        import numpy as _np
+        self.x = _np.asarray(x_thresholds if x_thresholds is not None else [], dtype=float)
+        self.y = _np.asarray(y_values if y_values is not None else [], dtype=float)
+        self.n_train = int(n_train)
+
+    def predict(self, p):
+        import numpy as _np
+        arr = _np.asarray(p, dtype=float)
+        if len(self.x) == 0:
+            out = _np.clip(arr, 0.0, 1.0)
+            return float(out) if arr.ndim == 0 else out
+        out = _np.interp(arr, self.x, self.y, left=float(self.y[0]), right=float(self.y[-1]))
+        out = _np.clip(out, 0.0, 1.0)
+        return float(out) if arr.ndim == 0 else out
+
+    @classmethod
+    def fit(cls, probs, outcomes) -> "IsotonicCalibrator":
+        import numpy as _np
+        p = _np.asarray(probs, dtype=float)
+        y = _np.asarray(outcomes, dtype=float)
+        if p.shape != y.shape:
+            raise ValueError("probs and outcomes shape mismatch")
+        if len(p) < 2:
+            return cls(x_thresholds=p.tolist(), y_values=y.tolist(), n_train=int(len(p)))
+        order = _np.argsort(p, kind="mergesort")
+        p_sorted = p[order]
+        y_sorted = y[order]
+        values = y_sorted.astype(float).copy()
+        weights = _np.ones_like(values, dtype=float)
+        i = 0
+        while i < len(values) - 1:
+            if values[i] > values[i + 1]:
+                total_w = weights[i] + weights[i + 1]
+                merged = (values[i] * weights[i] + values[i + 1] * weights[i + 1]) / total_w
+                values[i] = merged
+                weights[i] = total_w
+                values = _np.delete(values, i + 1)
+                weights = _np.delete(weights, i + 1)
+                p_sorted = _np.delete(p_sorted, i + 1)
+                if i > 0:
+                    i -= 1
+            else:
+                i += 1
+        x_thresholds = p_sorted
+        y_values = _np.clip(values, 0.0, 1.0)
+        return cls(x_thresholds=x_thresholds.tolist(), y_values=y_values.tolist(), n_train=int(len(p)))
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": "isotonic",
+            "x_thresholds": [float(v) for v in self.x.tolist()],
+            "y_values": [float(v) for v in self.y.tolist()],
+            "n_train": self.n_train,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "IsotonicCalibrator":
+        return IsotonicCalibrator(
+            x_thresholds=d.get("x_thresholds", []),
+            y_values=d.get("y_values", []),
+            n_train=d.get("n_train", 0),
+        )
+
+
+def _calibrator_path() -> str:
+    return os.environ.get(_CALIBRATOR_PATH_ENV, _DEFAULT_CALIBRATOR_PATH)
+
+
+def save_calibrator(calibrator: _CalibratorBase, path: Optional[str] = None, *, metadata: Optional[dict] = None) -> str:
+    path = path or _calibrator_path()
+    payload = {
+        "calibrator": calibrator.to_dict(),
+        "metadata": metadata or {},
+    }
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp, p)
+    global _CALIBRATOR_CACHE, _CALIBRATOR_CACHE_MTIME, _CALIBRATOR_LOAD_FAILED
+    _CALIBRATOR_CACHE = None
+    _CALIBRATOR_CACHE_MTIME = None
+    _CALIBRATOR_LOAD_FAILED = False
+    return str(p)
+
+
+def load_calibrator(path: Optional[str] = None) -> Optional[_CalibratorBase]:
+    """Load calibrator from JSON file. Returns None if file missing or invalid."""
+    path = path or _calibrator_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    try:
+        return _CalibratorBase.from_dict(payload.get("calibrator", {}))
+    except (ValueError, KeyError) as e:
+        logger.warning("edge_confidence: failed to parse calibrator at %s: %s", path, e)
+        return None
+
+
+def _get_active_calibrator() -> Optional[_CalibratorBase]:
+    global _CALIBRATOR_CACHE, _CALIBRATOR_CACHE_MTIME, _CALIBRATOR_LOAD_FAILED
+    path = _calibrator_path()
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        if _CALIBRATOR_CACHE is not None:
+            _CALIBRATOR_CACHE = None
+            _CALIBRATOR_CACHE_MTIME = None
+        return None
+    if _CALIBRATOR_CACHE is not None and _CALIBRATOR_CACHE_MTIME == mtime:
+        return _CALIBRATOR_CACHE
+    if _CALIBRATOR_LOAD_FAILED and _CALIBRATOR_CACHE_MTIME == mtime:
+        return None
+    cal = load_calibrator(path)
+    if cal is None:
+        _CALIBRATOR_LOAD_FAILED = True
+        _CALIBRATOR_CACHE_MTIME = mtime
+        return None
+    _CALIBRATOR_CACHE = cal
+    _CALIBRATOR_CACHE_MTIME = mtime
+    _CALIBRATOR_LOAD_FAILED = False
+    return cal
+
+
+def calibrate_probability(raw_prob: Optional[float], calibrator: Optional[_CalibratorBase] = None) -> Optional[float]:
+    """Apply calibrator to a raw probability. Returns None if raw_prob is None.
+
+    If no calibrator is provided and none is loadable from disk, returns the
+    raw probability clipped to [0, 1].
+    """
+    if raw_prob is None:
+        return None
+    try:
+        p = float(raw_prob)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(p):
+        return None
+    p = max(0.0, min(1.0, p))
+    cal = calibrator if calibrator is not None else _get_active_calibrator()
+    if cal is None:
+        return p
+    try:
+        return max(0.0, min(1.0, float(cal.predict(p))))
+    except Exception as e:
+        logger.warning("edge_confidence: calibrator.predict failed: %s", e)
+        return p
+
+
+def brier_score(probs, outcomes) -> float:
+    """Mean squared error between predicted probs and observed binary outcomes."""
+    import numpy as _np
+    p = _np.asarray(probs, dtype=float)
+    y = _np.asarray(outcomes, dtype=float)
+    if len(p) == 0:
+        return float("nan")
+    return float(_np.mean((p - y) ** 2))
+
+
+def expected_calibration_error(probs, outcomes, *, n_bins: int = 10) -> float:
+    """Weighted absolute gap between predicted prob and observed frequency."""
+    import numpy as _np
+    p = _np.asarray(probs, dtype=float)
+    y = _np.asarray(outcomes, dtype=float)
+    if len(p) == 0:
+        return float("nan")
+    edges = _np.linspace(0.0, 1.0, n_bins + 1)
+    total = len(p)
+    ece = 0.0
+    for i in range(n_bins):
+        lo, hi = edges[i], edges[i + 1]
+        if i == n_bins - 1:
+            mask = (p >= lo) & (p <= hi)
+        else:
+            mask = (p >= lo) & (p < hi)
+        if not _np.any(mask):
+            continue
+        bin_pred = float(_np.mean(p[mask]))
+        bin_obs = float(_np.mean(y[mask]))
+        weight = float(_np.sum(mask)) / total
+        ece += weight * abs(bin_pred - bin_obs)
+    return float(ece)
 
 
 def score_edge(
@@ -98,6 +413,9 @@ def score_edge(
     # --- Injury model signals ---
     injury_market_adjustment: Optional[float] = None,
     injury_is_contrarian: bool = False,
+    # --- Probability calibration ---
+    model_fair_prob: Optional[float] = None,
+    calibrator: Optional[_CalibratorBase] = None,
 ) -> EdgeConfidence:
     """
     Score a detected edge using AGP confidence methodology.
@@ -545,6 +863,30 @@ def score_edge(
 
     reasoning = f"Source: {source_class} (ceiling {ceiling}). " + " | ".join(reasons)
 
+    raw_prob: Optional[float] = None
+    calibrated_prob: Optional[float] = None
+    calibrator_name: Optional[str] = None
+    if model_fair_prob is not None:
+        try:
+            rp = float(model_fair_prob)
+            if math.isfinite(rp):
+                raw_prob = max(0.0, min(1.0, rp))
+        except (TypeError, ValueError):
+            raw_prob = None
+    if raw_prob is not None:
+        active = calibrator if calibrator is not None else _get_active_calibrator()
+        if active is None:
+            calibrated_prob = raw_prob
+            calibrator_name = "identity"
+        else:
+            try:
+                calibrated_prob = max(0.0, min(1.0, float(active.predict(raw_prob))))
+                calibrator_name = getattr(active, "kind", "unknown")
+            except Exception as e:
+                logger.warning("edge_confidence: calibrator.predict failed: %s", e)
+                calibrated_prob = raw_prob
+                calibrator_name = "identity_fallback"
+
     return EdgeConfidence(
         score=score,
         tier=tier,
@@ -552,6 +894,9 @@ def score_edge(
         ceiling=ceiling,
         factors=factors,
         reasoning=reasoning,
+        raw_prob=raw_prob,
+        calibrated_prob=calibrated_prob,
+        calibrator_name=calibrator_name,
     )
 
 
@@ -612,7 +957,26 @@ def score_parlay(leg_confidences: list[EdgeConfidence]) -> EdgeConfidence:
         f"Combined: {score:.2f} ({tier}). Source: {source_class} ceiling {ceiling}."
     )
 
+    raw_prob: Optional[float] = None
+    calibrated_prob: Optional[float] = None
+    calibrator_name: Optional[str] = None
+    raw_legs = [lc.raw_prob for lc in leg_confidences if lc.raw_prob is not None]
+    if raw_legs and len(raw_legs) == len(leg_confidences):
+        prod = 1.0
+        for rp in raw_legs:
+            prod *= max(0.0, min(1.0, float(rp)))
+        raw_prob = prod
+    cal_legs = [lc.calibrated_prob for lc in leg_confidences if lc.calibrated_prob is not None]
+    if cal_legs and len(cal_legs) == len(leg_confidences):
+        prod = 1.0
+        for cp in cal_legs:
+            prod *= max(0.0, min(1.0, float(cp)))
+        calibrated_prob = prod
+        names = {lc.calibrator_name for lc in leg_confidences if lc.calibrator_name}
+        calibrator_name = "mixed" if len(names) > 1 else (next(iter(names)) if names else None)
+
     return EdgeConfidence(
         score=score, tier=tier, source_class=source_class,
         ceiling=ceiling, factors=factors, reasoning=reasoning,
+        raw_prob=raw_prob, calibrated_prob=calibrated_prob, calibrator_name=calibrator_name,
     )
