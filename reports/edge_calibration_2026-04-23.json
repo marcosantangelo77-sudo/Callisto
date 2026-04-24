@@ -1,0 +1,342 @@
+{
+  "generated_at": "2026-04-24T00:09:15.321691+00:00",
+  "db_path": "C:\\Users\\marco\\OneDrive\\Desktop\\Callisto\\memory\\callisto.db",
+  "total_events": 36794,
+  "train_events": 25755,
+  "eval_events": 11039,
+  "closing_line_matches": 4681,
+  "raw_metrics_eval": {
+    "n": 11039,
+    "brier": 0.241021,
+    "ece": 0.02865,
+    "mean_pred": 0.518406,
+    "hit_rate": 0.528309
+  },
+  "platt_metrics_eval": {
+    "n": 11039,
+    "brier": 0.241346,
+    "ece": 0.024426,
+    "mean_pred": 0.544601,
+    "hit_rate": 0.528309
+  },
+  "isotonic_metrics_eval": {
+    "n": 11039,
+    "brier": 0.242433,
+    "ece": 0.038527,
+    "mean_pred": 0.560304,
+    "hit_rate": 0.528309
+  },
+  "raw_metrics_all": {
+    "n": 36794,
+    "brier": 0.233553,
+    "ece": 0.025832,
+    "mean_pred": 0.519309,
+    "hit_rate": 0.540496
+  },
+  "platt_metrics_all": {
+    "n": 36794,
+    "brier": 0.233033,
+    "ece": 0.017092,
+    "mean_pred": 0.545433,
+    "hit_rate": 0.540496
+  },
+  "isotonic_metrics_all": {
+    "n": 36794,
+    "brier": 0.232443,
+    "ece": 0.022926,
+    "mean_pred": 0.562577,
+    "hit_rate": 0.540496
+  },
+  "raw_reliability": [
+    {
+      "bin_low": 0.0,
+      "bin_high": 0.1,
+      "n": 425,
+      "mean_pred": 0.0748,
+      "hit_rate": 0.0071,
+      "gap": -0.0678
+    },
+    {
+      "bin_low": 0.1,
+      "bin_high": 0.2,
+      "n": 510,
+      "mean_pred": 0.1454,
+      "hit_rate": 0.1314,
+      "gap": -0.014
+    },
+    {
+      "bin_low": 0.2,
+      "bin_high": 0.30000000000000004,
+      "n": 599,
+      "mean_pred": 0.2613,
+      "hit_rate": 0.2604,
+      "gap": -0.0009
+    },
+    {
+      "bin_low": 0.30000000000000004,
+      "bin_high": 0.4,
+      "n": 1604,
+      "mean_pred": 0.3587,
+      "hit_rate": 0.3834,
+      "gap": 0.0247
+    },
+    {
+      "bin_low": 0.4,
+      "bin_high": 0.5,
+      "n": 7027,
+      "mean_pred": 0.4644,
+      "hit_rate": 0.4766,
+      "gap": 0.0122
+    },
+    {
+      "bin_low": 0.5,
+      "bin_high": 0.6000000000000001,
+      "n": 20721,
+      "mean_pred": 0.5215,
+      "hit_rate": 0.5491,
+      "gap": 0.0276
+    },
+    {
+      "bin_low": 0.6000000000000001,
+      "bin_high": 0.7000000000000001,
+      "n": 3542,
+      "mean_pred": 0.6425,
+      "hit_rate": 0.6796,
+      "gap": 0.0371
+    },
+    {
+      "bin_low": 0.7000000000000001,
+      "bin_high": 0.8,
+      "n": 1232,
+      "mean_pred": 0.7345,
+      "hit_rate": 0.7646,
+      "gap": 0.0301
+    },
+    {
+      "bin_low": 0.8,
+      "bin_high": 0.9,
+      "n": 541,
+      "mean_pred": 0.8476,
+      "hit_rate": 0.8226,
+      "gap": -0.0251
+    },
+    {
+      "bin_low": 0.9,
+      "bin_high": 1.0,
+      "n": 593,
+      "mean_pred": 0.945,
+      "hit_rate": 0.8853,
+      "gap": -0.0597
+    }
+  ],
+  "platt_reliability": [
+    {
+      "bin_low": 0.0,
+      "bin_high": 0.1,
+      "n": 505,
+      "mean_pred": 0.0704,
+      "hit_rate": 0.0178,
+      "gap": -0.0526
+    },
+    {
+      "bin_low": 0.1,
+      "bin_high": 0.2,
+      "n": 445,
+      "mean_pred": 0.1469,
+      "hit_rate": 0.1416,
+      "gap": -0.0054
+    },
+    {
+      "bin_low": 0.2,
+      "bin_high": 0.30000000000000004,
+      "n": 528,
+      "mean_pred": 0.2595,
+      "hit_rate": 0.2348,
+      "gap": -0.0247
+    },
+    {
+      "bin_low": 0.30000000000000004,
+      "bin_high": 0.4,
+      "n": 1306,
+      "mean_pred": 0.3565,
+      "hit_rate": 0.3423,
+      "gap": -0.0142
+    },
+    {
+      "bin_low": 0.4,
+      "bin_high": 0.5,
+      "n": 3978,
+      "mean_pred": 0.4587,
+      "hit_rate": 0.502,
+      "gap": 0.0433
+    },
+    {
+      "bin_low": 0.5,
+      "bin_high": 0.6000000000000001,
+      "n": 22520,
+      "mean_pred": 0.5395,
+      "hit_rate": 0.5336,
+      "gap": -0.0059
+    },
+    {
+      "bin_low": 0.6000000000000001,
+      "bin_high": 0.7000000000000001,
+      "n": 4225,
+      "mean_pred": 0.6462,
+      "hit_rate": 0.6128,
+      "gap": -0.0334
+    },
+    {
+      "bin_low": 0.7000000000000001,
+      "bin_high": 0.8,
+      "n": 1916,
+      "mean_pred": 0.7426,
+      "hit_rate": 0.7693,
+      "gap": 0.0267
+    },
+    {
+      "bin_low": 0.8,
+      "bin_high": 0.9,
+      "n": 631,
+      "mean_pred": 0.8461,
+      "hit_rate": 0.8225,
+      "gap": -0.0236
+    },
+    {
+      "bin_low": 0.9,
+      "bin_high": 1.0,
+      "n": 740,
+      "mean_pred": 0.9523,
+      "hit_rate": 0.877,
+      "gap": -0.0753
+    }
+  ],
+  "isotonic_reliability": [
+    {
+      "bin_low": 0.0,
+      "bin_high": 0.1,
+      "n": 747,
+      "mean_pred": 0.0291,
+      "hit_rate": 0.0268,
+      "gap": -0.0024
+    },
+    {
+      "bin_low": 0.1,
+      "bin_high": 0.2,
+      "n": 299,
+      "mean_pred": 0.1336,
+      "hit_rate": 0.1773,
+      "gap": 0.0437
+    },
+    {
+      "bin_low": 0.2,
+      "bin_high": 0.30000000000000004,
+      "n": 1476,
+      "mean_pred": 0.2754,
+      "hit_rate": 0.2764,
+      "gap": 0.0011
+    },
+    {
+      "bin_low": 0.30000000000000004,
+      "bin_high": 0.4,
+      "n": 3,
+      "mean_pred": 0.3664,
+      "hit_rate": 0.6667,
+      "gap": 0.3002
+    },
+    {
+      "bin_low": 0.4,
+      "bin_high": 0.5,
+      "n": 7123,
+      "mean_pred": 0.481,
+      "hit_rate": 0.4717,
+      "gap": -0.0093
+    },
+    {
+      "bin_low": 0.5,
+      "bin_high": 0.6000000000000001,
+      "n": 17670,
+      "mean_pred": 0.5601,
+      "hit_rate": 0.5479,
+      "gap": -0.0122
+    },
+    {
+      "bin_low": 0.6000000000000001,
+      "bin_high": 0.7000000000000001,
+      "n": 4918,
+      "mean_pred": 0.6484,
+      "hit_rate": 0.5978,
+      "gap": -0.0506
+    },
+    {
+      "bin_low": 0.7000000000000001,
+      "bin_high": 0.8,
+      "n": 1753,
+      "mean_pred": 0.7499,
+      "hit_rate": 0.6674,
+      "gap": -0.0825
+    },
+    {
+      "bin_low": 0.8,
+      "bin_high": 0.9,
+      "n": 2165,
+      "mean_pred": 0.8235,
+      "hit_rate": 0.7797,
+      "gap": -0.0438
+    },
+    {
+      "bin_low": 0.9,
+      "bin_high": 1.0,
+      "n": 640,
+      "mean_pred": 0.9709,
+      "hit_rate": 0.8828,
+      "gap": -0.0881
+    }
+  ],
+  "clv_check_raw": {
+    "n": 4681,
+    "mean_clv": 0.000781,
+    "pearson_cal_vs_clv": -0.364,
+    "trustworthy": true,
+    "note": "mean CLV > 0 indicates calibration correlates with sharp closing moves; positive hit rate with negative CLV = stale lines (suspect)."
+  },
+  "clv_check_platt": {
+    "n": 4681,
+    "mean_clv": 0.000781,
+    "pearson_cal_vs_clv": -0.3634,
+    "trustworthy": true,
+    "note": "mean CLV > 0 indicates calibration correlates with sharp closing moves; positive hit rate with negative CLV = stale lines (suspect)."
+  },
+  "clv_check_isotonic": {
+    "n": 4681,
+    "mean_clv": 0.000781,
+    "pearson_cal_vs_clv": -0.3445,
+    "trustworthy": true,
+    "note": "mean CLV > 0 indicates calibration correlates with sharp closing moves; positive hit rate with negative CLV = stale lines (suspect)."
+  },
+  "source_class_hit_rate": {
+    "PRIMARY": {
+      "n": 0
+    },
+    "SECONDARY": {
+      "n": 36794,
+      "mean_pred": 0.5193,
+      "hit_rate": 0.5405,
+      "brier": 0.233553
+    }
+  },
+  "platt_params": {
+    "kind": "platt",
+    "a": 1.099063423406741,
+    "b": 0.10583808446750168,
+    "n_train": 25755
+  },
+  "isotonic_params": {
+    "kind": "isotonic",
+    "n_points": 379,
+    "n_train": 25755
+  },
+  "chosen_calibrator": "platt",
+  "chosen_brier_improvement": -0.000325,
+  "installed": false
+}
