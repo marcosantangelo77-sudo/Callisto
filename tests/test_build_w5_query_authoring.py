@@ -50,8 +50,8 @@ def test_core_drops_interrogative_scaffolding():
 
 @pytest.mark.parametrize("q,expected", [
     ("Is unemployment rising?", "unemployment rising"),
-    ("What is the CPI?", "cpi"),
-    ("Which executive orders affect tariffs?", "executive orders affect tariffs"),
+    ("What is the CPI?", "CPI"),
+    ("Which executive orders affect tariffs?", "executive orders tariffs"),
     ("How has the federal funds rate moved over time?",
      "federal funds rate moved over time"),
 ])
@@ -64,7 +64,7 @@ def test_core_empty_when_only_filler():
 
 
 def test_core_preserves_order_and_case():
-    assert core_query("Does Apple face antitrust risk?") == "apple antitrust risk"
+    assert core_query("Does Apple face antitrust risk?") == "Apple antitrust risk"
 
 
 # ── plan shape ───────────────────────────────────────────────────────────

@@ -260,7 +260,7 @@ _RESOLVE_AUTO = 0.90     # single candidate >= this resolves automatically
 _RESOLVE_GAP = 0.10      # ...and must lead runner #2 by this much
 
 
-def _resolve(slot: str, text_lower: str,
+def _resolve(slot: str, question: str,
              table: dict[str, list[Candidate]]) -> tuple[
              dict[str, Any], dict[str, list[Candidate]]]:
     """Resolve one slot against a concept table.
@@ -271,14 +271,22 @@ def _resolve(slot: str, text_lower: str,
     candidate list comes back for explicit disambiguation. Exact-id tokens
     bypass the table entirely (they are their own answer).
     """
-    # exact known id as its own token passes through ("Fetch M2SL data")
-    for tok in re.findall(r"[A-Za-z0-9_]+", text_lower):
+    # exact known id as its own token passes through ("Fetch M2SL data").
+    # A bare word like WHAT must never resolve: require the token to appear
+    # FULLY UPPERCASE in the original text AND either contain a digit or be
+    # in the curated known-id set.
+    upper_tokens = {m.group(0) for m in
+                    re.finditer(r"\b[A-Z0-9][A-Z0-9_]+\b", question)}
+    known_ids = {c.key for cands in table.values() for c in cands}
+    for tok in re.findall(r"[A-Za-z0-9_]+", question):
         up = tok.upper()
-        if _FRED_ID_RE.match(up) or _BLS_ID_RE.match(up):
+        if up not in upper_tokens:
+            continue
+        if any(ch.isdigit() for ch in up) or up in known_ids:
             return {slot: up}, {}
     matched: list[tuple[int, list[Candidate]]] = []
     for concept, cands in table.items():
-        if concept in text_lower:
+        if concept in question.lower():
             matched.append((len(concept), cands))   # longer = more specific
     if not matched:
         return {}, {}
@@ -474,10 +482,11 @@ def _plan_treasury(question: str) -> PlanResult:
         return PlanResult(False, reason="ambiguous treasury dataset; "
                           "the catalog has ~1000 entries — disambiguate",
                           candidates=cands)
+    core = core_query(question)
     return PlanResult(False, reason=(
-        "Fiscal Data needs a dataset name from its ~1000-dataset catalog; "
-        "no curated mapping matched this topic. Browse "
-        "fiscaldata.treasury.gov/datasets and supply a dataset path."))
+        f"Fiscal Data needs a dataset name from its ~1000-dataset catalog; "
+        f"no curated mapping matched '{core}'. Browse "
+        f"fiscaldata.treasury.gov/datasets and supply a dataset path."))
 
 
 def _plan_wikidata(question: str) -> PlanResult:
