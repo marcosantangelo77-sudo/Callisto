@@ -34,6 +34,18 @@ def register_all(registry: SourceRegistry) -> None:
         ("bls", "BlsAdapter"),
         ("wikidata", "WikidataAdapter"),
         ("gdelt", "GdeltAdapter"),
+        # ── wave 3 ─────────────────────────────────────────────────────
+        ("sec_fts", "SecFullTextAdapter"),
+        ("courtlistener", "CourtListenerAdapter"),
+        ("uspto_odp", "UsptoOdpAdapter"),
+        ("bea", "BeaAdapter"),
+        ("census", "CensusAdapter"),
+        ("eia", "EiaAdapter"),
+        ("fdic", "FdicAdapter"),
+        ("cftc", "CftcCotAdapter"),
+        ("worldbank", "WorldBankAdapter"),
+        ("semantic_scholar", "SemanticScholarAdapter"),
+        ("wayback", "WaybackAdapter"),
     ]:
         try:
             spec, cls = _entry(mod_name, cls_name)
