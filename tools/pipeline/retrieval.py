@@ -356,6 +356,12 @@ class IterativeRetriever:
                     round_detail["sources"].append(
                         {"name": spec.name, "rejected": reason})
                     continue
+                # Every result lands in the ledger exactly once as
+                # primary bytes (RestSource already recorded the raw body;
+                # this is the canonical sorted-JSON form the pipeline
+                # carries forward, so it is registered too).
+                self.ledger.record_tool_result(
+                    f"{spec.name}_fetch", body, primary=True, urls=[fr.url])
                 trace.admitted.append(fr)
                 trace.independent_keys.add(
                     independence_key(spec.name, spec.base_url))

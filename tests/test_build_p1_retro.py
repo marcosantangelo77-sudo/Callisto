@@ -53,7 +53,7 @@ def _model() -> ScriptedModel:
     return m
 
 
-ROUTES = {"/works": json.dumps({"results": [{"id": "W1"}]})}
+ROUTES = {"/works": json.dumps({"results": [{"id": "W1", "title": "scholarly literature review of scholarly work on the topic"}]})}
 
 
 def test_pipeline_researcher_scores_against_retrodiction_questions(tmp_path):

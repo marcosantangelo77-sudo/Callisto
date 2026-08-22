@@ -35,14 +35,17 @@ from tools.pipeline.model import ScriptedModel  # noqa: E402
 
 OPENALEX_BODY = json.dumps({
     "results": [
-        {"id": "W1", "title": "Study on the topic",
-         "publication_year": 2024, "cited_by_count": 12},
+        {"id": "W1", "title": "Scholarly study on the topic: a literature "
+         "review of scholarly work", "publication_year": 2024,
+         "cited_by_count": 12},
     ],
 })
 FR_BODY = json.dumps({
     "documents": [
-        {"title": "Federal register notice on the topic",
-         "document_number": "2024-12345", "published_at": "2024-01-15"},
+        {"title": "Final agency rule published by the government: proposed "
+         "and final rules with dates, docket refs",
+         "document_number": "2024-12345", "published_at": "2024-01-15",
+         "agency": "government agency"},
     ],
 })
 
