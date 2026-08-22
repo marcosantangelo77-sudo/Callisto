@@ -499,9 +499,20 @@ class TestSelectionLayer:
         reg = self._registry()
         picks = reg.select("GDP trade prices")
         assert all(isinstance(p, SourceSpec) for p in picks)
-        # default min_score keeps only meaningful coverage; loosening it
-        # admits the partial source
-        assert [p.name for p in picks] == ["gdp_trade"]
+        # 'partial' answers only 'prices'. It IS included at default
+        # strictness, which is what select_explained's own docstring says
+        # should happen: "partial coverage still includes, because a source
+        # answering only 'prices' genuinely bears on 'energy prices
+        # inventories' even if it cannot answer the rest."
+        #
+        # This assertion previously read == ["gdp_trade"], pinning a
+        # threshold artifact rather than the stated intent: one match across
+        # three topical words scores 0.333, a hair under the 0.34 floor. That
+        # same cliff meant "patents filed by a company" selected nothing while
+        # "patents" selected uspto_odp. Ranking is still by coverage, so the
+        # fuller source comes first.
+        assert picks[0].name == "gdp_trade"
+        assert {p.name for p in picks} >= {"gdp_trade", "partial"}
         picks_loose = reg.select("GDP trade prices", min_score=0.0)
         assert picks_loose[0].name == "gdp_trade"
         assert {p.name for p in picks_loose} >= {"gdp_trade", "partial"}

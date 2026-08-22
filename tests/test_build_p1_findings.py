@@ -46,20 +46,36 @@ def _pipeline(tmp_path, ledger=None, routes=None, decompose=None):
         store=ArtifactStore(root=tmp_path / "art"), ledger=ledger)
 
 
-def test_finding_source_selection_is_word_overlap_not_semantic():
-    """FINDING: SourceRegistry.select matches on >=3-char word prefixes, so
-    the decomposer must emit question_type strings that share vocabulary
-    with the adapters' `answers` declarations. 'federal register documents'
-    selects NOTHING; 'final/proposed agency rules with dates and docket
-    refs' selects federalregister. The pipeline passes the model's
-    question_type straight through — a semantically-smart selector is a
-    real gap, recorded here rather than papered over."""
+def test_finding_source_selection_handles_natural_questions():
+    """RESOLVED (was: selection is word-overlap, not semantic).
+
+    P1 recorded that a natural question selected nothing because select()
+    scored matched/len(question_words) against a 0.34 floor — so the
+    threshold was a function of question LENGTH. 'patents' selected
+    uspto_odp; 'patents filed by a company' selected nothing, since one
+    match across three topical words is 0.333.
+
+    Fixed with a diagnostic-term rule: a term mentioned by at most a third
+    of registered sources sets a score FLOOR (not a bypass — min_score still
+    governs, so a caller asking for strictness still gets it).
+
+    This test now pins the fix. Selection is still lexical, not semantic —
+    embeddings would be the real answer — but ordinary phrasing works, and
+    a question no source covers still correctly returns nothing.
+    """
     from tools.sources.registry import get_source_registry
     reg = get_source_registry()
-    assert reg.select("federal register documents") == []
-    assert [s.name for s in
-            reg.select("final/proposed agency rules with dates and docket refs")] \
-        == ["federalregister"]
+
+    # natural phrasing selects
+    for q in ("patents filed by a company", "clinical trials",
+              "scholarly literature about semiconductor supply chains"):
+        assert reg.select(q), f"natural question selected nothing: {q!r}"
+
+    # a question nothing covers still returns nothing — no noise
+    assert reg.select("how is the weather") == []
+
+    # strictness remains a working control
+    assert reg.select("patents filed by a company", min_score=0.99) == []
 
 
 def test_finding_generic_fetch_covers_4_of_8_sources():

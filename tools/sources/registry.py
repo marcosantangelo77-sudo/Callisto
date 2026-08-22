@@ -28,6 +28,9 @@ def _tokens(text: str) -> list[str]:
     return [w for w in _WORD_RE.findall(text.lower()) if len(w) >= 3]
 
 
+_DIAGNOSTIC_FLOOR = 0.5
+
+
 def _overlap(q_words: list[str], answer_words: set[str]) -> tuple[bool, float, list[str]]:
     """(matches, score 0..1, matched question words). A question word
     matches when it equals or prefix-shares a word of the answer clause
@@ -181,8 +184,15 @@ class SourceRegistry:
                 for m in matched:
                     if self._term_frequency(m) <= self._diagnostic_ceiling():
                         best_diagnostic = best_diagnostic or m
+                        # A diagnostic match earns a score FLOOR rather than
+                        # bypassing min_score. Bypassing would make the
+                        # caller's strictness control silently inoperative —
+                        # the same shape of defect as a gate that lowers
+                        # itself. A caller asking for 0.99 still gets 0.99.
+                        if _DIAGNOSTIC_FLOOR > best[1]:
+                            best = (ok, _DIAGNOSTIC_FLOOR)
             ok_any, best_score = best
-            if not ok_any and best_score < min_score and not best_diagnostic:
+            if not ok_any and best_score < min_score:
                 decisions.append(SelectionDecision(
                     a.spec.name, False, 0.0,
                     [f"best answer clause covers only "
