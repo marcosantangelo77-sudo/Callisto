@@ -88,14 +88,16 @@ class SourceRegistry:
         return self._adapters.get(name)
 
     def select(self, question_type: str, *, max_tier: int = 5,
-               exclude: set[str] | None = None) -> list[SourceSpec]:
+               exclude: set[str] | None = None,
+               min_score: float = 0.34) -> list[SourceSpec]:
         """Specs whose `answers` overlap *question_type* on significant
         words (>=3-char tokens, prefix match so 'macro' matches
         'macroeconomic'), within a provenance-tier ceiling.
         Exclusions let callers drop sources that already failed.
-        Ranked: full-question-coverage answers first, then by tier."""
+        Ranked by relevance score, tie-broken by provenance tier."""
         return [d.spec for d in self.select_explained(
-            question_type, max_tier=max_tier, exclude=exclude)
+            question_type, max_tier=max_tier, exclude=exclude,
+            min_score=min_score)
             if d.included and d.spec is not None]
 
     def select_explained(self, question_type: str, *, max_tier: int = 5,

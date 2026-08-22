@@ -55,6 +55,10 @@ SELECT_TOOL = {
                 "question_type": {"type": "string"},
                 "max_tier": {"type": "integer",
                              "description": "provenance-tier ceiling 1-5"},
+                "explain": {"type": "boolean",
+                            "description":
+                                "also return per-source SelectionDecisions "
+                                "(why each source was chosen or skipped)"},
             },
             "required": ["question_type"],
         },
@@ -72,10 +76,10 @@ def _list_payload() -> dict:
     }
 
 
-def _select_payload(question_type: str, max_tier: int) -> dict:
+def _select_payload(question_type: str, max_tier: int, explain: bool) -> dict:
     reg = get_source_registry()
     picks = reg.select(question_type, max_tier=max(1, min(int(max_tier), 5)))
-    return {
+    payload = {
         "ok": True,
         "question_type": question_type,
         "sources": [s.to_dict() for s in picks],
@@ -83,6 +87,13 @@ def _select_payload(question_type: str, max_tier: int) -> dict:
                  "search without stating that no registered source covers "
                  "this question."),
     }
+    if explain:
+        # full decision log: every registered source with why it was
+        # chosen or skipped — lets a conclusion state its evidence basis
+        decisions = reg.select_explained(
+            question_type, max_tier=max(1, min(int(max_tier), 5)))
+        payload["decisions"] = [d.to_dict() for d in decisions]
+    return payload
 
 
 async def _execute(name: str, arguments: dict) -> dict:
@@ -92,8 +103,10 @@ async def _execute(name: str, arguments: dict) -> dict:
         if name == "source_registry_list":
             return _list_payload()
         if name == "source_registry_select":
-            return _select_payload(arguments.get("question_type", ""),
-                                   int(arguments.get("max_tier", 5)))
+            return _select_payload(
+                arguments.get("question_type", ""),
+                int(arguments.get("max_tier", 5)),
+                bool(arguments.get("explain", False)))
         raise ValueError(f"source plugin does not own tool {name!r}")
 
     try:
