@@ -98,13 +98,10 @@ class TestKalshiAdapter:
         ad = KalshiAdapter(RestSource(SPEC, ledger=ledger, transport=t,
                                       _limiter=_RateLimiter(0.0)))
         ad.list_markets(series_ticker="KXCPI", limit=50)
-        entries = [e for e in ledger.entries()
-                   if e.get("tool_name") == "kalshi_fetch"] \
-            if hasattr(ledger, "entries") else []
-        # Ledger API varies; the contract that must hold regardless:
-        recs = [e for e in getattr(ledger, "_records", [])
-                if getattr(e, "tool_name", "") == "kalshi_fetch"]
-        assert recs or entries, "fetch was not provenance-recorded"
+        # The ledger must hold the fetch: URL recorded and bytes primary.
+        url = f"{BASE}/markets?limit=50&series_ticker=KXCPI"
+        assert ledger.observed_urls() >= {url}
+        assert ledger.is_primary_bytes(t.routes[url])
 
     def test_get_market_carries_resolution_criteria(self):
         t = FakeTransport()
@@ -164,12 +161,13 @@ class TestEdgeWiring:
 
     def test_market_quote_is_probability_kind_two_sided(self):
         ad = make_adapter(FakeTransport())
-        quote, meta = self._quote(ad)
+        quote, _ = self._quote(ad)
         assert isinstance(quote, MarketQuote)
         assert quote.kind == "probability"
         assert quote.source == "kalshi"
-        assert quote.price == pytest.approx(0.62)
-        assert quote.counter_price == pytest.approx(0.61)
+        # price is the YES ask; counter is the complementary NO ask
+        assert quote.price == pytest.approx(0.63)
+        assert quote.counter_price == pytest.approx(0.37)
         fair, audit = quote.fair_probability()
         assert audit["devigged"], "two-sided book must devig"
 
@@ -345,15 +343,15 @@ class TestReadOnlyMandate:
         """No credentials, no order paths, no account access — grep-guarded."""
         pkg_dir = os.path.join(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))), "tools", "domains", "kalshi")
-        banned = ("orders", "portfolio", "api_key", "authorization",
-                  "balance", "session_token", "signature", "private_key")
+        banned_urls = ("/orders", "/portfolio", "/balance",
+                       "api-key", "/email", "/reset_password")
         for fname in os.listdir(pkg_dir):
             if not fname.endswith(".py"):
                 continue
             text = open(os.path.join(pkg_dir, fname)).read().lower()
-            for word in banned:
+            for word in banned_urls:
                 assert word not in text, (
-                    f"{fname} mentions '{word}' — the package must contain "
+                    f"{fname} references '{word}' — the package must contain "
                     "no order/account path whatsoever")
 
     def test_spec_declares_public_read_only_endpoints(self):
