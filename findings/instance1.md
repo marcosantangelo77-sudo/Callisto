@@ -219,3 +219,29 @@ Falsifier: any consumer that applies stored suggestions automatically.
 For: unowned (design note)
 
 ---
+## DOSSIER — per-module close-out (mandate §6)
+
+### tools/self_repair.py
+- Q1 purpose: detect operational breakage in the unattended pipeline and fix it. Docstring honest; scope was not.
+- Verdict: gate-weakening paths REMOVED/REFUSED (3 refusers + opt-in requeue); scraper/stale-odds/bloat/WAL paths are sound and untouched. Heartbeat watchdog clean.
+- Q6 today: split detectors from repairers explicitly — detectors may say anything, repairers are a whitelist of non-gate actions. The GATE_WEAKENING_STRATEGIES frozenset is the seed of that.
+- Q7 retirement: never — the plumbing (prune/WAL/scrape-health) is load-bearing for an unattended system.
+- Q8 falsifier: any write to edge_threshold / promotion knobs / rejected-status surviving in this file without an env flag.
+
+### orchestrator.py
+- Verdict: mechanically correct 7-step flow with real code-level enforcement (_clamp_confidence after LLM steps, contradiction penalty, seal-refusal). The epistemic weakness is upstream: citation check is substring matching and Manager has no veto — both confirmed by Instance 4 independently.
+- Q6: citations should resolve against the URLs actually returned by the search step (they're already in-session as pre_results) — a diff, not a fetch. Recorded for Instance 4; not implemented by me since tier assignment says epistemics owns earned-confidence design.
+- Q8 falsifier: a sealed row whose confidence exceeded the ceiling implied by its weakest evidence link.
+
+### tools/autonomous.py
+- Verdict: monolith confirmed (Q6 applies hard). The loop interleaves three roles — data plane (collect/embed/backtest: fine), adjudication (evaluate/reject/promote: belongs behind the gate), and self-modification (the seven+1 mechanisms now refused or gated). The single highest-value change made this session: automated actors can no longer move gates in ANY of the eight locations that previously allowed it.
+- Q6 today: extract adjudication into one module owning ALL status/threshold writes, with the policy check at the single chokepoint; phases become read-mostly reporters. Migration: land the policy objects (done), then move writes one phase at a time behind the existing tests.
+- Q7 retirement: the file never retires whole; its phases retire individually as they get owners.
+- Q8 falsifier: an eighth gate-moving path found anywhere in the file.
+
+### Test coverage added
+tests/test_tier1_loop_self_repair_gate_policy.py (15 tests)
+tests/test_tier1_loop_autonomous_gate_policy.py (9 tests)
+Both green serially; full suite NOT run per COORDINATION.md rule.
+
+---
