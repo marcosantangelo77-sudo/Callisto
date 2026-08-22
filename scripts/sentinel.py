@@ -69,7 +69,7 @@ CLAUDE_TIMEOUT = 300        # 5 minutes for fix generation
 
 # Protected files — NEVER let Claude modify these
 PROTECTED_FILES = {
-    "agp.py",                   # AGP protocol is non-negotiable
+    "agp/__init__.py",          # AGP protocol is non-negotiable
     "scripts/sentinel.py",      # Can't modify yourself
     "scripts/watchdog.bat",     # Can't break the restart loop
     "scripts/setup_always_on.bat",
