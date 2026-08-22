@@ -79,14 +79,15 @@ def test_finding_source_selection_handles_natural_questions():
 
 
 def test_finding_generic_fetch_covers_4_of_8_sources():
-    """FINDING: only openalex, federalregister, clinicaltrials, gdelt have a
-    generic no-parameter search call. fred needs an API key + series id,
-    bls needs a POST with series ids, treasury needs a dataset name,
-    wikidata needs raw SPARQL. The pipeline skips them honestly (logged,
-    recorded as a gap) rather than inventing queries."""
-    covered = {k for k, v in ResearchPipeline.GENERIC_CALLS.items() if v}
-    assert covered == {"openalex", "federalregister", "clinicaltrials",
-                       "gdelt"}
+    """RESOLVED (W5 adoption, I1): the 4-entry GENERIC_CALLS table is gone.
+    Query authoring now goes through tools.sources.query_builder.build_plan,
+    which plans real adapter calls for 9 sources and honestly reports the
+    rest as gaps rather than inventing queries."""
+    from tools.sources.query_builder import plannable_sources
+    covered = set(plannable_sources())
+    assert {"openalex", "federalregister", "clinicaltrials",
+            "gdelt"} <= covered
+    assert "sec_fts" not in covered  # still deliberately unplannable
 
 
 def test_finding_sandbox_outputs_are_child_attested(tmp_path):

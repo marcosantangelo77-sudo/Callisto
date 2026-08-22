@@ -39,9 +39,13 @@ logger = logging.getLogger("callisto.retrieval")
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
-#: registry name -> adapter method, mirrored from engine.GENERIC_CALLS so a
-#: retriever constructed standalone still has routes. The engine passes its
-#: own dict explicitly; keep these in sync.
+#: Legacy generic-call table (W1): registry name -> adapter method spec.
+#: SUPERSEDED for the engine by tools.sources.query_builder.build_plan —
+#: kept ONLY so a retriever constructed with an explicit generic_calls=
+#: dict (older tests, ad-hoc scripts) behaves exactly as before. When
+#: generic_calls is None the retriever authors queries per source with
+#: build_plan, which covers every plannable adapter and honestly reports
+#: the rest.
 _DEFAULT_GENERIC_CALLS = {
     "openalex": ("works_search", ("term",), {"limit": 3}),
     "federalregister": ("search", (), {"query_term": "term", "limit": 3}),
@@ -244,6 +248,8 @@ class RetrievalTrace:
     admitted: list[Any] = field(default_factory=list)   # engine.FetchResult
     rejected: list[RejectedItem] = field(default_factory=list)
     queries: list[str] = field(default_factory=list)
+    #: sources the planner could not serve, with its honest reason
+    skipped_sources: list[dict] = field(default_factory=list)
     independent_keys: set[str] = field(default_factory=set)
     stop_reason: str = ""
 
@@ -266,7 +272,8 @@ class IterativeRetriever:
                  max_rounds: int = 3,
                  max_sources_per_leaf: int = 3,
                  max_fetches_per_round: int = 4,
-                 generic_calls: Optional[dict] = None):
+                 generic_calls: Optional[dict] = None,
+                 use_planner: bool = True):
         self.registry = registry
         self.ledger = ledger
         self.transport = transport
@@ -274,19 +281,27 @@ class IterativeRetriever:
         self.max_rounds = max(1, int(max_rounds))
         self.max_sources_per_leaf = max(1, int(max_sources_per_leaf))
         self.max_fetches_per_round = max(1, int(max_fetches_per_round))
-        self.generic_calls = generic_calls  # falls back to engine.GENERIC_CALLS
+        #: None + use_planner=True -> per-source query authoring via
+        #: tools.sources.query_builder.build_plan (W5). An explicit dict
+        #: keeps the legacy W1 behaviour byte-for-byte.
+        self.generic_calls = generic_calls
+        self.use_planner = use_planner
 
     def retrieve(self, question, question_type: str,
                  min_independent: int) -> RetrievalTrace:
         from tools.pipeline.engine import _make_adapter, _sha
         from tools.sources.base import RestSource, SourceError
 
-        calls = self.generic_calls or _DEFAULT_GENERIC_CALLS
+        legacy_calls = self.generic_calls
+        if legacy_calls is None and not self.use_planner:
+            # Explicit opt-out: behave as the W1 default table did.
+            legacy_calls = _DEFAULT_GENERIC_CALLS
         trace = RetrievalTrace(question_id=question.question_id)
 
         translated, chosen = translate_question_type(
             self.registry, question.text, question_type)
         excluded: set[str] = set()
+        unplannable: set[str] = set()
         query = build_query(question.text)
         relevant_titles: list[str] = []
         # Reuse loop_quality's terminator rather than inventing another
@@ -301,10 +316,31 @@ class IterativeRetriever:
         for rnd in range(1, self.max_rounds + 1):
             all_specs = self.registry.select(
                 translated, max_tier=3, exclude=excluded)
-            # Fan out across routable sources; a source with no generic
-            # route cannot contribute this round, so don't spend the
-            # fan-out budget on it.
-            routable = [s for s in all_specs if s.name in calls]
+            # Fan out across routable sources. With the planner (default)
+            # every source the registry selected is routable — build_plan
+            # either authors real queries or reports honestly why it
+            # cannot. Under a legacy generic_calls table only listed
+            # sources can contribute.
+            if legacy_calls is not None:
+                routable = [s for s in all_specs if s.name in legacy_calls]
+            else:
+                # Planner mode: a source the planner cannot serve must not
+                # consume fan-out budget that a servable source could use.
+                # Record the honest gap once, then keep only plannable
+                # sources as round candidates.
+                routable = []
+                for s in all_specs:
+                    if s.name not in unplannable:
+                        from tools.sources import query_builder as _qb
+                        plan = _qb.build_plan(s.name, question.text)
+                        if plan.plannable and plan.queries:
+                            routable.append(s)
+                        else:
+                            unplannable.add(s.name)
+                            trace.skipped_sources.append(
+                                {"name": s.name,
+                                 "reason": (plan.reason or
+                                            "no authored query")[:120]})
             if not routable:
                 trace.stop_reason = (
                     "selected sources lack generic fetch routes")
@@ -315,15 +351,31 @@ class IterativeRetriever:
             round_detail = {"round": rnd, "query": query,
                             "sources": [], "admitted": 0}
             for spec in specs:
-                call = calls.get(spec.name)
-                if not call:
-                    round_detail["sources"].append(
-                        {"name": spec.name, "skipped": "no generic route"})
-                    continue
-                method_name, pos_args, kw_args = call
-                kwargs = {k: (query if v == "term" else v)
-                          for k, v in (kw_args or {}).items()}
-                args = tuple(query if a == "term" else a for a in pos_args)
+                # ── query authoring: planner (W5) or legacy table (W1) ──
+                if legacy_calls is not None:
+                    call = legacy_calls.get(spec.name)
+                    if not call:
+                        round_detail["sources"].append(
+                            {"name": spec.name, "skipped": "no generic route"})
+                        continue
+                    method_name, pos_args, kw_args = call
+                    kwargs = {k: (query if v == "term" else v)
+                              for k, v in (kw_args or {}).items()}
+                    args = tuple(query if a == "term" else a for a in pos_args)
+                else:
+                    from tools.sources import query_builder
+                    plan = query_builder.build_plan(spec.name, question.text)
+                    if not plan.plannable or not plan.queries:
+                        reason = plan.reason or "no authored query possible"
+                        logger.info("planner skipped %s: %s",
+                                    spec.name, reason)
+                        excluded.add(spec.name)
+                        round_detail["sources"].append(
+                            {"name": spec.name, "skipped": reason[:120]})
+                        continue
+                    pq = plan.queries[0]
+                    method_name = pq.method
+                    args, kwargs = tuple(pq.args), dict(pq.kwargs)
                 try:
                     source = RestSource(spec, ledger=self.ledger,
                                         transport=self.transport)
