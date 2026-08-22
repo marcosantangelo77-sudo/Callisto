@@ -60,6 +60,10 @@ _QUERY_STOPWORDS = {
     "has", "how", "why", "whether", "and", "for", "with", "into", "from",
     "that", "this", "which", "are", "was", "were", "been", "their", "its",
     "can", "should", "would", "will", "did", "between", "across",
+    # generic research-process vocabulary: carries no source-selection signal
+    # and dilutes coverage scores (e.g. 'scholarly', 'paper', 'search')
+    "scholarly", "scholar", "literature", "academic", "academics",
+    "study", "studies", "papers", "search", "sources", "source",
 }
 
 
