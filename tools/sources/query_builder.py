@@ -341,12 +341,16 @@ def _plan_clinicaltrials(question: str) -> PlanResult:
                           "vocabulary")
     kw = {"query_term": core, "limit": 20}
     low = question.lower()
-    # structured filters where the question offers them
+    # structured filters where the question offers them. The status word
+    # must NOT stay in query.term: the API ANDs full-text terms, so
+    # 'recruiting semaglutide' searches for documents containing the word.
     for status_word, status in (("recruiting", "RECRUITING"),
                                 ("completed", "COMPLETED"),
                                 ("terminated", "TERMINATED")):
         if status_word in low:
             kw["status"] = status
+            kw["query_term"] = " ".join(
+                w for w in core.split() if w.lower() != status_word)
             break
     return PlanResult(True, queries=[PlannedQuery(
         source="clinicaltrials", method="search_studies", kwargs=kw,

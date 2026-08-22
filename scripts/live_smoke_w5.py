@@ -58,6 +58,9 @@ def main():
             print(f"[{name}] NOT PLANNABLE: {plan.reason}")
             continue
         entry = reg.get(name)
+        if entry is None:
+            print(f"[{name}] SKIPPED (not registered)")
+            continue
         adapter = entry.make_adapter(
             RestSource(entry.spec, transport=curl_transport))
         try:
@@ -71,8 +74,7 @@ def main():
                 st = body.get("studies", [])
                 first = (st[0]["protocolSection"]["identificationModule"]
                          ["nctId"] if st else "NONE")
-                print(f"[{name}] totalCount={body.get('totalCount')}; "
-                      f"first: {first}")
+                print(f"[{name}] {len(st)} studies; first: {first}")
             elif name == "federalregister":
                 docs = body.get("documents", [])
                 print(f"[{name}] count={body.get('count')}; first: "

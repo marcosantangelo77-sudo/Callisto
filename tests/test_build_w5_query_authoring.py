@@ -108,7 +108,7 @@ def test_clinicaltrials_status_filter():
         "clinicaltrials",
         "Are there completed clinical trials of semaglutide for obesity?")
     kw = p.queries[0].kwargs
-    assert kw["query_term"] == "completed semaglutide obesity"
+    assert kw["query_term"] == "semaglutide obesity"
     assert kw["status"] == "COMPLETED"
 
 
