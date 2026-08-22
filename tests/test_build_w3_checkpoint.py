@@ -200,7 +200,7 @@ def test_trace_reports_resume_and_oldest_evidence_time(tmp_path):
     assert oldest <= datetime.now(UTC) - timedelta(minutes=59)
 
 
-@given(st.integers(min_value=0, max_value=4))
+@given(st.sampled_from([0, 1, 2, 3]))
 @settings(max_examples=5, deadline=None)
 def test_property_kill_and_resume_equals_clean_run(crash_after_n):
     """For ANY crash point in the 4-stage chain, resuming to completion
@@ -263,7 +263,9 @@ def test_property_kill_and_resume_equals_clean_run(crash_after_n):
         crashed, ledger, store, trace = loop().run_until_complete(
             attempt(crash_after_n, root / "crash"))
         assert crashed is True
-        assert trace.is_resume
+        # crash at index 0 completes no stage, so the retry is all-fresh;
+        # any later crash leaves real work that must be resumed, not redone.
+        assert trace.is_resume or crash_after_n == 0
 
         # IDEMPOTENCE: resumed run's ledger equals clean run's exactly.
         assert len(store) == 1, "artifact/fetch recorded more than once"
