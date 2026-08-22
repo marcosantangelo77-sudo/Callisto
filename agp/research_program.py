@@ -252,6 +252,13 @@ class ResearchProgram:
         for q in self.questions:
             yield from q.walk()
 
+    def find(self, question_id: str) -> Optional[ResearchQuestion]:
+        """Locate a question anywhere in the program's forest."""
+        for q in self.walk_questions():
+            if q.question_id == question_id:
+                return q
+        return None
+
     @property
     def leaves(self) -> list[ResearchQuestion]:
         return [q for q in self.walk_questions() if not q.children]
@@ -270,18 +277,20 @@ class ResearchProgram:
 
     def to_dict(self) -> dict:
         """Full-state serialization, including per-question mutable status."""
+
+        def _q_full(q: ResearchQuestion) -> dict:
+            return {**_q_to_dict(q),
+                    "status": q.status.value,
+                    "lifecycle_link": q.lifecycle_link,
+                    "children": [_q_full(c) for c in q.children]}
+
         return {
             "program_id": self.program_id,
             "root_query": self.root_query,
             "domain": self.domain,
             "status": self.status.value,
             "created_at": self.created_at.isoformat(),
-            "questions": [
-                {**_q_to_dict(q),
-                 "status": q.status.value,
-                 "lifecycle_link": q.lifecycle_link}
-                for q in self.questions
-            ],
+            "questions": [_q_full(q) for q in self.questions],
             "artifacts": [{"kind": a.kind, "sha256": a.sha256}
                           for a in self.artifacts],
         }
