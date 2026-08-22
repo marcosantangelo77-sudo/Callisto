@@ -248,6 +248,8 @@ class RetrievalTrace:
     admitted: list[Any] = field(default_factory=list)   # engine.FetchResult
     rejected: list[RejectedItem] = field(default_factory=list)
     queries: list[str] = field(default_factory=list)
+    #: sources the planner could not serve, with its honest reason
+    skipped_sources: list[dict] = field(default_factory=list)
     independent_keys: set[str] = field(default_factory=set)
     stop_reason: str = ""
 
@@ -299,6 +301,7 @@ class IterativeRetriever:
         translated, chosen = translate_question_type(
             self.registry, question.text, question_type)
         excluded: set[str] = set()
+        unplannable: set[str] = set()
         query = build_query(question.text)
         relevant_titles: list[str] = []
         # Reuse loop_quality's terminator rather than inventing another
@@ -321,7 +324,23 @@ class IterativeRetriever:
             if legacy_calls is not None:
                 routable = [s for s in all_specs if s.name in legacy_calls]
             else:
-                routable = list(all_specs)
+                # Planner mode: a source the planner cannot serve must not
+                # consume fan-out budget that a servable source could use.
+                # Record the honest gap once, then keep only plannable
+                # sources as round candidates.
+                routable = []
+                for s in all_specs:
+                    if s.name not in unplannable:
+                        from tools.sources import query_builder as _qb
+                        plan = _qb.build_plan(s.name, question.text)
+                        if plan.plannable and plan.queries:
+                            routable.append(s)
+                        else:
+                            unplannable.add(s.name)
+                            trace.skipped_sources.append(
+                                {"name": s.name,
+                                 "reason": (plan.reason or
+                                            "no authored query")[:120]})
             if not routable:
                 trace.stop_reason = (
                     "selected sources lack generic fetch routes")
