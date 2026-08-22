@@ -124,6 +124,10 @@ DECOMPOSE_SYSTEM = (
     '"question_type": short phrase naming what kind of source answers it, '
     '"min_source_tier": 1-3, "min_independent_sources": int, '
     '"quant_required": bool, "horizon_days": int or null}]}.'
+    "\n\nHARD CONSTRAINT: if kind is \"predictive\", horizon_days MUST be a "
+    "positive integer — an undated prediction cannot ever resolve, so it is "
+    "rejected. If you cannot name a resolution horizon in days, the question "
+    "is not predictive: use \"descriptive\" or \"causal\" instead."
 )
 
 

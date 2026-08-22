@@ -113,6 +113,10 @@ class PipelineResult:
     artifact_refs: list[ArtifactRef] = field(default_factory=list)
     objections: list = field(default_factory=list)
     fetches: list[FetchResult] = field(default_factory=list)
+    #: recoverable problems handled during the run (e.g. a repaired
+    #: decomposition). Surfaced so a run that needed help does not look
+    #: identical to one that did not.
+    notes: list[str] = field(default_factory=list)
 
     def summary_dict(self) -> dict:
         return {
@@ -224,8 +228,20 @@ class ResearchPipeline:
 
     # ── Stage 1: decompose ────────────────────────────────────────────────
 
-    async def _decompose(self, query: str, today: date) -> ResearchProgram:
-        resp = await self.model.complete("Architect", decompose_messages(query))
+    async def _decompose(self, query: str, today: date,
+                         _repair: str = "") -> ResearchProgram:
+        msgs = decompose_messages(query)
+        if _repair:
+            # Repair turn: hand the model its own validation errors rather than
+            # failing the run. A model that omits a horizon has made a
+            # recoverable mistake; killing the pipeline over it wastes the
+            # whole decomposition.
+            msgs = msgs + [{"role": "user", "content":
+                            "Your previous decomposition was REJECTED:\n"
+                            f"{_repair}\n"
+                            "Return corrected JSON in the same shape. Fix only "
+                            "the rejected items."}]
+        resp = await self.model.complete("Architect", msgs)
         parsed = parse_model_json(resp) or {}
         program = ResearchProgram(root_query=query)
         self._question_types = {}
@@ -407,7 +423,14 @@ class ResearchPipeline:
         result = PipelineResult(root_query=question, sealed=False)
 
         # 1. Decompose.
-        program = await self._decompose(question, today)
+        try:
+            program = await self._decompose(question, today)
+        except ValueError as first:
+            # One repair turn. The validator's message names exactly what was
+            # wrong, so hand it back rather than losing the whole run to a
+            # recoverable model mistake. A second failure is real and raises.
+            result.notes.append(f"decomposition repair attempted: {first}")
+            program = await self._decompose(question, today, _repair=str(first))
         result.program = program
 
         # 2..5. Per leaf: select sources, fetch, compute, answer.
