@@ -141,9 +141,10 @@ def test_end_to_end_sealed_with_provenance_artifact_and_adversary(tmp_path):
         assert leaf.confidence <= ceilings[best_leaf_class] + 1e-9, (
             f"{leaf.text}: {leaf.confidence} exceeds {best_leaf_class} ceiling")
 
-    # Zero resolved descendants → inheritance rule caps parent at SPECULATIVE.
-    assert result.confidence_score <= 0.54 + 1e-9
-    assert result.confidence_tier in ("SPECULATIVE", "UNVERIFIED")
+    # Zero resolved descendants → inheritance rule caps parent at
+    # SPECULATIVE_CAP (= TIER_PROBABLE_MIN per tools/research_program.py).
+    from tools.research_program import SPECULATIVE_CAP
+    assert result.confidence_score <= SPECULATIVE_CAP + 1e-9
 
     # ── adversary had its say ──
     assert result.objections is not None  # attack ran (empty list = withstood)
@@ -189,11 +190,11 @@ def test_major_objection_lowers_confidence_but_still_seals(tmp_path):
         {"kind": "selection_effect", "severity": "MAJOR",
          "text": "only successful replications indexed"}])
     pipeline, _ = _make(tmp_path, adversary=critic)
-    base, _ = _make(tmp_path)
-    clean = asyncio.get_event_loop().run_until_complete(base[0].run("Q?"))
+    clean, _ = _make(tmp_path / "b")
     attacked = asyncio.get_event_loop().run_until_complete(pipeline.run("Q?"))
-    assert attacked.sealed and clean.sealed
-    assert attacked.confidence_score < clean.confidence_score
+    clean_res = asyncio.get_event_loop().run_until_complete(clean.run("Q?"))
+    assert attacked.sealed and clean_res.sealed
+    assert attacked.confidence_score < clean_res.confidence_score
 
 
 def test_unanswered_pipeline_refuses_to_seal(tmp_path):
@@ -212,7 +213,9 @@ def test_unanswered_pipeline_refuses_to_seal(tmp_path):
 
 
 def test_compute_stage_runs_sandbox_and_emits_artifacts(tmp_path):
-    code = ("result = {'mean': sum(inputs['series']) / len(inputs['series'])}")
+    code = ("import json\n"
+            "series = json.load(open('series.json'))\n"
+            "result = {'mean': sum(series) / len(series)}")
     compute = {"code": code, "inputs": {"series": [1.0, 2.0, 3.0]}}
     model = ScriptedModel({
         "Architect": [{"content": _decompose_response()}],

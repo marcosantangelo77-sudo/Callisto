@@ -64,6 +64,9 @@ from tools.sources.base import RestSource, SourceError, SourceSpec
 
 logger = logging.getLogger("callisto.pipeline")
 
+# Map agp SourceClass values to an ordering (higher = stronger evidence).
+_CLASS_RANK = {"INFERRED": 0, "SIGNAL": 1, "SECONDARY": 2, "PRIMARY": 3}
+
 
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
@@ -172,7 +175,7 @@ class ResearchPipeline:
 
     #: registry name -> adapter method used by the generic fetcher.
     GENERIC_CALLS = {
-        "openalex": ("works_search", ("term",)),
+        "openalex": ("works_search", ("term",), {"limit": 3}),
         "federalregister": ("search", (), {"query_term": "term", "limit": 3}),
         "clinicaltrials": ("search_studies", (), {"query_term": "term"}),
         "gdelt": ("doc_query", ("term",)),
@@ -225,6 +228,7 @@ class ResearchPipeline:
         resp = await self.model.complete("Architect", decompose_messages(query))
         parsed = parse_model_json(resp) or {}
         program = ResearchProgram(root_query=query)
+        self._question_types = {}
         for spec in (parsed.get("sub_questions") or [])[:5]:
             try:
                 kind = QuestionKind(str(spec.get("kind", "descriptive")).lower())
@@ -252,6 +256,8 @@ class ResearchPipeline:
                 evidence_requirements=req,
                 horizon=horizon,
             ))
+            self._question_types[program.questions[-1].question_id] = \
+                str(spec.get("question_type") or "")
         errs = program.validate()
         if errs:
             raise ValueError(f"decomposition invalid: {errs}")
@@ -263,7 +269,10 @@ class ResearchPipeline:
                                   max_fetches_per_leaf: int = 3
                                   ) -> list[FetchResult]:
         reg = self._get_registry()
-        qt = getattr(q, "question_type", "") or q.text
+        # The decomposer may attach a `question_type` (what kind of source
+        # answers this); ResearchQuestion doesn't store it, so the pipeline
+        # carries it alongside. Fall back to the question text.
+        qt = self._question_types.get(q.question_id) or q.text
         specs = reg.select(qt, max_tier=3)[:max_fetches_per_leaf]
         results: list[FetchResult] = []
         for spec in specs:
@@ -437,7 +446,7 @@ class ResearchPipeline:
             evidence_items=[e.content for e in session.evidence])
         result.objections = objections
         from agp.adversary import Adversary
-        clamped, veto_reason = Adversary.apply_verdict(clamped, objections)
+        clamped, _ = Adversary.apply_verdict(clamped, objections)
 
         session.summary = SessionSummary(
             scope=question, domain=domain, conclusion=conclusion,
@@ -446,13 +455,24 @@ class ResearchPipeline:
             contradiction_count=len(session.contradictions))
         session.advance_to(SessionStep.SESSION_CLOSE)
 
-        # 8. Seal or refuse.
-        if veto_reason:
-            result.refusal_reason = f"adversary veto: {veto_reason}"
+        # 8. Seal or refuse. Only a BLOCKING objection vetoes; MAJOR/MINOR
+        # objections have already lowered the score via apply_verdict. A
+        # penalty dropping below the DB floor means "refuse", not "store
+        # something below the floor".
+        result.session = session
+        blocking = next((ob for ob in objections if ob.is_blocking), None)
+        if blocking is not None:
+            result.refusal_reason = f"adversary veto: {blocking.text}"
+            self.adversary.ledger.record_sustained(
+                session.session_id, blocking.text)
+            return result
+        if session.summary.confidence_score < DB_CONFIDENCE_FLOOR:
+            result.refusal_reason = (
+                f"confidence {session.summary.confidence_score} below DB "
+                f"floor {DB_CONFIDENCE_FLOOR} after adversary penalties")
             for ob in objections:
-                if ob.is_blocking:
-                    self.adversary.ledger.record_sustained(
-                        session.session_id, ob.text)
+                self.adversary.ledger.record_sustained(
+                    session.session_id, ob.text)
             return result
         try:
             seal_hash = session.seal()
@@ -461,6 +481,7 @@ class ResearchPipeline:
             return result
 
         result.sealed = True
+        result.session = session
         result.conclusion = conclusion
         result.confidence_score = session.summary.confidence_score
         result.confidence_tier = tier
