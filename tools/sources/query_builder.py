@@ -312,9 +312,10 @@ def _resolve(slot: str, question: str,
     # FULLY UPPERCASE in the original text AND either contain a digit or be
     # in the curated known-id set.
     upper_tokens = {m.group(0) for m in
-                    re.finditer(r"\b[A-Z0-9][A-Z0-9_]+\b", question)}
+                    re.finditer(r"\b[A-Z0-9][A-Z0-9_]+(?:\.[A-Z0-9]+)*\b",
+                                question)}
     known_ids = {c.key for cands in table.values() for c in cands}
-    for tok in re.findall(r"[A-Za-z0-9_]+", question):
+    for tok in re.findall(r"[A-Za-z0-9_]+(?:\.[A-Z0-9]+)*", question):
         up = tok.upper()
         if up not in upper_tokens:
             continue
@@ -703,7 +704,7 @@ def _plan_wikidata_concept(question: str) -> tuple[dict, dict]:
     low = question.lower()
     matched = [(c, h) for h, c in _WIKIDATA_HINTS.items() if h in low]
     if matched:
-        matched.sort(key=lambda p: -p[1])
+        matched.sort(key=lambda p: -len(p[1]))
         best = matched[0][0]
         others = [c for c, _ in matched[1:] if c != best]
         if not others:
@@ -808,8 +809,8 @@ _EIA_SERIES: dict[str, list[Candidate]] = {
     "wti": [Candidate("PET.RWTC.M", "WTI spot price FOB, monthly", 0.9)],
     "brent": [Candidate("PET.RBRTE.M", "Brent spot price FOB, monthly", 0.9)],
     "crude oil prices": [
-        Candidate("PET.RWTC.M", "WTI spot price FOB, monthly", 0.9),
-        Candidate("PET.RBRTE.M", "Brent spot price FOB, monthly", 0.85),
+        Candidate("PET.RWTC.M", "WTI spot price FOB, monthly", 0.95),
+        Candidate("PET.RBRTE.M", "Brent spot price FOB, monthly", 0.8),
     ],
     "gasoline prices": [
         Candidate("PET.EER_EPD2DXL0_PFE_NUS_DPG.M",
@@ -960,8 +961,14 @@ def _plan_uspto_odp(question: str) -> PlanResult:
     if not core:
         return PlanResult(False, reason="no searchable core")
     assignee = None
-    m = re.search(r"(?:patents?|applications?)\s+(?:assigned\s+)?(?:to|by|of)"
-                  r"\s+([A-Z][A-Za-z0-9&.\- ]{2,40})", question)
+    m = re.search(r"(?:patents?|applications?)\s+(?:assigned\s+)?"
+                  r"(?:to|by|of)\s+([A-Z][A-Za-z0-9&.\- ]{2,40})", question)
+    if m:
+        raw = m.group(1).strip()
+        assignee = re.split(
+            r"\s+(?:regarding|concerning|about|on|for|between|from)\s+",
+            raw)[0].strip()
+        assignee = re.sub(r"[?.!,]+$", "", assignee)
     if m:
         raw = m.group(1).strip()
         assignee = re.split(
@@ -1069,9 +1076,9 @@ _KEYWORD_PLANNERS = {
 #: other registered source now has a planner; the remaining entries below
 #: are the honest residue, each naming exactly what is missing.
 _HONEST_GAPS = {
-    "sec_fts": "SEC full-text search requires a declared contact and this "
-               "host is currently 403'd; query authoring deferred until "
-               "access is restored (deliberate, not forgotten).",
+    "sec_fulltext": "SEC full-text search requires a declared contact and "
+               "this host is currently 403'd; query authoring deferred "
+               "until access is restored (deliberate, not forgotten).",
 }
 
 
