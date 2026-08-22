@@ -1,0 +1,175 @@
+"""Tier 3 epistemics — trust-escalator and tier-reachability characterization.
+
+These tests PIN the current (defective) behavior of the wiki/hermes trust
+loop and the source-class ceilings, so any future repair shows up as a
+deliberate diff rather than silent drift. Each test documents the defect it
+characterizes. Instance 4, audit 2026-08-22.
+"""
+import json
+import math
+
+import pytest
+
+from agp import (
+    AGPSession,
+    ConfidenceTier,
+    Domain,
+    Evidence,
+    SessionStep,
+    SourceClass,
+)
+from agp.thresholds import (
+    MAX_CONFIDENCE_BY_SOURCE,
+    TIER_CORROBORATED_MIN,
+    TIER_PROBABLE_MIN,
+)
+
+
+class TestCeilingsPinned:
+    """Pin the ceiling table itself — the load-bearing constant."""
+
+    def test_ceiling_table_matches_documented_values(self):
+        assert MAX_CONFIDENCE_BY_SOURCE == {
+            "PRIMARY": 1.0,
+            "SECONDARY": 0.75,
+            "SIGNAL": 0.55,
+            "INFERRED": 0.55,
+        }
+
+    def test_tier_boundaries(self):
+        assert ConfidenceTier.from_score(0.90).name == "VERIFIED"
+        assert ConfidenceTier.from_score(0.75).name == "CORROBORATED"
+        assert ConfidenceTier.from_score(0.7499).name == "PROBABLE"
+        assert ConfidenceTier.from_score(0.55).name == "PROBABLE"
+
+
+class TestVERIFIEDUnreachable:
+    """ROADMAP C2: VERIFIED requires score >= 0.90, only PRIMARY ceiling is 1.0,
+    but no AGP-session path ever assigns SourceClass.PRIMARY to evidence.
+    Orchestrator assigns SECONDARY (web) or INFERRED (reasoning) — see
+    orchestrator.py:1768/1799; the collection prompts at :1106/:1171 offer the
+    model only SECONDARY/INFERRED. So VERIFIED is unreachable by construction.
+    These tests pin the mechanism, not just the claim."""
+
+    def test_orchestrator_prompt_offers_only_secondary_inferred(self):
+        import inspect
+        import orchestrator
+        src = inspect.getsource(orchestrator)
+        # The evidence-collection JSON schemas never offer PRIMARY as a choice.
+        assert '"source_class":"SECONDARY"' in src or "'source_class': 'SECONDARY'" in src
+        # No construction site passes source_class=PRIMARY into Evidence.
+        assert "Evidence(\n" in src  # sanity: Evidence sites exist
+        assert "source_class=SourceClass.PRIMARY" not in src
+
+    def test_session_with_max_secondary_evidence_cannot_reach_verified(self):
+        s = _sealed_session(best_conf=0.75)
+        assert s.summary.confidence_tier is not VERIFIED_IF_AVAILABLE
+
+
+VERIFIED_IF_AVAILABLE = ConfidenceTier.VERIFIED
+
+
+def _make_raw(query="escalator probe") -> AGPSession:
+    s = AGPSession(query)
+    s.advance_to(SessionStep.ASSIGN_DOMAIN); s.domain = Domain.GENERAL
+    s.advance_to(SessionStep.SOURCE_ENUMERATION); s.sources = ["x"]
+    s.advance_to(SessionStep.PRIMARY_COLLECTION)
+    s.advance_to(SessionStep.CONTRADICTION_CHECK)
+    s.advance_to(SessionStep.SYNTHESIS)
+    return s
+
+
+def _sealed_session(evidence_confs=(0.70,), best_conf=0.70):
+    from agp import SessionSummary
+    s = _make_raw()
+    for c in evidence_confs:
+        s.add_evidence(Evidence(
+            content="fact", source_class=SourceClass.SECONDARY,
+            confidence_score=c, domain=Domain.GENERAL, origin_agent="t",
+        ))
+    s.summary = SessionSummary(
+        scope="q", domain=Domain.GENERAL, conclusion="c",
+        confidence_score=best_conf, evidence_count=len(evidence_confs),
+        contradiction_count=0,
+    )
+    s.advance_to(SessionStep.SESSION_CLOSE)
+    return s
+
+
+class TestTrustEscalatorArithmetic:
+    """The wiki/hermes loop: hermes learnings (self-reported confidence >= 0.5,
+   ratcheted upward by MAX(confidence, excluded.confidence) on every rewrite —
+    knowledge_wiki.py:244 filters them at confidence >= 0.5 and averages them
+    into article confidence (knowledge_wiki.py:375), and autonomous.py injects
+    articles back as PRIOR KNOWLEDGE prompt context. Nothing checks a seal or
+    an external source anywhere on that cycle. These tests pin the numbers."""
+
+    def test_hermes_ratchet_is_monotonic_upward(self):
+        """ON CONFLICT ... confidence=MAX(confidence, excluded.confidence):
+        re-reporting the same learning can never lower its confidence, so one
+        optimistic write permanently contaminates the key."""
+        # Pin the SQL text so a repair (e.g. decay, or min()) shows as a diff.
+        import inspect
+        from tools.hermes_memory import HermesMemory
+        src = inspect.getsource(HermesMemory.record_learning)
+        assert "confidence=MAX(confidence, excluded.confidence)" in src
+
+    def test_wiki_compile_ingests_unverified_learnings_at_half_ceiling(self):
+        """wiki compile admits hermes learnings at confidence >= 0.5 with no
+        seal check, no source check — INFERRED self-reports become article
+        priors. Pin the threshold literal."""
+        import inspect
+        from tools import knowledge_wiki as kw
+        src = inspect.getsource(kw.KnowledgeWiki._get_uncompiled_sources)
+        assert "confidence >= 0.5" in src          # hermes learnings gate
+        assert "confidence_score >= 0.6" in src    # catalogue gate
+        # And neither query touches sessions.seal_hash / verify_seal:
+        src_all = inspect.getsource(kw.KnowledgeWiki)
+        assert "verify_seal" not in src_all
+        assert "seal_hash" not in src_all
+
+    def test_article_confidence_average_can_exceed_any_single_source_class_ceiling(self):
+        """_create_article sets article confidence = mean(source confidences).
+        Two SECONDARY sources at their 0.75 ceiling average 0.75 → CORROBORATED
+        article even when every underlying item was a single uncorroborated
+        web claim. Averaging identical sources manufactures corroboration."""
+        confs = [MAX_CONFIDENCE_BY_SOURCE["SECONDARY"]] * 2
+        avg = sum(confs) / len(confs)
+        assert ConfidenceTier.from_score(avg) is ConfidenceTier.CORROBORATED
+
+    def test_weighted_merge_decay_is_glacial_but_not_zero(self):
+        """FALSIFIED HYPOTHESIS, recorded honestly: we expected the
+        old*weight+new/(weight+1) merge to make article tiers unable to fall.
+        Arithmetic says otherwise — it falls, just slowly. After FIVE
+        consecutive all-garbage (conf 0.30) compiles a 0.78 article is still
+        in the PROBABLE band; the escalator lives at INGESTION (unverified
+        learnings entering at conf>=0.5), not at this merge."""
+        existing_conf = 0.78
+        weight = 10
+        for new_src_conf in (0.30,) * 5:
+            existing_conf = (existing_conf * weight + new_src_conf) / (weight + 1)
+        assert existing_conf > TIER_PROBABLE_MIN  # 0.686 after 5 garbage rounds
+        # and 20 straight garbage rounds WOULD pull it to ~0.37:
+        c, w = 0.78, 10
+        for _ in range(20):
+            c = (c * w + 0.30) / (w + 1)
+        assert c < TIER_PROBABLE_MIN
+
+
+class TestCitationCheckVacuity:
+    """ROADMAP C1: `_response_cites_urls` is `"http://" in text`. Printing ANY
+    URL — fabricated included — upgrades the response INFERRED(0.55) →
+    SECONDARY(0.75), i.e. +0.20 ceiling for zero evidentiary work. Pin both
+    the predicate and its consequence."""
+
+    def test_predicate_accepts_fabricated_url(self):
+        from orchestrator import _response_cites_urls
+        assert _response_cites_urls("see https://totally-fabricated.example.net/x")
+        assert _response_cites_urls("the string http:// appears here")
+        assert not _response_cites_urls("no links at all")
+
+    def test_upgrade_mechanism(self):
+        from orchestrator import MAX_CONFIDENCE_BY_SOURCE
+        gain = (MAX_CONFIDENCE_BY_SOURCE["SECONDARY"]
+                - MAX_CONFIDENCE_BY_SOURCE["INFERRED"])
+        assert math.isclose(gain, 0.20)

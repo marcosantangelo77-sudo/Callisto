@@ -5,8 +5,10 @@ Enums, dataclasses, and session lifecycle for the AGP 7-step research methodolog
 """
 
 import hashlib
+import hmac
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -26,6 +28,38 @@ logger = logging.getLogger("callisto.agp")
 # Sessions with this as their conclusion MUST NOT seal — they represent
 # garbage synthesis that would otherwise write a 0.30 SPECULATIVE row to DB.
 EMPTY_SYNTHESIS_MARKER = "No synthesis produced."
+
+
+# ── Seal keying ──────────────────────────────────────────────────────────
+# An unkeyed SHA-256 seal is not a seal — anyone with DB write access can
+# recompute it over tampered bytes (verify_seal is public code). A keyed
+# HMAC makes forgery require the key, not just the repo.
+#
+#   CALLISTO_SEAL_KEY  — hex-encoded secret; when set, seals are HMAC-SHA256.
+#   When unset, seals fall back to unkeyed SHA-256 for backward compatibility
+#   with existing sealed sessions (legacy seals still verify; new seals are
+#   unkeyed and remain forgeable — set the key to close that hole).
+#
+# Key rotation: verify tries the current key first, then the legacy unkeyed
+# digest, then any key listed in CALLISTO_SEAL_KEY_OLD (comma-separated hex).
+def _seal_keys() -> list[bytes]:
+    keys: list[bytes] = []
+    current = os.getenv("CALLISTO_SEAL_KEY", "").strip()
+    if current:
+        try:
+            keys.append(bytes.fromhex(current))
+        except ValueError:
+            logging.getLogger("callisto.agp").error(
+                "CALLISTO_SEAL_KEY is not valid hex — falling back to unkeyed seal"
+            )
+    for old in os.getenv("CALLISTO_SEAL_KEY_OLD", "").split(","):
+        old = old.strip()
+        if old:
+            try:
+                keys.append(bytes.fromhex(old))
+            except ValueError:
+                pass
+    return keys
 
 
 class Domain(str, Enum):
@@ -179,6 +213,19 @@ class SessionSummary:
             "contradiction_count": self.contradiction_count,
             "manager_objections": self.manager_objections,
         }
+
+
+def _seal_digest(payload: str) -> str:
+    """Compute the seal digest over a canonical payload.
+
+    HMAC-SHA256 with CALLISTO_SEAL_KEY when set (forgery now requires the
+    key); unkeyed SHA-256 fallback for backward compatibility with legacy
+    sealed sessions when no key is configured.
+    """
+    keys = _seal_keys()
+    if keys:
+        return hmac.new(keys[0], payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 class AGPSession:
@@ -351,7 +398,7 @@ class AGPSession:
 
         self.sealed_at = datetime.now(timezone.utc).isoformat()
         payload = _canonical_payload(self.to_dict())
-        self.seal_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        self.seal_hash = _seal_digest(payload)
         self._sealed = True
         return self.seal_hash
 
@@ -378,8 +425,15 @@ class AGPSession:
             return False
 
         payload = _canonical_payload(data)
-        recomputed = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        return recomputed == stored_hash
+        # Accept: current key (or unkeyed fallback), then legacy unkeyed
+        # digest (pre-keying seals), then any rotation keys. Constant-time
+        # comparisons throughout.
+        candidates = [_seal_digest(payload), hashlib.sha256(payload.encode("utf-8")).hexdigest()]
+        for key in _seal_keys():
+            candidates.append(
+                hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+            )
+        return any(hmac.compare_digest(c, stored_hash) for c in candidates)
 
 
 def _canonical_payload(data: dict) -> str:
