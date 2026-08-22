@@ -188,4 +188,34 @@ per cycle with caps, regime-safe calendar gate.
 Falsifier: one submitted order from a 'live'-status hypothesis under current code.
 For: Instance 2 (money path owns arming decision)
 
+## [VERIFIED] autonomous.py:2303-2348 (pre-fix) — the deferred work-queue drain bypassed the threshold direction guard — FOUND AND CLOSED
+Blast radius: SILENT (would have silently re-opened hole #5)
+Evidence: `_process_drained_item` replays deferred `interpret_backtests` actions
+when Claude was unavailable earlier. It contained the OLD unguarded modify code
+(`UPDATE hypotheses SET edge_threshold = ?` with no clamp, no current-value read,
+no direction check) even after the guard landed in `_phase_interpret_backtests`.
+This is the structural lesson of the tier: a policy enforced at one call site is
+not enforcement; the same JSON contract is consumed in two places and each needs
+the guard. Fixed identically; static test now pins BOTH sites.
+Falsifier: any third consumer of the Claude "modify" JSON appearing without
+MIN_EDGE_THRESHOLD_FLOOR clamping + refusal logging.
+For: me
+
+## [VERIFIED] autonomous.py:7475-7663 — `_phase_system_improvement`: "self-improvement" is advisory-only and correctly so
+Blast radius: n/a — CLEAN FINDING with one caveat
+Evidence: suggestions go to a system_improvements table and NOTHING reads them for
+execution (repo-wide grep: only INSERTs and the phase's own SELECT of recent
+suggestions). status/implemented_at columns exist but no code path ever sets or
+queries them — the table is a suggestion box, not an actuator (Q5: the
+"implemented" lifecycle is unreachable). This is the RIGHT safety posture for an
+automated self-improvement claim; it just isn't labeled honestly ("This is how the
+system learns to improve itself over time" overstates a log).
+Caveat worth noting: its prompt explicitly asks Claude to diagnose "why 0% promotion"
+and invites "if the bottleneck is evaluation criteria (too strict), say so" — i.e.
+the loop systematically solicits gate-blaming diagnoses. Post-fix this can only
+produce advice, which is fine; but a future contributor wiring these suggestions
+to executors would re-arm the treadmill. The gate-policy refusers are the defense.
+Falsifier: any consumer that applies stored suggestions automatically.
+For: unowned (design note)
+
 ---
