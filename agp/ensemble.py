@@ -72,7 +72,7 @@ def normalize_model(name: str) -> str:
         n = n.rsplit("/", 1)[-1]
     # drop trailing build/date tags: gpt-4o-2024-08-06 → gpt-4o
     n = re.sub(r"-20\d{2}(-\d{2}){0,2}$", "", n)
-    return n
+    return n.strip()
 
 
 @dataclass
@@ -84,9 +84,12 @@ class ReviewProvenance:
 
     @property
     def independent(self) -> bool:
-        """True iff at least one reviewer is a DIFFERENT model from the author."""
+        """True iff at least one reviewer is a DIFFERENT model from the author.
+        An unknown reviewer ('' after normalization) is never evidence of
+        independence — ambiguity resolves conservative."""
         a = normalize_model(self.author_model)
-        return any(normalize_model(m) != a for m in self.reviewer_models)
+        return any(m not in ("", "(unattributed)")
+                   and normalize_model(m) != a for m in self.reviewer_models)
 
     @property
     def mode(self) -> str:
@@ -145,7 +148,9 @@ def capture_substantive_disagreement(
     reviewer objects along it while another independent reviewer stays silent
     on it. A lone critic objecting is not disagreement between models — it is
     one opinion, already handled by the penalty path. Self-review objections
-    never count as a dissenting second voice.
+    never count as a dissenting second voice, and unattributed objections
+    (model unknown — e.g. backend failure stubs) are excluded: an unknown
+    critic cannot be shown to be a second, independent one.
     """
     objs = [o for o in objections]
     reviewers = [m for m in reviewer_models
@@ -153,13 +158,11 @@ def capture_substantive_disagreement(
                  or normalize_model(m) != normalize_model(author_model)]
     records = []
     for kind in sorted({o.kind for o in objs}):
-        attackers = sorted({o.model or "(unattributed)" for o in objs
-                            if o.kind == kind})
-        attackers_indep = [m for m in attackers
-                           if not author_model
-                           or normalize_model(m) != normalize_model(author_model)]
+        attackers_indep = sorted({o.model for o in objs
+                                  if o.kind == kind and o.model
+                                  and normalize_model(o.model) != normalize_model(author_model)})
         silent = [m for m in reviewers
-                  if m not in attackers_indep and m != "(unattributed)"]
+                  if m not in attackers_indep]
         if attackers_indep and silent:
             detail = next(o.text for o in objs
                           if o.kind == kind and (o.model or "") in attackers_indep)
@@ -275,15 +278,20 @@ class AdversaryPanel:
                          f"conclusion unattacked by one critic, refusing by default",
                     kind="false_positive", severity="BLOCKING", model=""))
                 continue
+            # Adversary.attack fails closed internally: a dead backend surfaces
+            # as its own BLOCKING objection rather than an exception. Count it.
             for ob in r:
+                if ob.text.startswith("adversary backend failed"):
+                    failures += 1
                 if claim_domain:
                     ob.claim_domain = claim_domain
                 pooled.append(ob)
 
         reviewer_models = []
         for a in self.adversaries:
-            name = getattr(getattr(a, "router", None), "last_model", "") \
-                   or getattr(a, "declared_model", "")
+            name = getattr(a, "last_model", "") \
+                or getattr(getattr(a, "router", None), "last_model", "") \
+                or getattr(a, "declared_model", "")
             reviewer_models.append(name or "(unattributed)")
 
         prov = ReviewProvenance(author_model=author_model,

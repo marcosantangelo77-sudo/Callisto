@@ -448,6 +448,7 @@ class Adversary:
                 self.task_class, messages, schema=VERDICT_JSON_SCHEMA)
             parsed = resp.get("parsed_json")
             model_name = resp.get("model", "")
+            self.last_model = model_name
             if parsed is None:
                 parsed = json.loads(resp.get("content") or "{}")
         except Exception as e:  # noqa: BLE001 — fail closed by design
