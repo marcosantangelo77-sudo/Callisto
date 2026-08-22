@@ -89,12 +89,12 @@ class TestRegistryScoping:
             execute=exec_fn,
         ))
         assert "arxiv_search" in reg.tool_names_for(Domain.TECHNICAL)
-        handled, result = asyncio.get_event_loop().run_until_complete(
+        handled, result = asyncio.run(
             reg.dispatch("arxiv_search", {"q": "perovskite"})
         )
         assert handled and result == {"ok": True} and called["arxiv_search"] == {"q": "perovskite"}
         # unknown names fall through to legacy dispatch
-        handled, _ = asyncio.get_event_loop().run_until_complete(
+        handled, _ = asyncio.run(
             reg.dispatch("nonexistent", {})
         )
         assert not handled
@@ -132,7 +132,7 @@ class TestSportsRegression:
     def test_sports_dispatch_delegates(self):
         """_sports_tool_dispatch still reaches the odds implementations."""
         import orchestrator as o
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             o._execute_sports_tool("devig_market", {"side_a_american": -110, "side_b_american": -110})
         )
         assert abs(sum(result["fair_probabilities"]) - 1.0) < 1e-6
@@ -140,7 +140,7 @@ class TestSportsRegression:
     def test_execute_tool_handles_unknown_via_fallback(self):
         import orchestrator as o
         orch = object.__new__(o.Orchestrator)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             orch._execute_tool("no_such_tool", {})
         )
         assert result is not None  # execute_function_call fallback shape
