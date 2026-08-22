@@ -50,7 +50,7 @@ class PipelineResearcher(Researcher):
                  descendant_resolutions: Optional[list] = None,
                  claim_date: Optional[date] = None):
         self.model = model
-        self.routes = dict(routes)
+        self.routes = dict(routes) if routes is not None else None
         self.adversary_router = adversary_router or _AdversaryRouterStub()
         self.store = store
         self.descendant_resolutions = list(descendant_resolutions or [])
