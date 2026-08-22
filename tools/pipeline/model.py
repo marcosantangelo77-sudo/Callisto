@@ -88,7 +88,8 @@ class RouterModel(PipelineModel):
     def name(self) -> str:  # type: ignore[override]
         return getattr(self.router, "name", "router")
 
-    async def complete(self, role: str, messages: list[dict]) -> dict:
+    async def complete(self, role: str, messages: list[dict],
+                       **_ignored) -> dict:
         task_class = self._rtc.get(role, [role])[0]
         return await self.router.complete(task_class, messages)
 
@@ -111,7 +112,8 @@ class ScriptedModel(PipelineModel):
         self.responses.setdefault(role, []).extend(responses)
         return self
 
-    async def complete(self, role: str, messages: list[dict]) -> dict:
+    async def complete(self, role: str, messages: list[dict],
+                       **_ignored) -> dict:
         prompt = "\n".join(m.get("content", "") for m in messages)
         self.calls.append((role, prompt[:200]))
         queue = self.responses.get(role)
