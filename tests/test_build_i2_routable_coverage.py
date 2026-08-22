@@ -123,8 +123,10 @@ def test_fdic_bank_name_becomes_a_field_filter_within_the_adapter_dsl():
     p = build_plan("fdic", "What are the assets of Silicon Valley Bank?")
     assert p.plannable
     q = p.queries[0]
-    assert q.method == "institutions"
-    assert q.kwargs["filters"] == "NAME:Silicon Valley Bank"
+    # live-smoke finding: filters=NAME:x is an EXACT match (0 hits for
+    # partials); search=NAME:"x" is the partial-friendly ES query string
+    assert q.method == "search_institutions"
+    assert q.kwargs["search"] == 'NAME:"Silicon Valley Bank"'
     assert q.kwargs["fields"]
 
 
@@ -286,7 +288,7 @@ def _adapter_for(name):
 
 @pytest.mark.parametrize("name,question,method", [
     ("worldbank", "Population of Brazil over time", "indicator"),
-    ("fdic", "Assets of JPMorgan Chase bank", "institutions"),
+    ("fdic", "Assets of JPMorgan Chase bank", "search_institutions"),
     ("wayback", "Snapshot of https://whitehouse.gov before 2020-01-01",
      "closest"),
 ])

@@ -2,7 +2,7 @@
 Tier 1.
 
 publicreporting.cftc.gov (Socrata SODA API) serves the weekly COT reports:
-/resource/6dca-aqww (Legacy Futures-Only) and /resource/jhn-pzuq
+/resource/6dca-aqww (Legacy Futures-Only) and /resource/72hh-3qpy
 (Disaggregated Futures-Only). No key; SODA allows anonymous ~few req/s —
 we self-limit to 1 req/s and cap $limit at 1000. SoQL-style params apply
 ($where, $select, $order, $limit).
@@ -44,7 +44,10 @@ SPEC = SourceSpec(
 )
 
 LEGACY_FUTURES_ONLY = "6dca-aqww"
-DISAGG_FUTURES_ONLY = "jhn-pzuq"
+# I2 live smoke: jhn-pzuq returns Socrata dataset.missing — the
+# disaggregated futures-only resource is 72hh-3qpy (per CFTC's own API
+# help listing, verified 2026-08-22).
+DISAGG_FUTURES_ONLY = "72hh-3qpy"
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 

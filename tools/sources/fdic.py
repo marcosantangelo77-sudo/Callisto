@@ -1,6 +1,7 @@
 """FDIC BankFind Suite API — bank financials and structure. Tier 1.
 
-banks.data.fdic.gov/api — financials (/financials), institutions,
+api.fdic.gov/banks (formerly banks.data.fdic.gov/api, which now 301s) —
+financials (/financials), institutions,
 summary, failures. No key; fair use, self-limit to 2 req/s. Responses:
 {data:[{data:{...}, tier1... }], totals, parameters}. Filters use the
 FDIC filter DSL as `filters=STALP:TX AND ASSET>10000` passed via the
@@ -22,7 +23,7 @@ from tools.sources.base import RestSource, SourceSpec
 
 SPEC = SourceSpec(
     name="fdic",
-    base_url="https://banks.data.fdic.gov/api",
+    base_url="https://api.fdic.gov/banks",
     description="FDIC BankFind: bank-level financials, structure, failures",
     answers=(
         "quarterly bank financials (assets, deposits, capital, income)",
@@ -40,7 +41,7 @@ SPEC = SourceSpec(
 )
 
 # characters allowed inside a filter value after an operator
-_VALUE_RE = re.compile(r"^[A-Za-z0-9 .,:><=\-+()']*$")
+_VALUE_RE = re.compile(r"^[A-Za-z0-9 .,:><=\-+()\"']*$")
 
 
 class FdicAdapter:
@@ -57,6 +58,22 @@ class FdicAdapter:
         params: dict[str, str] = {"limit": max(1, min(int(limit), 10000))}
         if filters:
             params["filters"] = self._check_filter(filters)
+        if fields:
+            params["field_names"] = ",".join(fields)
+        url = self.source.build_url("/institutions", params)
+        return self.source.get_json(url)[0]
+
+    def search_institutions(self, search: str,
+                            fields: tuple[str, ...] = (),
+                            limit: int = 20) -> dict:
+        """Full-text institution search (Elasticsearch query string).
+        search=NAME:"chase" matches partials — unlike filters=NAME:chase,
+        which is an exact match and silently returns zero for partial
+        names (found in I2 live smoke)."""
+        params: dict[str, str] = {
+            "search": self._check_filter(search),
+            "limit": max(1, min(int(limit), 10000)),
+        }
         if fields:
             params["field_names"] = ",".join(fields)
         url = self.source.build_url("/institutions", params)

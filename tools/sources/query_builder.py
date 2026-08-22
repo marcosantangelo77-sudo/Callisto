@@ -237,11 +237,17 @@ _TREASURY_DATASETS: dict[str, list[Candidate]] = {
         Candidate("v2/accounting/od/avg_interest_rates",
                   "Average interest rates", 0.7),
     ],
+    # I2 live smoke: v2/debt/mspd/mspd_table_1 is a 404; national-debt
+    # questions are served by Debt to the Penny (verified 2026-08-22).
     "national debt": [
-        Candidate("v2/debt/mspd/mspd_table_1", "Debt by instrument", 0.8),
+        Candidate("v2/accounting/od/debt_to_penny",
+                  "Debt to the Penny (total public debt outstanding)", 0.85),
     ],
     "debt": [
-        Candidate("v2/debt/mspd/mspd_table_1", "Debt by instrument", 0.75),
+        Candidate("v2/accounting/od/debt_to_penny",
+                  "Debt to the Penny (total public debt outstanding)", 0.8),
+        Candidate("v1/debt/mspd/mspd_table_1",
+                  "Monthly Statement of the Public Debt, table 1", 0.6),
     ],
 }
 
@@ -273,10 +279,11 @@ _SEC_CIKN: dict[str, list[Candidate]] = {
 
 _CIK_RE = re.compile(r"^[0-9]{10}$")
 
-#: characters allowed inside an FDIC filter value after an operator — must
-#: match fdic.py's own guard so authored filters cannot pass planning but
-#: fail at fetch time.
-_VALUE_OK = re.compile(r"^[A-Za-z0-9 .,:><=\-+()']*$")
+# characters allowed inside an FDIC filter/search value after an operator —
+# must match fdic.py's own guard so authored filters cannot pass planning
+# but fail at fetch time. Double quotes are allowed: the ES query-string
+# form search=NAME:"term" is the partial-friendly route (live-smoke finding).
+_VALUE_OK = re.compile(r"^[A-Za-z0-9 .,:><=\-+()\"']*$")
 
 
 def resolve_entity(entity_type: str, text: str) -> tuple[
@@ -879,20 +886,25 @@ def _plan_fdic(question: str) -> PlanResult:
             source="fdic", method="failures", kwargs={"limit": 50},
             rationale="failed-bank history requested directly")],
             reason="failed-bank history query")
-    # bank-name lookup via NAME filter when a proper-noun token exists
+    # bank-name lookup. LIVE-SMOKE FINDING: filters=NAME:x is an EXACT
+    # match on the FDIC side (NAME:Chase → 0 hits; the full legal name
+    # quoted → 1), while search=NAME:"term" is an Elasticsearch query
+    # string that matches partials (NAME:"chase" → 11 institutions incl.
+    # CERT 628 JPMorgan Chase N.A.). Author the search form.
     proper = [t for t in re.findall(r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)*\b",
                                     question)
               if t.lower() not in _FILLER and t.lower() not in {
                   "what", "which", "bank", "banks", "the"}]
     if proper:
         name = max(proper, key=len)
-        filters = f"NAME:{name}"
-        if not _VALUE_OK.fullmatch(filters):
-            return PlanResult(False, reason=f"unsafe FDIC filter {filters!r}")
+        search = f'NAME:"{name}"'
+        if not _VALUE_OK.fullmatch(search):
+            return PlanResult(False, reason=f"unsafe FDIC search {search!r}")
         return PlanResult(True, queries=[PlannedQuery(
-            source="fdic", method="institutions",
-            kwargs={"filters": filters, "fields": _FDIC_FIELDS, "limit": 20},
-            rationale=f"institution search on bank name {name!r}")],
+            source="fdic", method="search_institutions",
+            kwargs={"search": search, "fields": _FDIC_FIELDS, "limit": 20},
+            rationale=f"institution full-text search on bank name "
+                      f"{name!r} (filters=NAME would exact-match)")],
             resolved={"bank_name": name}, reason=f"institution match {name}")
     core = core_query(question)
     return PlanResult(False, reason=(
