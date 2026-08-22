@@ -76,7 +76,15 @@ def _env_int(name: str, default: int) -> int:
 #   CALLISTO_LIVE_REVIEW_WINDOW_DAYS — rolling window for LIVE demotion review
 MIN_DAYS_PAPER = _env_int("CALLISTO_MIN_DAYS_PAPER", 7)
 MIN_PAPER_TRADES = _env_int("CALLISTO_MIN_PAPER_TRADES", 10)
-MIN_CLV_RATE = _env_float("CALLISTO_MIN_CLV_RATE", 0.005)  # 0.5% floor; CLV measurement unit bug tracked separately
+# Positive-CLV RATE floor (fraction of resolved forward-tests whose canonical
+# devigged CLV closed positive, 0..1). Pre-B1 default 0.005 was a unit error:
+# it read like a probability magnitude against a trade-rate, binding only when
+# literally every trade closed negative. Raised to a meaningful rate floor
+# (this TIGHTENS the gate — permitted; automated actors may never lower one).
+MIN_CLV_RATE = _env_float("CALLISTO_MIN_CLV_RATE", 0.50)
+# Minimum canonical (clv_log.clv_prob_bp) samples before the gate trusts the
+# devigged statistic over the legacy raw-implied-delta fallback.
+MIN_CANONICAL_CLV_SAMPLE = _env_int("CALLISTO_MIN_CANONICAL_CLV_SAMPLE", 3)
 LIVE_REVIEW_WINDOW_DAYS = _env_int("CALLISTO_LIVE_REVIEW_WINDOW_DAYS", 14)
 
 # FWER (Šidák) correction window in days. 'inf' counts every hypothesis ever
@@ -1185,14 +1193,75 @@ class HypothesisManager:
         else:
             checks.append(f"PASS: p-value {p:.4f} <= {max_p:.2e} (adaptive+FWER, base={base_p}, n={n}, fwer_n={fwer_n})")
 
-        # CLV rate
-        clv_rate = report.get("clv", {}).get("positive_clv_rate", 0)
+        # ── CLV gate (B1 rebuild) — reads the CANONICAL devigged statistic ──
+        # Canonical source: clv_log.clv_prob_bp, basis points of devigged
+        # probability between placement and close (positive = better price),
+        # unit-consistent by construction (instance2 VERIFIED finding).
+        # Gate statistic: fraction of resolved forward-tests whose canonical
+        # CLV closed positive, compared against min_clv_rate (a RATE floor,
+        # 0..1). Falls back to the legacy raw-implied-delta rate only when
+        # fewer than MIN_CANONICAL_CLV_SAMPLE canonical rows exist.
+        # NULL/insufficient data is reported honestly as insufficient, not
+        # rendered as a 0% failure.
         min_clv = gate["min_clv_rate"]
-        if clv_rate < min_clv:
-            checks.append(f"FAIL: CLV rate {clv_rate:.1%} < {min_clv:.0%}")
-            ready = False
+        clv_rate: Optional[float] = None
+        if min_clv <= 0:
+            checks.append(
+                f"INFO: CLV gate disabled for this transition (min_clv_rate={min_clv})"
+            )
         else:
-            checks.append(f"PASS: CLV rate {clv_rate:.1%} >= {min_clv:.0%}")
+            canon_mean_bp: Optional[float] = None
+            canon_n = 0
+            try:
+                from tools.resolvers.betting import BettingOutcomeResolver
+
+                _resolver = BettingOutcomeResolver(self._db)
+                canon_mean_bp, canon_n = await _resolver.mean_clv_prob_bp(hypothesis_id)
+            except Exception as e:
+                logger.debug(f"canonical CLV lookup failed for {hypothesis_id}: {e}")
+
+            if canon_n >= MIN_CANONICAL_CLV_SAMPLE:
+                # Rate over the same canonical sample.
+                try:
+                    pos_cur = await self._db.execute(
+                        "SELECT COUNT(*) FROM paper_trades pt "
+                        "JOIN clv_log cl ON cl.bet_id = 'pt:' || pt.trade_id "
+                        "WHERE pt.hypothesis_id = ? "
+                        "  AND pt.actual_result IN ('won','lost','push') "
+                        "  AND cl.clv_prob_bp IS NOT NULL AND cl.clv_prob_bp > 0",
+                        (hypothesis_id,),
+                    )
+                    canon_pos = int((await pos_cur.fetchone())[0] or 0)
+                    clv_rate: Optional[float] = canon_pos / canon_n
+                    clv_src = (
+                        f"canonical clv_log.clv_prob_bp "
+                        f"(n={canon_n}, mean={canon_mean_bp:.1f}bp)"
+                    )
+                except Exception:
+                    clv_rate = None
+                    clv_src = "canonical lookup error"
+            else:
+                # Legacy fallback: raw implied-delta fraction from the report
+                # (same 0..1 trade-rate scale as the threshold).
+                clv_rate = report.get("clv", {}).get("positive_clv_rate")
+                clv_n = report.get("clv", {}).get("clv_sample_size", 0)
+                clv_src = f"legacy clv_implied delta (n={clv_n}; canonical n={canon_n} < {MIN_CANONICAL_CLV_SAMPLE})"
+
+            if clv_rate is None:
+                checks.append(
+                    f"FAIL: CLV insufficient data — no usable CLV sample ({clv_src}); "
+                    f"need >= {MIN_CANONICAL_CLV_SAMPLE} canonical samples"
+                )
+                ready = False
+            elif clv_rate < min_clv:
+                checks.append(
+                    f"FAIL: CLV positive-rate {clv_rate:.2%} < {min_clv:.2%} [{clv_src}]"
+                )
+                ready = False
+            else:
+                checks.append(
+                    f"PASS: CLV positive-rate {clv_rate:.2%} >= {min_clv:.2%} [{clv_src}]"
+                )
 
         # Sharpe (backtest only)
         if "min_sharpe" in gate:
