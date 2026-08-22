@@ -201,3 +201,99 @@ SELECT COUNT(*) FROM sessions WHERE seal_hash IS NULL;
 ```
 
 — Instance 4, branch audit/tier3-epistemics. Commits: eb6151b (HMAC seal + tests).
+
+---
+
+# IMPLEMENTATION PASS — 2026-08-22 (same session, post-audit)
+
+Built everything buildable without database access. Commits e4690ba, c4d77d4,
+10bd7a4. All new behavior is tested; pre-existing failures in the wider suite
+(test_adaptive_timeout, test_claude_findings, test_prop_scanner — missing deps
+fastapi/polars/joblib) are identical on a clean tree and unrelated.
+
+## LANDED
+
+**1+2. agp/provenance.py (e4690ba) — ProvenanceLedger.**
+Source class becomes a function of provenance: evidence whose exact content
+hash matches bytes returned by a fetch tool → PRIMARY; hash matches any real
+tool return or cites an actually-fetched URL → SECONDARY; otherwise INFERRED
+no matter what the model declared. Citations count ONLY against URLs in the
+ledger (`cites_verified_url`) — fabricated URLs and bare "http://" literals
+fail because nothing parses-and-matches a ledger entry. 14 tests
+(tests/test_tier3_epi_provenance.py) including the two headline properties:
+model assertion declared SECONDARY assigns INFERRED, and fetched primary
+bytes clamp to 1.0 ceiling (VERIFIED tier now reachable for real documents).
+`relabel_evidence()` rewrites a whole evidence list from provenance and
+returns the demotion count for logging.
+
+**3. Wiki ingestion hardened (10bd7a4).**
+`_get_uncompiled_sources` now routes sessions through `AGPSession.verify_seal`:
+a row with a seal that fails verification is REJECTED outright (tampered bytes
+can no longer become prompt-context prior); legacy rows with seal_hash NULL
+enter capped at the INFERRED ceiling so old content informs compilation but
+cannot manufacture CORROBORATED priors. Article confidence is MIN of source
+confidences (`_article_confidence`), not the mean — averaging identical
+uncorroborated sources can no longer mint corroboration. The update merge is
+clamped to min(existing, new-source-min): garbage demotes promptly instead of
+glacially, and no article ever exceeds its weakest input.
+tests/test_tier3_epi_wiki_ingestion.py (6 tests: valid seal ingested, broken
+seal rejected, legacy capped, min-rule arithmetic). The trust-escalator pins
+in test_tier3_epi_trust.py were updated from defect-pinning to repair-pinning,
+with the change documented in each docstring.
+NOT changed (deliberately): hermes `record_learning` MAX-ratchet stays. Its
+correct replacement (decay, per Q7) changes stored-data semantics and needs
+the DB + operator sign-off on migration of existing rows — PROPOSAL below.
+
+**4. Seal veto hook (c4d77d4).**
+`AGPSession.seal_veto`: an optional callable(session, summary) → reason
+string; truthy return REFUSES the seal (AGPSealRefused), reviewer exceptions
+FAIL CLOSED. This is the enforcement point the Sentinel design needed: a
+component that did not write the conclusion can now block it. 6 tests
+(tests/test_tier3_epi_veto.py).
+
+## PROPOSALS (require files outside my ownership — orchestrator.py, scripts/)
+
+**P1 — wire ProvenanceLedger into orchestrator._step_collect_evidence.**
+The executor already sees every tool result. Diff shape (~30 lines):
+```python
+# orchestrator.py, _step_collect_evidence / _run_searches_parallel
+from agp.provenance import ProvenanceLedger, relabel_evidence
+ledger = ProvenanceLedger()                       # per-session
+# in _single_search success path, after results come back:
+for r in result.get("results", []):
+    ledger.record_tool_result("web_search", f'{r.get("title","")}\n{r.get("description","")}',
+                              urls=[r["url"]])
+# before returning combined evidence:
+demoted = relabel_evidence(combined, ledger, MAX_CONFIDENCE_BY_SOURCE)
+logger.info(f"provenance relabel: {demoted} demoted")
+```
+Delete `_response_cites_urls` and its two call sites (:1762, :1794) —
+`ledger.cites_verified_url(conclusion_text)` replaces them; the non-JSON
+fallback at :1797 must assign INFERRED + clamped confidence, never the raw
+ceiling. PRIMARY becomes assignable when a fetch tool's body text matches
+evidence content verbatim.
+
+**P2 — feed the Sentinel to the veto hook.**
+scripts/sentinel.py's local model is the right reviewer. In run_session,
+before seal(): build a one-shot prompt (conclusion + first ~8 evidence items),
+ask the local model "does any evidence item support each claim? answer
+JSON {supported: bool}", and set `session.seal_veto = lambda s, summ: None if
+supported else "conclusion not grounded in collected evidence"`. Also fix
+scripts/sentinel.py:72 `"agp.py"` → `"agp/__init__.py"` (PROTECTED_FILES
+currently protects a nonexistent file). Cost per session: one local-model
+call; the veto hook itself adds none when unset.
+
+**P3 — hermes ratchet → decay (needs DB migration sign-off).**
+Replace `confidence=MAX(confidence, excluded.confidence)` with
+`confidence=excluded.confidence` plus a scheduled decay job
+(`UPDATE hermes_learnings SET confidence = confidence * 0.98 WHERE ...`), or
+keep MAX only for sources='audit'/'human'. Existing contaminated keys need a
+one-time reset decision — operator call, not mine.
+
+## Falsifiers for this pass
+- P1 landed but citation loophole alive: craft a response citing a URL never
+  fetched that still reaches 0.75 — should be impossible once
+  `cites_verified_url` gates the tier.
+- Wiki repair broken: insert a tampered sealed session row; wiki compile must
+  reject it (test_broken_seal_is_rejected pins exactly this).
+
