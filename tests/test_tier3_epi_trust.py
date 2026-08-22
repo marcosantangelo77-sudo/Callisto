@@ -115,27 +115,32 @@ class TestTrustEscalatorArithmetic:
         assert "confidence=MAX(confidence, excluded.confidence)" in src
 
     def test_wiki_compile_ingests_unverified_learnings_at_half_ceiling(self):
-        """wiki compile admits hermes learnings at confidence >= 0.5 with no
-        seal check, no source check — INFERRED self-reports become article
-        priors. Pin the threshold literal."""
+        """REPAIRED 2026-08-22 (instance4 implementation pass): wiki compile
+        now seal-gates session ingestion — a row whose seal_hash fails
+        verify_seal is REJECTED; legacy unsealed rows enter capped at the
+        INFERRED ceiling. See tests/test_tier3_epi_wiki_ingestion.py. This
+        pin is updated to assert the repair, not the defect."""
         import inspect
         from tools import knowledge_wiki as kw
         src = inspect.getsource(kw.KnowledgeWiki._get_uncompiled_sources)
-        assert "confidence >= 0.5" in src          # hermes learnings gate
-        assert "confidence_score >= 0.6" in src    # catalogue gate
-        # And neither query touches sessions.seal_hash / verify_seal:
-        src_all = inspect.getsource(kw.KnowledgeWiki)
-        assert "verify_seal" not in src_all
-        assert "seal_hash" not in src_all
+        assert "verify_seal" in src            # seal gate exists at ingestion
+        assert "INFERRED" in src               # legacy rows capped as INFERRED
+        # Article confidence is min-of-sources, not mean (no manufactured
+        # corroboration).
+        src_create = inspect.getsource(kw.KnowledgeWiki._create_article)
+        assert "_article_confidence(sources)" in src_create
 
-    def test_article_confidence_average_can_exceed_any_single_source_class_ceiling(self):
-        """_create_article sets article confidence = mean(source confidences).
-        Two SECONDARY sources at their 0.75 ceiling average 0.75 → CORROBORATED
-        article even when every underlying item was a single uncorroborated
-        web claim. Averaging identical sources manufactures corroboration."""
-        confs = [MAX_CONFIDENCE_BY_SOURCE["SECONDARY"]] * 2
-        avg = sum(confs) / len(confs)
+    def test_article_confidence_min_of_sources_not_mean(self):
+        """REPAIRED: _create_article uses min-of-sources. Two identical 0.75
+        SECONDARY items no longer manufacture CORROBORATION beyond what one
+        item carries — and a weak source caps the whole article."""
+        from tools.knowledge_wiki import _article_confidence
+        assert _article_confidence([{"confidence": 0.75}, {"confidence": 0.75}]) == 0.75
+        mixed = [0.75, 0.75]
+        avg = sum(mixed) / len(mixed)          # old behavior for comparison
         assert ConfidenceTier.from_score(avg) is ConfidenceTier.CORROBORATED
+        # with min rule + differing sources, article cannot exceed weakest:
+        assert _article_confidence([{"confidence": 0.75}, {"confidence": 0.50}]) == 0.50
 
     def test_weighted_merge_decay_is_glacial_but_not_zero(self):
         """FALSIFIED HYPOTHESIS, recorded honestly: we expected the
