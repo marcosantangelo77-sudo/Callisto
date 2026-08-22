@@ -40,12 +40,8 @@ class FederalRegisterAdapter:
     def __init__(self, source: RestSource):
         self.source = source
 
-    # NOTE: the FR API rejects comma-joined values in one fields[] param
-    # (verified live: 'title,type' -> 400 "field not valid"); each field
-    # must be its own repeated fields[] entry.
-    FIELDS = ("title", "type", "abstract", "action", "publication_date",
-              "effective_on", "docket_ids", "citation", "document_number",
-              "html_url", "agencies")
+    FIELDS = ("title,type,abstract,action,published_at,effective_on,"
+              "docket_ids,citation,document_number,html_url,agencies")
 
     def search(self, conditions: str = "", query_term: str = "",
                order: str = "newest", limit: int = 20,
@@ -54,23 +50,15 @@ class FederalRegisterAdapter:
         params: dict = {
             "per_page": min(int(limit), 1000),
             "order": order,
+            "fields[]": self.FIELDS,
         }
-        for f in self.FIELDS:
-            params.setdefault("fields[]", [])
-            if isinstance(params["fields[]"], list):
-                params["fields[]"].append(f)
         if conditions:
             params["conditions[term]"] = conditions
         if query_term:
-            params["conditions[term]"] = query_term
+            params["conditions"] = query_term
         params.update(extra_params or {})
         url = self.source.build_url("/documents.json", params)
-        data = self.source.get_json(url)[0]
-        # The FR API returns `results` when fields[] is requested and
-        # `documents` otherwise — normalise to `documents`.
-        if "documents" not in data and isinstance(data.get("results"), list):
-            data["documents"] = data.pop("results")
-        return data
+        return self.source.get_json(url)[0]
 
     def document(self, document_number: str) -> dict:
         url = self.source.build_url(

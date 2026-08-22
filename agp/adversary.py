@@ -154,6 +154,7 @@ class AdversaryObjection:
     severity: str = "MINOR"             # BLOCKING | MAJOR | MINOR
     created_at: str = field(default_factory=_now_iso)
     model: str = ""                     # which endpoint produced it (router-reported)
+    claim_domain: str = ""              # claim class (Domain name) — per-model×domain calibration
     # Lifecycle (mutated only through TrackRecord/DissentLog methods):
     status: str = "RAISED"              # RAISED → SUSTAINED | OVERRULED
     overrule_reasoning: str = ""        # why the pipeline sealed anyway
@@ -317,6 +318,38 @@ class AdversaryLedger:
             ),
         }
 
+    def calibration_by_model(self, domain: Optional[str] = None) -> dict:
+        """Per-model critic scores — the record empirical routing consumes
+        (NEXT.md dissent logging; W4 multi-model). Keyed by the ``model`` that
+        produced each objection, optionally narrowed to one claim class, so
+        'harsh on financial claims, soft on scientific ones' becomes measurable.
+
+        Returns {model: score_record}; models with no scored objections report
+        n_scored=0 rather than an implied 100% or 0%. The empty-string model
+        (backend failure / unattributed) is grouped under "(unattributed)".
+        """
+        out: dict[str, list] = {}
+        for o in self.all_resolved():
+            if domain is not None and o.claim_domain != domain:
+                continue
+            key = o.model or "(unattributed)"
+            out.setdefault(key, []).append(o)
+        scores: dict[str, dict] = {}
+        for model, obs in sorted(out.items()):
+            scored = [o for o in obs if o.outcome in ("RIGHT", "WRONG")]
+            right = sum(1 for o in scored if o.outcome == "RIGHT")
+            scores[model] = {
+                "n_scored": len(scored),
+                "n_right": right,
+                "precision_of_attack": round(right / len(scored), 3) if scored else None,
+                "verdict": (
+                    "insufficient_data" if not scored
+                    else "well_calibrated" if right / len(scored) >= 0.35
+                    else "too_harsh"
+                ),
+            }
+        return scores
+
 
 # ═════════════════════════════════════════════════════════════════════════
 # The Adversary itself
@@ -415,6 +448,7 @@ class Adversary:
                 self.task_class, messages, schema=VERDICT_JSON_SCHEMA)
             parsed = resp.get("parsed_json")
             model_name = resp.get("model", "")
+            self.last_model = model_name
             if parsed is None:
                 parsed = json.loads(resp.get("content") or "{}")
         except Exception as e:  # noqa: BLE001 — fail closed by design

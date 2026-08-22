@@ -205,8 +205,12 @@ routing:
             "screening", [{"role": "user", "content": "x"}], system_context="s"
         ))
         # Result keys pinned: callers may depend on these.
+        # (W2 added "routing_basis" — which basis the routing decision used:
+        # "configured" until measured scores exist. Callers may depend on it
+        # being present; it never replaces the original keys.)
         assert set(result) == {"content", "parsed_json", "model", "tier",
-                               "task_class"}
+                               "task_class", "routing_basis"}
+        assert result["routing_basis"] == "configured"
         assert result["content"] == "ok"
         assert result["parsed_json"] is None
         assert result["model"] == "test-27b"

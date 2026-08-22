@@ -1,0 +1,424 @@
+"""W3 — step-level checkpointing and resumability for the research pipeline.
+
+Stolen deliberately from LangGraph: persist enough state after each pipeline
+stage (decompose, per-leaf select/fetch/compute/answer, adversary, seal) that
+a crashed run resumes from the last good step instead of throwing away the
+decomposition, every fetch, and every synthesis that already succeeded.
+
+Design contract (so engine.py can adopt it with a minimal diff — see
+findings/instance_w3.md):
+
+  1. CONTENT-ADDRESSED STEPS. A step key is
+         sha256(run_key | stage | input_hash)
+     where run_key binds the root question/domain/date and input_hash binds
+     everything the stage reads. An unchanged step is a cache hit and is NOT
+     re-executed — no duplicate fetches, ledger entries, or artifacts.
+
+  2. RESUME SEMANTICS THAT DO NOT LIE. Every checkpoint stores the UTC time
+     its payload was produced. A cache hit carries the ORIGINAL produced_at
+     forward — evidence fetched an hour ago is labeled with that hour, never
+     with the resume time. A RunTrace reports which steps were resumed and
+     the oldest evidence timestamp, so the caller decides what staleness
+     means.
+
+  3. IDEMPOTENCE. Because a completed step short-circuits before execution,
+     re-running cannot duplicate evidence or ledger entries. The one place a
+     resumed run MUST touch the ledger again is replaying prior fetch bytes
+     into a NEW ProvenanceLedger instance (the old process is gone);
+     replay_ledger() does that exactly once per distinct content hash.
+
+  4. SEALING ACROSS THE RESUME BOUNDARY. A seal covers a conclusion and its
+     evidence, wherever each was produced. replay_ledger() restores the
+     provenance facts (content hash -> primary bytes, urls) so
+     ProvenanceLedger.assign_source_class keeps working for checkpointed
+     evidence. Integrity is checked, not assumed: if a checkpointed fetch's
+     body no longer matches its recorded hash, provenance_is_intact()
+     reports False and seal_guard() says REFUSE. Resumption must never become
+     a way to launder evidence whose provenance was lost — when we cannot
+     guarantee provenance, we refuse to seal rather than seal something
+     unverifiable.
+
+  5. GARBAGE COLLECTION. gc(now, max_age_days) deletes stale checkpoints,
+     but NEVER one whose claim_ids are still open. Openness is delegated to
+     an injected callable so this module stays domain-general (any
+     falsifiable claim, not just betting).
+
+Storage is one JSON file per step under root/<run_key[:16]>/<key>.json —
+human-inspectable, crash-safe (write-temp-rename), and trivially prunable.
+No network, no database, no provider coupling.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import tempfile
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Optional
+
+logger = logging.getLogger("callisto.pipeline.checkpoint")
+
+UTC = timezone.utc
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+# ── Keys ───────────────────────────────────────────────────────────────────
+
+def run_key(root_query: str, domain: str = "", today: str = "") -> str:
+    """Identity of the RUN: same question, domain, and date -> same run."""
+    return _sha("\x1f".join([root_query.strip(), domain.strip(), today]))
+
+
+def step_key(rk: str, stage: str, input_hash: str) -> str:
+    """Identity of one STEP within a run. Content-addressed: change any
+    input and you get a different key (a miss), repeat it exactly and you
+    get the same key (a hit)."""
+    return _sha("\x1f".join([rk, stage.strip(), input_hash]))
+
+
+def hash_inputs(inputs: Optional[dict]) -> str:
+    """Canonical hash of a stage's inputs. Values must be JSON-serializable;
+    anything else should be pre-hashed by the caller (e.g. pass a body
+    digest, not the object)."""
+    return _sha(json.dumps(inputs or {}, sort_keys=True,
+                           separators=(",", ":"), default=str))
+
+
+# ── Checkpoint record ──────────────────────────────────────────────────────
+
+@dataclass
+class Checkpoint:
+    """One persisted stage output. payload is plain JSON-able data."""
+    key: str
+    run: str
+    stage: str
+    input_hash: str
+    payload: dict = field(default_factory=dict)
+    #: when the payload was PRODUCED (never updated on cache hits — this is
+    #: the field that keeps resumed runs honest about evidence age).
+    produced_at: str = ""
+    #: ids of claims this checkpoint contributes evidence to (GC protection).
+    claim_ids: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "key": self.key, "run": self.run, "stage": self.stage,
+            "input_hash": self.input_hash, "payload": self.payload,
+            "produced_at": self.produced_at, "claim_ids": self.claim_ids,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Checkpoint":
+        return cls(
+            key=d["key"], run=d["run"], stage=d["stage"],
+            input_hash=d["input_hash"], payload=d.get("payload") or {},
+            produced_at=d.get("produced_at", ""),
+            claim_ids=list(d.get("claim_ids") or []))
+
+    def age_seconds(self, now: Optional[datetime] = None) -> float:
+        if not self.produced_at:
+            return float("inf")
+        ref = (now or _now())
+        return (ref - datetime.fromisoformat(self.produced_at)).total_seconds()
+
+
+# ── Store ──────────────────────────────────────────────────────────────────
+
+class FileCheckpointer:
+    """JSON-file checkpoint store with GC that spares open claims."""
+
+    def __init__(self, root: Optional[Path] = None,
+                 is_claim_open: Optional[Callable[[str], bool]] = None):
+        self.root = Path(root) if root else Path(
+            os.environ.get("CALLISTO_STATE_DIR",
+                           str(Path.home() / ".local" / "state"))) \
+            / "callisto" / "checkpoints"
+        # is_claim_open(claim_id) -> bool. Default: nothing is ever open
+        # (pure-age GC). Production passes agp.claims' liveness check.
+        self.is_claim_open = is_claim_open or (lambda cid: False)
+
+    # -- paths --
+
+    def _dir_for(self, rk: str) -> Path:
+        d = self.root / rk[:16]
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _path(self, ckpt: Checkpoint) -> Path:
+        return self._dir_for(ckpt.run) / f"{ckpt.stage}.{ckpt.key[:24]}.json"
+
+    # -- core ops --
+
+    def save(self, rk: str, stage: str, input_hash: str,
+             payload: dict, *, claim_ids: Optional[list[str]] = None,
+             produced_at: Optional[datetime] = None) -> Checkpoint:
+        ck = Checkpoint(
+            key=step_key(rk, stage, input_hash), run=rk, stage=stage,
+            input_hash=input_hash, payload=payload,
+            produced_at=(produced_at or _now()).isoformat(),
+            claim_ids=list(claim_ids or []))
+        path = self._path(ck)
+        tmp = tempfile.NamedTemporaryFile(
+            "w", dir=path.parent, delete=False, suffix=".tmp")
+        try:
+            json.dump(ck.to_dict(), tmp, sort_keys=True)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp.close()
+            os.replace(tmp.name, path)  # atomic; crash leaves no half file
+        finally:
+            if os.path.exists(tmp.name):
+                os.unlink(tmp.name)
+        return ck
+
+    def load(self, rk: str, stage: str, input_hash: str) -> Optional[Checkpoint]:
+        key = step_key(rk, stage, input_hash)
+        return self.load_by_key(rk, key)
+
+    def load_by_key(self, rk: str, key: str) -> Optional[Checkpoint]:
+        d = self.root / rk[:16]
+        if not d.is_dir():
+            return None
+        for p in sorted(d.glob(f"*.{key[:24]}.json")):
+            try:
+                return Checkpoint.from_dict(json.loads(p.read_text()))
+            except (json.JSONDecodeError, KeyError, OSError) as e:
+                logger.warning("unreadable checkpoint %s: %s", p, e)
+                return None
+        return None
+
+    def list_all(self) -> list[Checkpoint]:
+        out: list[Checkpoint] = []
+        if not self.root.is_dir():
+            return out
+        for p in self.root.glob("*/*.json"):
+            try:
+                out.append(Checkpoint.from_dict(json.loads(p.read_text())))
+            except (json.JSONDecodeError, KeyError, OSError):
+                continue
+        return out
+
+    # -- garbage collection --
+
+    def gc(self, *, now: Optional[datetime] = None,
+           max_age_days: float = 30.0) -> list[str]:
+        """Delete checkpoints older than max_age_days — EXCEPT those whose
+        claim_ids contain an open claim, which survive at any age."""
+        cutoff = (now or _now()) - timedelta(days=max_age_days)
+        removed: list[str] = []
+        for ck in self.list_all():
+            if any(self.is_claim_open(c) for c in ck.claim_ids):
+                continue
+            produced = ck.produced_at or ""
+            if not produced:
+                age_old = True
+            else:
+                age_old = datetime.fromisoformat(produced) < cutoff
+            if age_old:
+                path = self._path(ck)
+                try:
+                    path.unlink(missing_ok=True)
+                    removed.append(ck.key)
+                except OSError as e:
+                    logger.warning("gc could not remove %s: %s", path, e)
+        # prune empty run dirs
+        if self.root.is_dir():
+            for d in self.root.iterdir():
+                if d.is_dir() and not any(d.iterdir()):
+                    d.rmdir()
+        return removed
+
+
+# ── Checked stage execution (the thing engine.py wraps each stage with) ────
+
+@dataclass
+class StageOutcome:
+    stage: str
+    resumed: bool                       # True = served from checkpoint
+    payload: dict
+    produced_at: str                    # ORIGINAL production time even on hits
+
+
+@dataclass
+class RunTrace:
+    """Honest record of which work was redone vs resumed."""
+    run: str
+    stages: list[StageOutcome] = field(default_factory=list)
+
+    @property
+    def resumed_stages(self) -> list[str]:
+        return [s.stage for s in self.stages if s.resumed]
+
+    @property
+    def fresh_stages(self) -> list[str]:
+        return [s.stage for s in self.stages if not s.resumed]
+
+    @property
+    def is_resume(self) -> bool:
+        return bool(self.resumed_stages)
+
+    def oldest_produced_at(self) -> Optional[str]:
+        times = [s.produced_at for s in self.stages if s.produced_at]
+        return min(times) if times else None
+
+
+async def run_stage(
+    cp: FileCheckpointer, trace: RunTrace, stage: str,
+    inputs: Optional[dict],
+    execute: Callable[[], Awaitable[dict]],
+    *,
+    claim_ids: Optional[list[str]] = None,
+    now: Optional[datetime] = None,
+) -> StageOutcome:
+    """Execute-or-reuse one pipeline stage.
+
+    Cache hit  -> the stored payload is returned WITH ITS ORIGINAL
+                  produced_at (stale evidence stays honestly stale) and the
+                  execute callable is never invoked, so no ledger entry,
+                  artifact, or fetch can be duplicated.
+    Cache miss -> execute() runs, its dict payload is persisted, and the
+                  checkpoint records THIS moment as produced_at.
+    """
+    ih = hash_inputs(inputs)
+    hit = cp.load(trace.run, stage, ih)
+    if hit is not None:
+        oc = StageOutcome(stage=stage, resumed=True, payload=hit.payload,
+                          produced_at=hit.produced_at)
+    else:
+        payload = await execute()
+        saved = cp.save(trace.run, stage, ih, payload,
+                        claim_ids=claim_ids, produced_at=now)
+        oc = StageOutcome(stage=stage, resumed=False, payload=payload,
+                          produced_at=saved.produced_at)
+    trace.stages.append(oc)
+    return oc
+
+
+# ── Provenance across the resume boundary ──────────────────────────────────
+
+def replay_ledger(ledger, checkpoints: list[Checkpoint]) -> dict:
+    """Replay checkpointed FETCH records into *ledger* so source-class
+    assignment works identically for resumed evidence.
+
+    Each fetch checkpoint's payload is expected to carry:
+      body           — the exact bytes/string returned by the source
+      url            — where they came from
+      content_sha256 — sha256 of body, recorded at fetch time
+
+    Deduplication is intrinsic to the ledger's hash keying AND enforced here:
+    a hash already replayed into this ledger instance is skipped, so calling
+    replay twice (or resuming twice) cannot double-record.
+
+    Returns {"replayed": n, "skipped_duplicates": n, "integrity_failures":
+    [keys]} — a non-empty integrity_failures means a stored body no longer
+    matches its recorded hash and the affected evidence must not be sealed.
+    """
+    # Dedup key lives ON THE LEDGER instance, so calling replay twice (or
+    # resuming twice into the same ledger) cannot double-record observations.
+    seen: set[str] = getattr(ledger, "_w3_replayed_hashes", None)
+    if seen is None:
+        seen = set()
+        setattr(ledger, "_w3_replayed_hashes", seen)
+    replayed = skipped = 0
+    failures: list[str] = []
+    for ck in checkpoints:
+        for rec in ck.payload.get("fetches", []):
+            body = rec.get("body", "")
+            digest = rec.get("content_sha256") or ""
+            if digest and _sha(body) != digest:
+                failures.append(ck.key)
+                continue
+            if digest in seen:
+                skipped += 1
+                continue
+            seen.add(digest)
+            ledger.record_tool_result(
+                rec.get("tool_name") or f"{rec.get('source_name', 'source')}_fetch",
+                body, primary=bool(rec.get("primary", True)),
+                urls=[rec["url"]] if rec.get("url") else None)
+            replayed += 1
+    return {"replayed": replayed, "skipped_duplicates": skipped,
+            "integrity_failures": failures}
+
+
+def provenance_is_intact(ledger, checkpoints: list[Checkpoint]) -> bool:
+    """True iff EVERY checkpointed fetch's bytes are provably in the ledger.
+
+    This is the anti-laundering check: resumption may only contribute
+    evidence whose provenance survived the boundary intact.
+    """
+    report = replay_ledger(ledger, checkpoints)
+    if report["integrity_failures"]:
+        return False
+    for ck in checkpoints:
+        for rec in ck.payload.get("fetches", []):
+            body = rec.get("body", "")
+            if not ledger.has_observation(body):
+                return False
+    return True
+
+
+def seal_guard(
+    trace: RunTrace, checkpoints: list[Checkpoint], ledger,
+) -> tuple[str, str]:
+    """Decide whether a possibly-resumed run may seal.
+
+    Returns ("SEAL", "") or ("REFUSE", reason). Fresh runs are unaffected.
+    A resumed run may only seal when every checkpointed piece of evidence
+    has verifiable provenance in (replayed) ledger. If we cannot guarantee
+    that, we refuse — sealing something unverifiable is worse than redoing
+    the work.
+    """
+    if not trace.is_resume:
+        # Even fresh runs must not seal over checkpointed evidence whose
+        # integrity fails — the guard is about the EVIDENCE, not the label.
+        if checkpoints and not provenance_is_intact(ledger, checkpoints):
+            return "REFUSE", (
+                "checkpointed evidence provenance could not be verified "
+                "against the ledger; refusing to seal")
+        return "SEAL", ""
+    if not provenance_is_intact(ledger, checkpoints):
+        failed = sum(len(ck.payload.get("fetches", [])) for ck in checkpoints)
+        return "REFUSE", (
+            "resumed run: checkpointed evidence provenance could not be "
+            "verified against the ledger; refusing to seal rather than "
+            "laundering evidence across the resume boundary "
+            f"(checkpointed fetch records: {failed})")
+    return "SEAL", ""
+
+
+# ── Crash simulation helper (tests + ops drills) ──────────────────────────
+
+class Crash(Exception):
+    """Simulated mid-run death at a named stage."""
+
+
+async def run_pipeline_checked(cp: FileCheckpointer, rk: str, stages: list,
+                               *, claim_ids_for=None) -> tuple[RunTrace, dict]:
+    """Generic checked runner mirroring the engine's stage sequence.
+
+    stages: list of (name, inputs_dict_or_callable, async_execute_fn). A
+    stage whose execute raises propagates — everything earlier is already
+    checkpointed, and re-calling this with the same stages resumes from the
+    failed one. Returns the trace plus a merged payload dict keyed by stage
+    name.
+    """
+    trace = RunTrace(run=rk)
+    merged: dict[str, dict] = {}
+    for name, inputs, fn in stages:
+        ins = inputs() if callable(inputs) else inputs
+        oc = await run_stage(
+            cp, trace, name, ins, fn,
+            claim_ids=(claim_ids_for or (lambda s: []))(name))
+        merged[name] = oc.payload
+    return trace, merged

@@ -312,6 +312,5 @@ class RestSource:
     def build_url(self, path: str = "", params: Optional[dict] = None) -> str:
         url = self.spec.base_url.rstrip("/") + "/" + path.lstrip("/")
         if params:
-            # list values become repeated query entries (fields[]=a&fields[]=b)
-            url += "?" + urllib.parse.urlencode(params, doseq=True)
+            url += "?" + urllib.parse.urlencode(params)
         return url
