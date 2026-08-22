@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -59,6 +60,10 @@ def main():
 
     for name, q in QUESTIONS:
         entry = reg.get(name)
+        # respect each source's self-limit between smoke calls — GDELT's
+        # 5s floor is real and its throttling is sticky for minutes after
+        if entry is not None and entry.spec.min_interval_s:
+            time.sleep(entry.spec.min_interval_s)
         if entry is None:
             print(f"[{name}] SKIPPED (not registered)")
             continue
