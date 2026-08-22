@@ -103,7 +103,8 @@ def test_bea_maps_trade_concept_to_dataset_pair():
     assert q.method == "get_data" and q.kwargs["dataset"] == "IntlTrade"
 
 
-def test_census_maps_housing_starts_to_timeseries_survey():
+def test_census_maps_housing_starts_to_timeseries_survey(monkeypatch):
+    monkeypatch.setenv("CALLISTO_CENSUS_API_KEY", "test-key")
     p = build_plan("census",
                    "Are housing starts falling since 2023-06?")
     assert p.plannable
@@ -163,7 +164,8 @@ def test_keyed_sources_without_keys_are_unplannable_with_instructions():
     os.environ.pop("CALLISTO_COURTLISTENER_TOKEN", None)
     for name, var in (("eia", "CALLISTO_EIA_API_KEY"),
                       ("uspto_odp", "CALLISTO_USPTO_ODP_KEY"),
-                      ("courtlistener", "CALLISTO_COURTLISTENER_TOKEN")):
+                      ("courtlistener", "CALLISTO_COURTLISTENER_TOKEN"),
+                      ("census", "CALLISTO_CENSUS_API_KEY")):
         p = build_plan(name, "Anything at all about something topical")
         assert p.plannable is False, name
         assert var in p.reason, f"{name} must name {var}"

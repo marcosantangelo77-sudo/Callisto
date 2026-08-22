@@ -803,13 +803,26 @@ def _plan_census(question: str) -> PlanResult:
     }
     matched = sorted(((k, v) for k, v in table.items() if k in low),
                      key=lambda p: -len(p[0]))
+    # live check 2026-08-22: Census now 302s to a "Missing Key" page even
+    # for light use — fail loudly at planning instead of mid-fetch.
+    import os
     if not matched:
+        if not os.environ.get("CALLISTO_CENSUS_API_KEY"):
+            return PlanResult(False, reason=(
+                "Census API requires a key even for light use (free at "
+                "api.census.gov/data/key_signup.html); set "
+                "CALLISTO_CENSUS_API_KEY before planning Census fetches."))
         core = core_query(question)
         return PlanResult(False, reason=(
             f"Census queries need year+dataset+GET variables from its "
             f"variable catalogue (no text search); no survey mapping "
             f"matched '{core}'. Browse api.census.gov/data.html and add "
             f"the mapping."))
+    if not os.environ.get("CALLISTO_CENSUS_API_KEY"):
+        return PlanResult(False, reason=(
+            "Census API requires a key even for light use (free at "
+            "api.census.gov/data/key_signup.html); set "
+            "CALLISTO_CENSUS_API_KEY before planning Census fetches."))
     get_vars, dataset, label = matched[0][1]
     start = end = ""
     years = re.findall(r"\b(19|20)\d{2}\b", question)
