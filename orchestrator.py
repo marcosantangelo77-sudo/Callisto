@@ -29,6 +29,7 @@ from agp import (
     SourceClass,
     ConfidenceTier,
 )
+from agp.provenance import ProvenanceLedger, relabel_evidence
 from agp.thresholds import (
     CONTRADICTION_PENALTY,
     DB_CONFIDENCE_FLOOR,
@@ -746,20 +747,6 @@ def _best_source_class(evidence: list, used_tools: bool) -> str:
     return best
 
 
-def _response_cites_urls(text: str) -> bool:
-    """Does the Claude Code response contain at least one URL citation?
-
-    Used to decide whether Claude's synthesis is grounded enough to be tiered
-    as SECONDARY (web-corroborated) vs INFERRED (pure reasoning). A response
-    that merely restates a conclusion without any source link is INFERRED —
-    the 0.75 CORROBORATED ceiling is not available to it.
-    """
-    if not text:
-        return False
-    lowered = text.lower()
-    return ("http://" in lowered) or ("https://" in lowered)
-
-
 def _dedup_search_results(results: list[dict]) -> list[dict]:
     """Deduplicate search results by URL, keeping the first occurrence."""
     seen_urls = set()
@@ -1273,6 +1260,18 @@ class Orchestrator:
         """
         used_tools = len(search_results) > 0
 
+        # Provenance ledger (findings/instance4.md P1): every real tool
+        # return is recorded here, by the code path that executed it.
+        # Source class is later assigned FROM this ledger — never from the
+        # model's self-declared label. A fabricated URL cannot enter it.
+        ledger = ProvenanceLedger()
+        for r in search_results:
+            ledger.record_tool_result(
+                "web_search",
+                f'{r.get("title", "")}\n{r.get("description", "")}',
+                urls=[r.get("url", "")] if r.get("url") else None,
+            )
+
         # ── Wiki retrieval (pre-LLM) ──
         wiki_evidence: list[Evidence] = []
         wiki_in_loop = os.getenv("CALLISTO_WIKI_IN_LOOP", "1") == "1"
@@ -1424,6 +1423,13 @@ class Orchestrator:
             used_tools = True
             for tc in response["tool_calls"]:
                 result = await self._execute_tool(tc["name"], tc["arguments"])
+                # Record the real tool return so its URLs/bytes carry
+                # provenance (the model cannot add to this ledger).
+                try:
+                    payload = result if isinstance(result, str) else json.dumps(result)
+                    ledger.record_tool_result(tc["name"], payload)
+                except (TypeError, ValueError):
+                    pass
                 messages.append({"role": "assistant", "content": response["content"] or ""})
                 messages.append({
                     "role": "tool" if self.architect.config.supports_native_tools else "user",
@@ -1457,6 +1463,16 @@ class Orchestrator:
                     logger.warning(f"Skipping malformed evidence: {e}")
         # Prepend wiki priors so their cites appear first in the trail.
         combined = wiki_evidence + evidence_list
+        # Provenance relabel: source class is assigned from the ledger, not
+        # the model's declaration. Declared SECONDARY without real tool
+        # provenance demotes to INFERRED (0.55 ceiling); real tool bytes can
+        # promote. Confidence re-clamps to the assigned class's ceiling.
+        demoted = relabel_evidence(combined, ledger, MAX_CONFIDENCE_BY_SOURCE)
+        if demoted:
+            logger.info(
+                f"Session {session.session_id}: provenance relabel — "
+                f"{demoted} evidence item(s) demoted"
+            )
         return combined, used_tools or bool(wiki_evidence)
 
     async def _run_searches_parallel(
@@ -1784,13 +1800,18 @@ class Orchestrator:
         # Parse Claude's response
         parsed = _parse_json_response(content) if content else None
 
+        # Citation grounding: a citation counts ONLY when it names a URL the
+        # session actually fetched (ledger), never a bare "http://" literal.
+        cited = self._provenance.cites_verified_url(content) or \
+            self._provenance.cites_verified_url(parsed.get("conclusion", "") if parsed else "")
+
         if parsed and isinstance(parsed, dict):
             # Claude Code is reasoning/synthesis, not primary documents.
             # Default tier: INFERRED (ceiling 0.55). Only upgrade to SECONDARY
-            # (ceiling 0.75) when the response actually cites URLs that ground
-            # the synthesis — a response without citations is pure reasoning.
+            # (ceiling 0.75) when the response cites URLs that the session
+            # actually fetched — a response without verified citations is
+            # pure reasoning, no matter how many URLs it prints.
             conclusion_text = parsed.get("conclusion", content[:500])
-            cited = _response_cites_urls(content) or _response_cites_urls(conclusion_text)
             tier = SourceClass.SECONDARY if cited else SourceClass.INFERRED
             source_name = (
                 f"Claude Code ({result['model']})"
@@ -1821,14 +1842,20 @@ class Orchestrator:
                 f"→ confidence={new_confidence}"
             )
         else:
-            # Couldn't parse JSON — use raw text, tier by citation presence
-            cited = _response_cites_urls(content)
+            # Couldn't parse JSON — use raw text, tier by VERIFIED citations.
+            # CRITICAL fix (instance4 C1): the old path granted the FULL
+            # ceiling (0.75) outright whenever "http://" appeared anywhere in
+            # an unparseable response. Now: unverified citations buy nothing —
+            # INFERRED tier, confidence clamped to the INFERRED ceiling.
+            cited = self._provenance.cites_verified_url(content)
             tier = SourceClass.SECONDARY if cited else SourceClass.INFERRED
-            ceiling = MAX_CONFIDENCE_BY_SOURCE[tier.value]
+            confidence = _clamp_confidence(
+                MAX_CONFIDENCE_BY_SOURCE[tier.value], tier.value
+            )
             claude_evidence = Evidence(
                 content=content[:500],
                 source_class=tier,
-                confidence_score=ceiling,
+                confidence_score=confidence,
                 domain=session.domain,
                 origin_agent="claude_code",
                 source_name=(
@@ -1838,11 +1865,11 @@ class Orchestrator:
             )
             session.add_evidence(claude_evidence)
             summary.conclusion = content[:1000]
-            summary.confidence_score = ceiling
+            summary.confidence_score = confidence
             summary.evidence_count = len(session.evidence)
             logger.info(
                 f"Claude Code enhancement used raw text ({tier.value}, "
-                f"cited={cited}, conf={ceiling})"
+                f"cited={cited}, conf={confidence})"
             )
 
         return summary, True

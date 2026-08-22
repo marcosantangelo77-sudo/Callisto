@@ -37,9 +37,10 @@ def build_sports_plugin(tool_schemas: list, execute) -> DomainPlugin:
         name="sports",
         domains=set(),          # sports is not an AGP Domain value — match on keywords
         keywords=re.compile(
-            r"\b(odds?|bet|betting|wager|parlay|spread|total|moneyline|h2h|"
+            r"\b(odds?|bet|betting|wager|parlay|spread|totals?|moneyline|h2h|"
             r"props?|bookmaker|bankroll|kelly|edge scan|clv|devig|"
-            r"nba|nfl|mlb|nhl|ncaa|wnba|pga|sport)\b",
+            r"nba|nfl|mlb|nhl|ncaa|wnba|pga|sport|super bowl|"
+            r"basketball|football|baseball|hockey|golf)\b",
             re.IGNORECASE,
         ),
         tool_schemas=tool_schemas,
