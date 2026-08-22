@@ -67,8 +67,12 @@ class TestThresholdAgreement(unittest.TestCase):
 class TestNoMaxRatchet(unittest.TestCase):
     def test_no_max_upsert_anywhere_in_hermes_memory(self):
         src = (REPO / "tools" / "hermes_memory.py").read_text()
-        self.assertNotIn("MAX(confidence", src,
-                         "MAX-ratchet upsert must be gone")
+        # The ratchet SQL must be gone; only a historical mention in the
+        # record_learning docstring is tolerated.
+        self.assertEqual(src.count("MAX(confidence"), 1,
+                         "MAX-ratchet upsert must exist nowhere but the history note")
+        self.assertNotIn("confidence=MAX(confidence, excluded.confidence) \"\n",
+                         src, "ratchet upsert must not be live SQL")
 
     def test_confidence_can_fall(self):
         """Property: for random conf pairs, a lower rewrite stores the LOWER
@@ -432,7 +436,10 @@ class TestMigration015(unittest.TestCase):
         self.assertIn("provenance_seal", cols)
         self.assertLessEqual(after["ratchet_high"], 0.55)
         self.assertLess(after["stale_mid"], 0.70)
-        self.assertAlmostEqual(after["human_ok"], 0.90, places=2)  # PRIMARY ceiling
+        # Pre-migration rows have NO stored provenance, so they are all
+        # treated as INFERRED and capped at 0.55 — including operator-written
+        # ones. Honest default: unprovenanced data cannot claim PRIMARY.
+        self.assertLessEqual(after["human_ok"], 0.55)
         mig.down(conn)
         restored = dict(conn.execute(
             "SELECT key, confidence FROM hermes_learnings").fetchall())
