@@ -1,0 +1,66 @@
+[
+  {
+    "id": "2063134",
+    "question": "Will Adanech Abiebie be the next Prime Minister of Ethiopia?",
+    "conditionId": "0x7d0aaf81bbd3fd73b6a1651cce08a452c0cbf9c0cbb4520ce0f981065b639d88",
+    "slug": "will-adanech-abiebie-be-the-next-prime-minister-of-ethiopia",
+    "resolutionSource": "",
+    "endDate": "2026-06-01T00:00:00Z",
+    "liquidity": "17039.7585",
+    "startDate": "2026-04-27T21:55:14.576Z",
+    "description": "General elections are scheduled to be held in Ethiopia on June 1, 2026.\n\nThis market will resolve to the next individual who officially assumes the office of Prime Minister of Ethiopia following the 2026 General elections.",
+    "outcomes": "[\"Yes\", \"No\"]",
+    "outcomePrices": "[\"0.0065\", \"0.9935\"]",
+    "volume": "83447581.45617703",
+    "active": true,
+    "closed": false,
+    "new": false,
+    "featured": false,
+    "archived": false,
+    "restricted": true,
+    "groupItemTitle": "Adanech Abiebie",
+    "enableOrderBook": true,
+    "orderPriceMinTickSize": 0.001,
+    "orderMinSize": 5,
+    "volumeNum": 83447581.45617703,
+    "liquidityNum": 17039.7585,
+    "endDateIso": "2026-06-01",
+    "startDateIso": "2026-04-27",
+    "hasReviewedDates": true,
+    "volume24hr": 1262.95,
+    "clobTokenIds": "[\"27146956652877944551877724690365745048289675287536243265951843487691050802191\", \"33216695217861742195941369663873573949679634432452142092545486849801915283392\"]",
+    "acceptingOrders": true,
+    "negRisk": true,
+    "negRiskMarketID": "0x55ab76d092f682bf5cbb7e14f13ee12f8410ce7cc1b7906f23b8fb56c11f6500",
+    "umaResolutionStatus": "",
+    "events": [
+      {
+        "id": "411239",
+        "ticker": "next-prime-minister-of-ethiopia",
+        "slug": "next-prime-minister-of-ethiopia",
+        "title": "Next Prime Minister of Ethiopia?",
+        "description": "General elections are scheduled to be held in Ethiopia on June 1, 2026."
+      }
+    ]
+  },
+  {
+    "id": "12345",
+    "question": "Will the Fed cut rates in September 2026?",
+    "conditionId": "0xabc",
+    "slug": "will-the-fed-cut-rates-in-september-2026",
+    "endDate": "2026-09-30T00:00:00Z",
+    "description": "This market will resolve to YES if the Federal Reserve announces a cut to the federal funds target range at its September 2026 meeting.",
+    "outcomes": "[\"Yes\", \"No\"]",
+    "outcomePrices": "[\"1\", \"0\"]",
+    "volumeNum": 500000.0,
+    "liquidityNum": 25000.0,
+    "active": false,
+    "closed": true,
+    "endDateIso": "2026-09-30",
+    "clobTokenIds": "[\"999888777666555444333222111000\", \"111222333444555666777888999000\"]",
+    "umaResolutionStatus": "resolved",
+    "events": [
+      {"id": "99", "ticker": "fed-rates-sep-2026", "slug": "fed-rates-september-2026", "title": "Fed cut in September?"}
+    ]
+  }
+]
