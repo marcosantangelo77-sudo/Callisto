@@ -95,3 +95,94 @@ Deferred to the dedicated section at end of file once backtest.py/ml_backtest.py
 characterization is in place — recorded here so the brief item is not lost.
 
 ---
+
+---
+
+# Continuation — Claude (Opus 5), 2026-08-22
+Instance 3 was cut off mid-brief by an OpenRouter daily rate limit. Picking up
+from its findings; all seven were re-verified against the code before building
+on them.
+
+## [VERIFIED] Re-verification of Instance 3's load-bearing claims — all three hold
+Blast radius: n/a (process)
+Evidence: read directly at hypothesis.py:87 (`os.getenv("CALLISTO_FWER_LOOKBACK_DAYS", "365")`),
+:1172 (`sidak = 1.0 - (1.0 - max_p) ** (1.0 / fwer_n)`), :1415 (`or (p > 0.15 and n >= 30)`),
+:1422-1429 (hit_rate<0.45 at n>=12). Every claim reproduced.
+Falsifier: those line numbers showing different code.
+
+## [VERIFIED] hypothesis.py:1176 — the audit log LABELS a 365-day window as "lifetime"
+Blast radius: SILENT (corrupts the audit trail this system relies on for trust)
+Evidence: `denom_tag = ... f"lifetime (lookback_days={FWER_LOOKBACK_DAYS})"` emits
+the literal string `lifetime (lookback_days=365.0)` — self-contradictory. Anyone
+reading gate logs to diagnose the zero-promotion problem is told the denominator is
+lifetime when it is a rolling year. This is how the ROADMAP's lifetime claim survived.
+Falsifier: a gate log line reading "lifetime" while FWER_LOOKBACK_DAYS is inf.
+For: gate rebuild
+
+## [VERIFIED] The killer rule is unreachable by configuration — 12 tunable constants, 1 hardcoded literal
+Blast radius: LOUD (explains why a prior fix attempt failed)
+Evidence: hypothesis.py:168-183 defines twelve AUTO_REJECT_* constants. The rule that
+actually kills true edges — `p > 0.15 and n >= 30` — is an inline literal at :1415.
+AUTO_REJECT_P was raised to 0.50 (":168, Reject only when signal data actively
+disproves thesis"), evidently an attempt to loosen the gate. It could not have worked:
+the literal is unaffected by every constant in that block. An operator loosening the
+gate by config sees no change and concludes the gate is not the problem.
+Falsifier: find a config path that alters the :1415 predicate.
+For: gate rebuild
+
+## [VERIFIED] The correction method is NOT the binding constraint — effect size is. My own FDR proposal fails.
+Blast radius: LOUD (redirects the entire gate-rebuild effort)
+Method: pure-stdlib power analysis, signals needed for a one-sided binomial test to
+clear each threshold at ~50% power against the -110 breakeven null (0.5238).
+
+      edge    win% |   p=0.05  BH q=.10  Sidak 25%  Sidak 5%
+    + 1pt   0.534 |    6,749    20,652     34,988    43,120
+    + 3pt   0.554 |      750     2,295      3,888     4,792
+    + 5pt   0.574 |      270       827      1,400     1,725
+    + 8pt   0.604 |      106       323        547       674
+    +12pt   0.644 |       47       144        243       300
+
+I hypothesised that replacing FWER (Šidák over cumulative N) with FDR
+(Benjamini-Hochberg over the evaluation batch) would restore reachability. It does
+not. BH cuts the requirement for a +3pt edge from 3,888 to 2,295 signals — a real 41%
+improvement, but still unreachable. Even an UNCORRECTED p=0.05 needs 750 resolved
+signals for a +3pt edge. A Monte-Carlo of the full batch (M=3192, 2% true edges,
+seed 20260822) promoted 0-1 hypotheses under BOTH methods at every n from 30 to 1000.
+
+The conclusion the data forces: **per-hypothesis significance testing of small edges
+is structurally mismatched to the data this system will ever have.** 3,192 hypotheses
+× 750 signals each = 2.4M resolved bets for uncorrected significance alone. Changing
+the correction rearranges deck chairs.
+Falsifier: a power calculation showing a realistic sports edge clearing any of these
+thresholds at signal counts this system actually accumulates (median resolved signals
+per hypothesis — a workstation query — would settle it immediately).
+For: gate rebuild
+
+## DESIGN ANSWER — what the correction should be scoped to (the deferred brief item)
+The question as posed ("per family, per window, per sport?") assumes the answer is a
+scoping choice. The power analysis says it is not. Three changes, in order of impact:
+
+1. **Pool, don't isolate.** Test hypothesis FAMILIES, not hypotheses. Fifty related
+   hypotheses (same sport × market type) at 60 signals each is 3,000 observations;
+   a hierarchical model estimates the family effect plus per-hypothesis deviations
+   and gets power at realistic n. Isolated testing throws away exactly the structure
+   that makes the problem tractable. This is where the multiple-comparison question
+   actually belongs — correct across FAMILIES (dozens), not hypotheses (thousands).
+
+2. **Invert the gate order.** Paper trading is free out-of-sample replication. The
+   current design puts the strictest statistical test BEFORE the cheap replication
+   step, which is backwards. backtesting→paper_trading should be a generous screen
+   (accept a high false-discovery rate; paper trading kills false positives at zero
+   cost); paper_trading→live should carry the strict test. Today a hypothesis must
+   pass 9e-05 to earn a free simulation.
+
+3. **Gate on CLV, not win rate.** Closing-line value has far lower variance than
+   realised outcomes — it measures whether you beat the market's final price rather
+   than whether a coin landed right. Positive CLV over 200 bets is stronger evidence
+   than 55% hit rate over 200 bets, at a fraction of the sample. This raises the
+   priority of the known CLV unit bug (ROADMAP §3.3) from "fix the live gate" to
+   "fix the statistic the whole rebuild should depend on."
+
+Note the interaction with the :1415 literal: none of this matters until that rule is
+removed. A true +3pt edge has ~10.8% joint survival past early attrition (Instance 3),
+so 89% of real edges die before any correction method is consulted.
