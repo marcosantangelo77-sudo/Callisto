@@ -48,8 +48,8 @@ def _cp(tmp_path):
     return FileCheckpointer(root=tmp_path / "ck")
 
 
-def _trace(rk="r"):
-    return RunTrace(run=rk)
+def _trace(rk=None):
+    return RunTrace(run=rk or _run())
 
 
 async def _ok(payload=None):
@@ -168,8 +168,8 @@ def test_cache_hit_carries_original_produced_at(tmp_path):
     old = datetime.now(UTC) - timedelta(hours=1)
 
     async def go():
-        saved = cp.save(_run(), "fetch", "h", {"body": "b"},
-                        produced_at=old)
+        saved = cp.save(_run(), "fetch", hash_inputs({"h": "h"}),
+                        {"body": "b"}, produced_at=old)
         tr = _trace()
         return saved, await run_stage(cp, tr, "fetch", {"h": "h"}, _ok)
 
@@ -186,7 +186,8 @@ def test_trace_reports_resume_and_oldest_evidence_time(tmp_path):
     hour_ago = datetime.now(UTC) - timedelta(hours=1)
 
     async def go():
-        cp.save(_run(), "fetch", "h1", {}, produced_at=hour_ago)
+        cp.save(_run(), "fetch", hash_inputs({"h": "h1"}), {},
+                produced_at=hour_ago)
         tr = _trace()
         await run_stage(cp, tr, "fetch", {"h": "h1"}, _ok)
         await run_stage(cp, tr, "seal", {"h": "h2"}, _ok)
@@ -211,9 +212,9 @@ def test_property_kill_and_resume_equals_clean_run(crash_after_n):
     try:
         stages_seen: list[str] = ["decompose", "leaf_a", "leaf_b", "seal"]
 
-        async def attempt(crash_at):
+        async def attempt(crash_at, fresh_root):
             """crash_at=None -> clean; else Crash raised AT that index."""
-            cp = FileCheckpointer(root=root / "ck")
+            cp = FileCheckpointer(root=fresh_root / "ck")
             ledger = ProvenanceLedger()
             store: list[str] = []
             rk = _run(f"prop")
@@ -257,21 +258,24 @@ def test_property_kill_and_resume_equals_clean_run(crash_after_n):
                 await run_stage(cp, trace, name, ins_fn(), fn)
             return crashed, ledger, store, trace
 
-        clean = loop().run_until_complete(attempt(None))
+        clean = loop().run_until_complete(attempt(None, root))
         assert clean[0] is False
         crashed, ledger, store, trace = loop().run_until_complete(
-            attempt(crash_after_n))
+            attempt(crash_after_n, root / "crash"))
         assert crashed is True
-        assert trace.is_resume or crash_after_n == 4  # 4 == crash after end? no-op
+        assert trace.is_resume
 
-        # IDEMPOTENCE: resumed ledger equals clean ledger exactly.
+        # IDEMPOTENCE: resumed run's ledger equals clean run's exactly.
         assert len(store) == 1, "artifact/fetch recorded more than once"
         assert ledger.observed_urls() == clean[1].observed_urls()
-        assert trace.payloads_equal(clean[3]) if False else True
-        # payloads equal: compare all checkpoints on disk between runs
+        # payloads equal: same number of checkpoints, identical payloads
         cps = {c.stage: c.payload for c in
+               FileCheckpointer(root=root / "crash" / "ck").list_all()}
+        ref = {c.stage: c.payload for c in
                FileCheckpointer(root=root / "ck").list_all()}
-        assert len(cps) == 4, f"expected 4 checkpoints, got {len(cps)}"
+        assert len(cps) == 4 == len(ref)
+        assert {k: v for k, v in cps.items()} == \
+            {k: v for k, v in ref.items()}
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
