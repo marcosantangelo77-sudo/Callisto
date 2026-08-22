@@ -1,0 +1,156 @@
+[
+  {
+    "question_id": "c1672ca2fb5444c9",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Apple_Inc."
+    ],
+    "market_implied": 0.72
+  },
+  {
+    "question_id": "5b03b4a3a36c4be0",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Nvidia"
+    ],
+    "market_implied": 0.88
+  },
+  {
+    "question_id": "ca8b500dd9b1417e",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Boeing"
+    ],
+    "market_implied": 0.35
+  },
+  {
+    "question_id": "f5de4cd259114c7f",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Tesla,_Inc."
+    ],
+    "market_implied": 0.45
+  },
+  {
+    "question_id": "7317d0d47f554e38",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Microsoft"
+    ],
+    "market_implied": 0.8
+  },
+  {
+    "question_id": "c2272acc84724476",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Meta_Platforms"
+    ],
+    "market_implied": 0.78
+  },
+  {
+    "question_id": "58d9579a2e4f464c",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Intel"
+    ],
+    "market_implied": 0.3
+  },
+  {
+    "question_id": "f3d2970a4e15420d",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Amazon_(company)"
+    ],
+    "market_implied": 0.75
+  },
+  {
+    "question_id": "c8427cfed4144aef",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Federal_Reserve"
+    ],
+    "market_implied": 0.65
+  },
+  {
+    "question_id": "4cf79e2d49f84403",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Bitcoin"
+    ],
+    "market_implied": 0.4
+  },
+  {
+    "question_id": "37fa78373d184990",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/S%26P_500"
+    ],
+    "market_implied": 0.35
+  },
+  {
+    "question_id": "f0036da9af514c12",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/SpaceX_Starship"
+    ],
+    "market_implied": 0.6
+  },
+  {
+    "question_id": "6392bb63a14142ec",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Boeing_Starliner"
+    ],
+    "market_implied": 0.55
+  },
+  {
+    "question_id": "19faa5fe980940e9",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/OpenAI"
+    ],
+    "market_implied": 0.25
+  },
+  {
+    "question_id": "4ce2ff138dfd4727",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Parker_Solar_Probe"
+    ],
+    "market_implied": 0.85
+  },
+  {
+    "question_id": "18d825878cf0468f",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Brat_(album)"
+    ],
+    "market_implied": null
+  },
+  {
+    "question_id": "c79e738665944b4b",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Solar_eclipse_of_April_8,_2024"
+    ],
+    "market_implied": null
+  },
+  {
+    "question_id": "27889bb78fa94bc7",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/Oppenheimer_(film)"
+    ],
+    "market_implied": 0.85
+  },
+  {
+    "question_id": "b529bb5d899e45e4",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/2024_United_Kingdom_general_election"
+    ],
+    "market_implied": 0.02
+  },
+  {
+    "question_id": "7dad0aba87644215",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/2024_United_States_presidential_election"
+    ],
+    "market_implied": 0.52
+  },
+  {
+    "question_id": "da2a3649239840d8",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/The_Tortured_Poets_Department"
+    ],
+    "market_implied": null
+  },
+  {
+    "question_id": "f19b4da1b9434f20",
+    "evidence_urls": [
+      "https://en.wikipedia.org/wiki/2024_Summer_Olympics_opening_ceremony"
+    ],
+    "market_implied": 0.9
+  }
+]

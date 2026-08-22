@@ -176,11 +176,15 @@ class RetrodictionBatch:
 
     def load_completed(self) -> dict[str, dict]:
         """Rehydrate prior results from the checkpoint store AND the results
-        JSONL (either surviving alone is enough — belt and braces)."""
+        JSONL (either surviving alone is enough — belt and braces).
+
+        Only terminal statuses count as complete: 'error' rows are retried
+        on resume, everything else (scored/null/refused) is final."""
         done: dict[str, dict] = {}
         for ck in self.checkpointer.list_all():
             if ck.stage == self.STAGE and isinstance(ck.payload, dict) \
-                    and ck.payload.get("status"):
+                    and ck.payload.get("status") \
+                    and ck.payload.get("status") != "error":
                 qid = ck.payload.get("question_id")
                 if qid:
                     done[qid] = ck.payload
@@ -194,9 +198,7 @@ class RetrodictionBatch:
                 except json.JSONDecodeError:
                     continue  # torn final line: skipped, not fatal
                 qid = rec.get("question_id")
-                if qid and rec.get("status"):
-                    done.setdefault(qid, rec)
-                    # prefer fresher JSONL record if both exist
+                if qid and rec.get("status") and rec.get("status") != "error":
                     done[qid] = rec
         return done
 
@@ -288,7 +290,8 @@ class RetrodictionBatch:
             rk = self._run_key(q)
             ih = self._inputs_hash(q)
             hit = self.checkpointer.load(rk, self.STAGE, ih)
-            if hit is not None and hit.payload.get("status"):
+            if (hit is not None and hit.payload.get("status")
+                    and hit.payload.get("status") != "error"):
                 payload = hit.payload
                 _append_once(BatchResult(
                     **{k: v for k, v in payload.items()
@@ -312,6 +315,9 @@ class RetrodictionBatch:
                     **{k: v for k, v in rec.items()
                        if k in BatchResult.__dataclass_fields__})
             _append_once(self.results[qid])
+        # error rows from earlier runs stay in the results file (history is
+        # never rewritten) but are NOT counted as completed work — they were
+        # re-run above and the fresh outcome supersedes them in self.results.
         return self.results
 
 
