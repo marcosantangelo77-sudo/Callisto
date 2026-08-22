@@ -1,15 +1,18 @@
 {
-  "generated_at": "2026-08-22T19:59:15.501946+00:00",
+  "generated_at": "2026-08-22T20:08:43.328087+00:00",
   "n_total": 5,
-  "n_scored": 0,
-  "n_null": 5,
-  "null_rate": 1.0,
-  "mean_brier": null,
-  "mean_absolute_error_vs_half": null,
-  "sealed_rate": null,
-  "mean_elapsed_s": null,
+  "n_scored": 5,
+  "n_null": 0,
+  "null_rate": 0.0,
+  "mean_brier": 0.25,
+  "mean_absolute_error_vs_half": 0.0,
+  "sealed_rate": 0.0,
+  "mean_elapsed_s": 103.7,
   "magnitude": {
-    "n_with_market": 0
+    "n_with_market": 5,
+    "mean_edge_taken": -0.14,
+    "mean_directional_edge": -0.22,
+    "beat_market_rate": 0.0
   },
   "calibration_overall": [
     {
@@ -29,9 +32,9 @@
     {
       "bin_low": 0.4,
       "bin_high": 0.6,
-      "n": 0,
-      "mean_p": null,
-      "realised": null
+      "n": 5,
+      "mean_p": 0.5,
+      "realised": 0.6
     },
     {
       "bin_low": 0.6,
@@ -49,40 +52,33 @@
     }
   ],
   "slices": {
-    "by_domain": {},
-    "by_horizon": {},
-    "by_question_type": {},
-    "nulls_by_domain": {
-      "FINANCIAL": 5
+    "by_domain": {
+      "FINANCIAL": {
+        "n": 5,
+        "brier": 0.25,
+        "mean_directional_edge": -0.22
+      }
     },
-    "errors_by_domain": {
-      "FINANCIAL": 5
-    }
+    "by_horizon": {
+      "short": {
+        "n": 5,
+        "brier": 0.25,
+        "mean_directional_edge": -0.22
+      }
+    },
+    "by_question_type": {
+      "beat_or_miss": {
+        "n": 5,
+        "brier": 0.25,
+        "mean_directional_edge": -0.22
+      }
+    },
+    "nulls_by_domain": {},
+    "errors_by_domain": {}
   },
   "failures": {
     "refusals": [],
-    "errors": [
-      {
-        "question_id": "c1672ca2fb5444c9",
-        "error": "RuntimeError: This event loop is already running"
-      },
-      {
-        "question_id": "5b03b4a3a36c4be0",
-        "error": "RuntimeError: This event loop is already running"
-      },
-      {
-        "question_id": "ca8b500dd9b1417e",
-        "error": "RuntimeError: This event loop is already running"
-      },
-      {
-        "question_id": "f5de4cd259114c7f",
-        "error": "RuntimeError: This event loop is already running"
-      },
-      {
-        "question_id": "7317d0d47f554e38",
-        "error": "RuntimeError: This event loop is already running"
-      }
-    ]
+    "errors": []
   },
-  "verdict": "NO SCORED OBSERVATIONS \u2014 every question produced a null. This is a retrieval/provenance finding, not silence."
+  "verdict": "at or worse than chance \u2014 do not trust these predictions yet"
 }
