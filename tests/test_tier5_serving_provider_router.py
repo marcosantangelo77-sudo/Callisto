@@ -83,8 +83,12 @@ class TestTaskClassRouting:
     def test_missing_frontier_base_url_raises(self, router_cfg, monkeypatch):
         monkeypatch.delenv("FRONTIER_BASE_URL", raising=False)
         router = inference.ProviderRouter(config_path=str(router_cfg))
-        with pytest.raises(RuntimeError, match="FRONTIER_BASE_URL"):
+        # Unresolved env-backed endpoint: construction stays local-only-safe,
+        # but asking for it raises LOUDLY instead of silently falling back.
+        with pytest.raises(RuntimeError, match="base_url"):
             router.tier_for("promotion_judgment")
+        # And it must not appear in candidates for routing.
+        assert "frontier" not in router.candidates_for("promotion_judgment")
 
 
 class TestPayloadShape:
@@ -147,17 +151,37 @@ class TestPayloadShape:
 
     def test_real_config_loads(self):
         """The actual repo providers.yaml must parse and every LOCAL task
-        class must resolve. The frontier tier is env-backed: unresolved here,
-        and asking for it must raise LOUDLY rather than silently falling back."""
+        class must resolve. The frontier endpoint is env-backed: unresolved
+        here, and asking for it must raise LOUDLY rather than silently
+        falling back. Call-site legacy names must also route (vocabulary
+        bridge)."""
         real = inference.ProviderRouter()
-        for tc in real.task_classes:
+        # Vocabulary bridge: call-site names are accepted.
+        for legacy in ("deep_work", "hypothesis_gen", "reasoning",
+                       "review", "code_generation"):
+            assert real.canonical_task_class(legacy) in real.task_classes
+        for tc in list(real.task_classes) + [
+            real.canonical_task_class(x) for x in
+            ("deep_work", "hypothesis_gen", "reasoning", "review",
+             "code_generation")
+        ]:
             try:
                 real.tier_for(tc)
             except RuntimeError:
-                # Only env-unresolved tiers may fail this way.
-                assert real.tiers[real.task_classes[tc]].extra.get("_unresolved")
+                # Only env-unresolved endpoints may fail this way.
+                names = real.task_classes[tc]
+                names = names if isinstance(names, list) else [names]
+                assert any(
+                    real.endpoints[n].extra.get("_unresolved") for n in names
+                ), f"task class {tc} failed without an unresolved-endpoint excuse"
             except inference.UnknownTaskClassError:
                 pytest.fail(f"declared task_class {tc} failed lookup")
+        # Local endpoints must be usable with no env vars at all.
+        assert not any(
+            ep.extra.get("_unresolved")
+            for n, ep in real.endpoints.items()
+            if not ep.backend.startswith("openai") or ep.base_url
+        )
 
 
 class TestLegacySurfaceIntact:

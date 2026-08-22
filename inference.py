@@ -851,9 +851,13 @@ def get_sentinel() -> OllamaInference:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# ProviderRouter — task_class -> tier -> endpoint, per config/providers.yaml
+# ProviderRouter — task_class -> endpoint POOL -> best capable endpoint.
+# Per config/providers.yaml. Adding compute (a second GPU box, a 3090/5090,
+# a DGX Spark alongside today's 5060 Ti) is a config entry — nothing else.
 # ══════════════════════════════════════════════════════════════════════════
 
+import asyncio as _asyncio
+import time as _time
 import yaml as _yaml
 from pathlib import Path as _Path
 
@@ -871,12 +875,48 @@ class UnknownTaskClassError(KeyError):
     """
 
 
+# ── Vocabulary bridge ──────────────────────────────────────────────────────
+# The codebase (tools/autonomous.py, MODEL_LADDER keys) passes these names;
+# providers.yaml historically declared different ones. The ROUTER side is
+# authoritative: call-site names are accepted as aliases of canonical task
+# classes so routing works before instance 1's rename pass lands.
+TASK_CLASS_ALIASES: dict[str, str] = {
+    # call-site name -> canonical task class
+    "deep_work": "research_synthesis",
+    "hypothesis_gen": "hypothesis_generation",
+    "reasoning": "research_synthesis",
+    "review": "adversarial_review",
+    "code_generation": "research_synthesis",
+}
+
+
 @dataclass(frozen=True)
-class TierConfig:
+class EndpointConfig:
+    """One model server process. A 'tier' may be served by MANY endpoints
+    (e.g. two GPU boxes running llama-server); routing picks among them."""
     name: str
     backend: str
     base_url: str
     model: str
+    api_key: Optional[str] = None
+    context_tokens: int = 32768
+    temperature: float = 0.2
+    vram_gb: float = 0.0                    # informational / placement hints
+    structured_output: bool = True          # json_schema response_format OK?
+    tool_calls: bool = False                # native function calling?
+    max_concurrency: int = 1                # parallel in-flight requests
+    cost_per_1k_input: float = 0.0          # USD; local = 0.0
+    cost_per_1k_output: float = 0.0
+    extra: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TierConfig:
+    """Back-compat view: tier name -> ordered candidate endpoints."""
+    name: str
+    backend: str
+    base_url: str                           # first endpoint (compat)
+    model: str                              # first endpoint (compat)
     api_key: Optional[str] = None
     context_tokens: int = 32768
     temperature: float = 0.2
@@ -896,73 +936,153 @@ def load_providers_config(path=None) -> dict:
         return _yaml.safe_load(f)
 
 
-def _tier_from_config(name: str, raw: dict, resolve_env: bool = True) -> TierConfig:
-    """Build a TierConfig. With resolve_env=False, env-var references are
-    carried through as None so a router can be constructed in local-only
-    setups; using that tier later raises LOUD (see ProviderRouter.tier_for).
+def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
+    """Build an EndpointConfig from one entry under `providers:`.
+
+    Env-backed fields (base_url_env / api_key_env / model_env) resolve at
+    build time when set; if unset the endpoint is marked _unresolved and is
+    skipped by routing (LOUD log) rather than crashing construction — that
+    keeps a local-only box constructible while a hosted tier is configured.
     """
     base_url = raw.get("base_url")
-    base_url_env = raw.get("base_url_env")
-    if not base_url and resolve_env:
-        base_url = os.getenv(base_url_env or "", "")
+    if not base_url and raw.get("base_url_env"):
+        base_url = os.getenv(raw["base_url_env"], "")
         if not base_url:
-            raise RuntimeError(
-                f"Tier '{name}' has no base_url and ${base_url_env} is unset"
-            )
+            raw = {**raw, "_unresolved": True}
     api_key = None
-    key_env = raw.get("api_key_env")
-    if key_env and resolve_env:
-        api_key = os.getenv(key_env) or None
+    if raw.get("api_key_env"):
+        api_key = os.getenv(raw["api_key_env"]) or None
     model = raw.get("model")
-    model_env = raw.get("model_env")
-    if not model and resolve_env:
-        model = os.getenv(model_env or "", "")
-        if not model:
-            raise RuntimeError(f"Tier '{name}' has no model and ${model_env} is unset")
-    if not base_url or not model:
-        # Unresolved env-backed tier — keep it declared but un-usable.
-        return TierConfig(name=name, backend=raw.get("backend", "openai_compat"),
-                          base_url=base_url or "", model=model or "",
-                          context_tokens=int(raw.get("context_tokens", 32768)),
-                          temperature=float(raw.get("temperature", 0.2)),
-                          extra={**raw.get("extra", {}), "_unresolved": True})
-    return TierConfig(
+    if not model and raw.get("model_env"):
+        model = os.getenv(raw["model_env"], "")
+    unresolved = bool(raw.get("_unresolved")) or not (base_url and model)
+    return EndpointConfig(
         name=name,
         backend=raw.get("backend", "openai_compat"),
-        base_url=base_url.rstrip("/"),
-        model=model,
+        base_url=(base_url or "").rstrip("/"),
+        model=model or "",
         api_key=api_key,
         context_tokens=int(raw.get("context_tokens", 32768)),
         temperature=float(raw.get("temperature", 0.2)),
-        extra=raw.get("extra") or {},
+        vram_gb=float(raw.get("vram_gb", 0) or 0),
+        structured_output=bool(raw.get("structured_output", True)),
+        tool_calls=bool(raw.get("tool_calls", False)),
+        max_concurrency=max(1, int(raw.get("max_concurrency", 1))),
+        cost_per_1k_input=float(raw.get("cost_per_1k_input", 0) or 0),
+        cost_per_1k_output=float(raw.get("cost_per_1k_output", 0) or 0),
+        extra={**(raw.get("extra") or {}), **({"_unresolved": True} if unresolved else {})},
     )
 
 
+class _EndpointState:
+    """Mutable runtime state for one endpoint: health, load, queue slot."""
+    __slots__ = ("cfg", "semaphore", "consecutive_failures",
+                 "cooldown_until", "in_flight")
+
+    def __init__(self, cfg: EndpointConfig):
+        self.cfg = cfg
+        self.semaphore = _asyncio.Semaphore(cfg.max_concurrency)
+        self.consecutive_failures = 0
+        self.cooldown_until = 0.0
+        self.in_flight = 0
+
+    @property
+    def available(self) -> bool:
+        return (
+            not self.cfg.extra.get("_unresolved")
+            and _time.monotonic() >= self.cooldown_until
+        )
+
+    def record_success(self) -> None:
+        self.consecutive_failures = 0
+
+    def record_failure(self) -> None:
+        self.consecutive_failures += 1
+        # Exponential cooldown: 2s, 4s, 8s... capped at 60s.
+        delay = min(60.0, 2.0 * (2 ** (self.consecutive_failures - 1)))
+        self.cooldown_until = _time.monotonic() + delay
+
+
+class CostLedger:
+    """Tracks token usage + USD cost per tier. Hosted calls are budgeted;
+    local calls are free at the margin and show up as $0."""
+
+    def __init__(self, budget_usd: Optional[float] = None):
+        self.budget_usd = budget_usd
+        self.total_cost_usd = 0.0
+        self.by_tier: dict = {}
+        self._lock = _asyncio.Lock()
+
+    async def record(self, tier: str, input_tokens: int,
+                     output_tokens: int, cost_usd: float) -> None:
+        async with self._lock:
+            self.total_cost_usd += cost_usd
+            t = self.by_tier.setdefault(
+                tier, {"calls": 0, "input_tokens": 0, "output_tokens": 0,
+                       "cost_usd": 0.0}
+            )
+            t["calls"] += 1
+            t["input_tokens"] += input_tokens
+            t["output_tokens"] += output_tokens
+            t["cost_usd"] += cost_usd
+
+    def snapshot(self) -> dict:
+        return {
+            "budget_usd": self.budget_usd,
+            "total_cost_usd": round(self.total_cost_usd, 6),
+            "remaining_usd": (
+                None if self.budget_usd is None
+                else round(self.budget_usd - self.total_cost_usd, 6)
+            ),
+            "over_budget": (
+                self.budget_usd is not None
+                and self.total_cost_usd > self.budget_usd
+            ),
+            "by_tier": {
+                k: {**v, "cost_usd": round(v["cost_usd"], 6)}
+                for k, v in sorted(self.by_tier.items())
+            },
+        }
+
+
 class ProviderRouter:
-    """Routes task_class -> tier -> OpenAI-compatible chat completions.
+    """Routes task_class -> tier -> best available endpoint in that tier.
 
     Usage at call sites:
 
         router.complete("research_synthesis", messages, schema=_SCHEMA)
 
-    The model is configuration: editing config/providers.yaml (or the
-    FRONTIER_* env vars for the hosted tier) swaps providers with no code
-    change. The legacy escalate_with_ladder path above is untouched; new
-    code should prefer this router.
+    Call-site legacy names (deep_work, hypothesis_gen, reasoning, review,
+    code_generation) are accepted via TASK_CLASS_ALIASES.
+
+    Design contract (SCOPE CORRECTION 2026-08-22): adding compute is a
+    config entry. A tier lists N endpoints; each declares capabilities
+    (context window, structured output, tool calls), a concurrency limit,
+    and unit costs. Routing picks the healthiest idle endpoint; dead ones
+    cool down exponentially instead of crashing the loop.
+
+    Budget: hosted endpoints declare $/1k tokens; every completion is
+    charged to the ledger. With `routing.budget.usd` set, hosted tiers are
+    refused once the budget is spent unless allow_budget_exceed=True —
+    escalation to frontier must be deliberate, visible, budgeted.
     """
 
     def __init__(self, config_path=None):
         cfg = load_providers_config(config_path)
         self.default_tier_name = cfg.get("default_tier", "local")
-        self.tiers: dict[str, TierConfig] = {
-            name: _tier_from_config(name, raw, resolve_env=False)
-            for name, raw in (cfg.get("providers") or {}).items()
-        }
-        # Env-backed tiers re-resolve (LOUD on failure) at first use; see
-        # tier_for. This keeps a local-only setup constructible.
         self._raw_providers = cfg.get("providers") or {}
+        self.endpoints: dict[str, EndpointConfig] = {
+            name: _endpoint_from_config(name, raw)
+            for name, raw in self._raw_providers.items()
+        }
+        self.states: dict[str, _EndpointState] = {
+            name: _EndpointState(ep) for name, ep in self.endpoints.items()
+        }
         routing = cfg.get("routing") or {}
-        self.task_classes: dict[str, str] = routing.get("task_classes") or {}
+
+        # task_classes values may be ONE tier name (back-compat) or a list
+        # of tier names in preference order (multi-tier fallback).
+        self.task_classes: dict[str, Any] = routing.get("task_classes") or {}
         esc = routing.get("escalation") or {}
         self.escalation = EscalationConfig(
             json_schema_failures=int(esc.get("json_schema_failures", 2)),
@@ -971,25 +1091,144 @@ class ProviderRouter:
                 float(esc["confidence_below"]) if esc.get("confidence_below") else None
             ),
         )
+        budget = (routing.get("budget") or {})
+        self.budget_usd: Optional[float] = (
+            float(budget["usd"]) if budget.get("usd") is not None else None
+        )
+        self.cost_ledger = CostLedger(budget_usd=self.budget_usd)
+        self.health_checks_enabled = bool(
+            (routing.get("health_checks") or {}).get("enabled", True)
+        )
 
-    def tier_for(self, task_class: str) -> TierConfig:
-        """Resolve a task class to its tier. Unknown classes raise LOUDLY."""
-        tier_name = self.task_classes.get(task_class)
-        if tier_name is None:
+    # ── vocabulary ──
+
+    def canonical_task_class(self, task_class: str) -> str:
+        tc = TASK_CLASS_ALIASES.get(task_class, task_class)
+        if tc not in self.task_classes:
             raise UnknownTaskClassError(
-                f"task_class {task_class!r} not declared in "
+                f"task_class {task_class!r} (canonical {tc!r}) not declared in "
                 f"{_PROVIDERS_CONFIG_PATH}; declared: {sorted(self.task_classes)}"
             )
-        tier = self.tiers.get(tier_name)
-        if tier is None:
-            raise RuntimeError(
-                f"task_class {task_class!r} maps to unknown tier {tier_name!r}"
+        return tc
+
+    # ── back-compat surface ──
+
+    def tiers_view_names(self) -> list[str]:
+        """Names of configured endpoints, in declaration order."""
+        return list(self.endpoints)
+
+    def tier_for(self, task_class: str) -> TierConfig:
+        """Resolve a task class to its FIRST usable tier (legacy shape).
+        Unknown classes raise LOUDLY. Unresolved env-backed endpoints raise
+        LOUDLY rather than falling back silently."""
+        tc = self.canonical_task_class(task_class)
+        names = self.task_classes[tc]
+        if isinstance(names, str):
+            names = [names]
+        for n in names:
+            ep = self.endpoints.get(n)
+            if ep is None:
+                continue
+            if ep.extra.get("_unresolved"):
+                raise RuntimeError(
+                    f"tier endpoint '{n}' has no resolved base_url/model — "
+                    f"set its *_env vars to use task class {task_class!r}"
+                )
+            return TierConfig(
+                name=n, backend=ep.backend, base_url=ep.base_url,
+                model=ep.model, api_key=ep.api_key,
+                context_tokens=ep.context_tokens, temperature=ep.temperature,
+                extra=ep.extra,
             )
-        if tier.extra.get("_unresolved"):
-            raw = self._raw_providers.get(tier_name, {})
-            tier = _tier_from_config(tier_name, raw)
-            self.tiers[tier_name] = tier
-        return tier
+        raise RuntimeError(f"task class {task_class!r} has no usable endpoints")
+
+    # ── capability-based selection ──
+
+    def candidates_for(self, task_class: str,
+                       schema: Optional[dict] = None) -> list[str]:
+        """Endpoint names for a task class, healthy-first, capability-ordered."""
+        tc = self.canonical_task_class(task_class)
+        names = self.task_classes[tc]
+        if isinstance(names, str):
+            names = [names]
+        out = []
+        for n in names:
+            ep = self.endpoints.get(n)
+            st = self.states.get(n)
+            if st is None or ep is None:
+                continue
+            if not st.available:
+                continue
+            if schema is not None and not ep.structured_output:
+                continue
+            out.append(n)
+        if not out:
+            # Everything cooling down (or filtered): prefer least-bad rather
+            # than raising — degrade, don't crash the loop.
+            fallback = [n for n in names
+                        if n in self.states
+                        and not self.endpoints[n].extra.get("_unresolved")
+                        and (schema is None
+                             or self.endpoints[n].structured_output)]
+            if fallback:
+                logger.warning(
+                    f"All endpoints for task_class={task_class!r} cooling "
+                    f"down; using {fallback[0]} anyway"
+                )
+                return fallback
+        return out
+
+    def pick_endpoint(self, task_class: str, schema: Optional[dict] = None,
+                      tools: bool = False) -> Optional[EndpointConfig]:
+        """Best available endpoint satisfying the request's capability needs.
+        Prefers lowest current load, then declared order."""
+        for name in self.candidates_for(task_class):
+            ep = self.endpoints[name]
+            if schema is not None and not ep.structured_output:
+                continue
+            if tools and not ep.tool_calls:
+                continue
+            return ep
+        return None
+
+    # ── health ──
+
+    async def check_health(self, name: str, timeout: float = 5.0) -> dict:
+        """Probe one endpoint with a minimal chat request."""
+        ep = self.endpoints[name]
+        headers = {"Content-Type": "application/json"}
+        if ep.api_key:
+            headers["Authorization"] = f"Bearer {ep.api_key}"
+        payload = {
+            "model": ep.model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    f"{ep.base_url}/chat/completions", json=payload,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+            self.states[name].record_success()
+            return {"endpoint": name, "status": "ok"}
+        except Exception as e:
+            self.states[name].record_failure()
+            return {"endpoint": name, "status": "error", "error": str(e)}
+
+    async def health_report(self) -> dict:
+        results = await _asyncio.gather(
+            *(self.check_health(n) for n in self.endpoints),
+            return_exceptions=True,
+        )
+        out = {}
+        for name, r in zip(self.endpoints, results):
+            out[name] = r if isinstance(r, dict) else {
+                "endpoint": name, "status": "error", "error": repr(r)}
+        return out
+
+    # ── completion ──
 
     @staticmethod
     def build_messages(messages: list[dict], system_context: str = "") -> list[dict]:
@@ -1001,16 +1240,18 @@ class ProviderRouter:
 
     @staticmethod
     def _payload(
-        tier: TierConfig,
+        endpoint: EndpointConfig,
         messages: list[dict],
         schema: Optional[dict],
         temperature: Optional[float],
         max_tokens: Optional[int],
     ) -> dict:
         payload: dict[str, Any] = {
-            "model": tier.model,
+            "model": endpoint.model,
             "messages": messages,
-            "temperature": temperature if temperature is not None else tier.temperature,
+            "temperature": (
+                temperature if temperature is not None else endpoint.temperature
+            ),
         }
         if max_tokens:
             payload["max_tokens"] = max_tokens
@@ -1023,6 +1264,33 @@ class ProviderRouter:
             }
         return payload
 
+    @staticmethod
+    def _tier_alias_for_compat(name: str, raw: dict) -> EndpointConfig:
+        return _endpoint_from_config(name, raw)
+
+    async def _post(self, endpoint: EndpointConfig, payload: dict,
+                    timeout: float) -> tuple[str, dict]:
+        headers = {"Content-Type": "application/json"}
+        if endpoint.api_key:
+            headers["Authorization"] = f"Bearer {endpoint.api_key}"
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{endpoint.base_url}/chat/completions", json=payload,
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        try:
+            content = data["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            logger.warning(
+                f"ProviderRouter: malformed completion response from "
+                f"endpoint {endpoint.name}: keys={list(data)}"
+            )
+            content = ""
+        usage = data.get("usage") or {}
+        return content, usage
+
     async def complete(
         self,
         task_class: str,
@@ -1032,47 +1300,83 @@ class ProviderRouter:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         timeout: float = 300.0,
+        allow_budget_exceed: bool = False,
     ) -> dict:
-        """One routed completion.
+        """One routed completion, with failover across the tier pool,
+        per-endpoint concurrency limiting, and cost accounting.
 
         Returns {"content", "parsed_json", "model", "tier", "task_class"}.
-        Raises on HTTP/network failure — LOUD; callers decide on retry/escalate.
+        Raises only when EVERY candidate endpoint failed (or none can serve
+        the requested capability) — a dead endpoint degrades, never crashes.
         """
-        tier = self.tier_for(task_class)
         msgs = self.build_messages(messages, system_context)
-        payload = self._payload(tier, msgs, schema, temperature, max_tokens)
-        headers = {"Content-Type": "application/json"}
-        if tier.api_key:
-            headers["Authorization"] = f"Bearer {tier.api_key}"
+        errors: list[str] = []
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{tier.base_url}/chat/completions", json=payload, headers=headers
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        for name in self.candidates_for(task_class, schema=schema):
+            endpoint = self.endpoints[name]
+            state = self.states[name]
 
-        content = ""
-        try:
-            content = data["choices"][0]["message"]["content"] or ""
-        except (KeyError, IndexError, TypeError):
-            logger.warning(
-                f"ProviderRouter: malformed completion response from tier "
-                f"{tier.name}: keys={list(data)}"
-            )
-        parsed_json = _parse_json_response(content) if content else None
-        return {
-            "content": content,
-            "parsed_json": parsed_json,
-            "model": tier.model,
-            "tier": tier.name,
-            "task_class": task_class,
-        }
+            if endpoint.cost_per_1k_input or endpoint.cost_per_1k_output:
+                if (self.budget_usd is not None
+                        and self.cost_ledger.total_cost_usd >= self.budget_usd
+                        and not allow_budget_exceed):
+                    errors.append(
+                        f"{name}: budget ${self.budget_usd:.2f} exhausted "
+                        f"(spent ${self.cost_ledger.total_cost_usd:.2f}) — "
+                        f"refusing paid tier; pass allow_budget_exceed=True "
+                        f"to override deliberately"
+                    )
+                    continue
+            payload = self._payload(endpoint, msgs, schema, temperature, max_tokens)
+            queued_at = _time.monotonic()
+            try:
+                # Backpressure: wait here if the endpoint is saturated.
+                async with state.semaphore:
+                    queue_s = _time.monotonic() - queued_at
+                    state.in_flight += 1
+                    try:
+                        content, usage = await _post_with_retry(
+                            self._post, endpoint, payload, timeout
+                        )
+                    finally:
+                        state.in_flight -= 1
+                state.record_success()
+
+                in_tok = int(usage.get("prompt_tokens", 0) or 0)
+                out_tok = int(usage.get("completion_tokens", 0) or 0)
+                cost = (
+                    in_tok / 1000 * endpoint.cost_per_1k_input
+                    + out_tok / 1000 * endpoint.cost_per_1k_output
+                )
+                await self.cost_ledger.record(name, in_tok, out_tok, cost)
+
+                if queue_s > 1.0:
+                    logger.info(
+                        f"ProviderRouter: {name} was saturated — queued "
+                        f"{queue_s:.1f}s for task_class={task_class}"
+                    )
+                return {
+                    "content": content,
+                    "parsed_json": _parse_json_response(content) if content else None,
+                    "model": endpoint.model,
+                    "tier": name,
+                    "task_class": task_class,
+                }
+            except Exception as e:
+                state.record_failure()
+                errors.append(f"{name}: {e}")
+                logger.warning(
+                    f"ProviderRouter: endpoint {name} failed "
+                    f"({state.consecutive_failures} consecutive) — failing over: {e}"
+                )
+
+        raise RuntimeError(
+            f"All endpoints failed for task_class={task_class!r}: "
+            f"{'; '.join(errors) or 'no candidates'}"
+        )
 
     def complete_sync(self, *args, **kwargs) -> dict:
         """Synchronous wrapper around complete()."""
-        import asyncio as _asyncio
-
         try:
             _asyncio.get_running_loop()
         except RuntimeError:
@@ -1080,6 +1384,46 @@ class ProviderRouter:
         else:
             raise RuntimeError("complete_sync() called from inside a running loop")
         return _asyncio.run(self.complete(*args, **kwargs))
+
+    def status(self) -> dict:
+        """Expose routing + cost state (wire into GET /system/full-status)."""
+        return {
+            "default_tier": self.default_tier_name,
+            "endpoints": {
+                n: {
+                    "base_url": self.endpoints[n].base_url,
+                    "model": self.endpoints[n].model,
+                    "max_concurrency": self.endpoints[n].max_concurrency,
+                    "in_flight": self.states[n].in_flight,
+                    "available": self.states[n].available,
+                    "consecutive_failures": self.states[n].consecutive_failures,
+                    "cost_per_1k_input": self.endpoints[n].cost_per_1k_input,
+                    "cost_per_1k_output": self.endpoints[n].cost_per_1k_output,
+                }
+                for n in self.endpoints
+            },
+            "cost": self.cost_ledger.snapshot(),
+        }
+
+
+async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
+                           timeout: float, attempts: int = 2) -> tuple[str, dict]:
+    """Retry transient failures within one endpoint before failing over.
+    Connection errors and 5xx retry; other HTTP errors do not."""
+    last_exc: Optional[Exception] = None
+    for i in range(attempts):
+        try:
+            return await post_fn(endpoint, payload, timeout)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code < 500:
+                raise
+            last_exc = e
+        except (httpx.TransportError,) as e:
+            last_exc = e
+        if i < attempts - 1:
+            await _asyncio.sleep(0.5 * (i + 1))
+    assert last_exc is not None
+    raise last_exc
 
 
 _router: Optional[ProviderRouter] = None
