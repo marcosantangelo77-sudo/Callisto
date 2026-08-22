@@ -100,6 +100,32 @@ class SourceRegistry:
             min_score=min_score)
             if d.included and d.spec is not None]
 
+    def _term_frequency(self, term: str) -> int:
+        """How many registered sources mention this term in their answers.
+
+        Cached per registry. A term appearing in one source's answer clauses
+        is a strong pointer; a term appearing in most of them ("data",
+        "series") carries no signal.
+        """
+        cache = getattr(self, "_tf_cache", None)
+        if cache is None:
+            cache = {}
+            for ad in self._adapters.values():
+                seen = set()
+                for ans in ad.spec.answers:
+                    seen.update(_tokens(ans))
+                for w in seen:
+                    cache[w] = cache.get(w, 0) + 1
+            self._tf_cache = cache
+        return cache.get(term, 0) or sum(
+            n for w, n in cache.items() if w.startswith(term) or term.startswith(w)
+        )
+
+    def _diagnostic_ceiling(self) -> int:
+        """A term is diagnostic if it points at no more than a third of the
+        registry — never fewer than 1, so a small registry still works."""
+        return max(1, len(self._adapters) // 3)
+
     def select_explained(self, question_type: str, *, max_tier: int = 5,
                          exclude: set[str] | None = None,
                          min_score: float = 0.34,
@@ -140,6 +166,7 @@ class SourceRegistry:
                     ["question has no matchable words"], None))
                 continue
             best: tuple[bool, float] = (False, 0.0)
+            best_diagnostic = ""
             for ans in a.spec.answers:
                 # score each answer clause against the question MINUS pure
                 # connectives ('and', 'for', 'the'...) so 'GDP and trade'
@@ -148,8 +175,14 @@ class SourceRegistry:
                 ok, score, matched = _overlap(core, set(_tokens(ans)))
                 if score > best[1]:
                     best = (ok, score)
+                # A term that points at only a handful of sources is
+                # DIAGNOSTIC: matching it should qualify regardless of how
+                # many other words the question happens to contain.
+                for m in matched:
+                    if self._term_frequency(m) <= self._diagnostic_ceiling():
+                        best_diagnostic = best_diagnostic or m
             ok_any, best_score = best
-            if not ok_any and best_score < min_score:
+            if not ok_any and best_score < min_score and not best_diagnostic:
                 decisions.append(SelectionDecision(
                     a.spec.name, False, 0.0,
                     [f"best answer clause covers only "
