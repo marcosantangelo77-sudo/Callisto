@@ -282,6 +282,9 @@ def _resolve(slot: str, question: str,
         up = tok.upper()
         if up not in upper_tokens:
             continue
+        # must contain a letter — bare numbers ('2024') are dates, not ids
+        if not any(ch.isalpha() for ch in up):
+            continue
         if any(ch.isdigit() for ch in up) or up in known_ids:
             return {slot: up}, {}
     matched: list[tuple[int, list[Candidate]]] = []
@@ -294,9 +297,10 @@ def _resolve(slot: str, question: str,
     cands = matched[0][1]
     top, second = cands[0], (cands[1] if len(cands) > 1 else None)
     confident = (
-        top.confidence >= _RESOLVE_AUTO
-        and (second is None or top.confidence - second.confidence >= _RESOLVE_GAP)
-    )
+        second is not None
+        and top.confidence >= _RESOLVE_AUTO
+        and top.confidence - second.confidence >= _RESOLVE_GAP
+    ) or (second is None and top.confidence >= 0.75)
     if confident:
         return {slot: top.key}, {}
     return {}, {slot: list(cands)}
@@ -386,7 +390,7 @@ def _plan_gdelt(question: str) -> PlanResult:
     core = core_query(
         question,
         extra_stop={"news", "coverage", "reported", "reporting", "media",
-                    "press", "outlets", "outlet"})
+                    "press", "outlets", "outlet", "volume"})
     if not core:
         return PlanResult(False, reason="no topical core beyond coverage "
                           "vocabulary")
