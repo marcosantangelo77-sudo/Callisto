@@ -155,6 +155,19 @@ _OVERLAP_FAMILIES = {
 }
 
 
+def in_family(source_name: str, members) -> bool:
+    """Is this source a member of an overlap family?
+
+    Normalised: 'semantic_scholar', 'semanticscholar' and 'Semantic-Scholar'
+    are the same source. Exposed so callers reuse ONE membership rule —
+    tools/why.py previously reimplemented it without normalisation, so a
+    family collapse silently failed to register and two dependent sources
+    read as two independent voices.
+    """
+    n = re.sub(r"[^a-z0-9]", "", str(source_name).lower())
+    return any(re.sub(r"[^a-z0-9]", "", str(m).lower()) == n for m in members)
+
+
 def independence_key(source_name: str, base_url: str) -> str:
     """The unit that counts toward min_independent_sources: the publisher
     host, collapsed into declared overlap families."""

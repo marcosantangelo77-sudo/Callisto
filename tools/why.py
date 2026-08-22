@@ -338,6 +338,7 @@ class WhyExplanation:
 
 
 def independence_from_fetches(fetches) -> IndependenceWhy:
+    from tools.pipeline.retrieval import in_family as _in_family
     """Count independent sources exactly as retrieval does, with the
     family-collapse statements spelled out."""
     keys: set = set()
@@ -349,7 +350,7 @@ def independence_from_fetches(fetches) -> IndependenceWhy:
                                getattr(f, "source_name", ""))
         keys.add(key)
         for family, members in _OVERLAP_FAMILIES.items():
-            if getattr(f, "source_name", "") in members:
+            if _in_family(getattr(f, "source_name", ""), members):
                 seen_family_members.setdefault(family, set()).add(
                     f.source_name)
     for family, members in sorted(seen_family_members.items()):
