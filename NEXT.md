@@ -291,3 +291,33 @@ build one or to pay a vendor for access.
 **Build the pattern, not the domain.** If adding FRED after EDGAR is more than a
 config entry plus a thin adapter, the pattern is wrong and should be fixed
 before a third source is added.
+
+---
+
+## RETRODICTION SCORING — score against MAGNITUDE, not just direction
+
+**Owner's improvement, 2026-08-22.** The first design scored binary outcomes
+("did NVDA beat consensus?"). That is a weak signal: companies beat roughly 75%
+of the time, so a correct call carries little information.
+
+Score against the market's implied distribution instead:
+
+  - realised move vs the options-implied move at prediction time
+  - IV crush, skew shift, term-structure response
+  - for any event with a market: implied probability at claim time vs outcome
+
+**This is CLV, generalised** — the same structure R5 is building into
+tools/edge.py. The market's pre-event implied distribution is the benchmark; a
+prediction either beat it or did not. Identical math for an earnings reaction, a
+Kalshi contract, a biotech binary, and a sports line.
+
+**Why it matters statistically:** continuous outcomes carry far more power per
+observation than binary ones. A hundred magnitude observations is worth several
+hundred yes/no observations. This attacks the sample-size wall directly — the
+audit showed a true +3pt edge needs ~3,888 signals to clear the promotion gate
+on win/loss alone. Scoring against magnitude collapses that requirement, because
+each observation says how MUCH you were right, not merely whether.
+
+**Consequence for the gate rebuild:** prefer continuous scoring wherever a
+market price exists. Binary resolution is the fallback for claims with no
+market, not the default.
