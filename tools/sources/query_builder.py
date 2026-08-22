@@ -559,6 +559,19 @@ def _plan_wikidata(question: str) -> PlanResult:
     if "q_id" in cands:
         return PlanResult(False, reason="ambiguous entity class; "
                           "disambiguate before querying", candidates=cands)
+    if "q_id" in resolved:
+        # a bare Q-number IS the entity; nothing to author beyond recording
+        return PlanResult(True, resolved=resolved,
+                          queries=[PlannedQuery(
+                              source="wikidata", method="sparql",
+                              args=(f"SELECT ?item ?itemLabel ?itemDescription"
+                                    f" WHERE {{ BIND(wd:{resolved['q_id']}"
+                                    f" AS ?item)"
+                                    f" SERVICE wikibase:label {{ bd:"
+                                    f"serviceParam wikibase:language \"en\"."
+                                    f" }} }} LIMIT 1",),
+                              rationale="explicit Q-id supplied in question")],
+                          reason=f"{resolved['q_id']} supplied directly")
     terms = [w for w in core.split() if w.lower() not in _WIKIDATA_HINTS]
     subject = terms[0] if terms else core.split()[0]
     sparql = (
@@ -961,14 +974,10 @@ def _plan_uspto_odp(question: str) -> PlanResult:
     if not core:
         return PlanResult(False, reason="no searchable core")
     assignee = None
-    m = re.search(r"(?:patents?|applications?)\s+(?:assigned\s+)?"
-                  r"(?:to|by|of)\s+([A-Z][A-Za-z0-9&.\- ]{2,40})", question)
-    if m:
-        raw = m.group(1).strip()
-        assignee = re.split(
-            r"\s+(?:regarding|concerning|about|on|for|between|from)\s+",
-            raw)[0].strip()
-        assignee = re.sub(r"[?.!,]+$", "", assignee)
+    m = (re.search(r"(?:patents?|applications?)\s+assigned\s+to\s+"
+                   r"([A-Z][A-Za-z0-9&.\- ]{1,40})", question)
+         or re.search(r"(?:patents?|applications?)\s+(?:by|of)\s+"
+                      r"([A-Z][A-Za-z0-9&.\- ]{2,40})", question))
     if m:
         raw = m.group(1).strip()
         assignee = re.split(
