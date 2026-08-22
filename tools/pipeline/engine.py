@@ -291,6 +291,10 @@ class ResearchPipeline:
                                     transport=self.transport)
                 adapter = _make_adapter(reg, spec.name, source)
                 fetched = getattr(adapter, method_name)(*args, **kwargs)
+                if source.last_record is None or \
+                        source.last_record.status != 200:
+                    raise SourceError(
+                        f"{spec.name} returned non-200 for this query")
                 body = json.dumps(fetched, sort_keys=True)
                 rec = FetchResult(
                     source_name=spec.name,
