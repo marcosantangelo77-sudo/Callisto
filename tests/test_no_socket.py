@@ -25,7 +25,16 @@ def _no_sockets():
     originals = {name: fn for name, fn in _BLOCKED}
 
     def _deny(name):
+        real = originals.get(name)
+
         def impl(*args, **kwargs):
+            # AF_UNIX is local IPC, not network egress. asyncio's event loop
+            # creates a unix self-pipe internally, so blocking every family
+            # breaks async tests instead of catching a real network call.
+            if name == "socket.socket" and args:
+                import socket as _s
+                if args[0] not in (_s.AF_INET, _s.AF_INET6):
+                    return real(*args, **kwargs)
             raise AssertionError(
                 f"finance tests must not touch the network: "
                 f"{name} was called — use tests/fixtures/edgar/ instead"
