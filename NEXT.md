@@ -133,3 +133,31 @@ checkable confidence. **Whatever breaks on that run is the real backlog**, and
 it will be better ranked than any list written in advance, including this one.
 
 Run early, run small, let reality prioritise.
+
+---
+
+## SCOPE GUARD — owner correction, 2026-08-22
+
+**The system is not a work-automation tool.** It does not exist to produce lease
+abstracts, estoppels, or proformas as deliverables. If the goal were a finished
+DCF for its own sake, asking a state-of-the-art model directly would be better
+and the owner would do that instead.
+
+**The purpose is finding edges and alpha — things worth money.** Financial
+artifacts are EVIDENCE in service of a claim, never the product:
+
+  - not: "produce a DCF for this REIT"
+  - but: "is this REIT mispriced, and here is the DCF, the implied cap rate
+    against comps, the LTV and the DSCR that show why"
+
+The artifact exists so the conclusion is checkable. That is the whole reason to
+build modelling capability at all.
+
+**Why EDGAR/XBRL still matters, stated correctly:** it is the evidence layer for
+financial questions. Without it the system cannot answer them. That — not
+deliverable generation, and not that the owner happens to be able to grade the
+output — is the justification for building it.
+
+**Test any proposed capability against this:** does it help find or verify an
+edge? If it only produces a nicer document, it is out of scope, however useful
+it might be to a person doing that work by hand.
