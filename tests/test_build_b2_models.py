@@ -27,9 +27,9 @@ class TestRegistration:
         assert got.model_id == "btc_s2f" and preds == []
 
     def test_duplicate_rejected(self, reg):
-        reg.register("pace model")
+        reg.register("pace_model")
         with pytest.raises(ValueError):
-            reg.register("pace model")
+            reg.register("pace_model")
 
     def test_list(self, reg):
         reg.register("model a")
@@ -58,10 +58,10 @@ class TestPredictions:
 
     def test_resolve_closes_against_truth_any_domain(self, reg):
         # domain-general: resolve a supply-chain ETA, not just sports/btc
-        reg.register("eta model")
-        p = reg.add_prediction("eta model", "container lands by Jun 1", "90d",
+        reg.register("eta_model")
+        p = reg.add_prediction("eta_model", "container lands by Jun 1", "90d",
                                target_value=30.0, tolerance=2.0)  # days late
-        r = reg.resolve_prediction("eta model", p.prediction_id, realized=29.0)
+        r = reg.resolve_prediction("eta_model", p.prediction_id, realized=29.0)
         assert r.status == STATUS_RESOLVED
 
     def test_double_resolve_requires_explicit_supersede(self, reg):
@@ -86,9 +86,9 @@ class TestTrackRecord:
     """The product: a model knows how accurate it is, earned against outcomes."""
 
     def test_unearned_confidence_flagged(self, reg):
-        reg.register("fresh model")
-        reg.add_prediction("fresh model", "c", "10y", probability=0.8)
-        tr = reg.track_record("fresh model")
+        reg.register("fresh_model")
+        reg.add_prediction("fresh_model", "c", "10y", probability=0.8)
+        tr = reg.track_record("fresh_model")
         assert tr["resolved"] is False  # callers must treat confidence as unearned
 
     def test_brier_perfect_calibration(self, reg):
@@ -108,10 +108,10 @@ class TestTrackRecord:
         assert abs(reg.track_record("anti-oracle")["probabilistic"]["brier"] - 1.0) < 1e-9
 
     def test_point_hit_rate_with_tolerance(self, reg):
-        reg.register("point model")
+        reg.register("point_model")
         hits = [(250000, True), (300000, False), (255000, True)]
         for target, _ in hits:
-            p = reg.add_prediction("point model", "price target", "5y",
+            p = reg.add_prediction("point_model", "price target", "5y",
                                    target_value=target, tolerance=20000)
         for i, (target, hit) in enumerate(hits):
             pred_id = reg.get("point_model")[1][i].prediction_id
