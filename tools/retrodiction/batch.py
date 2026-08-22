@@ -258,6 +258,17 @@ class RetrodictionBatch:
 
     async def run(self) -> dict[str, BatchResult]:
         done = self.load_completed()
+        # qids already present in the results FILE (checkpoint-only completions
+        # get re-appended below so the JSONL stays the full record).
+        from_file: set[str] = set()
+        if self.results_path.exists():
+            for line in self.results_path.read_text().splitlines():
+                line = line.strip()
+                if line:
+                    try:
+                        from_file.add(json.loads(line).get("question_id"))
+                    except json.JSONDecodeError:
+                        continue
         qs = self.questions
         if self.config.limit:
             qs = qs[:self.config.limit]
@@ -265,27 +276,42 @@ class RetrodictionBatch:
         logger.info("batch %s: %d total, %d already complete, %d to run",
                     self.config.label, len(qs), len(qs) - len(todo), len(todo))
 
+        appended: set[str] = set()
+
+        def _append_once(res: BatchResult) -> None:
+            if res.question_id in from_file or res.question_id in appended:
+                return
+            appended.add(res.question_id)
+            self._append(res)
+
         for i, q in enumerate(todo):
             rk = self._run_key(q)
             ih = self._inputs_hash(q)
             hit = self.checkpointer.load(rk, self.STAGE, ih)
             if hit is not None and hit.payload.get("status"):
                 payload = hit.payload
+                _append_once(BatchResult(
+                    **{k: v for k, v in payload.items()
+                       if k in BatchResult.__dataclass_fields__}))
             else:
                 result = await self._run_one(q)
                 payload = result.to_dict()
                 self.checkpointer.save(rk, self.STAGE, ih, payload,
                                        claim_ids=[q.question_id])
-                self._append(result)
+                _append_once(result)
                 self.results[q.question_id] = result
             if self.config.on_progress:
                 self.config.on_progress(i + 1, len(todo))
-        # merge resumed rows into self.results for reporting
-        for qid, rec in self.load_completed().items():
+        # merge resumed rows into self.results for reporting AND ensure the
+        # results JSONL carries every completion (a run where everything was
+        # already checkpointed still leaves a complete file behind).
+        completed = self.load_completed()
+        for qid, rec in completed.items():
             if qid not in self.results:
                 self.results[qid] = BatchResult(
                     **{k: v for k, v in rec.items()
                        if k in BatchResult.__dataclass_fields__})
+            _append_once(self.results[qid])
         return self.results
 
 

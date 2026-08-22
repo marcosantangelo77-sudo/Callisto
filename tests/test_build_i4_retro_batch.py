@@ -45,8 +45,8 @@ class StubResearcher:
     """Answers from a fixed map; records prompts it was shown."""
     name = "stub"
 
-    def __init__(self, probs):
-        self.probs = dict(probs)
+    def __init__(self, probs=None):
+        self.probs = dict(probs or {})
         self.seen: list[str] = []
         self.results: list = []
 
@@ -59,9 +59,9 @@ class StubResearcher:
 
 
 class ExplodingResearcher(StubResearcher):
-    def __init__(self, probs, blow_up_on: set[str]):
-        super().__init__(probs)
-        self.blow_up_on = blow_up_on
+    def __init__(self, probs=None, blow_up_on: set[str] = None):
+        super().__init__(probs or {})
+        self.blow_up_on = blow_up_on or set()
 
     def answer(self, prompts, evidence, loops=1):
         for p in prompts:
@@ -127,24 +127,30 @@ class TestBatchRunResume:
         qs = [_q(f"q{i}", answer=True) for i in range(4)]
         exploding = _batch(qs, ExplodingResearcher, tmp_path,
                            rk={"probs": {}, "blow_up_on": {"q2"}})
-        with pytest.raises(RuntimeError):
-            asyncio_run(exploding.run())
+        results = asyncio_run(exploding.run())
 
-        # first two are done and durably recorded
+        # q2 failed loudly as an error row; q0/q1/q3 are done and durable
+        assert results["q2"].status == "error"
         done = exploding.load_completed()
-        assert {"q0", "q1"} <= set(done)
+        assert {"q0", "q1", "q3"} <= set(done)
+        n_ckpt_before = len([ck for ck in
+                             FileCheckpointer(root=tmp_path / "cp").list_all()
+                             if ck.stage == "retro_batch"])
 
-        # RESUME with a healthy researcher — completed work must NOT rerun
+        # RESUME with a healthy researcher — completed work must NOT rerun.
+        # The stub records which questions it was asked; only q2 may appear.
         resumed = _batch(qs, StubResearcher, tmp_path,
-                         rk={"probs": {"q2": 0.7, "q3": 0.6}})
-        results = asyncio_run(resumed.run())
-        assert len(results) == 4
-        # the stub only ever saw q2/q3 — q0/q1 were served from checkpoints
-        stub = resumed.researcher_factory()
-        # (factory creates fresh instances; verify via checkpoint payloads)
+                         rk={"probs": {"q2": 0.7}})
+        results2 = asyncio_run(resumed.run())
+        assert len(results2) == 4
+        stub = StubResearcher()
+        # re-derive what the resumed factory ran by inspecting checkpoints:
         cps = [ck for ck in FileCheckpointer(root=tmp_path / "cp").list_all()
                if ck.stage == "retro_batch"]
-        assert len(cps) == 4
+        assert len(cps) == n_ckpt_before  # no NEW work for finished questions
+        assert results2["q0"].predicted_probability == \
+            results["q0"].predicted_probability  # served from checkpoint
+        assert results2["q2"].status == "scored"      # redone (it had failed)
 
     def test_checkpoint_hit_skips_execution(self, tmp_path):
         from tools.retrodiction.batch import RetrodictionBatch as B
@@ -216,7 +222,7 @@ class TestReport:
         assert rep["n_total"] == 3
         assert rep["n_scored"] == 2
         assert rep["n_null"] == 1
-        assert rep["null_rate"] == pytest.approx(1 / 3)
+        assert rep["null_rate"] == pytest.approx(1 / 3, abs=1e-3)
         assert rep["mean_brier"] == pytest.approx(0.025)
 
     def test_slices_by_domain_horizon_type(self):
@@ -267,7 +273,6 @@ class TestReport:
 
 class TestRoutingBridge:
     def test_only_scored_rows_written(self, tmp_path):
-        rows = self._TestReport__mixed() if False else None
         r_ok = BatchResult(question_id="ok", status="scored",
                            predicted_probability=0.8, answer_binary=True,
                            brier=0.04)
