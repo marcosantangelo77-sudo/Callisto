@@ -108,3 +108,58 @@ random inputs, not chosen ones.**
     is a 20 KB stub. The ghost-FK check and migration 013 wait for that machine.
   - Nothing has been driven end to end yet. That remains the highest-value
     unfinished thing — see NEXT.md "THE DISCIPLINE".
+
+---
+
+## RESUME PROTOCOL — added 2026-08-22 ~04:00
+
+**If the Claude session ended mid-flight (usage limit, crash, closed terminal):**
+
+Agents keep running independently. Their work is protected by a detached daemon:
+
+    ~/callisto-wt/autosave.sh      commits + pushes every worktree every 5 min
+    ~/callisto-wt/autosave.log     what it saved and when
+    pgrep -f autosave.sh           check it is alive; relaunch with nohup if not
+
+So **nothing is lost**. Resuming is a merge job, not a recovery job.
+
+### Steps to resume
+
+1. `~/callisto-wt/status.sh` — see every instance, branch, commits, uncommitted.
+2. For each branch ahead of master: read its `findings/` and its final log in
+   `/tmp/*.log`, then merge into master and RUN THE SUITE (command above).
+3. Fix integration failures. They will exist — merging is where defects surface.
+   Three appeared tonight that were invisible on individual branches.
+4. Push master. Verify `pmset -g batt` shows charging and `pgrep -x caffeinate`
+   is alive, or the machine sleeps and everything stops.
+
+### The standing instruction
+
+**Stop adding capability. Start testing.** As of this writing the repo has
+~1,490 tests and every major component built, but nothing has been driven end
+to end. The owner's own words: *"we just gotta test it at this point."*
+
+The pipeline instance (`build/pipeline`) is the one that makes testing possible
+— it wires the eleven disconnected components into one chain. When it lands,
+the next action is NOT another feature. It is:
+
+  - drive one real question through the whole chain
+  - whatever breaks is the real backlog, better ranked than any list
+
+Resist the pull toward more components. The failure mode this project already
+survived once was four months of building without running.
+
+### Branch inventory at handoff time
+
+    merged to master:  audit tiers 0-7, sandbox, artifacts, charts, model
+                       registry, tool registry, citation grounding, provenance,
+                       HMAC seal, OutcomeResolver, CLV rewire, base-rate floors,
+                       inheritance rule, ResearchProgram, schema seam +
+                       migrations, EDGAR + fixtures, retrodiction harness,
+                       adversary, source registry (8 adapters), edge
+                       quantification, Fermi, reference classes
+
+    in flight:         build/pipeline           end-to-end wiring  <- the one that matters
+                       build/preregistration    sealed falsifiers + long-lived claims
+                       build/sources-2          more adapters incl. Wayback-as-proof
+                       build/loop-quality       information-gain termination
