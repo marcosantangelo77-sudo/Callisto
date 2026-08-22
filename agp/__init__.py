@@ -253,6 +253,14 @@ class AGPSession:
         # time, the session is mostly noise and seal() refuses.
         self.filtered_evidence_count: int = 0
 
+        # Independent seal reviewer (mechanism 4 of the earned-confidence
+        # design): a callable(session, summary) → Optional[str]. Non-empty /
+        # truthy return = veto reason; the seal is refused. This is the hook
+        # that lets a component which did NOT write the conclusion (the
+        # Sentinel) block a seal on "conclusion asserts X, evidence contains
+        # no X". None/absent = legacy behavior, nothing changes.
+        self.seal_veto = None
+
         self._sealed: bool = False
 
         # Liveness tracking — lets an external watcher (task_worker adaptive
@@ -352,6 +360,9 @@ class AGPSession:
           - conclusion is empty or == EMPTY_SYNTHESIS_MARKER
           - len(evidence) == 0
           - filtered_evidence_count > len(evidence)  (mostly-rejected session)
+          - self.seal_veto(session, summary) returns a truthy reason — the
+            independent-reviewer hook (e.g. Sentinel fed conclusion +
+            evidence). Reviewer exceptions FAIL CLOSED (refuse).
 
         Raises AGPSealRefused in those cases instead of sealing a 0.30
         SPECULATIVE row into the DB.
@@ -395,6 +406,26 @@ class AGPSession:
                 f"Session {self.session_id}: refusing to seal — "
                 f"filtered ({self.filtered_evidence_count}) > kept ({len(self.evidence)})"
             )
+
+        # ── Independent reviewer veto (fails closed) ──
+        if self.seal_veto is not None:
+            try:
+                reason = self.seal_veto(self, self.summary)
+            except Exception as e:
+                reason = f"reviewer crashed: {type(e).__name__}: {e}"
+                logger.error(
+                    "AGP seal veto reviewer raised for session %s — failing closed",
+                    self.session_id,
+                )
+            if reason:
+                logger.warning(
+                    "AGP seal refused for session %s by independent review: %s",
+                    self.session_id, reason,
+                )
+                raise AGPSealRefused(
+                    f"Session {self.session_id}: refusing to seal — "
+                    f"independent review veto: {reason}"
+                )
 
         self.sealed_at = datetime.now(timezone.utc).isoformat()
         payload = _canonical_payload(self.to_dict())
