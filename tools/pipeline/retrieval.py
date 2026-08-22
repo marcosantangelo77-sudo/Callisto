@@ -332,15 +332,31 @@ class IterativeRetriever:
             round_detail = {"round": rnd, "query": query,
                             "sources": [], "admitted": 0}
             for spec in specs:
-                call = calls.get(spec.name)
-                if not call:
-                    round_detail["sources"].append(
-                        {"name": spec.name, "skipped": "no generic route"})
-                    continue
-                method_name, pos_args, kw_args = call
-                kwargs = {k: (query if v == "term" else v)
-                          for k, v in (kw_args or {}).items()}
-                args = tuple(query if a == "term" else a for a in pos_args)
+                # ── query authoring: planner (W5) or legacy table (W1) ──
+                if legacy_calls is not None:
+                    call = legacy_calls.get(spec.name)
+                    if not call:
+                        round_detail["sources"].append(
+                            {"name": spec.name, "skipped": "no generic route"})
+                        continue
+                    method_name, pos_args, kw_args = call
+                    kwargs = {k: (query if v == "term" else v)
+                              for k, v in (kw_args or {}).items()}
+                    args = tuple(query if a == "term" else a for a in pos_args)
+                else:
+                    from tools.sources import query_builder
+                    plan = query_builder.build_plan(spec.name, question.text)
+                    if not plan.plannable or not plan.queries:
+                        reason = plan.reason or "no authored query possible"
+                        logger.info("planner skipped %s: %s",
+                                    spec.name, reason)
+                        excluded.add(spec.name)
+                        round_detail["sources"].append(
+                            {"name": spec.name, "skipped": reason[:120]})
+                        continue
+                    pq = plan.queries[0]
+                    method_name = pq.method
+                    args, kwargs = tuple(pq.args), dict(pq.kwargs)
                 try:
                     source = RestSource(spec, ledger=self.ledger,
                                         transport=self.transport)

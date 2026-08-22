@@ -177,18 +177,6 @@ class ResearchPipeline:
                  inheritance rule for the parent conclusion's ceiling.
     """
 
-    #: registry name -> adapter method used by the generic fetcher.
-    GENERIC_CALLS = {
-        "openalex": ("works_search", ("term",), {"limit": 3}),
-        "federalregister": ("search", (), {"query_term": "term", "limit": 3}),
-        "clinicaltrials": ("search_studies", (), {"query_term": "term"}),
-        "gdelt": ("doc_query", ("term",)),
-        "treasury": None,   # needs a dataset name; not generically callable
-        "bls": None,        # POST + series ids; not generically callable
-        "fred": None,       # needs an API key + series id
-        "wikidata": None,   # raw SPARQL; needs query authoring
-    }
-
     def __init__(self, *, model: PipelineModel, adversary_router=None,
                  transport: Optional[Transport] = None,
                  store: Optional[ArtifactStore] = None,
@@ -293,9 +281,13 @@ class ResearchPipeline:
 
         reg = self._get_registry()
         qt = question_type or q.text
+        # Query authoring is delegated to the W5 planner
+        # (tools.sources.query_builder.build_plan): per-source, fully-formed
+        # adapter calls covering 9 sources, honest gaps for the rest. This
+        # replaced the 4-entry GENERIC_CALLS table whose mono-source fan-out
+        # kept independence at 1 in the second live run.
         retriever = IterativeRetriever(
-            registry=reg, ledger=self.ledger, transport=self.transport,
-            generic_calls=self.GENERIC_CALLS)
+            registry=reg, ledger=self.ledger, transport=self.transport)
         trace = retriever.retrieve(
             q, qt, min_independent=q.evidence_requirements.min_independent_sources)
         return list(trace.admitted), trace
