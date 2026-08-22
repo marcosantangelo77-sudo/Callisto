@@ -39,9 +39,13 @@ logger = logging.getLogger("callisto.retrieval")
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
-#: registry name -> adapter method, mirrored from engine.GENERIC_CALLS so a
-#: retriever constructed standalone still has routes. The engine passes its
-#: own dict explicitly; keep these in sync.
+#: Legacy generic-call table (W1): registry name -> adapter method spec.
+#: SUPERSEDED for the engine by tools.sources.query_builder.build_plan —
+#: kept ONLY so a retriever constructed with an explicit generic_calls=
+#: dict (older tests, ad-hoc scripts) behaves exactly as before. When
+#: generic_calls is None the retriever authors queries per source with
+#: build_plan, which covers every plannable adapter and honestly reports
+#: the rest.
 _DEFAULT_GENERIC_CALLS = {
     "openalex": ("works_search", ("term",), {"limit": 3}),
     "federalregister": ("search", (), {"query_term": "term", "limit": 3}),
@@ -266,7 +270,8 @@ class IterativeRetriever:
                  max_rounds: int = 3,
                  max_sources_per_leaf: int = 3,
                  max_fetches_per_round: int = 4,
-                 generic_calls: Optional[dict] = None):
+                 generic_calls: Optional[dict] = None,
+                 use_planner: bool = True):
         self.registry = registry
         self.ledger = ledger
         self.transport = transport
@@ -274,14 +279,21 @@ class IterativeRetriever:
         self.max_rounds = max(1, int(max_rounds))
         self.max_sources_per_leaf = max(1, int(max_sources_per_leaf))
         self.max_fetches_per_round = max(1, int(max_fetches_per_round))
-        self.generic_calls = generic_calls  # falls back to engine.GENERIC_CALLS
+        #: None + use_planner=True -> per-source query authoring via
+        #: tools.sources.query_builder.build_plan (W5). An explicit dict
+        #: keeps the legacy W1 behaviour byte-for-byte.
+        self.generic_calls = generic_calls
+        self.use_planner = use_planner
 
     def retrieve(self, question, question_type: str,
                  min_independent: int) -> RetrievalTrace:
         from tools.pipeline.engine import _make_adapter, _sha
         from tools.sources.base import RestSource, SourceError
 
-        calls = self.generic_calls or _DEFAULT_GENERIC_CALLS
+        legacy_calls = self.generic_calls
+        if legacy_calls is None and not self.use_planner:
+            # Explicit opt-out: behave as the W1 default table did.
+            legacy_calls = _DEFAULT_GENERIC_CALLS
         trace = RetrievalTrace(question_id=question.question_id)
 
         translated, chosen = translate_question_type(
@@ -301,10 +313,15 @@ class IterativeRetriever:
         for rnd in range(1, self.max_rounds + 1):
             all_specs = self.registry.select(
                 translated, max_tier=3, exclude=excluded)
-            # Fan out across routable sources; a source with no generic
-            # route cannot contribute this round, so don't spend the
-            # fan-out budget on it.
-            routable = [s for s in all_specs if s.name in calls]
+            # Fan out across routable sources. With the planner (default)
+            # every source the registry selected is routable — build_plan
+            # either authors real queries or reports honestly why it
+            # cannot. Under a legacy generic_calls table only listed
+            # sources can contribute.
+            if legacy_calls is not None:
+                routable = [s for s in all_specs if s.name in legacy_calls]
+            else:
+                routable = list(all_specs)
             if not routable:
                 trace.stop_reason = (
                     "selected sources lack generic fetch routes")
