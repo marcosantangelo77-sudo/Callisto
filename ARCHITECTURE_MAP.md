@@ -104,7 +104,7 @@ AST pass reconciliation — confidence labels:
 | module-internal-only | ~950 | n/a | private helpers used within their own file — alive, not listed |
 | live | 904 | n/a | referenced from ≥1 production file |
 
-**Method caveats (falsifiers in §6):** string-literal matching is deliberately over-inclusive (a comment saying "unused function foo" would keep `foo` alive — comments are not parsed, only strings); decorated functions are never claimed dead because FastAPI/pytest/click discover them by decoration; `self_repair`'s config-driven `__import__` can resurrect any module at runtime.
+**Method caveats (falsifiers in §6):** docstrings and string literals are treated as references (over-inclusive by design); comments are not parsed and do not keep code alive; decorated functions are never claimed dead because FastAPI/pytest/click discover them by decoration; `self_repair`'s config-driven `__import__` can resurrect any module at runtime. "Imported but never called" is reported separately — the AST pass counts import aliases as references (conservative), so such functions appear live here even if no call site exists.
 
 ### 2.1 The 64 high-confidence dead functions (VERIFIED zero references)
 
@@ -117,7 +117,9 @@ Grouped by subsystem — **money-path items bolded** (they are Tier-0 adjacent a
 - `tools/local_compute.py:123` `local_kelly` — a *local* Kelly implementation, dead
 - `tools/math_utils.py:41` `decimal_to_implied`
 - `tools/correlation.py:398,405,552,994` `_prob_to_decimal`, `_adjust_joint_probability`, `detect_mispriced_correlation`, `estimate_sgp_vig`
-- `tools/ev.py:53` `ev_free_bet` (imported by `orchestrator` but never called — unused import)
+
+**Imported-unused (not counted in the 64; the AST pass counts import aliases as references):**
+- `tools/ev.py:53` `ev_free_bet` — imported by `orchestrator.py:87`, zero call sites anywhere in the repo.
 
 **Data plane**
 - `tools/dk_scraper.py:1098,1142,1242` all three golf functions; `tools/fanduel_scraper.py:305` golf outrights
