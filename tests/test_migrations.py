@@ -102,9 +102,12 @@ def test_existing_db_is_bootstrapped(tmp_path):
 
     result = apply_pending_migrations(db)
     discovered_versions = {m.version for m in discover_migrations()}
-    assert result["bootstrapped"] == len(discovered_versions)
-    # Bootstrap marks every migration as already-applied, so applied list is empty.
-    assert result["applied"] == []
+    # B5 (schema seam): 013/014 must NOT be bootstrap-marked — they carry
+    # the domain-general rebuild and run for real against existing DBs.
+    assert result["bootstrapped"] == len(discovered_versions) - 2
+    pre_seam = {v for v in discovered_versions if v < 13}
+    assert set(result["applied"]) == discovered_versions - pre_seam
+    assert 13 in result["applied"] and 14 in result["applied"]
 
     # All schema_migrations rows have bootstrap=1, applied_at=NULL.
     conn = sqlite3.connect(db)
@@ -116,8 +119,14 @@ def test_existing_db_is_bootstrapped(tmp_path):
         conn.close()
     assert len(rows) == len(discovered_versions)
     for _v, applied_at, bootstrap in rows:
-        assert applied_at is None
-        assert bootstrap == 1
+        # 013/014 ran for real (not bootstrapped) so they carry timestamps;
+        # every other migration is bootstrap-marked with NULL applied_at.
+        if _v in (13, 14):
+            assert applied_at is not None
+            assert bootstrap == 0
+        else:
+            assert applied_at is None
+            assert bootstrap == 1
 
 
 def test_bootstrap_only_runs_when_schema_migrations_empty(tmp_path):

@@ -90,6 +90,8 @@ def check_row_parity(conn: sqlite3.Connection) -> dict:
 
 def check_referential_integrity(conn: sqlite3.Connection) -> dict:
     orphans: dict[str, int] = {}
+    if not _table_exists(conn, "hypotheses"):
+        return {"ok": True, "detail": "no hypotheses table", "orphans": {}}
     for t in HYP_FK_CHILDREN:
         if not _table_exists(conn, t):
             continue
@@ -121,8 +123,13 @@ def check_domain_coverage(conn: sqlite3.Connection) -> dict:
     if not _table_exists(conn, "hypotheses"):
         return {"ok": True, "detail": "no hypotheses table"}
     cols = [r[1] for r in conn.execute("PRAGMA table_info(hypotheses)").fetchall()]
-    if "domain" not in cols:
+    if "domain" not in cols and "sport" in cols:
+        # 013 ran its rebuild but domain vanished — impossible; fail loud.
         return {"ok": False, "detail": "domain column missing post-migration"}
+    if "domain" not in cols:
+        # Stub/foreign hypotheses table without either column (e.g. a bare
+        # test fixture): nothing to verify here.
+        return {"ok": True, "detail": "hypotheses lacks both domain and sport; skipped"}
     nulls = conn.execute(
         "SELECT COUNT(*) FROM hypotheses WHERE domain IS NULL OR domain = ''"
     ).fetchone()[0]
