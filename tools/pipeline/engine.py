@@ -197,6 +197,9 @@ class ResearchPipeline:
         self.descendant_resolutions = list(descendant_resolutions or [])
         self._adversary_router = adversary_router
         self._adversary = None
+        #: True when the adversary runs on the SAME model as the author
+        #: (no adversary_router injected). Self-review is visible and capped.
+        self._adversary_is_self_review = adversary_router is None
         # None = no checkpointing; behaviour identical to the pre-W3 run.
         self.checkpointer = checkpointer
 
@@ -211,15 +214,21 @@ class ResearchPipeline:
     @property
     def adversary(self):
         if self._adversary is None:
-            if self._adversary_router is None:
-                raise ValueError(
-                    "adversary_router is required to attack conclusions")
             from agp.adversary import Adversary, AdversaryLedger
             import tempfile
             tmp = tempfile.mkdtemp(prefix="callisto_adv_")
+            # CONSTRUCTION ERGONOMICS (JOB 3): a live run used to die at
+            # stage 6 — ~100 seconds in — because no adversary router was
+            # wired. Defaulting to the SAME model as the author is safe by
+            # construction: agp.ensemble marks same-model review as
+            # self_review and caps it at SELF_REVIEW_CEILING, so this can
+            # only ever subtract confidence, never inflate independence.
+            router = self._adversary_router or self.model
             self._adversary = Adversary(
-                self._adversary_router,
+                router,
                 ledger=AdversaryLedger(path=f"{tmp}/dissent.jsonl"))
+            self._adversary_is_self_review = (
+                self._adversary_router is None)
         return self._adversary
 
     # ── Stage 1: decompose ────────────────────────────────────────────────
@@ -518,7 +527,14 @@ class ResearchPipeline:
         clamped, tier = clamp_parent_confidence(
             proposed, self.descendant_resolutions)
 
-        # 7. Adversary.
+        # 7. Adversary. When no dedicated router was injected, the author's
+        # own model attacks — recorded honestly as self-review in the notes.
+        if self._adversary_is_self_review:
+            result.notes.append(
+                "adversary running in self-review mode: no separate "
+                "adversary_router was wired; same-model review is capped "
+                "(SELF_REVIEW_CEILING) and counts as zero independent "
+                "reviewers")
         objections = await self.adversary.attack(
             claim_id=session.session_id, conclusion=conclusion,
             evidence_items=[e.content for e in session.evidence])
