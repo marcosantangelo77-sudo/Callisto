@@ -266,6 +266,122 @@ class ResearchProgram:
         blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
+    # ── persistence: close and reopen weeks later with full state ────────
+
+    def to_dict(self) -> dict:
+        """Full-state serialization, including per-question mutable status."""
+        return {
+            "program_id": self.program_id,
+            "root_query": self.root_query,
+            "domain": self.domain,
+            "status": self.status.value,
+            "created_at": self.created_at.isoformat(),
+            "questions": [
+                {**_q_to_dict(q),
+                 "status": q.status.value,
+                 "lifecycle_link": q.lifecycle_link}
+                for q in self.questions
+            ],
+            "artifacts": [{"kind": a.kind, "sha256": a.sha256}
+                          for a in self.artifacts],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ResearchProgram":
+        def _q_from(dd: dict) -> ResearchQuestion:
+            req = dd.get("requirements", {})
+            hz = dd.get("horizon")
+            q = ResearchQuestion(
+                text=dd["text"],
+                kind=QuestionKind(dd["kind"]),
+                priority=dd.get("priority", 0.5),
+                evidence_requirements=EvidenceRequirement(
+                    min_source_class=SourceClassRank(
+                        req.get("min_source_class", "SECONDARY")),
+                    min_independent_sources=int(
+                        req.get("min_independent_sources", 2)),
+                    quant_required=bool(req.get("quant_required", False)),
+                ),
+                horizon=None if hz is None else Horizon(
+                    claim_date=date.fromisoformat(hz["claim_date"]),
+                    resolve_date=date.fromisoformat(hz["resolve_date"]),
+                ),
+                children=[_q_from(c) for c in dd.get("children", [])],
+                status=QuestionStatus(dd.get("status", "open")),
+                lifecycle_link=dd.get("lifecycle_link"),
+                question_id=dd["id"],
+            )
+            return q
+
+        prog = cls(
+            root_query=d["root_query"],
+            domain=d.get("domain", "GENERAL"),
+            program_id=d["program_id"],
+            questions=[_q_from(qd) for qd in d.get("questions", [])],
+            artifacts=[ArtifactRef(kind=a["kind"], sha256=a["sha256"])
+                       for a in d.get("artifacts", [])],
+            status=ProgramStatus(d.get("status", "active")),
+            created_at=datetime.fromisoformat(d["created_at"]),
+        )
+        return prog
+
+
+class ProgramStore:
+    """File-backed persistence for ResearchPrograms — one JSON file per
+    program, keyed by program_id, under a directory.
+
+    This is the interim store while the DB migration is a PROPOSAL only
+    (tools/schema.py core/plugin seam; see findings/p2_claims_migration.md).
+    Atomic writes (temp file + rename) so a crash mid-save cannot corrupt a
+    program's record.
+    """
+
+    def __init__(self, directory):
+        import os
+        self._dir = str(directory)
+        os.makedirs(self._dir, exist_ok=True)
+
+    def _path(self, program_id: str) -> str:
+        import os
+        if not program_id or any(c in program_id for c in "/\\."):
+            raise ValueError(f"invalid program_id {program_id!r}")
+        return os.path.join(self._dir, f"program_{program_id}.json")
+
+    def save(self, program: ResearchProgram) -> str:
+        import os
+        errs = program.validate()
+        if errs:
+            raise ValueError(f"refusing to persist invalid program: {errs}")
+        path = self._path(program.program_id)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(program.to_dict(), f, ensure_ascii=False)
+        os.replace(tmp, path)
+        return path
+
+    def load(self, program_id: str) -> Optional[ResearchProgram]:
+        try:
+            with open(self._path(program_id), encoding="utf-8") as f:
+                return ResearchProgram.from_dict(json.load(f))
+        except FileNotFoundError:
+            return None
+
+    def list_ids(self) -> list[str]:
+        import glob
+        import os
+        out = []
+        for p in sorted(glob.glob(os.path.join(self._dir, "program_*.json"))):
+            out.append(os.path.basename(p)[len("program_"):-len(".json")])
+        return out
+
+    def delete(self, program_id: str) -> bool:
+        import os
+        try:
+            os.remove(self._path(program_id))
+            return True
+        except FileNotFoundError:
+            return False
+
 
 def _q_to_dict(q: ResearchQuestion) -> dict:
     return {
