@@ -120,3 +120,72 @@ Falsifier: a session dict with sealed=true and error="seal_refused".
 For: unowned (recorded as gold per mandate Q8 permission)
 
 ---
+## WORK UNIT 3 — autonomous.py startup sequence: the biggest gate ratchet in the tier (FOUND + FIXED)
+
+## [VERIFIED] autonomous.py:1609-1709 — `_migrate_edge_thresholds` lowered EVERY hypothesis's operative gate to 0.3% on every loop start
+Blast radius: SILENT, continuous, and the largest single gate-weakening mechanism in the codebase
+Evidence: called from ResearchLoop.start (:1472) — i.e., on every unattended loop
+boot. Four passes end at `UPDATE hypotheses SET edge_threshold = 0.003 WHERE
+edge_threshold > 0.003` over all draft/backtesting rows. This is the operative
+COLUMN that gates every signal in backtest.py. ROADMAP §3.1 documented self-repair's
+1.5% writes as the scandal; this routine is strictly worse (0.3%, runs forever,
+no marker written, no hermes learning, just a log line). Nobody flagged it because
+it lives in the loop's own startup, not in self_repair.
+Falsifier: run a loop start with hypotheses above 0.3% and find them unchanged.
+FIX APPLIED (my file): gated behind CALLISTO_ALLOW_THRESHOLD_MIGRATION=1; without
+the flag it logs what it WOULD have done and changes nothing.
+For: me (fixed); workstation should check how many rows are already pinned at 0.003
+
+## [VERIFIED] autonomous.py:1711-1754 — `_retroactive_signal_update` rewrote HISTORICAL EVIDENCE to match the lowered gate
+Blast radius: CRITICAL for epistemics (evidence tampering by a maintenance routine)
+Evidence: after migration, re-flags backtest_events.signal_generated=1 wherever
+`edge >= new threshold`. The stats/p-values/promotion gates then consume these
+events. This means past performance records were silently regenerated under the
+new 0.3% bar — hypothesis statistics are NOT computed under a consistent standard
+over time. Any calibration claim built on backtest_events is contaminated by however
+many times this ran. Same fix applied: opt-in gated, default no-op.
+Falsifier: a DB where signal_generated flags change without an operator action.
+For: me (fixed); contamination query belongs in ROADMAP §3.1 set:
+  SELECT COUNT(*) FROM backtest_events WHERE signal_generated=1 AND edge < 0.005;
+
+## [VERIFIED] autonomous.py:1756-1801, :1803-1839 — two startup requeues un-reject hypotheses and lower gates
+Blast radius: SILENT
+Evidence: `_requeue_threshold_rejections` bulk-moves rejected→backtesting AND sets
+edge_threshold=0.015; `_requeue_prop_rejections` moves rejected→draft and sets 0.003.
+Both run on every start. Combined with self_repair's `_fix_premature_rejection`,
+there were FOUR independent un-reject mechanisms. All now operator-gated.
+Falsifier: rejected rows moving to draft/backtesting on loop start without env flag.
+For: me (fixed)
+
+## [VERIFIED] The complete gate-weakening surface of Tier 1 (post-fix inventory)
+Blast radius: n/a — summary finding
+Evidence: exhaustive sweep of my three files found SEVEN distinct automated
+gate-weakening mechanisms, of which ROADMAP knew about three:
+  1. self_repair._fix_thresholds (JSON key, was no-op) — REFUSED now
+  2. self_repair._fix_finding_promotion_thresholds (dead knob) — REFUSED now
+  3. self_repair._fix_finding_edge_ceiling (OPERATIVE column write) — REFUSED now
+  4. self_repair._fix_premature_rejection (rejected→draft) — OPT-IN GATED
+  5. autonomous._phase_interpret_backtests modify-path (operative column,
+     unbounded, LLM-controlled) — DIRECTION-GUARD now (may raise, never lower)
+  6. autonomous._migrate_edge_thresholds (startup ratchet to 0.3%) — OPT-IN GATED
+  7. autonomous._retroactive_signal_update (evidence rewrite) — OPT-IN GATED
+Enforcement principle landed structurally: refusers + direction guards +
+operator opt-in flags + static regression tests in both test_tier1_loop_* files.
+Falsifier: any remaining code path in autonomous.py/self_repair.py/orchestrator.py
+that lowers edge_threshold, weakens promotion requirements, or un-rejects without
+an explicit operator flag.
+For: me
+
+## [VERIFIED] autonomous.py:5727+ vs backtest.py:3809 — ROADMAP §0 loaded-gun claim CONFIRMED unchanged
+Blast radius: LOUD but fail-safe-by-accident (do not "fix")
+Evidence: `_phase_live_execute` lists hypotheses with status='live' (:5790) and feeds
+them to `generate_paper_trade_signal`, which hard-returns [] unless status ==
+'paper_trading' (backtest.py:3809). No automated bet can be placed today. Per
+mandate §5.2 I have NOT armed this path and no test of mine touches it with live
+semantics. Note the phase also has sound layers worth keeping when it is ever
+legitimately armed: drawdown kill-switch before execution, portfolio sizing once
+per cycle with caps, regime-safe calendar gate.
+Falsifier: one submitted order from a 'live'-status hypothesis under current code.
+For: Instance 2 (money path owns arming decision)
+
+---
