@@ -282,56 +282,31 @@ class ResearchPipeline:
     # ── Stage 2+3: select sources and fetch per leaf ──────────────────────
 
     async def _fetch_for_question(self, q: ResearchQuestion,
-                                  max_fetches_per_leaf: int = 3
-                                  ) -> list[FetchResult]:
+                                  question_type: str = "",
+                                  ) -> tuple[list[FetchResult], Any]:
+        """Iterative, gated, fanned-out retrieval for one leaf.
+
+        Returns (fetches, RetrievalTrace). Every returned fetch passed the
+        relevance gate; rejected items live on the trace with reasons. A
+        trace with zero admitted items is an honest null, surfaced as such."""
+        from tools.pipeline.retrieval import IterativeRetriever
+
         reg = self._get_registry()
-        # The decomposer may attach a `question_type` (what kind of source
-        # answers this); ResearchQuestion doesn't store it, so the pipeline
-        # carries it alongside. Fall back to the question text.
-        qt = self._question_types.get(q.question_id) or q.text
-        specs = reg.select(qt, max_tier=3)[:max_fetches_per_leaf]
-        results: list[FetchResult] = []
-        for spec in specs:
-            call = self.GENERIC_CALLS.get(spec.name)
-            if not call:
-                logger.info("no generic route for source '%s'; skipped",
-                            spec.name)
-                continue
-            method_name, pos_args, kw_args = call
-            term = re.sub(r"[^A-Za-z0-9 ]", " ", q.text).strip()
-            kwargs = {k: (term if v == "term" else v)
-                      for k, v in (kw_args or {}).items()}
-            args = tuple(term if a == "term" else a for a in pos_args)
-            try:
-                source = RestSource(spec, ledger=self.ledger,
-                                    transport=self.transport)
-                adapter = _make_adapter(reg, spec.name, source)
-                fetched = getattr(adapter, method_name)(*args, **kwargs)
-                if source.last_record is None or \
-                        source.last_record.status != 200:
-                    raise SourceError(
-                        f"{spec.name} returned non-200 for this query")
-                body = json.dumps(fetched, sort_keys=True)
-                rec = FetchResult(
-                    source_name=spec.name,
-                    url=source.last_record.url if source.last_record else "",
-                    content_sha256=_sha(body),
-                    body=body, parsed=fetched, question_id=q.question_id)
-            except Exception as e:  # noqa: BLE001 — a failed source is skipped
-                logger.info("source %s failed for %s: %s",
-                            spec.name, q.question_id, e)
-                continue
-            # Every result lands in the ledger exactly once as primary bytes.
-            self.ledger.record_tool_result(
-                f"{spec.name}_fetch", body, primary=True, urls=[rec.url])
-            results.append(rec)
-        return results
+        qt = question_type or q.text
+        retriever = IterativeRetriever(
+            registry=reg, ledger=self.ledger, transport=self.transport,
+            generic_calls=self.GENERIC_CALLS)
+        trace = retriever.retrieve(
+            q, qt, min_independent=q.evidence_requirements.min_independent_sources)
+        return list(trace.admitted), trace
+
 
     # ── Stage 4+5: answer with optional sandbox compute + artifacts ───────
 
     async def _answer_leaf(self, q: ResearchQuestion,
                            fetches: list[FetchResult],
                            session: AGPSession,
+                           trace: Any = None,
                            ) -> LeafOutcome:
         out = LeafOutcome(question_id=q.question_id, text=q.text)
         evidence_items: list[Evidence] = []
@@ -399,13 +374,20 @@ class ResearchPipeline:
                       MAX_CONFIDENCE_BY_SOURCE.get(best_class.value, 0.55))
 
         # Evidence-requirement gate (agp.research_program): unmet requirements
-        # cap the leaf at SPECULATIVE floor band.
+        # cap the leaf at SPECULATIVE floor band. Independent-source counting
+        # now reflects ACTUAL source diversity (distinct hosts / declared
+        # overlap families), not the number of API calls that returned.
         achieved = SourceClassRank(best_class.value)
+        if trace is not None and trace.independent_keys:
+            n_indep = len(trace.independent_keys)
+        else:
+            n_indep = len({f.source_name for f in fetches}) + (
+                1 if out.sandbox_status == "ok" else 0)
         reasons = q.evidence_requirements.unmet_reasons(
-            achieved, len({f.source_name for f in fetches}) + (
-                1 if out.sandbox_status == "ok" else 0),
+            achieved, n_indep,
             produced_quant=out.sandbox_status == "ok" or
             bool(out.answer and re.search(r"\d", out.answer)))
+
         out.requirement_reasons = reasons
         if reasons:
             clamped = min(clamped, 0.54)
@@ -442,10 +424,19 @@ class ResearchPipeline:
         session.sources = [s["name"] for s in self._get_registry().specs()]
 
         for q in program.leaves:
-            fetches = await self._fetch_for_question(q)
+            fetches, trace = await self._fetch_for_question(
+                q, self._question_types.get(q.question_id) or "")
             result.fetches.extend(fetches)
-            outcome = await self._answer_leaf(q, fetches, session)
+            if trace.rejected:
+                result.notes.append(
+                    f"leaf '{q.text[:60]}': {len(trace.rejected)} fetch(s) "
+                    "rejected at ingestion: " + "; ".join(
+                        f"[{r.source_name}] {r.reason}"
+                        for r in trace.rejected))
+            outcome = await self._answer_leaf(q, fetches, session,
+                                              trace=trace)
             result.leaves.append(outcome)
+
 
         session.advance_to(SessionStep.PRIMARY_COLLECTION)
         session.advance_to(SessionStep.CONTRADICTION_CHECK)
