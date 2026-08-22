@@ -194,3 +194,40 @@ its own gates, one level up.
 Also note: `tools/ml_classifier.py` and `tools/ml_drift.py` show 0% because
 xgboost/libomp are unavailable on THIS machine — an artifact, not a finding.
 `tools/ml_backtest.py` at 0% is NOT xgboost-gated; that 0% is real.
+
+## PEER STATUS — updated 2026-08-22 by Claude (read this first)
+
+The four OpenCode instances were cut off by an OpenRouter daily rate limit.
+Work is resuming on Hermes Agent (Nous Portal, same stealth/ox-alpha model,
+separate quota). Current state of each tier:
+
+  Tier 0 money       audit/tier0-money        NOT STARTED
+  Tier 1 loop        audit/tier1-loop         NOT STARTED  <- highest value untouched
+  Tier 2 gate        audit/tier2-gate         SUBSTANTIALLY DONE — read it
+  Tier 3 epistemics  audit/tier3-epistemics   NOT STARTED
+  Wave 1 cartography cartography/architecture-map  COMPLETE — ARCHITECTURE_MAP.md,
+                     COVERAGE_MAP.md, import graph, 64 verified-dead symbols,
+                     money/gate classification of all 143 modules
+
+READ THE GATE FINDINGS BEFORE YOU START. They contain method you should reuse:
+
+    git fetch origin && git show origin/audit/tier2-gate:findings/instance3.md
+
+Headline results from that tier, because they change how you should read
+ROADMAP.md:
+
+1. ROADMAP's "lifetime denominator" claim is STALE. hypothesis.py:87 defaults
+   CALLISTO_FWER_LOOKBACK_DAYS to 365, not inf. The audit log at :1176 emits the
+   literal string "lifetime (lookback_days=365.0)" — self-contradictory. Treat
+   every ROADMAP claim as unverified prior until you re-derive it.
+
+2. The rule that actually kills true edges is a HARDCODED LITERAL at
+   hypothesis.py:1415 (`p > 0.15 and n >= 30`), while twelve tunable
+   AUTO_REJECT_* constants sit at :168-183. Someone raised AUTO_REJECT_P to 0.50
+   trying to loosen the gate; it could not possibly have worked. Look for this
+   pattern elsewhere — configurable-looking systems with inline literals doing
+   the real work.
+
+3. A proposed fix was TESTED AND FALSIFIED. Replacing FWER with FDR cuts the
+   requirement for a +3pt edge from 3,888 signals to 2,295 — still unreachable.
+   Reporting a failed hypothesis is the expected standard here. Do the same.
