@@ -1,103 +1,110 @@
 # ============================================================================
-# Callisto model providers — PLACEHOLDER CONFIG (audit 2026-08-22)
+# Callisto model providers — ENDPOINT POOL config (instance 5, 2026-08-22)
 # ============================================================================
 #
-# GOAL: the model is configuration, not code. Today OllamaInference
-# (inference.py) hardcodes localhost:11434. This file declares a TIERED
-# design so swapping local<->hosted is a config edit.
+# CONTRACT (SCOPE CORRECTION 2026-08-22): adding compute is a CONFIG ENTRY.
+# Today: one RTX 5060 Ti 16 GB. Tomorrow: 3090s, 5090s, DGX Spark. Each
+# `providers:` entry below is ONE model server process declaring:
 #
-# WIRING PLAN (not yet implemented — do not assume this file is live):
-#   inference.py gains a ProviderRouter that reads this file, exposes
-#   complete(task_class, messages, schema=...) and routes:
-#     task_class -> tier -> endpoint, with escalation rules under `routing`.
-#   Every call site passes a task_class instead of a base URL. That is the
-#   whole abstraction; nothing else changes.
+#   base_url            OpenAI-compatible endpoint (llama-server / vLLM /
+#                       Ollama's /v1, local or remote box)
+#   model               model name the server was launched with
+#   context_tokens      usable context window
+#   structured_output   json_schema response_format supported? (default true)
+#   tool_calls          native function calling? (default false)
+#   max_concurrency     parallel in-flight requests the server can take.
+#                       llama-server defaults to ONE slot: -c ... --parallel N
+#                       if you raise it; set this to match or fan-out thrashes.
+#   cost_per_1k_input/output   USD; local endpoints are 0 (free at margin)
 #
-# ----------------------------------------------------------------------------
-# HARDWARE REALITY CHECK (RTX 5060 Ti 16 GB VRAM + 32 GB DDR5)
-# ----------------------------------------------------------------------------
-# A "120B-class" model does NOT fit. gpt-oss-120b alone is ~61 GB of weights
-# against 48 GB combined VRAM+RAM. DeepSeek-V4 distills don't exist locally;
-# Mistral Small is now 119B; Llama 4 has no small variant. Realistic ceiling:
-# dense 27B at ~3-bit dynamic quant fully resident, or MoE with expert offload
-# (decode OK at DDR5 speed, prefill 10x slower — bad for agentic loops that
-# pay prefill on every step).
+# Routing picks by task class -> ordered endpoint list -> health + capability,
+# with per-endpoint concurrency limits, exponential cooldown on failures and
+# automatic failover down the list. Dead GPU box = degraded, not crashed.
 #
-# RECOMMENDED LOCAL (quality-first):
-#   Qwen3.8-27B, Unsloth UD-Q3_K_XL GGUF via llama.cpp server:
-#     llama-server -hf unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL \
-#       -ngl 99 -fa on -c 32768 -ctk q8_0 -ctv q8_0 --jinja --cache-reuse 256
-#   Why: hybrid DeltaNet => KV cache only ~64 KiB/token (1.05 GB @32k q8);
-#   13.1 GB weights + KV + buffers ~= 15.2 GB -> fully resident, GPU-speed
-#   prefill (research synthesis prompts are seconds, not minutes), ~20-25 t/s
-#   decode, grammar-constrained JSON, native tool templates via --jinja.
-#   If you measure headroom, step to UD-IQ4_XS @16k context; if you OOM, stay.
-#
-# BUDGET ALTERNATIVE (latency-first, 12 months of production maturity):
-#   gpt-oss-20b MXFP4 (12-14 GB total) + a second small instance
-#   (gemma4:e4b) for classification grind on spare VRAM.
-#
-# WHY llama.cpp server over Ollama/vLLM: only stack combining native
-# Windows, per-request grammar-guaranteed JSON, deliberate expert-offload
-# control, and exposed KV quant/prefix-cache tuning. vLLM re-enters if you
-# move to Linux and want batch throughput for extraction.
+# SCALING RECIPES — copy an entry, change name/base_url/model, done:
+#   * second box (e.g. a 3090 running qwen3.8-27b): add `gpu2:` with its LAN
+#     URL, append it to research_synthesis/hypothesis_generation lists.
+#   * DGX Spark alongside: add `spark:` with big model + max_concurrency: 4,
+#     put it FIRST for promotion_judgment/adversarial_review.
+#   * bigger single GPU (5090 32GB): swap gpu1's model to a Q4 quant of the
+#     same family; nothing else changes.
 
-default_tier: local
+default_tier: gpu1
 
 providers:
-  local:
-    # Primary: quality-first dense model fully resident in 16 GB.
+  gpu1:
+    # RTX 5060 Ti 16 GB — quality-first resident model (today's hardware).
     backend: llama_cpp_server
     base_url: http://localhost:8080/v1
-    api_key_env: null            # local server; no key
     model: qwen3.8-27b-ud-q3_k_xl
     context_tokens: 32768
-    temperature: 0.2             # structured outputs want low temperature
-    extra:
-      jinja: true                # native tool-calling templates
-      cache_reuse: 256           # prefix caching: stable system prompt + tools
+    temperature: 0.2
+    structured_output: true       # grammar-constrained JSON via --jinja
+    tool_calls: true              # native templates via --jinja
+    max_concurrency: 1            # llama-server default; raise WITH --parallel
+    vram_gb: 16
 
-  local_fast:
-    # High-volume grind tier: screening / extraction / classification.
-    # Small, fast, cheap to run wrong twice.
+  gpu1_fast:
+    # High-volume grind on spare VRAM / second small server process.
     backend: llama_cpp_server
     base_url: http://localhost:8081/v1
-    model: gemma4-e4b            # or Qwen3.8-4B distill
+    model: gemma4-e4b
     context_tokens: 16384
     temperature: 0.1
+    structured_output: true
+    tool_calls: false
+    max_concurrency: 1
+    vram_gb: 10
 
   frontier:
-    # The few hard judgment calls. Hosted, paid, swappable by env var.
+    # The few hard judgment calls. Hosted, paid, budgeted, swappable by env.
     backend: openai_compat
-    base_url_env: FRONTIER_BASE_URL    # e.g. https://openrouter.ai/api/v1
+    base_url_env: FRONTIER_BASE_URL      # e.g. https://openrouter.ai/api/v1
     api_key_env: FRONTIER_API_KEY
-    model_env: FRONTIER_MODEL          # e.g. a flagship hosted model
+    model_env: FRONTIER_MODEL
     context_tokens: 200000
+    temperature: 0.2
+    structured_output: true
+    tool_calls: true
+    max_concurrency: 4
+    cost_per_1k_input: 3.0        # EDIT to your actual hosted pricing
+    cost_per_1k_output: 15.0
 
 routing:
-  # task_class -> tier. Task classes are declared at call sites; the router
-  # escalates on the signals below, never on vibes.
+  # task_class -> one endpoint (exact) or a LIST of endpoints in failover
+  # order. Canonical classes below; call-site legacy names are bridged in
+  # inference.TASK_CLASS_ALIASES (deep_work->research_synthesis,
+  # hypothesis_gen->hypothesis_generation, reasoning->research_synthesis,
+  # review->adversarial_review, code_generation->research_synthesis).
   task_classes:
-    hypothesis_generation: local
-    research_synthesis: local
-    screening: local_fast
-    extraction: local_fast
-    classification: local_fast
-    backtest_interpretation: local
-    promotion_judgment: frontier        # few calls, real money consequences
-    adversarial_review: frontier
+    hypothesis_generation: [gpu1, frontier]
+    research_synthesis: [gpu1, frontier]
+    screening: gpu1_fast
+    extraction: gpu1_fast
+    classification: gpu1_fast
+    backtest_interpretation: [gpu1, frontier]
+    promotion_judgment: [frontier, gpu1]   # frontier preferred; falls back LOCAL if budget spent/unset
+    adversarial_review: [frontier, gpu1]
 
   escalation:
     # Cheap checks first. Escalation is the design, not an apology.
-    json_schema_failures: 2       # after N constrained retries, escalate
-    tool_error_loops: 2           # model failing to recover twice
-    disagreement: true            # two local passes disagree -> frontier
-    confidence_below: 0.60        # self-reported, post-clamp
+    json_schema_failures: 2
+    tool_error_loops: 2
+    disagreement: true
+    confidence_below: 0.60
     sensitive_context_stays_local: true
 
+  budget:
+    # Hosted spend cap per process lifetime. When spent, paid endpoints
+    # refuse unless a caller passes allow_budget_exceed=True deliberately.
+    usd: 5.00
+
+  health_checks:
+    enabled: true
+
 notes: >-
-  Tiered local+frontier is the vendor-endorsed pattern in Aug 2026 (NVIDIA
-  ships Nemotron 3.5 Lightning explicitly for it). Disagree with all-local:
-  the volume work (the 3,192-rejection grind) is exactly what local models do
-  well now, while promotion/adversarial judgment calls are few enough that
-  frontier pricing is noise against the cost of a wrong promote.
+  Plug-and-play contract: today this file describes exactly one 5060 Ti +
+  a small grind server + an env-backed frontier endpoint, and degrades to
+  just gpu1 if everything else is dead. Adding a 3090/5090/DGX Spark is a
+  new providers: entry plus appending its name to the relevant
+  task_classes lists. No code changes, ever.
