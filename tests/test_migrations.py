@@ -104,7 +104,10 @@ def test_existing_db_is_bootstrapped(tmp_path):
     discovered_versions = {m.version for m in discover_migrations()}
     # B5 (schema seam): 013/014 must NOT be bootstrap-marked — they carry
     # the domain-general rebuild and run for real against existing DBs.
-    assert result["bootstrapped"] == len(discovered_versions) - 2
+    # Same rule for any later seam-carrying migration: everything from 13 on
+    # is post-framework and must actually run (generalised so adding
+    # migration 015+ doesn't silently break this count).
+    assert result["bootstrapped"] == len([v for v in discovered_versions if v < 13])
     pre_seam = {v for v in discovered_versions if v < 13}
     assert set(result["applied"]) == discovered_versions - pre_seam
     assert 13 in result["applied"] and 14 in result["applied"]
@@ -119,9 +122,9 @@ def test_existing_db_is_bootstrapped(tmp_path):
         conn.close()
     assert len(rows) == len(discovered_versions)
     for _v, applied_at, bootstrap in rows:
-        # 013/014 ran for real (not bootstrapped) so they carry timestamps;
-        # every other migration is bootstrap-marked with NULL applied_at.
-        if _v in (13, 14):
+        # 013+ ran for real (not bootstrapped) so they carry timestamps;
+        # every earlier migration is bootstrap-marked with NULL applied_at.
+        if _v >= 13:
             assert applied_at is not None
             assert bootstrap == 0
         else:

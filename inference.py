@@ -9,7 +9,6 @@ import json
 import logging
 import os
 import re
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
@@ -20,16 +19,12 @@ import httpx
 from dotenv import load_dotenv
 
 # Hermes path setup — imports are lazy to avoid pulling in pandas/yfinance at startup
-_HERMES_PATH = os.path.join(os.path.dirname(__file__), "hermes-function-calling")
-if _HERMES_PATH not in sys.path:
-    sys.path.insert(0, _HERMES_PATH)
-
-
-def _get_hermes_tools():
-    """Lazy import of Hermes tool schemas (upstream functions.py, schema defs only)."""
-    from functions import get_openai_tools
-    return get_openai_tools
-
+# QUARANTINE (P4, 2026-08-22): the hermes-function-calling submodule moved to
+# attic/ (see attic/hermes-function-calling.README.md). The old _HERMES_PATH
+# sys.path insert and _get_hermes_tools() lazy import are GONE — they had zero
+# call sites and the path insert would shadow top-level module names if the
+# submodule were ever checked out. The live validator is the vendored
+# tools/hermes_validator.py.
 
 def _get_hermes_validator():
     """Vendored validator — see tools/hermes_validator.py for the verdict on
