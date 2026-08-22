@@ -231,3 +231,47 @@ ROADMAP.md:
 3. A proposed fix was TESTED AND FALSIFIED. Replacing FWER with FDR cuts the
    requirement for a +3pt edge from 3,888 signals to 2,295 — still unreachable.
    Reporting a failed hypothesis is the expected standard here. Do the same.
+
+## ⚠ SCOPE CORRECTION FROM THE OWNER — 2026-08-22, supersedes earlier framing
+
+**Callisto is a deep research agent orchestrator. It is NOT a sports betting
+system.** Sports betting is one application, chosen as a proving ground because
+ground truth arrives within hours, which is the only reason confidence
+calibration can be *measured* at all. It is the test harness, not the product.
+
+Do not scope your findings, your Q6 answers, or your improvement proposals to
+sports. If a design only makes sense for betting, it is the wrong design. The
+orchestrator should point at any domain where an edge can be found and a
+conclusion can be checked — research, markets, systems analysis, anything.
+
+What the owner actually wants from it:
+
+- **Local models pursuing different objectives.** The system runs on hardware
+  he owns, at electricity cost, with no subscription. Objectives are
+  configurable; the domain is not fixed.
+- **Plug-and-play hardware scaling.** Today an RTX 5060 Ti with 16 GB. He may
+  move to 3090s, 5090s, or DGX Spark. Adding compute must not require a
+  redesign — the provider/routing layer has to absorb "more and bigger local
+  models" as configuration. Design for that now; do not hardcode assumptions
+  that a 16 GB single-GPU box is the ceiling.
+- **Sophisticated, accurate, truthful conclusions.** Calibration and the seal
+  discipline are the point of the whole system. Everything that makes a
+  conclusion more honestly earned is high value.
+- **Finding edges and alpha, domain-agnostic.**
+
+Priority consequences, effective immediately:
+
+- **The data plane is LOWER priority than previously briefed.** The owner
+  obtained the odds API for free and scraped public sources; that data is
+  replaceable and is not the moat. Earlier guidance calling the historical
+  cache "irreplaceable, no vendor sells it back" overstated it — correction
+  recorded. Do not spend depth on scraper hardening. Silent-failure and unit
+  bugs there still matter, but only because they corrupt conclusions.
+- **The orchestrator, the calibration/seal machinery, the provider-routing
+  layer, and Hermes are the high-value surface.** That is where domain-general
+  capability lives.
+- **Ask of every proposal: does this still make sense if the domain is not
+  sports?** If the answer is no, generalise it or drop it.
+
+The system has not been touched in four months. Ambition is welcome — the
+mandate's "no complexity ceiling on proposals" applies fully here.
