@@ -26,14 +26,15 @@ if _HERMES_PATH not in sys.path:
 
 
 def _get_hermes_tools():
-    """Lazy import of Hermes tool schemas."""
+    """Lazy import of Hermes tool schemas (upstream functions.py, schema defs only)."""
     from functions import get_openai_tools
     return get_openai_tools
 
 
 def _get_hermes_validator():
-    """Lazy import of Hermes function call validator."""
-    from validator import validate_function_call_schema
+    """Vendored validator — see tools/hermes_validator.py for the verdict on
+    why this no longer imports the upstream submodule's validator.py."""
+    from tools.hermes_validator import validate_function_call_schema
     return validate_function_call_schema
 
 load_dotenv(override=True)
@@ -847,3 +848,246 @@ def get_manager() -> OllamaInference:
 
 def get_sentinel() -> OllamaInference:
     return _make_agent("sentinel")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ProviderRouter — task_class -> tier -> endpoint, per config/providers.yaml
+# ══════════════════════════════════════════════════════════════════════════
+
+import yaml as _yaml
+from pathlib import Path as _Path
+
+_PROVIDERS_CONFIG_PATH = _Path(
+    os.getenv("CALLISTO_PROVIDERS_CONFIG")
+    or str(_Path(__file__).parent / "config" / "providers.yaml")
+)
+
+
+class UnknownTaskClassError(KeyError):
+    """Raised when complete() gets a task_class not declared in providers.yaml.
+
+    LOUD by design: a typo'd task_class must never silently fall back to the
+    default tier — that is how routing decisions stop being decisions.
+    """
+
+
+@dataclass(frozen=True)
+class TierConfig:
+    name: str
+    backend: str
+    base_url: str
+    model: str
+    api_key: Optional[str] = None
+    context_tokens: int = 32768
+    temperature: float = 0.2
+    extra: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class EscalationConfig:
+    json_schema_failures: int = 2
+    tool_error_loops: int = 2
+    confidence_below: Optional[float] = None
+
+
+def load_providers_config(path=None) -> dict:
+    cfg_path = _Path(path or _PROVIDERS_CONFIG_PATH)
+    with open(cfg_path) as f:
+        return _yaml.safe_load(f)
+
+
+def _tier_from_config(name: str, raw: dict, resolve_env: bool = True) -> TierConfig:
+    """Build a TierConfig. With resolve_env=False, env-var references are
+    carried through as None so a router can be constructed in local-only
+    setups; using that tier later raises LOUD (see ProviderRouter.tier_for).
+    """
+    base_url = raw.get("base_url")
+    base_url_env = raw.get("base_url_env")
+    if not base_url and resolve_env:
+        base_url = os.getenv(base_url_env or "", "")
+        if not base_url:
+            raise RuntimeError(
+                f"Tier '{name}' has no base_url and ${base_url_env} is unset"
+            )
+    api_key = None
+    key_env = raw.get("api_key_env")
+    if key_env and resolve_env:
+        api_key = os.getenv(key_env) or None
+    model = raw.get("model")
+    model_env = raw.get("model_env")
+    if not model and resolve_env:
+        model = os.getenv(model_env or "", "")
+        if not model:
+            raise RuntimeError(f"Tier '{name}' has no model and ${model_env} is unset")
+    if not base_url or not model:
+        # Unresolved env-backed tier — keep it declared but un-usable.
+        return TierConfig(name=name, backend=raw.get("backend", "openai_compat"),
+                          base_url=base_url or "", model=model or "",
+                          context_tokens=int(raw.get("context_tokens", 32768)),
+                          temperature=float(raw.get("temperature", 0.2)),
+                          extra={**raw.get("extra", {}), "_unresolved": True})
+    return TierConfig(
+        name=name,
+        backend=raw.get("backend", "openai_compat"),
+        base_url=base_url.rstrip("/"),
+        model=model,
+        api_key=api_key,
+        context_tokens=int(raw.get("context_tokens", 32768)),
+        temperature=float(raw.get("temperature", 0.2)),
+        extra=raw.get("extra") or {},
+    )
+
+
+class ProviderRouter:
+    """Routes task_class -> tier -> OpenAI-compatible chat completions.
+
+    Usage at call sites:
+
+        router.complete("research_synthesis", messages, schema=_SCHEMA)
+
+    The model is configuration: editing config/providers.yaml (or the
+    FRONTIER_* env vars for the hosted tier) swaps providers with no code
+    change. The legacy escalate_with_ladder path above is untouched; new
+    code should prefer this router.
+    """
+
+    def __init__(self, config_path=None):
+        cfg = load_providers_config(config_path)
+        self.default_tier_name = cfg.get("default_tier", "local")
+        self.tiers: dict[str, TierConfig] = {
+            name: _tier_from_config(name, raw, resolve_env=False)
+            for name, raw in (cfg.get("providers") or {}).items()
+        }
+        # Env-backed tiers re-resolve (LOUD on failure) at first use; see
+        # tier_for. This keeps a local-only setup constructible.
+        self._raw_providers = cfg.get("providers") or {}
+        routing = cfg.get("routing") or {}
+        self.task_classes: dict[str, str] = routing.get("task_classes") or {}
+        esc = routing.get("escalation") or {}
+        self.escalation = EscalationConfig(
+            json_schema_failures=int(esc.get("json_schema_failures", 2)),
+            tool_error_loops=int(esc.get("tool_error_loops", 2)),
+            confidence_below=(
+                float(esc["confidence_below"]) if esc.get("confidence_below") else None
+            ),
+        )
+
+    def tier_for(self, task_class: str) -> TierConfig:
+        """Resolve a task class to its tier. Unknown classes raise LOUDLY."""
+        tier_name = self.task_classes.get(task_class)
+        if tier_name is None:
+            raise UnknownTaskClassError(
+                f"task_class {task_class!r} not declared in "
+                f"{_PROVIDERS_CONFIG_PATH}; declared: {sorted(self.task_classes)}"
+            )
+        tier = self.tiers.get(tier_name)
+        if tier is None:
+            raise RuntimeError(
+                f"task_class {task_class!r} maps to unknown tier {tier_name!r}"
+            )
+        if tier.extra.get("_unresolved"):
+            raw = self._raw_providers.get(tier_name, {})
+            tier = _tier_from_config(tier_name, raw)
+            self.tiers[tier_name] = tier
+        return tier
+
+    @staticmethod
+    def build_messages(messages: list[dict], system_context: str = "") -> list[dict]:
+        out = []
+        if system_context:
+            out.append({"role": "system", "content": system_context})
+        out.extend(messages)
+        return out
+
+    @staticmethod
+    def _payload(
+        tier: TierConfig,
+        messages: list[dict],
+        schema: Optional[dict],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+    ) -> dict:
+        payload: dict[str, Any] = {
+            "model": tier.model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else tier.temperature,
+        }
+        if max_tokens:
+            payload["max_tokens"] = max_tokens
+        if schema is not None:
+            # Structured output. llama-server supports json_schema in
+            # response_format; hosted OpenAI-compat APIs accept it too.
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "callisto_output", "schema": schema},
+            }
+        return payload
+
+    async def complete(
+        self,
+        task_class: str,
+        messages: list[dict],
+        schema: Optional[dict] = None,
+        system_context: str = "",
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        timeout: float = 300.0,
+    ) -> dict:
+        """One routed completion.
+
+        Returns {"content", "parsed_json", "model", "tier", "task_class"}.
+        Raises on HTTP/network failure — LOUD; callers decide on retry/escalate.
+        """
+        tier = self.tier_for(task_class)
+        msgs = self.build_messages(messages, system_context)
+        payload = self._payload(tier, msgs, schema, temperature, max_tokens)
+        headers = {"Content-Type": "application/json"}
+        if tier.api_key:
+            headers["Authorization"] = f"Bearer {tier.api_key}"
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{tier.base_url}/chat/completions", json=payload, headers=headers
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        content = ""
+        try:
+            content = data["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            logger.warning(
+                f"ProviderRouter: malformed completion response from tier "
+                f"{tier.name}: keys={list(data)}"
+            )
+        parsed_json = _parse_json_response(content) if content else None
+        return {
+            "content": content,
+            "parsed_json": parsed_json,
+            "model": tier.model,
+            "tier": tier.name,
+            "task_class": task_class,
+        }
+
+    def complete_sync(self, *args, **kwargs) -> dict:
+        """Synchronous wrapper around complete()."""
+        import asyncio as _asyncio
+
+        try:
+            _asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("complete_sync() called from inside a running loop")
+        return _asyncio.run(self.complete(*args, **kwargs))
+
+
+_router: Optional[ProviderRouter] = None
+
+
+def get_router() -> ProviderRouter:
+    """Process-wide router, loaded once. Set inference._router = None to reset."""
+    global _router
+    if _router is None:
+        _router = ProviderRouter()
+    return _router
