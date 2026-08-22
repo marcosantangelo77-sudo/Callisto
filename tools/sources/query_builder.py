@@ -585,7 +585,7 @@ def _plan_wikidata(question: str) -> PlanResult:
 _WORLDBANK_INDICATORS: dict[str, list[Candidate]] = {
     "gdp": [
         Candidate("NY.GDP.MKTP.CD", "GDP (current US$)", 0.95),
-        Candidate("NY.GDP.MKTP.KD.ZG", "GDP growth (annual %)", 0.85),
+        Candidate("NY.GDP.MKTP.KD.ZG", "GDP growth (annual %)", 0.8),
     ],
     "gdp growth": [
         Candidate("NY.GDP.MKTP.KD.ZG", "GDP growth (annual %)", 0.95),

@@ -314,3 +314,32 @@ class RestSource:
         if params:
             url += "?" + urllib.parse.urlencode(params)
         return url
+
+
+# ── Independence families (I2) ────────────────────────────────────────────
+#
+# Two adapters that index or resell the same underlying corpus are ONE
+# independent source no matter how different their APIs look. Declaring
+# that here — next to the specs that know what each source actually is —
+# keeps the honest answer with the adapter layer; consumers collapse on
+# it rather than re-deriving (or inflating) independence per pipeline.
+#
+# Membership is deliberately small: every entry claims "these do not
+# corroborate each other", which LOWERS confidence ceilings when two
+# family members both hit. That is the safe direction; omitting a real
+# overlap is the defect (it inflates confidence).
+INDEPENDENCE_FAMILIES: dict[str, frozenset[str]] = {
+    # OpenAlex and Semantic Scholar both index the scholarly literature
+    # with heavily overlapping crawl bases; a paper findable in one is
+    # nearly always findable in the other.
+    "scholarly-aggregator": frozenset({"openalex", "semanticscholar"}),
+}
+
+
+def independence_family(spec_name: str) -> str:
+    """The family key a source counts as toward min_independent_sources:
+    its declared family name, or its own name when it stands alone."""
+    for family, members in INDEPENDENCE_FAMILIES.items():
+        if spec_name in members:
+            return family
+    return spec_name
