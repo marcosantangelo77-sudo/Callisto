@@ -34,7 +34,7 @@ import datetime as _dt
 from typing import Optional
 
 from tools.retrodiction.cutoff import ProofKind, PublicationProof
-from tools.sources.base import RestSource, SourceSpec
+from tools.sources.base import RestSource, SourceError, SourceSpec
 
 SPEC = SourceSpec(
     name="wayback",
@@ -71,9 +71,10 @@ class WaybackAdapter:
         snap_url = self.source.build_url("/available", params)
         return self.source.get_json(snap_url)[0]
 
-    def fetch_snapshot(self, snapshot_url: str) -> tuple[str, object]:
+    def fetch_snapshot(self, snapshot_url: str):
         """Fetch the archived bytes. Returns (body, FetchRecord)."""
-        return self.source.get(snapshot_url)
+        body = self.source.get(snapshot_url)[1]
+        return body, self.source.last_record
 
     def capture_timestamps(self, url: str, limit: int = 20) -> dict:
         """CDX-style listing via the timemap endpoint (text lines:
@@ -124,6 +125,8 @@ class WaybackAdapter:
         if not snapshot_url.startswith("http"):
             return None, f"bad snapshot locator {snapshot_url!r}"
         body, rec = self.fetch_snapshot(snapshot_url)
+        if rec is None or rec.url != snapshot_url:
+            return None, "internal: snapshot fetch record missing"
         proof = PublicationProof(
             kind=ProofKind.IMMUTABLE_SNAPSHOT,
             published_on=capture_date,
@@ -141,23 +144,36 @@ class WaybackAdapter:
         Returns (record, reason) — record is None when no proof exists."""
         from tools.retrodiction.cutoff import EvidenceRecord
 
-        proof, reason = self.snapshot_proof(url, before, sign_key=sign_key)
-        if proof is None:
-            return None, reason
-        # refetch deterministically: snapshot_proof already pulled these
-        # bytes; reuse by fetching once more would double-hit the archive,
-        # so instead we re-derive from the recorded fetch through the source.
-        rec = self.source.last_record
-        if rec is None or rec.url != proof.locator:
+        if isinstance(before, str):
+            before = _dt.date.fromisoformat(before)
+        ts_target = before.strftime("%Y%m%d235959")
+        avail = self.closest(url, ts_target)
+        snap = (avail.get("archived_snapshots", {}).get("closest"))
+        if not snap or not snap.get("available", True):
+            return None, f"no wayback snapshot of {url!r} on/before {before}"
+        captured = str(snap.get("timestamp", ""))
+        if len(captured) < 8 or not captured[:8].isdigit():
+            return None, f"unparseable capture timestamp {captured!r}"
+        capture_date = _dt.datetime.strptime(captured[:8], "%Y%m%d").date()
+        if capture_date >= before:
+            return None, (f"nearest capture {capture_date} is not strictly "
+                          f"before {before}")
+        snapshot_url = snap.get("url", "")
+        if not snapshot_url.startswith("http"):
+            return None, f"bad snapshot locator {snapshot_url!r}"
+        body, rec = self.fetch_snapshot(snapshot_url)
+        if rec is None or rec.url != snapshot_url:
             return None, "internal: snapshot fetch record missing"
-        # last_record holds only metadata, not the body — re-fetch the
-        # immutable URL once to obtain the exact bytes the proof covers.
-        body, rec2 = self.fetch_snapshot(proof.locator)
-        if rec2.content_sha256 != proof.content_sha256:
-            return None, ("snapshot bytes changed between resolution and "
-                          "retrieval (unexpected for an immutable URL)")
+        proof = PublicationProof(
+            kind=ProofKind.IMMUTABLE_SNAPSHOT,
+            published_on=capture_date,
+            locator=snapshot_url,
+            content_sha256=rec.content_sha256,
+        )
+        if sign_key:
+            proof = proof.sign(sign_key)
         ts = fetched_at or _dt.datetime.now(_dt.timezone.utc).replace(
             tzinfo=None)
         return EvidenceRecord(
-            url=proof.locator, query=query, fetched_at=ts,
+            url=snapshot_url, query=query, fetched_at=ts,
             content=body, proof=proof), ""
