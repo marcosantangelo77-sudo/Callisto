@@ -154,3 +154,213 @@ Grouped by subsystem — **money-path items bolded** (they are Tier-0 adjacent a
 ### 2.2 vulture-only signals worth eyes (60% confidence, not AST-corroborated)
 
 439 findings total; the full list is mechanical. Notable clusters: `tools/thesis_seeds.py` seed-coverage helpers, `tools/work_queue.py:321` unused `focus_context`, 22 unused imports across `tools/` (cheap hygiene), 1 unused class. Vulture's unused-*variable* hits (143) include many ORM-ish locals — treat as noise until triaged.
+
+---
+
+## 3. Money/gate classification — the tiered map
+
+Every module classified into exactly one primary tier, with secondary "touches" flags:
+**M** = touches money (stakes, orders, bankroll, execution), **G** = feeds promote/demote decisions.
+"NEITHER" = no M and no G flag — 103 of 143 modules.
+
+Tier counts: **MONEY 22 · GATE 32 · EPISTEMICS 7 · DATA-PLANE 24 · SERVING 9 · INFRA 26 · UNKNOWN 9** (+ `tools` pkg inits).
+
+Classification basis (INFERRED from names + docstrings + keyword/content scan + import position; coverage and test columns are VERIFIED measurements). The full per-module table follows; key tiers first.
+
+### 3.1 MONEY-PATH (22) — where real/paper money moves or stake-affecting numbers are computed at execution time
+
+| module | lines | touches | line-cov | named tests |
+|---|---|---|---|---|
+| `tools.bet_executor` | 1253 | G | **46%** | 0 |
+| `tools.order_reconciler` | 1008 | — | **83%** | 1 |
+| `tools.clv_tracker` | 943 | G | **46%** | 0 |
+| `tools.kelly` | 895 | — | **40%** | 0 |
+| `tools.bankroll_sim` | 739 | G | **78%** | 1 |
+| `tools.order_manager` | 735 | — | **87%** | 1 |
+| `tools.arbitrage_scanner` | 1109 | — | 0%* | 0 |
+| `tools.correlation` | 1079 | — | **11%** | 0 |
+| `tools.edge_scanner`† | 1507 | M | **6%** | 0 |
+| `tools.prop_resolver`† | 500 | M | 44% | 0 |
+| `tools.live_edges` | 652 | — | **13%** | 0 |
+| `tools.boost_evaluator` | 649 | — | **17%** | 1 |
+| `tools.parlay_scanner` | 624 | — | **12%** | 1 |
+| `tools.sgp_scanner` | 647 | — | **14%** | 1 |
+| `tools.quant.consensus_engine` | 382 | — | 33% | 0 |
+| `tools.quant.edge_ranker` | 333 | — | 0%* | 0 |
+| `tools.prop_fair_value` | 319 | — | 0%* | 0 |
+| `tools.quant.scanner` | 202 | — | 0%* | 0 |
+| `tools.ml_backtest` | 360 | G | 0% | 0 |
+| `tools.sizing` | 187 | — | 100% | 0 |
+| `tools.ev` | 120 | — | 63% | 0 |
+| `tools.local_compute` | 123 | — | 0% | 0 |
+
+\* 0% = zero executed lines in the whole suite. † classified GATE-primary by function but carries order/edge-to-bet touchpoints — listed here for Tier-0 completeness; see table in §3.6 for their canonical tier.
+
+### 3.2 GATE (32) — feeds promote/demote decisions
+
+`tools.backtest` (4211, 34%, touches M) · `tools.hypothesis` (2848, 55%, M) · `tools.hypothesis_generator` (1684) · `tools.edge_scanner` (1507, M) · `tools.line_analysis` (1485) · `tools.pace_model` (1405, **0%**) · `tools.market_psychology` (1522) · `tools.injury_model` (1609) · `tools.temporal_analysis` (1122) · `tools.environment` (1250) · `tools.golf_masters` (1574) · `tools.dead_numbers` (1250) · `tools.regime` (980, **0%**) · `tools.market_regime` (644) · `tools.ml_features` (1097) · `tools.simulation` (1369) · `tools.sim` (471) · `tools.followup_guard` (733) · `tools.prop_resolver` (500, M) · `tools.prop_stat_map` (143) · `tools.news_impact` (425) · `tools.narrative_edge` (436) · `tools.thesis_seeds` (1462) · `tools.line_gaps` (313) · `tools.market_analysis` (293) · `tools.market_microstructure` (210) · `tools.kl_divergence` (212) · `tools.learned_correlations` (407) · `tools.granger_causality` (367) · `tools.regime_replay` (200) · `tools.ml_classifier` (649) · `tools.ml_drift` (291)
+
+### 3.3 EPISTEMICS (7)
+
+`agp` (399 lines, **95% cov**) · `agp.thresholds` (54) · `tools.knowledge_wiki` (1350) · `tools.hermes_memory` (767) · `tools.embeddings` (795) · `tools.edge_confidence` (618) · `memory` root (453)
+
+### 3.4 DATA-PLANE (24), SERVING (9), INFRA (26), UNKNOWN (9)
+
+Full table below (all 143 modules).
+
+### 3.5 Neither money nor gate: 103 modules
+
+Everything not tagged M/G — all of DATA-PLANE, most of SERVING/INFRA/EPISTEMICS, and the 9 UNKNOWN one-off scripts. The money-touching surface is small and enumerable: **~30 modules carry everything that can cost money** — that is the Wave-2 depth-pass priority surface.
+
+### 3.6 Full classification table (143 modules)
+
+tier · touches (M/G) · measured line coverage from the run documented in §4 · named-test count · fan-in.
+
+| module | lines | tier | touches | line-cov | named tests | fan-in |
+|---|---|---|---|---|---|---|
+| `tools.data_collector` | 3156 | DATA | G | 11% | 0 | 1 |
+| `tools.line_monitor` | 1958 | DATA | M | 8% | 0 | 1 |
+| `tools.odds_api_io` | 1518 | DATA | — | 40% | 0 | 4 |
+| `tools.prop_scraper_free` | 1306 | DATA | — | 12% | 1 | 1 |
+| `tools.dk_scraper` | 1254 | DATA | — | 10% | 0 | 3 |
+| `tools.live_state` | 905 | DATA | M | 57% | 1 | 2 |
+| `tools.news_ingestion` | 861 | DATA | — | 68% | 1 | 1 |
+| `tools.tci_scraper` | 811 | DATA | — | 0% | 0 | 1 |
+| `tools.action_network_scraper` | 680 | DATA | — | 14% | 0 | 1 |
+| `tools.odds_api` | 581 | DATA | M | 42% | 1 | 21 |
+| `tools.fanatics_scraper` | 574 | DATA | — | 76% | 1 | 1 |
+| `tools.historical_odds` | 539 | DATA | G | 33% | 0 | 3 |
+| `tools.betmgm_scraper` | 530 | DATA | — | 13% | 0 | 1 |
+| `tools.contextual_data` | 523 | DATA | — | 15% | 0 | 3 |
+| `tools.game_dates` | 385 | DATA | — | 92% | 0 | 3 |
+| `tools.fanduel_scraper` | 365 | DATA | — | 13% | 0 | 1 |
+| `tools.ingestion_tracking` | 301 | DATA | — | 85% | 1 | 10 |
+| `tools.player_name_index` | 289 | DATA | — | 83% | 0 | 2 |
+| `tools.game_scheduler` | 263 | DATA | — | 0% | 0 | 1 |
+| `tools.odds_ws` | 216 | DATA | — | 0% | 0 | 2 |
+| `tools.news_loop` | 196 | DATA | — | 0% | 0 | 0 |
+| `tools.searxng` | 96 | DATA | — | 26% | 0 | 1 |
+| `tools.brave_search` | 89 | DATA | — | 35% | 0 | 2 |
+| `tools.search` | 62 | DATA | — | 37% | 0 | 2 |
+| `tools.knowledge_wiki` | 1350 | EPISTEMICS | — | 46% | 0 | 6 |
+| `tools.embeddings` | 795 | EPISTEMICS | — | 50% | 0 | 7 |
+| `tools.hermes_memory` | 767 | EPISTEMICS | — | 29% | 0 | 5 |
+| `tools.edge_confidence` | 618 | EPISTEMICS | — | 66% | 1 | 4 |
+| `memory` | 453 | EPISTEMICS | — | - | 1 | 2 |
+| `agp` | 399 | EPISTEMICS | — | 95% | 0 | 3 |
+| `agp.thresholds` | 54 | EPISTEMICS | — | 100% | 0 | 3 |
+| `tools.backtest` | 4211 | GATE | M | 34% | 1 | 4 |
+| `tools.hypothesis` | 2848 | GATE | M | 54% | 1 | 4 |
+| `tools.hypothesis_generator` | 1684 | GATE | — | 39% | 0 | 2 |
+| `tools.injury_model` | 1609 | GATE | — | 13% | 0 | 2 |
+| `tools.golf_masters` | 1574 | GATE | — | 0% | 0 | 0 |
+| `tools.market_psychology` | 1522 | GATE | — | 7% | 0 | 3 |
+| `tools.edge_scanner` | 1507 | GATE | M | 42% | 0 | 4 |
+| `tools.line_analysis` | 1485 | GATE | — | 6% | 0 | 2 |
+| `tools.thesis_seeds` | 1462 | GATE | — | 90% | 1 | 1 |
+| `tools.pace_model` | 1405 | GATE | — | 0% | 0 | 2 |
+| `tools.simulation` | 1369 | GATE | — | 46% | 1 | 2 |
+| `tools.dead_numbers` | 1250 | GATE | — | 22% | 0 | 3 |
+| `tools.environment` | 1250 | GATE | — | 0% | 0 | 3 |
+| `tools.temporal_analysis` | 1122 | GATE | — | 11% | 0 | 3 |
+| `tools.ml_features` | 1097 | GATE | — | 77% | 1 | 3 |
+| `tools.regime` | 980 | GATE | — | 0% | 2 | 1 |
+| `tools.followup_guard` | 733 | GATE | — | 71% | 0 | 1 |
+| `tools.ml_classifier` | 649 | GATE | — | 0% | 1 | 2 |
+| `tools.market_regime` | 644 | GATE | — | 88% | 1 | 6 |
+| `tools.prop_resolver` | 500 | GATE | M | 74% | 1 | 1 |
+| `tools.sim` | 471 | GATE | — | 10% | 0 | 1 |
+| `tools.narrative_edge` | 436 | GATE | — | 0% | 0 | 2 |
+| `tools.news_impact` | 425 | GATE | — | 80% | 1 | 1 |
+| `tools.learned_correlations` | 407 | GATE | — | 23% | 0 | 1 |
+| `tools.granger_causality` | 367 | GATE | — | 0% | 0 | 2 |
+| `tools.line_gaps` | 313 | GATE | — | 92% | 1 | 3 |
+| `tools.market_analysis` | 293 | GATE | — | 0% | 0 | 1 |
+| `tools.ml_drift` | 291 | GATE | — | 0% | 1 | 0 |
+| `tools.kl_divergence` | 212 | GATE | — | 13% | 0 | 2 |
+| `tools.market_microstructure` | 210 | GATE | — | 87% | 0 | 2 |
+| `tools.regime_replay` | 200 | GATE | — | 78% | 0 | 0 |
+| `tools.prop_stat_map` | 143 | GATE | — | 100% | 0 | 1 |
+| `tools.autonomous` | 7955 | INFRA | M G | 4% | 0 | 1 |
+| `tools.schema` | 1981 | INFRA | M G | 58% | 0 | 4 |
+| `orchestrator` | 1896 | INFRA | M G | 17% | 0 | 1 |
+| `tools.pipeline_integrity` | 1191 | INFRA | G | 12% | 0 | 2 |
+| `tools.self_repair` | 1031 | INFRA | G | 17% | 0 | 2 |
+| `tools.health` | 916 | INFRA | — | 46% | 2 | 2 |
+| `tools.cache_manager` | 639 | INFRA | — | 14% | 0 | 3 |
+| `tools.db_writer` | 589 | INFRA | — | 81% | 1 | 12 |
+| `tools.work_queue` | 439 | INFRA | — | 69% | 1 | 2 |
+| `tools.migrations.010_local_game_dates` | 422 | INFRA | — | 84% | 0 | 0 |
+| `tools.credentials` | 380 | INFRA | — | 97% | 1 | 1 |
+| `task_queue` | 367 | INFRA | — | 57% | 0 | 1 |
+| `tools.migrations.runner` | 366 | INFRA | — | 84% | 0 | 0 |
+| `tools.db_utils` | 227 | INFRA | — | 55% | 0 | 13 |
+| `tools.event_bus` | 221 | INFRA | — | 0% | 0 | 5 |
+| `tools.book_keys` | 197 | INFRA | M | 97% | 0 | 7 |
+| `upstream_review` | 125 | INFRA | — | - | 0 | 0 |
+| `tools.math_utils` | 114 | INFRA | — | 73% | 0 | 14 |
+| `tools.state_paths` | 102 | INFRA | — | 88% | 1 | 1 |
+| `tools.migrations.012_news_events` | 101 | INFRA | — | 67% | 0 | 0 |
+| `tools.migrations.011_orders_fsm` | 81 | INFRA | — | 67% | 0 | 0 |
+| `logging_config` | 72 | INFRA | — | 55% | 0 | 1 |
+| `tools.quant` | 67 | INFRA | — | 100% | 0 | 1 |
+| `tools.migrations` | 56 | INFRA | — | 100% | 0 | 2 |
+| `wal_fix` | 9 | INFRA | — | - | 0 | 0 |
+| `tools` | 1 | INFRA | — | 100% | 0 | 10 |
+| `tools.bet_executor` | 1253 | MONEY | G | 46% | 0 | 2 |
+| `tools.arbitrage_scanner` | 1109 | MONEY | — | 68% | 0 | 0 |
+| `tools.correlation` | 1079 | MONEY | — | 11% | 0 | 3 |
+| `tools.order_reconciler` | 1008 | MONEY | — | 83% | 1 | 1 |
+| `tools.clv_tracker` | 943 | MONEY | G | 46% | 0 | 3 |
+| `tools.kelly` | 895 | MONEY | — | 40% | 0 | 3 |
+| `tools.bankroll_sim` | 739 | MONEY | G | 77% | 1 | 2 |
+| `tools.order_manager` | 735 | MONEY | — | 87% | 0 | 4 |
+| `tools.live_edges` | 652 | MONEY | — | 86% | 0 | 1 |
+| `tools.boost_evaluator` | 649 | MONEY | — | 71% | 1 | 3 |
+| `tools.sgp_scanner` | 647 | MONEY | — | 83% | 1 | 0 |
+| `tools.parlay_scanner` | 624 | MONEY | — | 85% | 1 | 3 |
+| `tools.quant.consensus_engine` | 382 | MONEY | — | 92% | 1 | 2 |
+| `tools.ml_backtest` | 360 | MONEY | G | 0% | 0 | 0 |
+| `tools.quant.edge_ranker` | 333 | MONEY | — | 83% | 1 | 1 |
+| `tools.prop_fair_value` | 319 | MONEY | — | 80% | 1 | 0 |
+| `tools.prop_scanner` | 210 | MONEY | — | 78% | 1 | 3 |
+| `tools.telegram_bot` | 208 | MONEY | — | 61% | 1 | 1 |
+| `tools.local_compute` | 206 | MONEY | — | 0% | 0 | 1 |
+| `tools.quant.scanner` | 202 | MONEY | — | 64% | 0 | 0 |
+| `tools.sizing` | 187 | MONEY | — | 29% | 0 | 3 |
+| `tools.ev` | 120 | MONEY | — | 24% | 0 | 3 |
+| `api` | 4685 | SERVING | M G | 23% | 1 | 3 |
+| `inference` | 849 | SERVING | — | 54% | 0 | 7 |
+| `tools.telegram` | 680 | SERVING | M | 11% | 1 | 10 |
+| `tools.dashboard` | 557 | SERVING | M | 81% | 1 | 0 |
+| `tools.claude_code` | 556 | SERVING | — | 50% | 1 | 5 |
+| `tools.local_cc_bridge` | 520 | SERVING | — | 77% | 1 | 1 |
+| `tools.callisto_mcp_server` | 349 | SERVING | — | 0% | 0 | 0 |
+| `monitor` | 111 | SERVING | — | 23% | 0 | 1 |
+| `tools.regime_api` | 106 | SERVING | — | 82% | 0 | 0 |
+| `tools.sgp_correlations` | 373 | UNKNOWN | — | 74% | 1 | 1 |
+| `tools.quant.sharp_detection` | 365 | UNKNOWN | — | 94% | 1 | 0 |
+| `tools.devig` | 317 | UNKNOWN | — | 86% | 1 | 5 |
+| `tools.sgp` | 260 | UNKNOWN | — | 51% | 2 | 3 |
+| `tools.task_classifier` | 208 | UNKNOWN | — | 93% | 0 | 1 |
+| `query_pipeline` | 197 | UNKNOWN | — | - | 0 | 0 |
+| `tools.migrations.007_live_game_states` | 117 | UNKNOWN | — | 62% | 0 | 0 |
+| `tools.migrations.005_task_queue_timeout_status` | 100 | UNKNOWN | — | 88% | 0 | 0 |
+| `callisto_query` | 91 | UNKNOWN | — | - | 0 | 0 |
+| `analysis` | 88 | UNKNOWN | — | - | 0 | 0 |
+| `tools.migrations.009_portfolio_correlation` | 79 | UNKNOWN | — | 83% | 0 | 0 |
+| `tools.migrations.004_cleanup_fk_orphans` | 76 | UNKNOWN | — | 95% | 0 | 0 |
+| `tools.migrations.006_prop_market_indexes` | 69 | UNKNOWN | — | 67% | 0 | 0 |
+| `query_hyps_debug` | 62 | UNKNOWN | — | - | 0 | 0 |
+| `run_query` | 61 | UNKNOWN | — | - | 0 | 0 |
+| `check_nba_events` | 58 | UNKNOWN | — | - | 0 | 0 |
+| `tools.migrations.008_arbitrage_fields` | 58 | UNKNOWN | — | 85% | 0 | 0 |
+| `tools.migrations.002_add_archived_columns` | 55 | UNKNOWN | — | 86% | 0 | 0 |
+| `query_hyps` | 53 | UNKNOWN | — | - | 0 | 0 |
+| `callisto_query2` | 39 | UNKNOWN | — | - | 0 | 0 |
+| `tools.migrations.003_backtest_events_event_id_index` | 38 | UNKNOWN | — | 89% | 0 | 0 |
+| `tools.migrations.001_initial` | 30 | UNKNOWN | — | 83% | 0 | 0 |
+| `query_bt` | 12 | UNKNOWN | — | - | 0 | 0 |
+
+COUNTS: {'DATA': 24, 'EPISTEMICS': 7, 'GATE': 32, 'INFRA': 26, 'MONEY': 22, 'SERVING': 9, 'UNKNOWN': 23}
+NEITHER money nor gate: 103
