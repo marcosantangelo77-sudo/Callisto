@@ -376,7 +376,7 @@ def _plan_federalregister(question: str) -> PlanResult:
             doc_type = dt
             break
     if doc_type:
-        extra["conditions[type][]"] = [doc_type]
+        extra["conditions[type][]"] = doc_type
     return PlanResult(True, queries=[PlannedQuery(
         source="federalregister", method="search",
         kwargs={"query_term": core, "limit": 20, "extra_params": extra},

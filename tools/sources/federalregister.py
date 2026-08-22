@@ -40,7 +40,7 @@ class FederalRegisterAdapter:
     def __init__(self, source: RestSource):
         self.source = source
 
-    FIELDS = ("title,type,abstract,action,published_at,effective_on,"
+    FIELDS = ("title,type,abstract,action,publication_date,effective_on,"
               "docket_ids,citation,document_number,html_url,agencies")
 
     def search(self, conditions: str = "", query_term: str = "",
@@ -55,7 +55,7 @@ class FederalRegisterAdapter:
         if conditions:
             params["conditions[term]"] = conditions
         if query_term:
-            params["conditions"] = query_term
+            params["conditions[term]"] = query_term
         params.update(extra_params or {})
         url = self.source.build_url("/documents.json", params)
         return self.source.get_json(url)[0]

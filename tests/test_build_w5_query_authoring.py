@@ -116,7 +116,7 @@ def test_federalregister_document_type_filter():
     p = build_plan("federalregister",
                    "Which proposed rules address vehicle emissions?")
     kw = p.queries[0].kwargs
-    assert kw["extra_params"]["conditions[type][]"] == ["PRORULE"]
+    assert kw["extra_params"]["conditions[type][]"] == "PRORULE"
     assert "proposed rules" not in kw["query_term"]  # scaffold stripped
 
 
