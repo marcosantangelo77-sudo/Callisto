@@ -938,7 +938,13 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     build time when set; if unset the endpoint is marked _unresolved and is
     skipped by routing (LOUD log) rather than crashing construction — that
     keeps a local-only box constructible while a hosted tier is configured.
+
+    backend="hermes_cli" needs NEITHER base_url nor model: it shells out to
+    the Hermes CLI (Nous Portal OAuth lives in the keychain) and serves the
+    hosted stealth-ox-alpha model, so base_url stays "" and model defaults
+    to "ox-alpha". Such an endpoint is never _unresolved.
     """
+    backend = raw.get("backend", "openai_compat")
     base_url = raw.get("base_url")
     if not base_url and raw.get("base_url_env"):
         base_url = os.getenv(raw["base_url_env"], "")
@@ -950,7 +956,13 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     model = raw.get("model")
     if not model and raw.get("model_env"):
         model = os.getenv(raw["model_env"], "")
-    unresolved = bool(raw.get("_unresolved")) or not (base_url and model)
+    if backend == "hermes_cli":
+        # No URL, no env vars, no keychain access — just the binary.
+        unresolved = False
+        model = model or "ox-alpha"
+        base_url = ""
+    else:
+        unresolved = bool(raw.get("_unresolved")) or not (base_url and model)
     return EndpointConfig(
         name=name,
         backend=raw.get("backend", "openai_compat"),
@@ -1237,7 +1249,14 @@ class ProviderRouter:
                 continue
             if not st.available:
                 continue
-            if schema is not None and not ep.structured_output:
+            # hermes_cli declares structured_output=False honestly — it
+            # cannot enforce a schema. It is still usable for schema-bearing
+            # calls on a BEST-EFFORT basis (JSON-in-text + _parse_json_response),
+            # which is what keeps a CLI-only laptop running the whole system.
+            # Callers needing a hard guarantee must not rely on it: check
+            # ep.structured_output themselves.
+            if (schema is not None and not ep.structured_output
+                    and ep.backend != "hermes_cli"):
                 continue
             out.append(n)
         if not out:
@@ -1247,7 +1266,8 @@ class ProviderRouter:
                         if n in self.states
                         and not self.endpoints[n].extra.get("_unresolved")
                         and (schema is None
-                             or self.endpoints[n].structured_output)]
+                             or self.endpoints[n].structured_output
+                             or self.endpoints[n].backend == "hermes_cli")]
             if fallback:
                 logger.warning(
                     f"All endpoints for task_class={task_class!r} cooling "
@@ -1274,6 +1294,16 @@ class ProviderRouter:
     async def check_health(self, name: str, timeout: float = 5.0) -> dict:
         """Probe one endpoint with a minimal chat request."""
         ep = self.endpoints[name]
+        if ep.backend == "hermes_cli":
+            # No HTTP to probe: healthy iff the binary resolves. A real ping
+            # would burn a ~14s CLI session per health pass.
+            from tools.pipeline.hermes_cli import hermes_available
+            if hermes_available():
+                self.states[name].record_success()
+                return {"endpoint": name, "status": "ok"}
+            self.states[name].record_failure()
+            return {"endpoint": name, "status": "error",
+                    "error": "hermes CLI binary not found"}
         headers = {"Content-Type": "application/json"}
         if ep.api_key:
             headers["Authorization"] = f"Bearer {ep.api_key}"
@@ -1416,7 +1446,8 @@ class ProviderRouter:
                         f"to override deliberately"
                     )
                     continue
-            payload = self._payload(endpoint, msgs, schema, temperature, max_tokens)
+            payload = self._payload(endpoint, msgs, schema, temperature, max_tokens) \
+                if endpoint.backend != "hermes_cli" else None
             queued_at = _time.monotonic()
             try:
                 # Backpressure: wait here if the endpoint is saturated.
@@ -1424,9 +1455,29 @@ class ProviderRouter:
                     queue_s = _time.monotonic() - queued_at
                     state.in_flight += 1
                     try:
-                        content, usage = await _post_with_retry(
-                            self._post, endpoint, payload, timeout
-                        )
+                        if endpoint.backend == "hermes_cli":
+                            from tools.pipeline.hermes_cli import (
+                                hermes_complete,
+                                _default_max_procs as _hc_procs)
+                            if _hc_procs() < self.endpoints[name].max_concurrency:
+                                logger.warning(
+                                    f"ProviderRouter: hermes_cli endpoint "
+                                    f"{name} declares max_concurrency="
+                                    f"{self.endpoints[name].max_concurrency} "
+                                    f"> CALLISTO_HERMES_MAX_PROCS — the "
+                                    f"shared process semaphore will bound "
+                                    f"forks to {_hc_procs()}")
+                            res = await hermes_complete(
+                                msgs,
+                                role=str(task_class),
+                                timeout_s=float(timeout),
+                            )
+                            content = res["content"]
+                            usage: dict = {}
+                        else:
+                            content, usage = await _post_with_retry(
+                                self._post, endpoint, payload, timeout
+                            )
                     finally:
                         state.in_flight -= 1
                 state.record_success()
