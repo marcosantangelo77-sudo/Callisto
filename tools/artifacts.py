@@ -224,8 +224,12 @@ class ArtifactStore:
         # First-seen provenance wins: an artifact's origin does not change
         # because someone later re-put identical bytes.
         if existing:
-            merged["code_sha256"] = merged["code_sha256"] or existing.get("code_sha256", "")
-            merged["name"] = merged["name"] or existing.get("name", "")
+            for key in ("code_sha256", "name"):
+                if not (existing.get(key) or ""):
+                    continue
+                merged[key] = existing[key]
+            if existing.get("data_refs") and not merged["data_refs"]:
+                merged["data_refs"] = existing["data_refs"]
             merged["created_at"] = existing.get("created_at")
         idx[ref.sha256] = merged
         tmp = self.index_path.with_suffix(".tmp")
@@ -315,9 +319,11 @@ def store_sandbox_outputs(
     elif result.status == "ok":
         # Without workspace access we can only attest what the child hashed.
         for f in result.files:
+            ext = Path(f["name"]).suffix.lstrip(".").lower()
+            kind = ext if ext in ALLOWED_KINDS else "txt"
             refs.append(ArtifactRef(
                 sha256=f["sha256"],
-                kind=_sniff_kind(b""),
+                kind=kind,
                 name=f["name"],
                 code_sha256=code_hash,
                 data_refs=[stdout_ref.sha256],
