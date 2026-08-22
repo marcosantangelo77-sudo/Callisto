@@ -186,23 +186,26 @@ class TestSelfReviewEscape:
         assert prov.mode == "self_review"   # FAILS: reads 'independent_review'
         assert prov.ceiling == 0.54         # FAILS: cap is None
 
-    def test_unattributed_reviewer_counts_as_independent(self):
-        """REPRODUCIBLE BREAK (F6): ReviewProvenance.independent requires a
-        reviewer that is non-empty AND differs from author. But the panel
-        substitutes '(unattributed)' for unknown models (ensemble.py ~295),
-        and independent() explicitly excludes '(unattributed)'... yet ANY
-        OTHER garbage name — e.g. the literal string '?' or 'unknown' or a
-        whitespace variant the router logs on failure — counts as a
-        DIFFERENT model. A self-review where the reviewer's model name came
-        back mangled ('GPT-4o ' vs 'gpt-4o' normalises equal — fine — but
-        'my-gpt-4o-proxy' does NOT) reads as independent review and the 0.54
-        cap evaporates. Distinctness is judged on SPELLING, not weights."""
-        author = "gpt-4o"
-        # Same weights behind a proxy alias:
-        prov = ReviewProvenance(author_model=author,
+    def test_unattributed_reviewer_is_correctly_rejected(self):
+        # honest negative: the '(unattributed)' substitution is handled —
+        # ambiguity resolves conservative here. The escapes are F6a (empty
+        # author) and the alias test below, not this one.
+        prov = ReviewProvenance(author_model="gpt-4o",
+                                reviewer_models=["(unattributed)", "gpt-4o"])
+        assert prov.independent is False
+        assert prov.ceiling == 0.54
+
+    def test_proxy_alias_defeats_distinctness(self):
+        """REPRODUCIBLE BREAK (F6b): distinctness is judged on SPELLING of the
+        router-reported model name, never on weights or endpoint. The same
+        weights behind a proxy/alias name ('gpt-4o-proxy-alias') count as a
+        genuinely different reviewer, so a model can review its own
+        conclusion and the SELF_REVIEW_CEILING (0.54) never applies.
+        normalize_model strips provider prefixes and date suffixes only."""
+        prov = ReviewProvenance(author_model="gpt-4o",
                                 reviewer_models=["gpt-4o-proxy-alias"])
-        assert prov.independent is True      # spelling != identity (FAILS)
-        assert prov.ceiling is None           # 0.54 cap gone
+        assert prov.independent is False   # FAILS: True
+        assert prov.ceiling == 0.54        # FAILS: None
 
     def test_panel_verdict_blocking_veto_returns_rounded_up_score(self):
         """Cross-break (F1 family): PanelVerdict.apply on the VETO path also
@@ -255,8 +258,10 @@ class TestInheritanceRule:
                      "resolved_at": "2026-01-01"})
         # without the stale, n=4 < MIN_RESOLVED_FOR_LIFT -> capped at 0.55:
         assert inherited_ceiling(recs[:4]) == 0.55
-        # WITH the never-resolved descendant, the ceiling lifts off SPECULATIVE:
-        assert inherited_ceiling(recs) > 0.55   # FAILS: stale shouldn't count
+        # WITH the never-resolved descendant the ceiling jumps to ~0.71 —
+        # past PROBABLE, nearly CORROBORATED, on credit from a question
+        # that was never answered:
+        assert inherited_ceiling(recs) > 0.70   # FAILS: stale shouldn't count toward lift
 
     def test_pinball_none_on_quantile_style_record_scores_as_clean_hit(self):
         """A resolution carrying pinball_score=None and outcome='hit' earns
@@ -275,8 +280,11 @@ class TestInheritanceRule:
             r["outcome"] = "miss"
         ceil_half_miss = inherited_ceiling(recs)
         assert ceil_half_miss < ceil_all_hits   # sanity
-        # ...but a flat 50% record still lifts the ceiling well past SPECULATIVE:
-        assert ceil_half_miss >= 0.62   # generous credit for coin-flip record
+        # ...but a flat 50% miss record still lifts the ceiling to 0.6426 —
+        # comfortably PROBABLE. Wilson support at 50% is ~0.35 and the
+        # calibration factor 0.0, yet size_factor and the 0.55-weighting
+        # still grant a coin-flip track record a two-band promotion:
+        assert ceil_half_miss >= 0.62   # FAILS: 50% accuracy deserves no lift
 
     def test_best_source_class_is_self_reported_on_records(self):
         """best_source_class arrives on the ResolutionRecord dict with NO
