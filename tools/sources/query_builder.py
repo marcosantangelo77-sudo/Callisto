@@ -253,6 +253,42 @@ _WIKIDATA_HINTS: dict[str, str] = {
     "drug": "Q12140", "medication": "Q12140",
 }
 
+#: SEC registrant name -> CIK. Even though sec_fts is deliberately
+#: unplannable while this host is 403'd, the CIK seam is entity RESOLUTION:
+#: 'Apple' -> 0000320193 is a fact any caller (EDGAR tooling, the model,
+#: future adapters) needs resolved the same candidate-or-resolve way.
+_SEC_CIKN: dict[str, list[Candidate]] = {
+    "apple": [Candidate("0000320193", "Apple Inc.", 0.95)],
+    "microsoft": [Candidate("0000789019", "Microsoft Corp.", 0.95)],
+    "google": [
+        Candidate("0001652044", "Alphabet Inc.", 0.9),
+    ],
+    "alphabet": [Candidate("0001652044", "Alphabet Inc.", 0.95)],
+    "amazon": [Candidate("0001018724", "Amazon.com Inc.", 0.95)],
+    "nvidia": [Candidate("0001045810", "NVIDIA Corp.", 0.95)],
+    "tesla": [Candidate("0001318605", "Tesla Inc.", 0.95)],
+    "meta": [Candidate("0001326801", "Meta Platforms Inc.", 0.9)],
+    "facebook": [Candidate("0001326801", "Meta Platforms Inc.", 0.9)],
+}
+
+_CIK_RE = re.compile(r"^[0-9]{10}$")
+
+#: characters allowed inside an FDIC filter value after an operator — must
+#: match fdic.py's own guard so authored filters cannot pass planning but
+#: fail at fetch time.
+_VALUE_OK = re.compile(r"^[A-Za-z0-9 .,:><=\-+()']*$")
+
+
+def resolve_entity(entity_type: str, text: str) -> tuple[
+        dict[str, Any], dict[str, list[Candidate]]]:
+    """Public resolution entry point for identifier slots beyond per-source
+    planners ('company' -> CIK). Same contract as _resolve: a key lands in
+    `resolved` ONLY above the auto threshold with a real gap; otherwise
+    ranked candidates come back for explicit disambiguation."""
+    if entity_type == "company":
+        return _resolve("cik", text, _SEC_CIKN)
+    raise ValueError(f"unknown entity type {entity_type!r}")
+
 
 # ── resolution semantics ────────────────────────────────────────────────
 
@@ -320,12 +356,17 @@ def _plan_openalex(question: str) -> PlanResult:
         reason=f"searched as '{core}'")
 
 
+# I2 live-smoke bug: the registry name is 'semanticscholar' (semantic_scholar.
+# py SPEC.name), but wave 4 registered the planner under 'semantic_scholar' —
+# so build_plan('semanticscholar', ...) fell through to an "honest gap" that
+# claimed a keyword planner was deferred while one existed all along. Keyed by
+# the registry name now, and both spellings accepted defensively.
 def _plan_semantic_scholar(question: str) -> PlanResult:
     core = core_query(question)
     if not core:
         return PlanResult(False, reason="no searchable core")
     return PlanResult(True, queries=[PlannedQuery(
-        source="semantic_scholar", method="paper_search",
+        source="semanticscholar", method="paper_search",
         kwargs={"query": core, "limit": 10},
         rationale="paper keyword search using the extracted core")],
         reason=f"searched as '{core}'")
@@ -508,7 +549,15 @@ def _plan_wikidata(question: str) -> PlanResult:
     """
     core = core_query(question)
     if not core:
+        # still allow a bare Q-id question ("What is Q42?")
+        resolved, cands = _plan_wikidata_concept(question)
+        if "q_id" in resolved:
+            return PlanResult(True, resolved=resolved, reason=f"{resolved['q_id']}")
         return PlanResult(False, reason="no searchable core")
+    resolved, cands = _plan_wikidata_concept(question)
+    if "q_id" in cands:
+        return PlanResult(False, reason="ambiguous entity class; "
+                          "disambiguate before querying", candidates=cands)
     terms = [w for w in core.split() if w.lower() not in _WIKIDATA_HINTS]
     subject = terms[0] if terms else core.split()[0]
     sparql = (
@@ -529,10 +578,473 @@ def _plan_wikidata(question: str) -> PlanResult:
         reason=f"entity lookup for '{subject}'")
 
 
+# ── I2 wave: entity-resolution tables for identifier-bound sources ──────
+
+#: World Bank indicators by concept. Codes are real WDI ids; anything not
+#: in this table falls back to the WB indicator API's own search.
+_WORLDBANK_INDICATORS: dict[str, list[Candidate]] = {
+    "gdp": [
+        Candidate("NY.GDP.MKTP.CD", "GDP (current US$)", 0.95),
+        Candidate("NY.GDP.MKTP.KD.ZG", "GDP growth (annual %)", 0.8),
+    ],
+    "gdp growth": [
+        Candidate("NY.GDP.MKTP.KD.ZG", "GDP growth (annual %)", 0.95),
+    ],
+    "population": [
+        Candidate("SP.POP.TOTL", "Population, total", 0.95),
+    ],
+    "trade": [
+        Candidate("NE.TRD.GNFS.ZS", "Trade (% of GDP)", 0.8),
+    ],
+    "debt": [
+        Candidate("GC.DOD.TOTL.GD.ZS", "Central government debt, total "
+                  "(% of GDP)", 0.75),
+        Candidate("DT.DOD.DLDS.CD", "External debt stocks, long-term (US$)",
+                  0.7),
+    ],
+    "emissions": [
+        Candidate("EN.GHG.CO2.PC.CE.AR5", "CO2 emissions per capita",
+                  0.8),
+    ],
+    "energy use": [
+        Candidate("EG.USE.PCAP.KG.OE", "Energy use per capita", 0.8),
+    ],
+}
+
+#: ISO3 country codes that appear as ordinary words in questions.
+_WB_COUNTRIES: dict[str, str] = {
+    "usa": "USA", "united states": "USA", "china": "CHN", "india": "IND",
+    "germany": "DEU", "japan": "JPN", "brazil": "BRA", "mexico": "MEX",
+    "nigeria": "NGA", "uk": "GBR", "britain": "GBR",
+    "united kingdom": "GBR", "france": "FRA", "russia": "RUS",
+    "south korea": "KOR", "korea": "KOR", "canada": "CAN",
+}
+
+_ISO3_RE = re.compile(r"^[A-Z]{3}$")
+_WB_INDICATOR_RE = re.compile(r"^[A-Z]{2}\.[A-Z0-9]{3}\.[A-Z0-9]{2,4}$")
+
+
+def _wb_resolve_country(question: str) -> tuple[str, list[Candidate]]:
+    """('USA', []) when one country is named; ('', candidates) when several
+    are (a cross-country comparison needs the caller to say which — or
+    'all', which the planner decides)."""
+    low = question.lower()
+    hits: list[tuple[int, str]] = []   # (len, iso3) longest phrase wins checks
+    for name, iso3 in _WB_COUNTRIES.items():
+        if re.search(r"\b" + re.escape(name) + r"\b", low):
+            hits.append((len(name), iso3))
+    if not hits:
+        m = _ISO3_RE.search(question.upper())
+        return (m.group(0), []) if m else ("", [])
+    hits.sort(reverse=True)
+    distinct = {iso for _, iso in hits}
+    if len(distinct) == 1:
+        return distinct.pop(), []
+    # multiple countries named: rank them by how specific the mention was
+    seen: set[str] = set()
+    cands: list[Candidate] = []
+    for _, iso3 in hits:
+        if iso3 in seen:
+            continue
+        seen.add(iso3)
+        cands.append(Candidate(iso3, f"ISO3 {iso3}", 0.6))
+    return "", cands
+
+
+def _plan_worldbank(question: str) -> PlanResult:
+    resolved_i, cands_i = _resolve("indicator_code", question,
+                                   _WORLDBANK_INDICATORS)
+    country, cands_c = _wb_resolve_country(question)
+    if "indicator_code" in cands_i or cands_c:
+        merged = dict(cands_i)
+        if cands_c:
+            merged["country"] = cands_c
+        return PlanResult(False, reason="ambiguous World Bank indicator or "
+                          "country; disambiguate before fetching",
+                          candidates=merged)
+    core = core_query(question)
+    if "indicator_code" not in resolved_i:
+        if not core:
+            return PlanResult(False, reason="no known indicator and no "
+                              "searchable core")
+        # fall back to WB's own indicator search so results carry real codes
+        return PlanResult(True, queries=[PlannedQuery(
+            source="worldbank", method="search_indicators",
+            kwargs={"query": core, "limit": 10},
+            rationale="WB indicator full-text search; results carry codes "
+                      "for a follow-up indicator fetch")],
+            reason=f"no curated indicator matched; searched as '{core}'")
+    code = resolved_i["indicator_code"]
+    kw: dict = {"code": code, "per_page": 200}
+    if country:
+        kw["iso3"] = country
+        who = country
+    elif any(w in question.lower() for w in
+             ("compare", "comparison", "across countries", "cross-country")):
+        kw["iso3"] = "all"
+        who = "all countries"
+    else:
+        kw["iso3"] = "all"
+        who = "all countries (no country named)"
+    return PlanResult(True, queries=[PlannedQuery(
+        source="worldbank", method="indicator", kwargs=kw,
+        rationale=f"concept resolved to {code} for {who}")],
+        resolved={**resolved_i, **({"country": country} if country else {})},
+        reason=f"'{core or question}' -> {code} ({who})")
+
+
+def _plan_wikidata_concept(question: str) -> tuple[dict, dict]:
+    """'concept -> Q-number' resolution via curated hints + Q-id passthrough."""
+    upper_tokens = {m.group(0) for m in
+                    re.finditer(r"\bQ[0-9]+\b", question)}
+    if upper_tokens:
+        qid = sorted(upper_tokens)[0]
+        return {"q_id": qid}, {}
+    low = question.lower()
+    matched = [(c, h) for h, c in _WIKIDATA_HINTS.items() if h in low]
+    if matched:
+        matched.sort(key=lambda p: -p[1])
+        best = matched[0][0]
+        others = [c for c, _ in matched[1:] if c != best]
+        if not others:
+            return {"q_id": best}, {}
+        return {}, {"q_id": [Candidate(best, f"class {best}", 0.7)] +
+                    [Candidate(c, f"class {c}", 0.5) for c in others]}
+    return {}, {}
+
+
+def _plan_bea(question: str) -> PlanResult:
+    """BEA has no text search, but its NIPA/Regional surface is small enough
+    to map honestly: GDP/trade/income concepts to dataset+table pairs."""
+    low = question.lower()
+    table: dict[str, tuple[dict, str]] = {
+        "gdp": ({"dataset": "NIPA", "tablename": "T10101", "linecode": "1"},
+                "Real GDP (Table 1.1.1 line 1)"),
+        "personal income": ({"dataset": "Regional", "tablename": "SAINC1"},
+                            "State annual personal income"),
+        "trade balance": ({"dataset": "IntlTrade", "tablename": ""},
+                          "International trade in goods & services"),
+        "exports": ({"dataset": "IntlTrade", "tablename": ""},
+                    "Exports of goods & services"),
+        "imports": ({"dataset": "IntlTrade", "tablename": ""},
+                    "Imports of goods & services"),
+        "gdp by industry": ({"dataset": "GDPbyIndustry",
+                             "tablename": "GrossOutput"},
+                            "GDP by industry gross output"),
+    }
+    matched = sorted(((k, v) for k, v in table.items() if k in low),
+                     key=lambda p: -len(p[0]))
+    if not matched:
+        core = core_query(question)
+        return PlanResult(False, reason=(
+            f"BEA requires a DataSetName+TableName pair from its parameter "
+            f"catalogue and has no text search; no mapping matched "
+            f"'{core}'. Browse apps.bea.gov/API/signup + the interactive "
+            f"data catalogue and add the mapping."))
+    kw, label = matched[0][1]
+    years = ""
+    m = re.search(r"\b(19|20)\d{2}\b", question)
+    if m:
+        y = int(m.group(0))
+        years = f"{y - 4},{y}"
+    if years:
+        kw["years"] = years
+    return PlanResult(True, queries=[PlannedQuery(
+        source="bea", method="get_data", kwargs=dict(kw, frequency="A"),
+        rationale=f"topic mapped to BEA {label}")],
+        reason=f"mapped to {label} ({kw.get('dataset')})")
+
+
+def _plan_census(question: str) -> PlanResult:
+    """Census queries are year+dataset+variable tuples with no search; we
+    author the handful of timeseries surveys ordinary questions name."""
+    low = question.lower()
+    table: dict[str, tuple[list[str], str, str]] = {
+        "housing starts": (
+            ["HOUSTNSA"], "timeseries/eits/resconst",
+            "New residential construction: housing starts (not seasonally "
+            "adjusted)"),
+        "building permits": (
+            ["PERMITSNSA"], "timeseries/eits/resconst",
+            "New residential construction: building permits"),
+        "housing completions": (
+            ["COMPNSA"], "timeseries/eits/resconst",
+            "New residential construction: completions"),
+        "retail sales": (
+            ["SM_44X72_SM"], "timeseries/eits/marts",
+            "Monthly retail trade: total retail sales (NAICS 44X72)"),
+        "e-commerce": (
+            ["SM_4541SM"], "timeseries/eits/marts",
+            "Monthly retail trade: e-commerce sales"),
+        "population": (
+            ["POP"], "timeseries/international/pop",
+            "International data base population (or use ACS tables)"),
+    }
+    matched = sorted(((k, v) for k, v in table.items() if k in low),
+                     key=lambda p: -len(p[0]))
+    if not matched:
+        core = core_query(question)
+        return PlanResult(False, reason=(
+            f"Census queries need year+dataset+GET variables from its "
+            f"variable catalogue (no text search); no survey mapping "
+            f"matched '{core}'. Browse api.census.gov/data.html and add "
+            f"the mapping."))
+    get_vars, dataset, label = matched[0][1]
+    start = end = ""
+    years = re.findall(r"\b(19|20)\d{2}\b", question)
+    yrs = re.findall(r"\b((?:19|20)\d{2})\b", question)
+    if yrs:
+        start = yrs[0] + "-01"
+        end = (yrs[1] if len(yrs) > 1 else yrs[0]) + "-12"
+    return PlanResult(True, queries=[PlannedQuery(
+        source="census", method="timeseries",
+        kwargs={"dataset": dataset, "get_vars": get_vars,
+                "geo_for": "us:*", "start": start, "end": end},
+        rationale=f"question mapped to Census {label}")],
+        reason=f"mapped to {label}")
+
+
+_EIA_SERIES: dict[str, list[Candidate]] = {
+    "wti": [Candidate("PET.RWTC.M", "WTI spot price FOB, monthly", 0.9)],
+    "brent": [Candidate("PET.RBRTE.M", "Brent spot price FOB, monthly", 0.9)],
+    "crude oil prices": [
+        Candidate("PET.RWTC.M", "WTI spot price FOB, monthly", 0.9),
+        Candidate("PET.RBRTE.M", "Brent spot price FOB, monthly", 0.85),
+    ],
+    "gasoline prices": [
+        Candidate("PET.EER_EPD2DXL0_PFE_NUS_DPG.M",
+                  "US retail diesel price", 0.7),
+        Candidate("TOTAL.MOGTU.US.M", "US motor gasoline supplied", 0.65),
+    ],
+    "natural gas storage": [
+        Candidate("NG.NWG_STO.M", "Natural gas working storage", 0.85),
+    ],
+}
+
+
+def _plan_eia(question: str) -> PlanResult:
+    """EIA v2 needs an API key AND a series id or facet route. Concept
+    table resolves common energy series; otherwise refuse honestly."""
+    # fail loudly at PLANNING time when no key is configured — a plan whose
+    # first fetch dies on auth wastes the whole retrieval round.
+    import os
+    if not os.environ.get("CALLISTO_EIA_API_KEY"):
+        return PlanResult(False, reason=(
+            "EIA v2 requires CALLISTO_EIA_API_KEY (free registration at "
+            "api.eia.gov/register). Set it before planning EIA fetches — "
+            "failing loudly here instead of mid-fetch."))
+    resolved, cands = _resolve("series_id", question, _EIA_SERIES)
+    if "series_id" in resolved:
+        sid = resolved["series_id"]
+        freq = "annual"
+        low = question.lower()
+        if any(w in low for w in ("monthly", "month", "weekly", "week")):
+            freq = "monthly" if "week" not in low else "weekly"
+        return PlanResult(True, queries=[PlannedQuery(
+            source="eia", method="series",
+            kwargs={"series_id": sid, "frequency": freq},
+            rationale=f"concept resolved to EIA series {sid} ({freq})")],
+            resolved=resolved, reason=f"resolved to {sid}")
+    if "series_id" in cands:
+        return PlanResult(False, reason="ambiguous energy series; "
+                          "disambiguate before fetching", candidates=cands)
+    core = core_query(question)
+    return PlanResult(False, reason=(
+        f"EIA series need an id from its facet browser (route like "
+        f"'petroleum/stve/state'); no mapping matched '{core}'. Browse "
+        f"api.eia.gov/dashboard and add the mapping."))
+
+
+_FDIC_FIELDS = ("CERT", "NAME", "STALP", "ASSET", "DEP", "EQ", "REPDTE")
+
+
+def _plan_fdic(question: str) -> PlanResult:
+    low = question.lower()
+    if any(w in low for w in ("failed bank", "bank failure", "failures")):
+        return PlanResult(True, queries=[PlannedQuery(
+            source="fdic", method="failures", kwargs={"limit": 50},
+            rationale="failed-bank history requested directly")],
+            reason="failed-bank history query")
+    # bank-name lookup via NAME filter when a proper-noun token exists
+    proper = [t for t in re.findall(r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)*\b",
+                                    question)
+              if t.lower() not in _FILLER and t.lower() not in {
+                  "what", "which", "bank", "banks", "the"}]
+    if proper:
+        name = max(proper, key=len)
+        filters = f"NAME:{name}"
+        if not _VALUE_OK.fullmatch(filters):
+            return PlanResult(False, reason=f"unsafe FDIC filter {filters!r}")
+        return PlanResult(True, queries=[PlannedQuery(
+            source="fdic", method="institutions",
+            kwargs={"filters": filters, "fields": _FDIC_FIELDS, "limit": 20},
+            rationale=f"institution search on bank name {name!r}")],
+            resolved={"bank_name": name}, reason=f"institution match {name}")
+    core = core_query(question)
+    return PlanResult(False, reason=(
+        f"FDIC BankFind filters are field=value predicates over institution "
+        f"attributes; no bank name or failure request found in '{core}'."))
+
+
+_CFTC_MARKETS: dict[str, list[Candidate]] = {
+    # legacy futures-only cftc_contract_market_code values (CFTC COT):
+    # 067651 WTI Crude Oil (NYMEX), 088691 Gold (COMEX), 023651 Henry Hub
+    # Natural Gas (NYMEX), 001601 Wheat (CBT), 002601 Corn (CBT),
+    # 005601 Soybeans (CBT).
+    "crude oil": [
+        Candidate("067651", "WTI Crude Oil (NYMEX)", 0.9),
+    ],
+    "oil": [
+        Candidate("067651", "WTI Crude Oil (NYMEX)", 0.75),
+    ],
+    "gold": [
+        Candidate("088691", "Gold (COMEX)", 0.9),
+    ],
+    "natural gas": [
+        Candidate("023651", "Henry Hub Natural Gas (NYMEX)", 0.9),
+    ],
+    "wheat": [
+        Candidate("001601", "Wheat (CBT)", 0.9),
+    ],
+    "corn": [
+        Candidate("002601", "Corn (CBT)", 0.9),
+    ],
+    "soybeans": [
+        Candidate("005601", "Soybeans (CBT)", 0.9),
+    ],
+}
+
+
+def _plan_cftc(question: str) -> PlanResult:
+    """COT reports need a cftc_contract_market_code; curated commodity map,
+    explicit code passthrough, else honest refusal."""
+    m = re.search(r"\b([0-9]{3}[0-9A-Za-z]{3})\b", question)
+    if m:
+        code = m.group(1)
+        return PlanResult(True, queries=[PlannedQuery(
+            source="cftc_cot", method="contract_history",
+            kwargs={"market_code": code, "weeks": 52},
+            rationale="explicit CFTC market code supplied")],
+            resolved={"market_code": code}, reason=f"market code {code}")
+    resolved, cands = _resolve("market_code", question, _CFTC_MARKETS)
+    if "market_code" in resolved:
+        code = resolved["market_code"]
+        disaggregated = any(w in question.lower() for w in
+                            ("disaggregat", "money manager", "producer",
+                             "swap dealer"))
+        return PlanResult(True, queries=[PlannedQuery(
+            source="cftc_cot", method="contract_history",
+            kwargs={"market_code": code, "weeks": 52,
+                    "disaggregated": disaggregated},
+            rationale=f"commodity resolved to COT market code {code}"
+                      + (" (disaggregated report)" if disaggregated else ""))],
+            resolved=resolved, reason=f"resolved to market code {code}")
+    if "market_code" in cands:
+        return PlanResult(False, reason="ambiguous COT contract; "
+                          "disambiguate before fetching", candidates=cands)
+    core = core_query(question)
+    return PlanResult(False, reason=(
+        f"CFTC COT needs a market_code from the weekly report's contract "
+        f"list; no mapping matched '{core}'. Find codes at "
+        f"cftc.gov/dea/futures/deacmxlf.htm and add the mapping."))
+
+
+def _plan_uspto_odp(question: str) -> PlanResult:
+    import os
+    if not os.environ.get("CALLISTO_USPTO_ODP_KEY"):
+        return PlanResult(False, reason=(
+            "USPTO Open Data Portal requires CALLISTO_USPTO_ODP_KEY (free "
+            "at data.uspto.gov/getting-started). Set it before planning "
+            "patent fetches — failing loudly instead of mid-fetch."))
+    core = core_query(question)
+    if not core:
+        return PlanResult(False, reason="no searchable core")
+    assignee = None
+    m = re.search(r"(?:patents?|applications?)\s+(?:assigned\s+)?(?:to|by|of)"
+                  r"\s+([A-Z][A-Za-z0-9&.\- ]{2,40})", question)
+    if m:
+        raw = m.group(1).strip()
+        assignee = re.split(
+            r"\s+(?:regarding|concerning|about|on|for|between|from)\s+",
+            raw)[0].strip()
+        assignee = re.sub(r"[?.!,]+$", "", assignee)
+    if assignee:
+        q = f'assigneeName:"{assignee}"'
+        why = f"assignee filter on {assignee!r}"
+    else:
+        q = core
+        why = f"simple query string over bibliographic fields: {core!r}"
+    return PlanResult(True, queries=[PlannedQuery(
+        source="uspto_odp", method="search_applications",
+        kwargs={"query": q, "limit": 25},
+        rationale=f"ODP simplified query syntax — {why}")],
+        reason=why)
+
+
+def _plan_courtlistener(question: str) -> PlanResult:
+    import os
+    if not os.environ.get("CALLISTO_COURTLISTENER_TOKEN"):
+        return PlanResult(False, reason=(
+            "CourtListener requires CALLISTO_COURTLISTENER_TOKEN (free at "
+            "courtlistener.com — account tier ~125 req/day). Set it before "
+            "planning case-law fetches."))
+    core = core_query(question)
+    if not core:
+        return PlanResult(False, reason="no searchable core")
+    low = question.lower()
+    stype = "o"
+    if "docket" in low:
+        stype = "d"
+    elif "judge" in low:
+        stype = "p"
+    order = "score desc"
+    if any(w in low for w in ("recent", "latest", "newest", "last year")):
+        order = "dateFiled desc"
+    return PlanResult(True, queries=[PlannedQuery(
+        source="courtlistener", method="search",
+        kwargs={"query": core, "search_type": stype, "order_by": order},
+        rationale=f"opinion/docket search ({stype}) over extracted core")],
+        reason=f"{stype} search as '{core}'")
+
+
+def _plan_wayback(question: str) -> PlanResult:
+    """Wayback takes a URL, not a topic. Extract a URL when the question
+    carries one; otherwise declare honestly that there is nothing to
+    author until the pipeline knows WHICH page is in question."""
+    m = re.search(r"https?://[^\s\"')]+", question)
+    if not m:
+        bare = re.search(
+            r"\b((?:www\.)?[a-z0-9\-]+(?:\.[a-z]{2,})+"
+            r"(?:/[^\s\"')]*)?)", question, re.IGNORECASE)
+        if bare:
+            url = "https://" + bare.group(1)
+        else:
+            core = core_query(question)
+            return PlanResult(False, reason=(
+                f"Wayback queries take a page URL, not a topic. Nothing to "
+                f"author from '{core}' — supply the URL whose past state "
+                f"matters (often itself a retrieval result)."))
+    else:
+        url = m.group(0).rstrip(".,;")
+    ts = ""
+    yrs = re.findall(r"\b((?:19|20)\d{2})(?:-(\d{2}))?(?:-(\d{2}))?\b",
+                     question)
+    if yrs:
+        y, mo, d = yrs[-1]
+        ts = y + (mo or "") + (d or "")
+    return PlanResult(True, queries=[PlannedQuery(
+        source="wayback", method="closest",
+        kwargs={"url": url, "timestamp": ts},
+        rationale="availability lookup for the closest capture"
+                  + (f" at/before {ts}" if ts else ""))],
+        resolved={"url": url}, reason=f"snapshot lookup for {url}")
+
+
 # keyword-capable adapters: same shape, source-specific knobs
 _KEYWORD_PLANNERS = {
     "openalex": _plan_openalex,
-    "semantic_scholar": _plan_semantic_scholar,
+    "semanticscholar": _plan_semantic_scholar,
+    "semantic_scholar": _plan_semantic_scholar,   # legacy spelling (I2)
     "clinicaltrials": _plan_clinicaltrials,
     "federalregister": _plan_federalregister,
     "gdelt": _plan_gdelt,
@@ -540,30 +1052,26 @@ _KEYWORD_PLANNERS = {
     "bls": _plan_bls,
     "treasury": _plan_treasury,
     "wikidata": _plan_wikidata,
+    # ── wave I2 ─────────────────────────────────────────────────────
+    "worldbank": _plan_worldbank,
+    "bea": _plan_bea,
+    "census": _plan_census,
+    "eia": _plan_eia,
+    "fdic": _plan_fdic,
+    "cftc_cot": _plan_cftc,
+    "uspto_odp": _plan_uspto_odp,
+    "courtlistener": _plan_courtlistener,
+    "wayback": _plan_wayback,
 }
 
 #: SEC deliberately unplannable here — the machine is rate-limited/403'd and
-#: the mandate forbids hitting it; planning would invite fetching.
+#: the mandate forbids hitting it; planning would invite fetching. Every
+#: other registered source now has a planner; the remaining entries below
+#: are the honest residue, each naming exactly what is missing.
 _HONEST_GAPS = {
     "sec_fts": "SEC full-text search requires a declared contact and this "
                "host is currently 403'd; query authoring deferred until "
                "access is restored (deliberate, not forgotten).",
-    "courtlistener": "requires CALLISTO_COURTLISTENER_API_KEY; planner is "
-                     "trivial (keyword) but left to the access owner.",
-    "uspto_odp": "requires CALLISTO_USPTO_API_KEY; keyword planner deferred.",
-    "bea": "needs dataset+tablename pairs from BEA's parameter catalogue; "
-           "no free-text search exists in the API.",
-    "census": "Census API queries are year+dataset+get-vars tuples with no "
-              "text search; authoring requires a variable catalogue.",
-    "eia": "requires CALLISTO_EIA_API_KEY; series routing needs EIA's facet "
-           "browser, not keywords.",
-    "fdic": "FDIC BankFind filters are field=value predicates; keyword "
-            "mapping deferred to the FDIC owner.",
-    "cftc": "CFTC COT needs market-code/dataset selection; no text search.",
-    "worldbank": "indicator codes need the WB indicator catalogue; keyword "
-                 "mapping deferred.",
-    "wayback": "Wayback queries take a URL, not a topic; nothing to author "
-               "without knowing which page is in question.",
 }
 
 

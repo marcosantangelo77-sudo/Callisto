@@ -139,13 +139,15 @@ class RelevanceGate:
 
 # ── Source independence ────────────────────────────────────────────────────
 
-# Sources that aggregate the SAME underlying literature/publisher pool are
-# not independent corroboration even when their APIs differ. Distinct
-# entries here must be justified; everything else counts independent at
-# the host level.
+# Sources that aggregate the SAME underlying corpus are not independent
+# corroboration even when their APIs differ. The declaration lives with the
+# adapters (tools.sources.base.INDEPENDENCE_FAMILIES) so the honest answer
+# sits next to the specs that know each source's actual upstream; this
+# mapping is derived from it, never re-declared.
+from tools.sources.base import INDEPENDENCE_FAMILIES as _DECLARED_FAMILIES
+
 _OVERLAP_FAMILIES = {
-    # both index the scholarly literature; overlapping crawl bases
-    "scholarly-aggregator": {"openalex", "semantic_scholar"},
+    family: set(members) for family, members in _DECLARED_FAMILIES.items()
 }
 
 

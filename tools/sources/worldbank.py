@@ -48,6 +48,25 @@ class WorldBankAdapter:
     def __init__(self, source: RestSource):
         self.source = source
 
+    def search_indicators(self, query: str, limit: int = 10) -> dict:
+        """Full-text search over the WDI indicator catalogue (source=2).
+        Results carry real indicator codes for a follow-up indicator()
+        fetch — we never invent a code from a keyword."""
+        url = self.source.build_url("/indicator", {
+            "format": "json", "source": "2",
+            "search": query.strip(),
+            "per_page": max(1, min(int(limit), 200)),
+        })
+        data, rec = self.source.get_json(url)
+        meta = data[0] if isinstance(data, list) and len(data) > 1 else {}
+        rows = data[1] if isinstance(data, list) and len(data) > 1 else []
+        return {"total": meta.get("total", len(rows)),
+                "rows": [{"code": r.get("id"),
+                          "name": r.get("name"), }
+                         for r in rows],
+                "_fetch": {"url": rec.url, "sha256": rec.content_sha256,
+                           "fetched_at": rec.fetched_at}}
+
     def indicator(self, iso3: str, code: str, start: str = "",
                   end: str = "", per_page: int = 200) -> dict:
         """Records for one country/indicator. iso3 like 'USA' or 'all';
