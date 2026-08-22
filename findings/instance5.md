@@ -101,3 +101,104 @@ For: unowned.
   instance 1's files. The router is additive; migration can proceed per-site.
 - Moving the submodule to attic/: quarantine rule says owner decides; the
   vendored replacement removes the need to touch it.
+
+---
+
+# Plug-and-play compute (2026-08-22, follow-up pass)
+
+Commits: dadfb2d (characterization), 1794217 (pool router), f9e9e50 (pool
+tests), 4c500fa (providers.yaml pool config).
+
+## [VERIFIED] ProviderRouter is now an endpoint POOL with capability routing, health/failover, queueing, and a cost ledger
+Blast radius: LOUD (legacy surface preserved)
+Evidence: inference.py:853-1433. Each `providers:` entry is one endpoint
+declaring vram_gb, context_tokens, structured_output, tool_calls,
+max_concurrency, and $/1k-token costs. `routing.task_classes` values may be
+one endpoint name (back-compat) or a LIST in failover order. complete()
+walks candidates: skips cooling-down endpoints, filters by capability
+(schema needs structured_output=true), enforces per-endpoint
+asyncio.Semaphore(max_concurrency), retries transient errors in-place
+(2 attempts), fails over on exhaustion, records tokens+USD in CostLedger.
+Dead endpoints get exponential cooldown (2s→60s cap); if ALL candidates are
+cooling it degrades to the first rather than crashing the loop — fan-out
+against a dead box cannot take down the autonomous loop. 47 tier5 tests
+pass (characterization + pool + original + validator).
+Falsifier: run two concurrent complete() calls against max_concurrency=1
+endpoint with a counter in the server — peak concurrency >1 falsifies the
+semaphore claim. Unplug gpu1 and watch research_synthesis fail outright —
+falsifies failover.
+For: owned.
+
+## [VERIFIED] Concurrency/backpressure — the fan-out thrash problem is closed
+Blast radius: SILENT before, bounded now
+Evidence: llama-server serves ONE request at a time unless launched with
+--parallel N; orchestrator.py fans out to parallel agents. Before this
+pass, N parallel agents would open N sockets into a 1-slot server —
+queueing inside TCP, no visibility, timeout storms. Now each endpoint has
+a declared max_concurrency and an asyncio.Semaphore; excess requests wait
+in the router (backpressure), waits over 1s are logged, in_flight counts
+are exposed via router.status() for /system/full-status wiring.
+INFERRED caveat: default configs still declare max_concurrency: 1 — correct
+for stock llama-server, but the OWNER must raise it in lockstep with
+--parallel at launch. Mismatch direction (config > server) re-creates
+thrash invisibly. Falsifier: benchmark tok/s at fan-out=4 vs serial on the
+real box; a >30% drop falsifies "runs well".
+For: config values unowned (owner's hardware).
+
+## [VERIFIED] Cost & budget awareness — frontier escalation is now deliberate
+Blast radius: LOW (additive)
+Evidence: local endpoints cost $0/1k (free at margin); frontier declares
+cost_per_1k_input/output. Every completion charges CostLedger from the
+response usage block. routing.budget.usd (default $5) caps process-lifetime
+hosted spend: once spent, paid endpoints REFUSE unless the caller passes
+allow_budget_exceed=True — escalation becomes an explicit decision visible
+at the call site. router.status()/CostLedger.snapshot() expose spend by
+endpoint. Note: promotion_judgment/adversarial_review list [frontier, gpu1],
+so budget exhaustion falls back LOCAL instead of blocking judgment calls —
+degraded quality, never a crashed loop.
+Falsifier: set budget.usd: 0.000001 and confirm promotion_judgment routes
+to gpu1 without erroring; a hard failure would falsify.
+For: owned.
+
+## FOR INSTANCE 1 — exact rename list (router side made authoritative meanwhile)
+The vocabulary gap is BRIDGED, not just documented: inference.TASK_CLASS_ALIASES
+maps every call-site name to a canonical task class, so all existing call
+sites route correctly TODAY. The renames below are for vocabulary hygiene,
+not correctness. When instance 1 migrates escalate_with_ladder call sites
+to router.complete(), use these:
+
+  Call-site name (current)     -> canonical task class        | sites
+  ---------------------------------------------------------------------
+  task_type="deep_work"        -> research_synthesis          | autonomous.py ×6
+  task_type="hypothesis_gen"   -> hypothesis_generation       | autonomous.py ×2 (+hypothesis_generator.py paths)
+  task_type="reasoning"        -> research_synthesis          | MODEL_LADDER key, inference.py:167
+  task_type="review"           -> adversarial_review          | MODEL_LADDER key, inference.py:179
+  task_type="code_generation"  -> research_synthesis          | MODEL_LADDER key, inference.py:184
+
+Migration contract: canonical names are exactly the keys of
+routing.task_classes in providers.yaml (8 classes). If instance 1 wants a
+DIFFERENT canonical name (e.g. keep "deep_work" as canonical), change the
+alias map OR add the name to task_classes — both are one-line edits;
+the router raises UnknownTaskClassError loudly on anything undeclared.
+[VERIFIED] bridge works: tests assert deep_work/hypothesis_gen/reasoning/
+review/code_generation all resolve against the real repo config.
+
+## [VERIFIED] providers.yaml rewritten as endpoint pool with scaling recipes
+Blast radius: none until owner adds hardware
+Evidence: header documents the plug-and-play contract; recipes for second
+box (3090), DGX Spark alongside, bigger single GPU (5090). Today's file
+still describes exactly one 5060 Ti (gpu1) + grind endpoint + env-backed
+frontier, and degrades to gpu1 alone. Frontier pricing ($3/$15 per 1k) is
+PLACEHOLDER — flagged in-file for owner to edit to real numbers.
+Falsifier: adding a `gpu2:` entry and appending it to two task_classes
+lists should need zero .py edits — any code change falsifies the contract.
+For: hardware entries unowned (owner); schema owned.
+
+## Single-box degradation check [VERIFIED]
+With only gpu1 alive: screening→gpu1_fast, everything local→gpu1,
+frontier tasks→frontier if env vars resolve else LOUD RuntimeError at
+tier_for (candidates_for skips unresolved endpoints, so complete() with a
+local-only fallback list still works). Construction never requires
+FRONTIER_* to be set — verified by test_missing_frontier_base_url_raises.
+Falsifier: unset all FRONTIER_* env vars and import inference + construct
+ProviderRouter — any exception falsifies.
