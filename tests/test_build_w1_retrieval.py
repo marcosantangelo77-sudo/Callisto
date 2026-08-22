@@ -14,6 +14,7 @@ regression-tested here in four parts:
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -82,13 +83,15 @@ def _registry(*specs) -> SourceRegistry:
     reg = SourceRegistry()
 
     def make_adapter(source):
+        path = "/" + re.sub(r"^https?://|[^a-z0-9].*$", "",
+                            source.spec.base_url.lower()) or "works"
         class _Ad:
             def __getattr__(self, method_name):
                 def call(*args, **kwargs):
                     term = next((a for a in args if isinstance(a, str)),
                                 kwargs.get("query_term", "q"))
                     url = source.build_url(
-                        "/works", {"search": term.replace(" ", "+")})
+                        path, {"search": term.replace(" ", "+")})
                     return source.get_json(url)[0]
                 return call
         return _Ad()
@@ -117,7 +120,8 @@ def _q(text="What does research say about semiconductor supply chain "
     return rq
 
 
-def _retriever(reg, transport_routes, gate=None, max_rounds=3, **kw):
+def _retriever(reg, transport_routes, gate=None, max_rounds=3,
+               call_names=("alpha", "beta"), **kw):
     ledger = ProvenanceLedger()
     return IterativeRetriever(
         registry=reg, ledger=ledger,
@@ -126,6 +130,8 @@ def _retriever(reg, transport_routes, gate=None, max_rounds=3, **kw):
         max_rounds=max_rounds, generic_calls={
             "alpha": ("works_search", ("term",), {"limit": 3}),
             "beta": ("works_search", ("term",), {"limit": 3}),
+            "openalex": ("works_search", ("term",), {"limit": 3}),
+            "semantic_scholar": ("works_search", ("term",), {"limit": 3}),
         }, **kw)
 
 
@@ -211,13 +217,15 @@ def test_two_hits_from_one_source_do_not_meet_min_independent_2():
 
 
 def test_sufficiency_declared_only_at_real_independence():
-    reg = _registry(("alpha", _ALPHA_ANSWERS, "https://api.openalex.org"),
-                    ("beta", _BETA_ANSWERS, "https://s.example"))
+    reg = _registry(("openalex", _ALPHA_ANSWERS, "https://api.openalex.org"),
+                    ("semantic_scholar", _BETA_ANSWERS,
+                     "https://s.example"))
     routes = {"/works": _openalex_body()}
     trace = _retriever(reg, routes).retrieve(_q(min_ind=2), "",
                                              min_independent=2)
-    # alpha+beta are in one overlap family (scholarly aggregators) so they
-    # collapse to ONE independent source even though both returned hits.
+    # openalex+semantic_scholar are one declared overlap family (both index
+    # the scholarly literature), so two hits from them are ONE independent
+    # source and sufficiency must NOT be declared at min_independent=2.
     assert len(trace.independent_keys) == 1
     assert not trace.stop_reason.startswith("sufficient")
 
@@ -229,8 +237,9 @@ def test_empty_first_round_refines_and_retries_other_sources():
     reg = _registry(("alpha", _ALPHA_ANSWERS, "https://api.openalex.org"),
                     ("beta", ["agency rules about supply chains"],
                      "https://c.org"))
-    # Round-agnostic route: alpha always returns junk, beta always good.
-    routes = {"/works": IRRELEVANT_BODY, "/doc": _openalex_body()}
+    # alpha always returns junk, beta always good; each adapter routes to
+    # its own fixture path derived from its base_url host.
+    routes = {"/api": IRRELEVANT_BODY, "/c": _openalex_body()}
     trace = _retriever(reg, routes).retrieve(_q(), "", min_independent=1)
     assert trace.n_admitted >= 1
     assert any(r["name"] == "beta" for rnd in trace.rounds
