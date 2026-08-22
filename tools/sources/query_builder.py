@@ -975,9 +975,11 @@ def _plan_uspto_odp(question: str) -> PlanResult:
         return PlanResult(False, reason="no searchable core")
     assignee = None
     m = (re.search(r"(?:patents?|applications?)\s+assigned\s+to\s+"
-                   r"([A-Z][A-Za-z0-9&.\- ]{1,40})", question)
+                   r"([A-Z][A-Za-z0-9&.\- ]{1,40})", question,
+                   re.IGNORECASE)
          or re.search(r"(?:patents?|applications?)\s+(?:by|of)\s+"
-                      r"([A-Z][A-Za-z0-9&.\- ]{2,40})", question))
+                      r"([A-Z][A-Za-z0-9&.\- ]{2,40})", question,
+                      re.IGNORECASE))
     if m:
         raw = m.group(1).strip()
         assignee = re.split(
