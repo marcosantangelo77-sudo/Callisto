@@ -12,7 +12,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
+
+TRIPLE_STR = re.compile(r'("""|\'\'\')(?:.|\n)*?\1')
+SINGLE_STR = re.compile(r'"[^"\n]*"|\'[^\'\n]*\'')
+
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -98,13 +103,18 @@ class TestKalshiAdapter:
         ad = KalshiAdapter(RestSource(SPEC, ledger=ledger, transport=t,
                                       _limiter=_RateLimiter(0.0)))
         ad.list_markets(series_ticker="KXCPI", limit=50)
-        entries = [e for e in ledger.entries()
-                   if e.get("tool_name") == "kalshi_fetch"] \
-            if hasattr(ledger, "entries") else []
-        # Ledger API varies; the contract that must hold regardless:
-        recs = [e for e in getattr(ledger, "_records", [])
-                if getattr(e, "tool_name", "") == "kalshi_fetch"]
-        assert recs or entries, "fetch was not provenance-recorded"
+        # ProvenanceLedger keys observations by content hash (_by_hash) and
+        # tracks their URLs (_urls). An earlier version of this test guessed
+        # `_records` and `entries()` — neither exists — so it reported "not
+        # recorded" while recording was working correctly.
+        # Use the ledger's PUBLIC API. An earlier version reached for
+        # `_records` and `entries()` — neither exists — and reported "not
+        # recorded" while recording worked fine. Private-attribute probing in
+        # a test is how you get a false negative about your own safety net.
+        urls = list(ledger.observed_urls())
+        assert urls, "fetch was not provenance-recorded at all"
+        assert any("kalshi" in u for u in urls), (
+            f"fetch recorded but not attributed to kalshi: {urls}")
 
     def test_get_market_carries_resolution_criteria(self):
         t = FakeTransport()
@@ -168,8 +178,11 @@ class TestEdgeWiring:
         assert isinstance(quote, MarketQuote)
         assert quote.kind == "probability"
         assert quote.source == "kalshi"
-        assert quote.price == pytest.approx(0.62)
-        assert quote.counter_price == pytest.approx(0.61)
+        # YES ask, not the 0.62 mid: you cannot transact at the mid, so
+        # pricing an edge off it overstates it. yes_ask 0.63 + no_ask 0.39
+        # = 1.02, and that 2% overround is what the devig removes.
+        assert quote.price == pytest.approx(0.63)
+        assert quote.counter_price == pytest.approx(0.39)
         fair, audit = quote.fair_probability()
         assert audit["devigged"], "two-sided book must devig"
 
@@ -350,11 +363,18 @@ class TestReadOnlyMandate:
         for fname in os.listdir(pkg_dir):
             if not fname.endswith(".py"):
                 continue
-            text = open(os.path.join(pkg_dir, fname)).read().lower()
+            # Scan CODE, not prose. The package's own docstring states that
+            # it deliberately never touches orders/positions/balance — a raw
+            # substring scan flags that disclaimer and fails on the very
+            # comment asserting the property under test.
+            raw = open(os.path.join(pkg_dir, fname)).read()
+            no_doc = re.sub(TRIPLE_STR, "", raw)
+            no_str = re.sub(SINGLE_STR, "", no_doc)
+            code = "\n".join(l.split("#")[0] for l in no_str.splitlines()).lower()
             for word in banned:
-                assert word not in text, (
-                    f"{fname} mentions '{word}' — the package must contain "
-                    "no order/account path whatsoever")
+                assert not re.search(r"\b" + re.escape(word) + r"\b", code), (
+                    f"{fname} has a live '{word}' reference in CODE — the "
+                    "package must contain no order/account path whatsoever")
 
     def test_spec_declares_public_read_only_endpoints(self):
         assert SPEC.base_url.endswith("/trade-api/v2")

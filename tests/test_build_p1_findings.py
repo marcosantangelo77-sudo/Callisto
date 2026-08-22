@@ -71,8 +71,12 @@ def test_finding_source_selection_handles_natural_questions():
               "scholarly literature about semiconductor supply chains"):
         assert reg.select(q), f"natural question selected nothing: {q!r}"
 
-    # a question nothing covers still returns nothing — no noise
-    assert reg.select("how is the weather") == []
+    # a question nothing covers still returns nothing — no noise.
+    # NB: "how is the weather" USED to be the example here and now correctly
+    # selects kalshi, which runs weather markets. The system was right and the
+    # test was stale — a reminder that "nothing covers this" is a moving target
+    # as adapters are added.
+    assert reg.select("how do I bake sourdough bread") == []
 
     # strictness remains a working control
     assert reg.select("patents filed by a company", min_score=0.99) == []

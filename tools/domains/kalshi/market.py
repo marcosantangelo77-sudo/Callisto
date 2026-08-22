@@ -213,11 +213,17 @@ class KalshiAdapter:
     def market_quote(self, ticker: str):
         """The market's live price as a tools.edge.MarketQuote.
 
-        YES mid as `price`, YES bid as `counter_price`, kind='probability'
-        (Kalshi dollars ARE probabilities). With both sides present the
-        quote devigs via the standard two-way path, so assess_edge() sees a
-        fair market probability rather than raw implied. Returns
-        (quote, fetch_meta); raises ValueError on a stale/unpriced book.
+        YES ask as `price`, NO ask as `counter_price`, kind='probability'
+        (Kalshi dollars ARE probabilities).
+
+        Two complementary OFFERS, deliberately — not the mid. You cannot
+        transact at the mid, so pricing an edge off it silently overstates
+        it. yes_ask + no_ask sums above 1.0 and that excess IS the spread,
+        measurable as overround, which the standard two-way devig removes.
+        assess_edge() therefore sees a fair market probability rather than
+        either a raw implied price or an untradeable midpoint.
+
+        Returns (quote, fetch_meta); raises ValueError on a stale/unpriced book.
         """
         import time as _time
 

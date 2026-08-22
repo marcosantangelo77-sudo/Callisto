@@ -155,6 +155,16 @@ def independence_key(source_name: str, base_url: str) -> str:
     """The unit that counts toward min_independent_sources: the publisher
     host, collapsed into declared overlap families."""
     host = re.sub(r"^https?://", "", base_url).split("/")[0]
+    # Normalise before matching. The family list is keyed by adapter name,
+    # so 'semantic_scholar' vs 'semanticscholar' silently fell through to the
+    # host — making two sources that index the SAME literature count as two
+    # INDEPENDENT voices, which inflates confidence. Naming drift must not be
+    # able to manufacture independence.
+    _norm = lambda x: re.sub(r"[^a-z0-9]", "", str(x).lower())
+    nname = _norm(source_name)
+    for family, members in _OVERLAP_FAMILIES.items():
+        if any(_norm(m) == nname for m in members):
+            return family
     for family, members in _OVERLAP_FAMILIES.items():
         if source_name in members:
             return family

@@ -85,7 +85,9 @@ class TestTriangulation:
         a = item("c", "openalex", base="https://openalex.org")
         b = item("c", "semantic_scholar", base="https://semanticscholar.org")
         assert a.indep_key == independence_key("openalex", "https://openalex.org")
-        assert b.indep_key == a.indep_key
+        assert b.indep_key == a.indep_key, (
+            "semantic_scholar must collapse into the openalex family — "
+            "naming drift must not manufacture independence")
         g = triangulate([a, b])[0]
         assert g.independent_sources == 1
         assert len(g.items) == 2
