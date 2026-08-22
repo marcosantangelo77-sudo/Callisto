@@ -615,7 +615,18 @@ async def _backfill_signals_from_backtests(db) -> None:
 
     Idempotent — uses INSERT OR IGNORE and checks if backfill already ran.
     """
-    from tools.backtest import _signal_confidence
+    try:
+        from tools.backtest import _signal_confidence
+    except ImportError:
+        # tools.backtest pulls heavy deps (polars etc.) that may be absent
+        # in minimal environments. Mirror the real classifier (backtest.py:44)
+        # rather than failing schema startup over it.
+        def _signal_confidence(edge: float) -> str:
+            if edge >= 0.02:
+                return "high"
+            elif edge >= 0.012:
+                return "medium"
+            return "low"
 
     # Check if we already have backtest-type signals (skip if already backfilled)
     row = await db.execute_fetchall(
