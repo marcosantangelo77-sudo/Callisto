@@ -23,6 +23,7 @@ The pipeline can only ever lower what the model proposes.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -52,6 +53,7 @@ from agp.research_program import (
 from agp.thresholds import MAX_CONFIDENCE_BY_SOURCE, DB_CONFIDENCE_FLOOR
 from agp import ConfidenceTier
 from tools.artifacts import ArtifactStore, ArtifactRef
+from tools.pipeline import checkpoint as ckpt
 from tools.pipeline.model import (
     PipelineModel,
     answer_messages,
@@ -117,6 +119,9 @@ class PipelineResult:
     #: decomposition). Surfaced so a run that needed help does not look
     #: identical to one that did not.
     notes: list[str] = field(default_factory=list)
+    #: present only when a checkpointer was injected — records which stages
+    #: were resumed vs fresh, so stale evidence is visible to the caller.
+    trace: Optional[ckpt.RunTrace] = None
 
     def summary_dict(self) -> dict:
         return {
@@ -182,7 +187,8 @@ class ResearchPipeline:
                  store: Optional[ArtifactStore] = None,
                  ledger: Optional[ProvenanceLedger] = None,
                  registry=None,
-                 descendant_resolutions: Optional[list] = None):
+                 descendant_resolutions: Optional[list] = None,
+                 checkpointer: Optional[ckpt.FileCheckpointer] = None):
         self.model = model
         self.transport = transport
         self.store = store or ArtifactStore()
@@ -191,6 +197,8 @@ class ResearchPipeline:
         self.descendant_resolutions = list(descendant_resolutions or [])
         self._adversary_router = adversary_router
         self._adversary = None
+        # None = no checkpointing; behaviour identical to the pre-W3 run.
+        self.checkpointer = checkpointer
 
     # -- lazy components ---------------------------------------------------
 
@@ -395,16 +403,43 @@ class ResearchPipeline:
         today = today or date.today()
         self.artifact_refs = []
         result = PipelineResult(root_query=question, sealed=False)
+        cp = self.checkpointer
+        trace: Optional[ckpt.RunTrace] = None
+        if cp is not None:
+            trace = ckpt.RunTrace(run=ckpt.run_key(
+                question,
+                domain.value if hasattr(domain, "value") else str(domain),
+                today.isoformat()))
 
-        # 1. Decompose.
-        try:
-            program = await self._decompose(question, today)
-        except ValueError as first:
-            # One repair turn. The validator's message names exactly what was
-            # wrong, so hand it back rather than losing the whole run to a
-            # recoverable model mistake. A second failure is real and raises.
-            result.notes.append(f"decomposition repair attempted: {first}")
-            program = await self._decompose(question, today, _repair=str(first))
+        # 1. Decompose (checkpointed when a checkpointer is injected).
+        async def _do_decompose() -> ResearchProgram:
+            try:
+                prog = await self._decompose(question, today)
+            except ValueError as first:
+                # One repair turn. The validator's message names exactly what
+                # was wrong, so hand it back rather than losing the whole run
+                # to a recoverable model mistake. A second failure raises.
+                result.notes.append(
+                    f"decomposition repair attempted: {first}")
+                prog = await self._decompose(question, today,
+                                             _repair=str(first))
+            return prog
+
+        if cp is not None:
+            async def _decompose_payload() -> dict:
+                prog = await _do_decompose()
+                return {"program": prog.to_dict(),
+                        "question_types": self._question_types}
+            oc = await ckpt.run_stage(cp, trace, "decompose",
+                                      {"question": question,
+                                       "today": today.isoformat()},
+                                      _decompose_payload)
+            program = ResearchProgram.from_dict(oc.payload["program"])
+            self._question_types = {
+                qid: qt for qid, qt in
+                (oc.payload.get("question_types") or {}).items()}
+        else:
+            program = await _do_decompose()
         result.program = program
 
         # 2..5. Per leaf: select sources, fetch, compute, answer.
@@ -416,17 +451,50 @@ class ResearchPipeline:
         session.sources = [s["name"] for s in self._get_registry().specs()]
 
         for q in program.leaves:
-            fetches, trace = await self._fetch_for_question(
-                q, self._question_types.get(q.question_id) or "")
+            async def _fetch_payload(q=q) -> dict:
+                fetches_q, trace_q = await self._fetch_for_question(
+                    q, self._question_types.get(q.question_id) or "")
+                return {"fetches": [dataclasses.asdict(f)
+                                    for f in fetches_q]}
+            if cp is not None:
+                f_oc = await ckpt.run_stage(
+                    cp, trace, "fetch_leaf", {"qid": q.question_id},
+                    _fetch_payload,
+                    claim_ids=[session.session_id])
+                # Restore the fetched bytes into this run's ledger so
+                # source-class assignment works identically on a resume.
+                ck = cp.load_by_key(
+                    trace.run,
+                    ckpt.step_key(trace.run, "fetch_leaf",
+                                  ckpt.hash_inputs({"qid": q.question_id})))
+                if ck is not None:
+                    ckpt.replay_ledger(self.ledger, [ck])
+                fetches = [_fetch_from_payload(r)
+                           for r in f_oc.payload["fetches"]]
+                rejected = []
+                trace_q = None
+            else:
+                fetches, trace_q = await self._fetch_for_question(
+                    q, self._question_types.get(q.question_id) or "")
+                rejected = trace_q.rejected
             result.fetches.extend(fetches)
-            if trace.rejected:
+            if rejected:
                 result.notes.append(
-                    f"leaf '{q.text[:60]}': {len(trace.rejected)} fetch(s) "
+                    f"leaf '{q.text[:60]}': {len(rejected)} fetch(s) "
                     "rejected at ingestion: " + "; ".join(
-                        f"[{r.source_name}] {r.reason}"
-                        for r in trace.rejected))
-            outcome = await self._answer_leaf(q, fetches, session,
-                                              trace=trace)
+                        f"[{r.source_name}] {r.reason}" for r in rejected))
+
+            async def _answer() -> dict:
+                outcome = await self._answer_leaf(q, fetches, session,
+                                                  trace=trace_q)
+                return {"leaf": dataclasses.asdict(outcome)}
+            if cp is not None:
+                a_oc = await ckpt.run_stage(
+                    cp, trace, "answer_leaf", {"qid": q.question_id}, _answer)
+                outcome = _leaf_from_payload(a_oc.payload["leaf"])
+            else:
+                outcome = await self._answer_leaf(q, fetches, session,
+                                                  trace=trace_q)
             result.leaves.append(outcome)
 
 
@@ -484,6 +552,13 @@ class ResearchPipeline:
                 self.adversary.ledger.record_sustained(
                     session.session_id, ob.text)
             return result
+        if cp is not None:
+            verdict, reason = ckpt.seal_guard(trace, cp.list_all(),
+                                              self.ledger)
+            if verdict == "REFUSE":
+                result.refusal_reason = reason
+                result.trace = trace
+                return result
         try:
             seal_hash = session.seal()
         except Exception as e:  # noqa: BLE001 — AGPSealRefused et al.
@@ -496,6 +571,7 @@ class ResearchPipeline:
         result.confidence_score = session.summary.confidence_score
         result.confidence_tier = tier
         result.artifact_refs = list(self.artifact_refs)
+        result.trace = trace
         for ob in objections:
             self.adversary.ledger.record_overrule(
                 session.session_id, ob.text,
@@ -505,6 +581,30 @@ class ResearchPipeline:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
+
+def _fetch_from_payload(rec: dict) -> FetchResult:
+    """Rebuild a FetchResult from its checkpointed asdict form."""
+    rec = dict(rec)
+    parsed = rec.get("parsed")
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed)
+        except (ValueError, TypeError):
+            pass
+    return FetchResult(source_name=rec["source_name"], url=rec["url"],
+                       content_sha256=rec["content_sha256"],
+                       body=rec["body"], parsed=parsed,
+                       question_id=rec["question_id"])
+
+
+def _leaf_from_payload(d: dict) -> LeafOutcome:
+    """Rebuild a LeafOutcome from its checkpointed asdict form."""
+    d = dict(d)
+    d["source_classes"] = list(d.get("source_classes") or [])
+    d["requirement_reasons"] = list(d.get("requirement_reasons") or [])
+    d["artifact_sha256s"] = list(d.get("artifact_sha256s") or [])
+    return LeafOutcome(**d)
+
 
 def _make_adapter(registry, name: str, source: RestSource):
     entry = registry.get(name)
