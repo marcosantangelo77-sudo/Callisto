@@ -463,8 +463,19 @@ class ResearchPipeline:
             async def _fetch_payload(q=q) -> dict:
                 fetches_q, trace_q = await self._fetch_for_question(
                     q, self._question_types.get(q.question_id) or "")
+                # Store the relevance gate's VERDICTS, not just its admits.
+                # A resume that replays only stored fetches silently skips
+                # the gate — evidence the live run rejected would enter the
+                # resumed run, and zero reported rejections would make the
+                # resumed run look cleaner than it was. Restoring the whole
+                # trace (rejects included) keeps rejection itself auditable.
                 return {"fetches": [dataclasses.asdict(f)
-                                    for f in fetches_q]}
+                                    for f in fetches_q],
+                        "rejections": [dataclasses.asdict(r)
+                                       for r in trace_q.rejected],
+                        "independent_keys": sorted(trace_q.independent_keys),
+                        "queries": list(trace_q.queries),
+                        "stop_reason": trace_q.stop_reason}
             if cp is not None:
                 f_oc = await ckpt.run_stage(
                     cp, trace, "fetch_leaf", {"qid": q.question_id},
@@ -480,8 +491,13 @@ class ResearchPipeline:
                     ckpt.replay_ledger(self.ledger, [ck])
                 fetches = [_fetch_from_payload(r)
                            for r in f_oc.payload["fetches"]]
-                rejected = []
-                trace_q = None
+                # Restore the FULL retrieval trace — admitted AND rejected —
+                # whether this stage was fresh or served from the checkpoint.
+                # The gate has already been applied to produce this payload;
+                # restoring it verbatim is how a resumed run scores exactly
+                # what the equivalent live run scored.
+                trace_q = _trace_from_payload(q.question_id, f_oc.payload)
+                rejected = trace_q.rejected
             else:
                 fetches, trace_q = await self._fetch_for_question(
                     q, self._question_types.get(q.question_id) or "")
@@ -613,6 +629,31 @@ class ResearchPipeline:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
+
+def _trace_from_payload(question_id: str, payload: dict):
+    """Rebuild a RetrievalTrace from a checkpointed fetch_leaf payload.
+
+    Restores the relevance gate's full verdict set — admitted fetches,
+    rejected items with reasons, and the independence keys the live run
+    computed — so a resumed run scores on exactly the evidence (and only
+    the evidence) the live run admitted. Missing legacy fields degrade to
+    empty, never to 'everything was admitted'.
+    """
+    from tools.pipeline.retrieval import RejectedItem, RetrievalTrace
+
+    trace = RetrievalTrace(question_id=question_id)
+    for r in payload.get("rejections") or []:
+        trace.rejected.append(RejectedItem(
+            source_name=r.get("source_name", ""),
+            url=r.get("url", ""),
+            reason=r.get("reason", ""),
+            relevance_score=float(r.get("relevance_score") or 0.0),
+            content_sha256=r.get("content_sha256", "")))
+    trace.independent_keys = set(payload.get("independent_keys") or [])
+    trace.queries = list(payload.get("queries") or [])
+    trace.stop_reason = payload.get("stop_reason", "")
+    return trace
+
 
 def _fetch_from_payload(rec: dict) -> FetchResult:
     """Rebuild a FetchResult from its checkpointed asdict form."""
