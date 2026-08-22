@@ -161,3 +161,87 @@ output — is the justification for building it.
 **Test any proposed capability against this:** does it help find or verify an
 edge? If it only produces a nicer document, it is out of scope, however useful
 it might be to a person doing that work by hand.
+
+---
+
+## MULTI-MODEL ROLE ASSIGNMENT — first-class item
+
+The goal is always local models running 24/7 at electricity cost. But the
+ProviderRouter is deliberately provider-agnostic, and that unlocks something no
+single model can do.
+
+### Different models in different roles
+
+The three AGP roles have genuinely different cognitive demands:
+
+  Architect — frames the question, decides what evidence would settle it,
+              chooses the decomposition. A bad decomposition dooms everything
+              downstream and no execution quality recovers it. Highest payoff
+              from capability.
+  Manager   — runs searches, collates, extracts, normalises. ~90% of token
+              volume. A resident 27B does this well at zero marginal cost.
+  Sentinel  — adversarial review. Second-highest payoff: catching a subtle flaw
+              is harder than producing the conclusion. A weak critic
+              rubber-stamps.
+
+Assign per role, not per system. Frontier for Architect and Sentinel, local for
+Manager, is the default worth testing first.
+
+### Cross-provider ensemble — the capability nothing else has
+
+Claude as Architect, GPT as Manager, Grok as Sentinel. **When they disagree,
+that disagreement is data, not noise.** A conclusion three models from different
+training distributions converge on is meaningfully stronger than one confident
+answer. Where they diverge, you have located genuine uncertainty rather than
+model idiosyncrasy.
+
+Feed disagreement into the confidence ceiling directly. No single model can
+produce this signal at any capability level. This system is the only place
+different models can argue with each other and have the outcome SCORED.
+
+### Re-verification on model upgrade
+
+When a stronger model becomes available, re-run previously sealed claims
+through it. Three things fall out:
+
+  1. **Claim audit** — a sealed conclusion the new model rejects is flagged for
+     review. Cheap insurance against a weak model having sealed something wrong.
+  2. **Model benchmark** — resolved claims are a held-out test set the owner
+     OWNS. Scoring a new model against outcomes that were already settled
+     measures it on real research, not on a public benchmark it may have
+     trained on.
+  3. **Ceiling revision** — if the model that sealed a claim is later shown
+     weak on that claim class, the confidence ceiling for that class should
+     drop retroactively.
+
+This makes model strength a measurable, tracked property of the system rather
+than a vendor claim.
+
+### Why a frontier model does better INSIDE the harness
+
+Six mechanisms, each addressing a known failure mode of standalone models:
+
+  1. Forced decomposition — commits to sub-questions with evidence requirements
+     before answering, so a failure is locatable.
+  2. Provenance enforcement — cannot claim a source it did not fetch.
+     Hallucinated citations are the most common research failure of every
+     frontier model; here it is structurally impossible.
+  3. Confidence ceilings tied to evidence class — cannot assert 90% on inferred
+     evidence. Overconfidence becomes a check failure, not a tendency.
+  4. An adversary that must try to break the conclusion before it seals.
+  5. A scored track record, per claim class.
+  6. Preregistration — commits to what would falsify before running.
+
+**Caveat, kept honest:** a harness that constrains a strong model also costs
+something. Frontier models are good at holistic synthesis, and a rigid pipeline
+can produce a worse answer than free reasoning. The gain comes from the
+VERIFICATION, not from the constraint. Design the harness to catch errors, not
+to dictate how to think.
+
+### Breadth, stated correctly
+
+The goal is not "run every possible analysis" — forty analyses per question
+buries the two that mattered. The goal is **find every piece of information
+RELEVANT to the question and use it to prove the claim right or wrong.**
+Decomposition determines which analyses bear on this question; the capability to
+produce many model types sits available and is selected, not sprayed.
