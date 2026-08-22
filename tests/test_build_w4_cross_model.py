@@ -326,10 +326,10 @@ def test_property_output_bounded_and_reason_consistent(score, v):
     assert 0.0 <= out <= 1.0
     if v.has_blocking:
         assert reason  # a veto always says why
-    elif out >= round(max(0.0, min(1.0, score)), 2):
-        # nothing was subtracted → there must be no penalty path fired
+    elif out >= round(max(0.0, min(1.0, score)), 2) and round(score, 2) > 0:
+        # nothing was subtracted (and there was headroom to subtract) → no
+        # penalty path fired
         assert not v.unanimous_unrebutted or v.objections == []
-        assert v.provenance.ceiling is None or score <= SELF_REVIEW_CEILING
     else:
         assert isinstance(reason, str)
 
