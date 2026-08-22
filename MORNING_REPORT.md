@@ -195,3 +195,68 @@ confidently wrong costs money, this is worth more than a better-written answer.
 
 **The next thing is not a feature.** It is one real question, driven end to end
 with a live model. Whatever breaks is the real backlog.
+
+---
+
+# THE END-TO-END RUN — a real question, a live model
+
+Not fixtures. Not a scripted model. A real question driven through the whole
+chain with Ox Alpha via Nous Portal.
+
+**Question:** *"What does recent scholarly research say about semiconductor
+supply chain resilience?"*
+
+**Result: 118 seconds. 5 sub-questions. 1 fetch. 4 adversary objections.
+REFUSED TO SEAL.**
+
+The adversary's own words:
+
+> "The evidence set contains exactly one substantive item — an OpenAlex API
+> record for Christensen, McDonald et al."
+>
+> "The pattern (one irrelevant hit, four null answers) is better explained by a
+> **retrieval failure** than by a genuine finding."
+>
+> "The lone evidence item was selected by string coincidence."
+
+**It diagnosed its own retrieval failure and refused rather than writing a
+confident summary from one irrelevant paper.** That is the entire thesis of this
+system, demonstrated on a real question. Every other research tool would have
+produced fluent paragraphs from that evidence.
+
+## Three defects the run surfaced — none visible to any test
+
+1. **The decomposition prompt was incomplete.** It said `"horizon_days": int or
+   null` and never told the model that PREDICTIVE *requires* a horizon. The
+   model reasonably emitted null; the validator correctly rejected it; the run
+   died. Fixed the prompt, and added one repair turn that hands the validator's
+   own message back — a recoverable model mistake should not cost the whole
+   decomposition.
+
+2. **`ResearchPipeline(model=m)` looks complete and isn't.** The adversary needs
+   its own router, and the run gets to stage 6 before finding out.
+
+3. **A signature mismatch surfaced as a veto, not an error** — because the
+   adversary fails closed. Safe, and much harder to diagnose. Worth knowing that
+   fail-closed design trades diagnosability for safety.
+
+## THE REAL BACKLOG — ranked by reality, not by me
+
+**1. Retrieval is the weak link.** Five sub-questions produced one fetch and one
+irrelevant result. Selection now matches sources, but the queries sent to those
+sources are poor and only 4 of 19 adapters have a generic fetch path. This is
+the single thing standing between the system and a useful answer.
+
+**2. Query authoring per source.** fred/bls/treasury/wikidata need real query
+construction, not a generic search call.
+
+**3. Evidence relevance gating.** The one hit was accepted despite being
+irrelevant. The adversary caught it *after* the fact; it should be caught at
+ingestion.
+
+**4. Construction ergonomics.** A live pipeline needs model + adversary_router
++ transport wired correctly, and gets deep into a run before telling you.
+
+Everything else built tonight — provenance, sealing, the adversary, the
+inheritance rule, preregistration, the sandbox — **worked**. The failure was in
+getting good evidence in, not in reasoning honestly about it.
