@@ -494,13 +494,29 @@ class ResearchPipeline:
                         f"[{r.source_name}] {r.reason}" for r in rejected))
 
             async def _answer() -> dict:
+                before = len(session.evidence)
                 outcome = await self._answer_leaf(q, fetches, session,
                                                   trace=trace_q)
-                return {"leaf": dataclasses.asdict(outcome)}
+                # Persist what this leaf contributed to the session so a
+                # resume can rehydrate session.evidence without re-running
+                # the model — otherwise AGP would rightly refuse to seal a
+                # zero-evidence session.
+                return {"leaf": dataclasses.asdict(outcome),
+                        "evidence": [dataclasses.asdict(e)
+                                     for e in session.evidence[before:]]}
             if cp is not None:
                 a_oc = await ckpt.run_stage(
                     cp, trace, "answer_leaf", {"qid": q.question_id}, _answer)
                 outcome = _leaf_from_payload(a_oc.payload["leaf"])
+                for e_rec in a_oc.payload.get("evidence") or []:
+                    ev = Evidence(
+                        content=e_rec["content"],
+                        source_class=SourceClass(e_rec["source_class"]),
+                        confidence_score=e_rec["confidence_score"],
+                        domain=domain,
+                        origin_agent=e_rec["origin_agent"],
+                        source_name=e_rec["source_name"])
+                    session.add_evidence(ev)
             else:
                 outcome = await self._answer_leaf(q, fetches, session,
                                                   trace=trace_q)

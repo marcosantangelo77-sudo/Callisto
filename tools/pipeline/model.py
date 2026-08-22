@@ -18,11 +18,17 @@ from typing import Optional
 
 
 class PipelineModel:
-    """Interface: complete(role, messages) -> dict with at least 'content'."""
+    """Interface: complete(role, messages) -> dict with at least 'content'.
+
+    complete() also accepts **_ignored so it can stand in as an adversary
+    backend (the Adversary calls complete(task_class, messages, schema=...)
+    by keyword). A signature mismatch here used to surface as a fail-closed
+    adversary veto rather than an error — much harder to diagnose."""
 
     name = "abstract"
 
-    async def complete(self, role: str, messages: list[dict]) -> dict:
+    async def complete(self, role: str, messages: list[dict],
+                       **_ignored) -> dict:
         raise NotImplementedError
 
 
