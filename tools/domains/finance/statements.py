@@ -75,7 +75,11 @@ LONG_TERM_DEBT_TAGS = [
 EQUITY_TAGS = ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]
 
 CFO_TAGS = ["NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"]
-CAPEX_TAGS = ["PaymentsToAcquirePropertyPlantAndEquipment"]
+CAPEX_TAGS = [
+    "PaymentsToAcquirePropertyPlantAndEquipment",
+    "PaymentsToAcquireProductiveAssets",
+    "PaymentsToAcquirePropertyPlantAndEquipmentAndIntangibleAssets",
+]
 DIVIDENDS_PAID_TAGS = ["PaymentsOfDividendsCommonStock", "PaymentsOfDividends"]
 
 DURATION_LINES = {
@@ -352,12 +356,17 @@ def assemble_statements(facts: dict, *, n_periods: int = 4) -> FinancialStatemen
         fetch_provenance=dict(meta),
     )
 
-    anchor_raw = []
+    # Anchor tag: the revenue candidate that reaches the MOST RECENT period
+    # wins (filers retire tags; "has some facts" is not enough — NVDA's
+    # older contract-revenue tag stops years before their current one).
+    anchor_raw: list[dict] = []
     for tag in REVENUE_TAGS:
-        anchor_raw = annual_facts(facts, tag)
-        if anchor_raw:
+        got = annual_facts(facts, tag)
+        if got and (not anchor_raw or
+                    max(f["end"] for f in got) >
+                    max(f["end"] for f in anchor_raw)):
+            anchor_raw = got
             stmt.used_tags["revenue"] = tag
-            break
     if not anchor_raw:
         raise ValueError("no annual revenue facts found — cannot align periods")
 
