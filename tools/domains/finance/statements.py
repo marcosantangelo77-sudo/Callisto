@@ -153,7 +153,15 @@ def _pick_tag(
     (start,end) tuples for duration lines), a tag only wins if it covers
     them — filers retire old tags, so a tag with facts that all predate the
     requested periods must not shadow a current one.
+
+    Fallback: if NO candidate covers at least half the wanted periods, use
+    the candidate whose facts reach the MOST RECENT wanted period instead of
+    returning nothing. Otherwise a current-but-short-history tag (filers
+    frequently start tagging a detail line mid-history) would be discarded
+    and its present-day values silently become gaps.
     """
+    best_tag, best_got = "", []
+    best_recent: str = ""
     for tag in candidates:
         got = instant_facts(facts, tag) if instant else annual_facts(facts, tag)
         if not got:
@@ -161,14 +169,19 @@ def _pick_tag(
         if want_periods:
             if instant:
                 covered = {f["end"] for f in got}
+                recent_key = max(f["end"] for f in got)
             else:
                 covered = {(f.get("start"), f["end"]) for f in got}
+                recent_key = max(f["end"] for f in got)
             missing = want_periods - covered
             if len(missing) > len(want_periods) / 2:
-                # covers less than half of what we need; try the next tag
+                # covers less than half of what we need; remember it as a
+                # fallback but try the next candidate first
+                if recent_key > best_recent:
+                    best_tag, best_got, best_recent = tag, got, recent_key
                 continue
         return tag, got
-    return "", []
+    return best_tag, best_got
 
 
 def _restatement_map(facts: dict, tag: str, *, instant: bool) -> dict:
@@ -213,7 +226,8 @@ def _duration_line(
         key = (pstart, pend)
         out.append(LineValue(
             label=label, period=plabel, start=pstart, end=pend,
-            value=float(f["val"]), tag=tag, accn=f.get("accn", ""),
+            value=float(f["val"]), unit=f.get("unit", "USD"),
+            tag=tag, accn=f.get("accn", ""),
             form=f.get("form", ""), filed=str(f.get("filed", "")),
             restated=len(restated.get(key, ())) > 1,
         ))

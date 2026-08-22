@@ -210,7 +210,34 @@ class EdgarClient:
             raise EdgarError(f"unknown ticker {t!r} (not in SEC company_tickers)")
         return int(entry["cik_str"])
 
-    def companyfacts(self, cik: int) -> dict:
+    def _resolve_cik(self, cik: Any) -> int:
+        """Accept a CIK as int or numeric string; reject tickers BY NAME.
+
+        A ticker here previously crashed deep inside str.format with
+        "ValueError: Unknown format code 'd'" — opaque. Tickers are a
+        different identifier space: name the problem and point at the
+        resolver instead.
+        """
+        if isinstance(cik, bool):
+            raise TypeError("CIK must be an int, got bool")
+        if isinstance(cik, int):
+            return cik
+        if isinstance(cik, str):
+            s = cik.strip()
+            if s.isdigit():
+                return int(s)
+            raise TypeError(
+                f"companyfacts()/submissions() expect a numeric CIK, got "
+                f"ticker {cik!r}. Resolve it first: "
+                f"client.facts_for_ticker({cik!r}) or "
+                f"client.ticker_to_cik({cik!r})."
+            )
+        raise TypeError(
+            f"CIK must be an int or numeric string, got {type(cik).__name__}"
+        )
+
+    def companyfacts(self, cik: int | str) -> dict:
+        cik = self._resolve_cik(cik)
         url = COMPANYFACTS_URL.format(cik=cik)
         data, rec = self._get_json(url)
         data["_fetch"] = {
@@ -220,7 +247,8 @@ class EdgarClient:
         }
         return data
 
-    def companyconcept(self, cik: int, taxonomy: str, tag: str) -> dict:
+    def companyconcept(self, cik: int | str, taxonomy: str, tag: str) -> dict:
+        cik = self._resolve_cik(cik)
         url = COMPANYCONCEPT_URL.format(cik=cik, taxonomy=taxonomy, tag=tag)
         data, rec = self._get_json(url)
         data["_fetch"] = {
@@ -230,7 +258,8 @@ class EdgarClient:
         }
         return data
 
-    def submissions(self, cik: int) -> dict:
+    def submissions(self, cik: int | str) -> dict:
+        cik = self._resolve_cik(cik)
         url = SUBMISSIONS_URL.format(cik=cik)
         data, rec = self._get_json(url)
         return data
@@ -242,6 +271,34 @@ class EdgarClient:
 
 
 # ── fact extraction helpers (pure, unit-tested offline) ───────────────────
+
+
+def load_companyfacts(path: str | os.PathLike) -> dict:
+    """Offline path: load a companyfacts payload from a local JSON file.
+
+    Mirrors EdgarClient.companyfacts()'s `_fetch` stamping so every
+    downstream consumer (statements assembly, models, provenance) sees the
+    identical shape — sha256 of the exact bytes on disk stand in for the
+    wire hash. This is what makes the module testable and usable without
+    network; fixtures live under tests/fixtures/edgar/.
+    """
+    import hashlib
+
+    p = os.fspath(path)
+    with open(p, "rb") as fh:
+        raw = fh.read()
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise EdgarError(f"non-JSON companyfacts file: {p}") from exc
+    data["_fetch"] = {
+        "url": f"file://{os.path.abspath(p)}",
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "fetched_at": time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(os.path.getmtime(p))
+        ),
+    }
+    return data
 
 
 def concept_units(facts: dict, tag: str, taxonomy: str = "us-gaap") -> dict:
