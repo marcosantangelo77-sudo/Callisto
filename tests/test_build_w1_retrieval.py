@@ -195,8 +195,10 @@ def test_fanout_queries_multiple_selected_sources():
 
 
 def test_overlap_family_collapses_to_one_independent_source():
+    # registry name is 'semanticscholar' (I2 fixed the family declaration
+    # which previously used 'semantic_scholar' and silently matched nothing)
     assert independence_key("openalex", "") == \
-        independence_key("semantic_scholar", "")
+        independence_key("semanticscholar", "")
     assert independence_key("openalex", "") != independence_key("gdelt", "")
 
 
@@ -218,7 +220,7 @@ def test_two_hits_from_one_source_do_not_meet_min_independent_2():
 
 def test_sufficiency_declared_only_at_real_independence():
     reg = _registry(("openalex", _ALPHA_ANSWERS, "https://api.openalex.org"),
-                    ("semantic_scholar", _BETA_ANSWERS,
+                    ("semanticscholar", _BETA_ANSWERS,
                      "https://s.example"))
     routes = {"/api": _openalex_body(), "/s?": _openalex_body()}
     trace = _retriever(reg, routes).retrieve(_q(min_ind=2), "",
