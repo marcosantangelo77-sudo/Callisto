@@ -281,7 +281,10 @@ def classify_gap(registry, trace: Any, question, question_type: str = "",
     skipped: list = list(getattr(trace, "skipped_sources", []) or [])
     for rd in rounds:
         for s in rd.get("sources", []):
-            tried_names.add(s.get("name", ""))
+            if s.get("name") and not s.get("skipped"):
+                # a source the planner SKIPPED was never touched — it must
+                # not count as tried
+                tried_names.add(s["name"])
             if "error" in s:
                 errors.append((s.get("name", ""), s["error"]))
             if "skipped" in s and s.get("name") not in \
