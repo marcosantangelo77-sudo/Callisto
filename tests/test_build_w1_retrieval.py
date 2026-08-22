@@ -152,7 +152,7 @@ def _alpha_reg(name="alpha", url="https://a.example",
 
 def test_irrelevant_hit_rejected_before_ingestion_with_reason():
     reg = _alpha_reg()
-    trace = _retriever(reg, {"/works": IRRELEVANT_BODY}).retrieve(
+    trace = _retriever(reg, {"/a?": IRRELEVANT_BODY}).retrieve(
         _q(), "", min_independent=1)
 
     assert trace.n_admitted == 0, "irrelevant hit must not enter evidence"
@@ -165,7 +165,7 @@ def test_irrelevant_hit_rejected_before_ingestion_with_reason():
 
 def test_irrelevant_hit_does_not_satisfy_min_independent():
     reg = _alpha_reg()
-    trace = _retriever(reg, {"/works": IRRELEVANT_BODY}).retrieve(
+    trace = _retriever(reg, {"/a?": IRRELEVANT_BODY}).retrieve(
         _q(min_ind=1), "", min_independent=1)
     assert trace.independent_keys == set()
 
@@ -186,7 +186,7 @@ def test_fanout_queries_multiple_selected_sources():
     reg = _registry(
         ("alpha", _ALPHA_ANSWERS, "https://api.openalex.org"),
         ("beta", _BETA_ANSWERS, "https://api.gdeltproject.org"))
-    routes = {"/works": _openalex_body(), "/doc": _openalex_body()}
+    routes = {"/api": _openalex_body(), "/gdelt": _openalex_body()}
     trace = _retriever(reg, routes).retrieve(_q(), "", min_independent=2)
     sources_hit = {r["name"] for rnd in trace.rounds
                    for r in rnd["sources"] if r.get("admitted")}
@@ -204,7 +204,7 @@ def test_two_hits_from_one_source_do_not_meet_min_independent_2():
     reg = _registry(("alpha", _ALPHA_ANSWERS, "https://api.openalex.org"),
                     ("beta", ["unrelated clause entirely"], "https://b.org"))
     # Only alpha is selected AND returns relevant data → 1 independent key.
-    routes = {"/works": _openalex_body()}
+    routes = {"/api": _openalex_body(), "/s?": _openalex_body()}
     trace = _retriever(reg, routes).retrieve(_q(min_ind=2), "",
                                              min_independent=2)
     assert trace.n_admitted >= 1
@@ -220,7 +220,7 @@ def test_sufficiency_declared_only_at_real_independence():
     reg = _registry(("openalex", _ALPHA_ANSWERS, "https://api.openalex.org"),
                     ("semantic_scholar", _BETA_ANSWERS,
                      "https://s.example"))
-    routes = {"/works": _openalex_body()}
+    routes = {"/api": _openalex_body(), "/s?": _openalex_body()}
     trace = _retriever(reg, routes).retrieve(_q(min_ind=2), "",
                                              min_independent=2)
     # openalex+semantic_scholar are one declared overlap family (both index
@@ -237,10 +237,14 @@ def test_empty_first_round_refines_and_retries_other_sources():
     reg = _registry(("alpha", _ALPHA_ANSWERS, "https://api.openalex.org"),
                     ("beta", ["agency rules about supply chains"],
                      "https://c.org"))
-    # alpha always returns junk, beta always good; each adapter routes to
-    # its own fixture path derived from its base_url host.
-    routes = {"/api": IRRELEVANT_BODY, "/c": _openalex_body()}
-    trace = _retriever(reg, routes).retrieve(_q(), "", min_independent=1)
+    # alpha always returns junk, beta always good. fixture_transport matches
+    # by substring; the path segment is the stable part of each URL.
+    # alpha always returns junk; beta admits. Requiring 2 independent
+    # sources keeps the loop running past round 1, so the query must
+    # actually refine once relevant hits exist.
+    trace = _retriever(reg, {"/api": IRRELEVANT_BODY,
+                             "/c?": _openalex_body()})\
+        .retrieve(_q(min_ind=2), "", min_independent=2)
     assert trace.n_admitted >= 1
     assert any(r["name"] == "beta" for rnd in trace.rounds
                for r in rnd["sources"] if r.get("admitted"))
@@ -252,7 +256,7 @@ def test_empty_first_round_refines_and_retries_other_sources():
 
 def test_round_budget_stops_with_reason():
     reg = _alpha_reg()
-    trace = _retriever(reg, {"/works": IRRELEVANT_BODY}, max_rounds=2)\
+    trace = _retriever(reg, {"/a?": IRRELEVANT_BODY}, max_rounds=2)\
         .retrieve(_q(), "", min_independent=1)
     assert trace.n_admitted == 0
     assert trace.stop_reason
@@ -330,7 +334,7 @@ def test_engine_records_rejections_and_caps_unmet_leaf(tmp_path):
     from tools.artifacts import ArtifactStore
     pipe = ResearchPipeline(
         model=model, adversary_router=_Quiet(),
-        transport=fixture_transport({"/works": IRRELEVANT_BODY}),
+        transport=fixture_transport({"/a?": IRRELEVANT_BODY}),
         store=ArtifactStore(root=tmp_path / "art"))
     result = asyncio.run(pipe.run(
         "What does research say about the topic?",

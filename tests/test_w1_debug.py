@@ -1,26 +1,39 @@
-from tests.test_build_w1_retrieval import (  # noqa: F401
-    _registry, _retriever, _q, _openalex_body, IRRELEVANT_BODY,
-    _ALPHA_ANSWERS, _BETA_ANSWERS)
-from tools.pipeline.engine import fixture_transport
+import asyncio
+import json
+from datetime import date
+
+from tests.test_build_w1_retrieval import IRRELEVANT_BODY
+from tools.pipeline.model import ScriptedModel
+from tools.pipeline.engine import ResearchPipeline, fixture_transport
+from tools.artifacts import ArtifactStore
 
 
-def test_debug_urls():
-    reg = _registry(("alpha", _ALPHA_ANSWERS, "https://api.openalex.org"),
-                    ("beta", ["agency rules about supply chains"],
-                     "https://c.org"))
-    seen = []
+def test_debug_engine(tmp_path):
+    decompose = json.dumps({"sub_questions": [{
+        "text": "what does scholarly research say about semiconductor "
+                "supply chain resilience",
+        "kind": "descriptive",
+        "question_type": "scholarly literature",
+        "min_source_tier": 2, "min_independent_sources": 1}]})
+    model = ScriptedModel({
+        "Architect": [{"content": decompose}],
+        "Manager": [{"content": json.dumps(
+            {"answer": "no relevant evidence found",
+             "proposed_confidence": 0.8})}],
+    })
 
-    def transport(url, headers):
-        seen.append(url)
-        return 200, IRRELEVANT_BODY
+    class _Quiet:
+        async def complete(self, task_class, messages, schema=None):
+            return {"parsed_json": {"objections": []}, "model": "stub"}
 
-    from agp.provenance import ProvenanceLedger
-    from tools.pipeline.retrieval import IterativeRetriever, RelevanceGate
-    ret = IterativeRetriever(
-        registry=reg, ledger=ProvenanceLedger(), transport=transport,
-        gate=RelevanceGate(min_coverage=0.25), max_rounds=1,
-        generic_calls={"alpha": ("works_search", ("term",), {"limit": 3}),
-                       "beta": ("works_search", ("term",), {"limit": 3})})
-    trace = ret.retrieve(_q(), "", min_independent=1)
-    print("URLS:", seen)
+    pipe = ResearchPipeline(
+        model=model, adversary_router=_Quiet(),
+        transport=fixture_transport({"/a?": IRRELEVANT_BODY}),
+        store=ArtifactStore(root=tmp_path / "art"))
+    result = asyncio.run(pipe.run(
+        "What does research say about semiconductor supply chain "
+        "resilience?", today=date(2026, 8, 22)))
+    print("NOTES:", result.notes)
+    print("FETCHES:", result.fetches)
+    print("SEALED:", result.sealed, result.refusal_reason)
     assert True
