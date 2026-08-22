@@ -45,6 +45,47 @@ _PRUNE_SAFE = {
 HEARTBEAT_INTERVAL = 300  # Check every 5 minutes
 LOOP_STALL_THRESHOLD = 2400  # 40 min — cycles have 18 phases with up to 600s timeouts each
 
+# ── GATE POLICY ──────────────────────────────────────────────────────────────
+# Governing principle: a maintenance routine must NEVER weaken a gate.
+#
+# Gate-bearing state is any value that feeds promotion/rejection decisions:
+#   - hypotheses.edge_threshold COLUMN (read by backtest.py:196/:3819, gates every
+#     signal at backtest.py:2520/:2708/:2866)
+#   - model_config keys consumed by evaluation/promotion logic
+#   - hypotheses.status transitions that reverse a rejection or advance a stage
+#
+# Self-repair may DIAGNOSE gate problems and record them for human review.
+# It may not WRITE to gate-bearing state. Enforced three ways:
+#   1. GATE_WRITE_PATTERNS below — refused substrings for SQL/config writes;
+#      every repair dispatch passes through SelfRepairEngine._gate_guard().
+#   2. Strategies classified GATE_WEAKENING_STRATEGIES are routed to a refuser,
+#      never executed, regardless of who asks (detector OR Claude findings).
+#   3. tests/test_tier1_loop_self_repair_gate_policy.py statically re-checks
+#      this file so a future edit cannot reintroduce an operative gate write
+#      without a loud, reviewable diff to the policy itself.
+GATE_WRITE_PATTERNS: tuple[str, ...] = (
+    # Operative threshold columns
+    "SET edge_threshold",
+    # Promotion/evaluation knobs wherever they might live
+    "minimum_events_for_promotion",
+    "_threshold_lowered_by",
+    "_promotion_threshold_lowered_by",
+    "_edge_ceiling_lowered_by",
+)
+# Status reversals that un-reject or advance stages are gate decisions too.
+GATE_STATUS_TRANSITIONS = {("rejected", "draft")}
+
+# Repair strategies whose entire purpose is to weaken a gate. These are never
+# executed; matching issues/findings are recorded for human review instead.
+GATE_WEAKENING_STRATEGIES: frozenset[str] = frozenset({
+    "promotion_thresholds_strict",   # lowers minimum_events_for_promotion
+    "edge_ceiling",                  # writes the operative edge_threshold column
+})
+
+# Env opt-in required for the premature-rejection requeue (rejected -> draft).
+ALLOW_REQUEUE_ENV = "CALLISTO_ALLOW_PREMATURE_REQUEUE"
+
+
 
 class Heartbeat:
     """Independent watchdog — monitors the research loop and Claude availability.
@@ -405,9 +446,16 @@ class SelfRepairEngine:
 
     async def _repair(self, issue: dict) -> dict:
         itype = issue.get("type", "unknown")
+        # GATE GUARD: refuse any strategy whose purpose is to weaken a gate.
+        if itype in ("high_rejection", "signal_drought"):
+            return self._refuse_gate_change(
+                itype,
+                f"Detector '{itype}' maps to threshold lowering — refused by gate policy. "
+                f"Diagnosis recorded for human review instead.",
+                detail=issue,
+            )
         fn = {"scraper_broken": self._fix_scraper, "stale_odds": self._fix_stale_odds,
               "empty_backtests": self._fix_empty_bt, "claude_stuck": self._fix_claude,
-              "high_rejection": self._fix_thresholds, "signal_drought": self._fix_thresholds,
               "premature_rejection": self._fix_premature_rejection,
               "resolution_broken": self._fix_resolution_broken,
               "db_bloat": self._fix_bloat}.get(itype)
@@ -420,6 +468,20 @@ class SelfRepairEngine:
         await self._record_to_hermes(itype, result)
         return result
 
+
+    def _refuse_gate_change(self, strategy: str, reason: str, detail=None) -> dict:
+        """Record a refused gate-weakening action for human review. Never executes."""
+        logger.warning(f"Gate policy REFUSED strategy '{strategy}': {reason}")
+        try:
+            import asyncio as _aio
+            loop = _aio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        result = {"fixed": False, "action": "gate_change_refused",
+                  "detail": f"{reason} | evidence: {str(detail)[:300]}"}
+        if loop is not None:
+            loop.create_task(self._record_to_hermes(f"gate_refused_{strategy}", result))
+        return result
 
     async def _fix_scraper(self, issue: dict) -> dict:
         fixed, disabled = [], []
@@ -456,7 +518,8 @@ class SelfRepairEngine:
                         return True
                 except Exception:
                     pass
-                mod._BASE_URL = orig  # revert before trying next
+                finally:
+                    mod._BASE_URL = orig  # always revert, even on timeout/exception
         except Exception:
             pass
         return False
@@ -521,57 +584,35 @@ class SelfRepairEngine:
             return {"fixed": False, "action": "reset_error", "detail": str(e)}
 
     async def _fix_thresholds(self, issue: dict) -> dict:
-        """Lower edge thresholds for high_rejection / signal_drought."""
-        itype = issue.get("type", "")
-        adjusted = 0
-        try:
-            async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("PRAGMA busy_timeout = 60000")
-                if itype == "high_rejection":
-                    zsr = await (await db.execute(
-                        "SELECT COUNT(*) FROM hypotheses h "
-                        "LEFT JOIN backtest_events be ON h.hypothesis_id=be.hypothesis_id "
-                        "WHERE h.status='rejected' "
-                        "GROUP BY h.hypothesis_id HAVING COUNT(be.id)>0 "
-                        "AND SUM(CASE WHEN be.signal_generated=1 THEN 1 ELSE 0 END)=0"
-                    )).fetchall()
-                    if len(zsr) < 5:
-                        return {"fixed": False, "action": "rejection_analysis",
-                                "detail": f"Only {len(zsr)} zero-signal rejections; genuine bad hypotheses"}
-                q = ("SELECT hypothesis_id, model_config FROM hypotheses WHERE status='backtesting'"
-                     if itype == "high_rejection" else
-                     "SELECT be.hypothesis_id, h.model_config FROM backtest_events be "
-                     "JOIN hypotheses h ON h.hypothesis_id=be.hypothesis_id "
-                     "WHERE h.status IN ('backtesting','draft') "
-                     "GROUP BY be.hypothesis_id HAVING COUNT(be.id)>=20")
-                rows = await (await db.execute(q)).fetchall()
-                for row in rows:
-                    h_id, mc_raw = row[0], row[1]
-                    try:
-                        cfg = json.loads(mc_raw) if mc_raw else {}
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                    thr = cfg.get("edge_threshold")
-                    if thr is not None and float(thr) > 0.02:
-                        cfg["edge_threshold"] = 0.015
-                        cfg["_threshold_lowered_by"] = f"self_repair_{itype}"
-                        await db.execute("UPDATE hypotheses SET model_config=? WHERE hypothesis_id=?",
-                                         (json.dumps(cfg), h_id))
-                        adjusted += 1
-                if adjusted:
-                    await db.commit()
-        except Exception as e:
-            return {"fixed": False, "action": "threshold_error", "detail": str(e)}
-        if adjusted:
-            return {"fixed": True, "action": "lowered_thresholds",
-                    "detail": f"edge_threshold -> 1.5% on {adjusted} hypotheses ({itype})"}
-        return {"fixed": False, "action": "no_thresholds_to_lower", "detail": "No thresholds > 2% found"}
+        """REFUSED by gate policy. Formerly lowered model_config edge_threshold.
+
+        Kept as an explicit refuser so any stale caller fails safe. Note: the
+        JSON key this once wrote was never read by backtesting anyway (it reads
+        the edge_threshold COLUMN) — the fix was cosmetic even when it ran.
+        """
+        return self._refuse_gate_change(
+            "threshold_lowering",
+            "_fix_thresholds refused: maintenance routines may not lower gates.",
+            detail=issue,
+        )
 
     async def _fix_premature_rejection(self, issue: dict) -> dict:
-        """Re-queue hypotheses that were rejected without being tested."""
+        """Re-queue hypotheses rejected without being tested.
+
+        GATED: un-rejecting is a gate decision (it reverses a rejection), so it
+        requires explicit operator opt-in via CALLISTO_ALLOW_PREMATURE_REQUEUE.
+        Without the flag this records the candidates for human review only.
+        """
         candidates = issue.get("candidates", [])
         if not candidates:
             return {"fixed": False, "action": "no_candidates", "detail": "No premature rejections found"}
+        if not os.getenv(ALLOW_REQUEUE_ENV):
+            return self._refuse_gate_change(
+                "premature_rejection_requeue",
+                f"Requeue of {len(candidates)} rejected->draft refused: "
+                f"{ALLOW_REQUEUE_ENV} not set. Un-rejecting reverses a gate decision.",
+                detail=[c.get("id") for c in candidates[:10]],
+            )
         requeued = 0
         try:
             async with aiosqlite.connect(DB_PATH) as db:
@@ -719,41 +760,49 @@ class SelfRepairEngine:
             strategy = self._classify_finding(desc)
 
             try:
-                handler = {
-                    "duplicate_events": self._fix_finding_duplicate_events,
-                    "side_filter_broken": self._fix_finding_side_filter,
-                    "prioritize_sports": self._fix_finding_prioritize_sports,
-                    "low_sample_size": self._fix_finding_low_sample,
-                    "promotion_thresholds_strict": self._fix_finding_promotion_thresholds,
-                    "edge_ceiling": self._fix_finding_edge_ceiling,
-                    "resolution_broken": self._fix_finding_resolution,
-                }.get(strategy)
-
-                if handler:
-                    result = await handler(finding)
+                # GATE GUARD: findings classified as gate-weakening are never
+                # executed — recorded for human review instead.
+                if strategy in GATE_WEAKENING_STRATEGIES:
+                    result = self._refuse_gate_change(
+                        strategy,
+                        f"Claude finding classified '{strategy}' maps to gate lowering "
+                        f"— refused by gate policy.",
+                        detail=desc,
+                    )
                 else:
-                    # Unknown pattern — record to Hermes with a UNIQUE key
-                    # to prevent the same finding from inflating occurrences.
-                    # Previous bug: x396 occurrences of "unknown" because the
-                    # same stalling issue was re-recorded every cycle under a
-                    # single key, drowning out real discoveries.
-                    import hashlib
-                    finding_hash = hashlib.md5(
-                        f"{strategy}:{desc[:100]}".encode()
-                    ).hexdigest()[:8]
-                    result = {"fixed": False, "action": "recorded_for_review",
-                              "detail": f"[{severity}] {desc[:200]}"}
-                    try:
-                        from tools.hermes_memory import get_hermes_memory
-                        hermes = get_hermes_memory()
-                        await hermes.record_learning(
-                            key=f"claude_finding_{strategy or 'unknown'}_{finding_hash}",
-                            value=f"[{severity}] {desc[:500]}",
-                            confidence=0.5,
-                            source="deep_work_finding",
-                        )
-                    except Exception:
-                        pass
+                    handler = {
+                        "duplicate_events": self._fix_finding_duplicate_events,
+                        "side_filter_broken": self._fix_finding_side_filter,
+                        "prioritize_sports": self._fix_finding_prioritize_sports,
+                        "low_sample_size": self._fix_finding_low_sample,
+                        "resolution_broken": self._fix_finding_resolution,
+                    }.get(strategy)
+
+                    if handler:
+                        result = await handler(finding)
+                    else:
+                        # Unknown pattern — record to Hermes with a UNIQUE key
+                        # to prevent the same finding from inflating occurrences.
+                        # Previous bug: x396 occurrences of "unknown" because the
+                        # same stalling issue was re-recorded every cycle under a
+                        # single key, drowning out real discoveries.
+                        import hashlib
+                        finding_hash = hashlib.md5(
+                            f"{strategy}:{desc[:100]}".encode()
+                        ).hexdigest()[:8]
+                        result = {"fixed": False, "action": "recorded_for_review",
+                                  "detail": f"[{severity}] {desc[:200]}"}
+                        try:
+                            from tools.hermes_memory import get_hermes_memory
+                            hermes = get_hermes_memory()
+                            await hermes.record_learning(
+                                key=f"claude_finding_{strategy or 'unknown'}_{finding_hash}",
+                                value=f"[{severity}] {desc[:500]}",
+                                confidence=0.5,
+                                source="deep_work_finding",
+                            )
+                        except Exception:
+                            pass
 
             except Exception as e:
                 result = {"fixed": False, "action": "handler_error",
@@ -932,78 +981,33 @@ class SelfRepairEngine:
                 "detail": "All hypotheses already have minimum_events set"}
 
     async def _fix_finding_promotion_thresholds(self, finding: dict) -> dict:
-        """Lower promotion requirements: reduce min events from default to 20."""
-        updated = 0
-        try:
-            async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("PRAGMA busy_timeout = 60000")
-                cursor = await db.execute(
-                    "SELECT hypothesis_id, model_config FROM hypotheses "
-                    "WHERE status = 'backtesting'"
-                )
-                rows = await cursor.fetchall()
-                for h_id, mc_raw in rows:
-                    try:
-                        cfg = json.loads(mc_raw) if mc_raw else {}
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                    current_min = cfg.get("minimum_events_for_promotion")
-                    if current_min is not None and current_min <= 20:
-                        continue  # Already low enough
-                    cfg["minimum_events_for_promotion"] = 20
-                    cfg["_promotion_threshold_lowered_by"] = "claude_finding_promotion_thresholds"
-                    await db.execute(
-                        "UPDATE hypotheses SET model_config = ? WHERE hypothesis_id = ?",
-                        (json.dumps(cfg), h_id),
-                    )
-                    updated += 1
-                if updated:
-                    await db.commit()
-        except Exception as e:
-            return {"fixed": False, "action": "lower_promotion_thresholds",
-                    "detail": f"Error: {e}"}
+        """REFUSED by gate policy. Formerly wrote minimum_events_for_promotion=20.
 
-        if updated:
-            return {"fixed": True, "action": "lower_promotion_thresholds",
-                    "detail": f"Lowered minimum_events_for_promotion to 20 on {updated} hypotheses"}
-        return {"fixed": False, "action": "lower_promotion_thresholds",
-                "detail": "All backtesting hypotheses already have low promotion thresholds"}
+        That key is read NOWHERE in the repo (verified by repo-wide grep), so the
+        original fix was a no-op that stamped confidence-0.8 success. Kept as an
+        explicit refuser for any stale caller.
+        """
+        return self._refuse_gate_change(
+            "promotion_thresholds_strict",
+            "_fix_finding_promotion_thresholds refused: maintenance routines may not "
+            "lower promotion requirements.",
+            detail=finding,
+        )
 
     async def _fix_finding_edge_ceiling(self, finding: dict) -> dict:
-        """Adjust edge thresholds above 2% down to 1.5%."""
-        adjusted = 0
-        try:
-            async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("PRAGMA busy_timeout = 60000")
-                cursor = await db.execute(
-                    "SELECT hypothesis_id, edge_threshold, model_config FROM hypotheses "
-                    "WHERE status IN ('draft', 'backtesting') AND edge_threshold > 0.02"
-                )
-                rows = await cursor.fetchall()
-                for h_id, thresh, mc_raw in rows:
-                    try:
-                        cfg = json.loads(mc_raw) if mc_raw else {}
-                    except (json.JSONDecodeError, TypeError):
-                        cfg = {}
-                    cfg["_previous_edge_threshold"] = thresh
-                    cfg["_edge_ceiling_lowered_by"] = "claude_finding_edge_ceiling"
-                    await db.execute(
-                        "UPDATE hypotheses SET edge_threshold = 0.015, model_config = ? "
-                        "WHERE hypothesis_id = ?",
-                        (json.dumps(cfg), h_id),
-                    )
-                    adjusted += 1
-                if adjusted:
-                    await db.commit()
-        except Exception as e:
-            return {"fixed": False, "action": "lower_edge_ceiling",
-                    "detail": f"Error: {e}"}
+        """REFUSED by gate policy. Formerly wrote the OPERATIVE edge_threshold
+        column (UPDATE hypotheses SET edge_threshold = 0.015).
 
-        if adjusted:
-            return {"fixed": True, "action": "lower_edge_ceiling",
-                    "detail": f"Lowered edge_threshold from >2% to 1.5% on {adjusted} hypotheses"}
-        return {"fixed": False, "action": "lower_edge_ceiling",
-                "detail": "No hypotheses with edge_threshold > 2% found"}
+        That column is read by backtest.py:196/:3819 and gates every signal at
+        backtest.py:2520/:2708/:2866 — this was the one lowering path that
+        actually moved the gate. A maintenance routine must never do this.
+        """
+        return self._refuse_gate_change(
+            "edge_ceiling",
+            "_fix_finding_edge_ceiling refused: writing the operative edge_threshold "
+            "column is a gate change, reserved for humans.",
+            detail=finding,
+        )
 
     async def _fix_finding_resolution(self, finding: dict) -> dict:
         """Re-run resolution when Claude identifies matching failures."""

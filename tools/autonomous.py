@@ -88,6 +88,12 @@ ANALYSIS_COOLDOWN = 120  # 2 min between analysis runs
 # Don't re-analyze the same edge within this window
 EDGE_DEDUP_WINDOW = 1800  # 30 minutes
 
+# GATE POLICY bounds for automated threshold modification (_phase_interpret_backtests).
+# An automated actor may raise a hypothesis's edge_threshold (tightening the gate)
+# but never lower it; refusals are logged to hypothesis notes for human review.
+MIN_EDGE_THRESHOLD_FLOOR = 0.005   # never below the creation default (hypothesis.py:488)
+MAX_EDGE_THRESHOLD_CEILING = 0.10  # sanity clamp against LLM garbage (e.g. 25.0)
+
 # Module-level regime cache — shared between AutonomousLoop and ResearchLoop.
 # ResearchLoop populates it; AutonomousLoop reads it for edge enrichment.
 # LRU-capped to prevent unbounded memory growth (~385 MB/hr leak source).
@@ -1603,15 +1609,34 @@ class ResearchLoop:
     async def _migrate_edge_thresholds(self) -> None:
         """Lower edge_thresholds that exceed real market edge range.
 
-        Real market edges in our data top out at ~0.83% with most at 0.3-0.8%.
-        Three-pass migration:
-          Pass 1: thresholds >= 2.5% → 1.5% (legacy fix)
-          Pass 2: thresholds >= 1.5% → 1.0% (93% zero-signal fix)
-          Pass 3: thresholds >= 0.8% → 0.5% (max observed edge is 0.83%)
-        Without pass 3, 2,845+ hypotheses at 1.0% can never fire a signal.
+        GATE POLICY: this routine writes the OPERATIVE edge_threshold column on
+        draft/backtesting hypotheses — a gate change made by a maintenance
+        routine. It now requires explicit operator opt-in via
+        CALLISTO_ALLOW_THRESHOLD_MIGRATION=1. Without the flag it logs what it
+        WOULD have done and changes nothing. The migration was also re-running
+        on EVERY loop start (not once); under the flag it remains idempotent,
+        but each application is now a conscious operator act, visible in logs.
+
+        Original rationale preserved: real market edges in our data top out at
+        ~0.83% with most at 0.3-0.8%. Four passes end at 0.3%.
         """
         db = self.hypothesis_manager._db
         if db is None:
+            return
+
+        if not os.getenv("CALLISTO_ALLOW_THRESHOLD_MIGRATION"):
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM hypotheses "
+                "WHERE edge_threshold > 0.003 AND status IN ('draft', 'backtesting')"
+            )
+            row = await cursor.fetchone()
+            would = row[0] if row else 0
+            if would:
+                logger.warning(
+                    f"Gate policy: edge-threshold migration SKIPPED (would lower "
+                    f"{would} hypotheses' operative gates). Set "
+                    f"CALLISTO_ALLOW_THRESHOLD_MIGRATION=1 to authorize."
+                )
             return
 
         # Pass 1: legacy — >= 2.5% to 1.5%
@@ -1705,12 +1730,18 @@ class ResearchLoop:
     async def _retroactive_signal_update(self) -> None:
         """Retroactively update signal_generated on backtest events after threshold migration.
 
-        When edge_threshold is lowered, existing backtest events may now qualify
-        as signals (edge >= new threshold). Without this, hypotheses sit in 'held'
-        state despite having edges that exceed the updated threshold.
+        GATE POLICY: this REWRITES HISTORICAL EVIDENCE (signal_generated flags
+        on already-resolved backtest events) to match a lowered gate — the
+        evidence base moves to fit the threshold instead of the threshold being
+        tested against the evidence. Requires the same operator opt-in as the
+        migration that motivates it: CALLISTO_ALLOW_THRESHOLD_MIGRATION=1.
+        Without the flag: no-op.
         """
         db = self.hypothesis_manager._db
         if db is None:
+            return
+
+        if not os.getenv("CALLISTO_ALLOW_THRESHOLD_MIGRATION"):
             return
 
         # For each backtesting hypothesis, update signal_generated based on
@@ -1758,6 +1789,17 @@ class ResearchLoop:
         if db is None:
             return
 
+        # GATE POLICY: un-rejecting reverses a rejection decision (rejected ->
+        # backtesting) AND writes a lowered operative gate. Operator opt-in
+        # required, same flag as the threshold migration.
+        if not os.getenv("CALLISTO_ALLOW_THRESHOLD_MIGRATION"):
+            logger.warning(
+                "Gate policy: _requeue_threshold_rejections SKIPPED (un-rejects "
+                "hypotheses and lowers gates). Set CALLISTO_ALLOW_THRESHOLD_MIGRATION=1 "
+                "to authorize."
+            )
+            return
+
         cursor = await db.execute(
             "SELECT hypothesis_id, model_config FROM hypotheses "
             "WHERE status = 'rejected' "
@@ -1803,6 +1845,11 @@ class ResearchLoop:
         """
         db = self.hypothesis_manager._db
         if db is None:
+            return
+
+        # GATE POLICY: un-rejecting reverses a rejection decision and writes
+        # edge_threshold = 0.003. Operator opt-in required.
+        if not os.getenv("CALLISTO_ALLOW_THRESHOLD_MIGRATION"):
             return
 
         cursor = await db.execute(
@@ -2254,11 +2301,43 @@ class ResearchLoop:
                     except Exception:
                         pass
                 modified = 0
+                refused = 0
                 for mod in parsed.get("modify", []):
                     try:
                         hid = mod.get("id")
                         new_thresh = mod.get("new_threshold")
                         if hid and new_thresh is not None and db:
+                            # GATE POLICY: same direction guard as
+                            # _phase_interpret_backtests — automated actors may
+                            # raise a gate but never lower it. This drain path
+                            # previously bypassed that guard entirely.
+                            new_thresh = max(MIN_EDGE_THRESHOLD_FLOOR,
+                                             min(MAX_EDGE_THRESHOLD_CEILING,
+                                                 float(new_thresh)))
+                            cur = await db.execute(
+                                "SELECT edge_threshold FROM hypotheses WHERE hypothesis_id = ?",
+                                (hid,),
+                            )
+                            row = await cur.fetchone()
+                            current = float(row[0]) if row and row[0] is not None else None
+                            if current is None:
+                                continue
+                            if new_thresh < current:
+                                refused += 1
+                                logger.warning(
+                                    "GATE POLICY REFUSED (deferred drain) threshold "
+                                    "LOWERING hyp=%s %s -> %s — recorded for human review",
+                                    hid, current, new_thresh,
+                                )
+                                await db.execute(
+                                    "UPDATE hypotheses SET notes = COALESCE(notes, '') || ? "
+                                    "WHERE hypothesis_id = ?",
+                                    (f"\n[cycle {self._cycles}] REFUSED deferred-drain "
+                                     f"threshold lowering {current} -> {new_thresh} "
+                                     f"(gate policy; human decision required)", hid),
+                                )
+                                await db.commit()
+                                continue
                             await db.execute(
                                 "UPDATE hypotheses SET edge_threshold = ? WHERE hypothesis_id = ?",
                                 (new_thresh, hid),
@@ -2269,7 +2348,8 @@ class ResearchLoop:
                         pass
                 if rejected or modified:
                     logger.info(
-                        f"Deferred drain interpret: rejected {rejected}, modified {modified}"
+                        f"Deferred drain interpret: rejected {rejected}, "
+                        f"raised {modified}, refused {refused}"
                     )
 
             elif work_type == "system_improvement":
@@ -6163,21 +6243,59 @@ class ResearchLoop:
                         )
 
                     # Act: Modify thresholds for promising hypotheses
+                    # GATE POLICY (mirrors tools/self_repair.py): an automated
+                    # actor may STRENGTHEN a gate but never WEAKEN it.
+                    #   - new_threshold >= current  → applied (gate tightened/unchanged)
+                    #   - new_threshold <  current  → recorded for human review, NOT applied
+                    #   - out-of-range values clamped to [MIN_EDGE_THRESHOLD_FLOOR,
+                    #     MAX_EDGE_THRESHOLD_CEILING] before comparison
                     modified = 0
+                    refused = 0
                     for mod in actions.get("modify", []):
                         try:
                             hid = mod.get("id")
                             new_thresh = mod.get("new_threshold")
                             reason = mod.get("reason", "claude_threshold_adjust")
                             if hid and new_thresh is not None:
+                                new_thresh = max(MIN_EDGE_THRESHOLD_FLOOR,
+                                                 min(MAX_EDGE_THRESHOLD_CEILING,
+                                                     float(new_thresh)))
+                                cur = await db.execute(
+                                    "SELECT edge_threshold FROM hypotheses WHERE hypothesis_id = ?",
+                                    (hid,),
+                                )
+                                row = await cur.fetchone()
+                                current = float(row[0]) if row and row[0] is not None else None
+                                if current is None:
+                                    continue
+                                if new_thresh < current:
+                                    refused += 1
+                                    logger.warning(
+                                        "GATE POLICY REFUSED threshold LOWERING hyp=%s "
+                                        "%s -> %s (reason=%s) — recorded for human review",
+                                        hid, current, new_thresh, str(reason)[:120],
+                                    )
+                                    await db.execute(
+                                        "UPDATE hypotheses SET "
+                                        "notes = COALESCE(notes, '') || ? "
+                                        "WHERE hypothesis_id = ?",
+                                        (
+                                            f"\n[cycle {self._cycles}] REFUSED threshold "
+                                            f"lowering {current} -> {new_thresh}: {reason} "
+                                            f"(gate policy; human decision required)",
+                                            hid,
+                                        ),
+                                    )
+                                    await db.commit()
+                                    continue
                                 await db.execute(
                                     "UPDATE hypotheses SET edge_threshold = ?, "
                                     "notes = COALESCE(notes, '') || ? "
                                     "WHERE hypothesis_id = ?",
                                     (
                                         new_thresh,
-                                        f"\n[cycle {self._cycles}] threshold adjusted "
-                                        f"to {new_thresh}: {reason}",
+                                        f"\n[cycle {self._cycles}] threshold raised "
+                                        f"{current} -> {new_thresh}: {reason}",
                                         hid,
                                     ),
                                 )
@@ -6187,7 +6305,12 @@ class ResearchLoop:
                             logger.warning(f"Failed to modify threshold for hypothesis {mod.get('id', '?')}: {e}")
                     if modified:
                         logger.info(
-                            f"Research: Claude modified thresholds on {modified} hypotheses"
+                            f"Research: Claude raised thresholds on {modified} hypotheses"
+                        )
+                    if refused:
+                        logger.info(
+                            f"Research: {refused} threshold-lowering suggestions refused by "
+                            f"gate policy and logged to hypothesis notes for human review"
                         )
 
                     # Log insights
