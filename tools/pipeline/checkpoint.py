@@ -323,7 +323,12 @@ def replay_ledger(ledger, checkpoints: list[Checkpoint]) -> dict:
     [keys]} — a non-empty integrity_failures means a stored body no longer
     matches its recorded hash and the affected evidence must not be sealed.
     """
-    seen: set[str] = set()
+    # Dedup key lives ON THE LEDGER instance, so calling replay twice (or
+    # resuming twice into the same ledger) cannot double-record observations.
+    seen: set[str] = getattr(ledger, "_w3_replayed_hashes", None)
+    if seen is None:
+        seen = set()
+        setattr(ledger, "_w3_replayed_hashes", seen)
     replayed = skipped = 0
     failures: list[str] = []
     for ck in checkpoints:
@@ -375,6 +380,12 @@ def seal_guard(
     the work.
     """
     if not trace.is_resume:
+        # Even fresh runs must not seal over checkpointed evidence whose
+        # integrity fails — the guard is about the EVIDENCE, not the label.
+        if checkpoints and not provenance_is_intact(ledger, checkpoints):
+            return "REFUSE", (
+                "checkpointed evidence provenance could not be verified "
+                "against the ledger; refusing to seal")
         return "SEAL", ""
     if not provenance_is_intact(ledger, checkpoints):
         failed = sum(len(ck.payload.get("fetches", [])) for ck in checkpoints)
