@@ -7848,6 +7848,50 @@ class ResearchLoop:
         except Exception as e:
             logger.error(f"Pipeline integrity check failed: {e}", exc_info=True)
 
+    def record_iteration_outcome(
+        self,
+        confidence: float,
+        evidence_counts: dict[str, int],
+        position: Optional[int] = None,
+        total: Optional[int] = None,
+        notes: str = "",
+    ) -> dict:
+        """R2 seam: record one iteration's confidence + evidence into the
+        calibration trace, and return the task_class the ProviderRouter
+        should serve this iteration's phase with.
+
+        ``position``/``total`` map the iteration onto a loop phase
+        (framing → grind → adversarial_review); omitting them records under
+        the extraction (grind) class. Callers that route model calls through
+        ProviderRouter pass the returned task_class to
+        ``router.complete(...)``; callers that only log ignore it.
+        """
+        from tools.loop_quality import task_class_for_iteration
+
+        tc = None
+        if position is not None and total is not None:
+            tc = task_class_for_iteration(position, total)
+        rec = self._calibration_trace.add_iteration(
+            confidence, evidence_counts, task_class=tc, notes=notes,
+        )
+        logger.info(
+            "Calibration: iter %d conf=%.3f evidence=%d "
+            "(+conf/-dis/neutral=%d/%d/%d) task_class=%s",
+            rec.iteration, rec.confidence, rec.evidence_total,
+            rec.confirming, rec.disconfirming, rec.neutral, tc or "-",
+        )
+        return {"record": rec.to_dict(), "task_class": tc}
+
+    def compact_iteration_state(self, items: list[dict], **budgets) -> tuple[list[dict], list[dict]]:
+        """R2 seam: explicit iteration-boundary compaction.
+
+        Contradicting items survive verbatim regardless of budget; supporting
+        and neutral items are capped best-tier-first. Dropped items carry a
+        reason. See tools.loop_quality.compact_state.
+        """
+        from tools.loop_quality import compact_state
+        return compact_state(items, **budgets)
+
     async def _check_progress(self) -> None:
         """Ralph loop pattern: detect spinning vs making progress.
 
