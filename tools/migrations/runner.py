@@ -189,10 +189,13 @@ def bootstrap_existing_db(
     ``bootstrap=1, applied_at=NULL`` — but ONLY if the DB already has
     Callisto's core tables and the migrations table is still empty.
 
-    The heuristic for "existing DB": the ``hypotheses`` table exists. That's
-    the oldest canonical table; if it's present, ``ensure_schema`` has run
-    at least once before this migration framework was introduced, so all
-    pre-existing migrations are implicitly satisfied.
+    The heuristic for "existing DB": the ``hypotheses`` table exists AND the
+    schema-seam migrations (013/014) are not yet recorded. That combination
+    means the DB predates the migration framework's seam work: every
+    migration up to 012 is implicitly satisfied, but 013+ MUST still run
+    (they carry the domain-general rebuild, not a no-op). If 013 is already
+    recorded, bootstrap is unnecessary either way — the runner skips
+    applied versions regardless.
 
     Returns the number of rows seeded.
     """
@@ -211,6 +214,10 @@ def bootstrap_existing_db(
 
     inserted = 0
     for mig in migrations:
+        if mig.version >= 13:
+            # 013/014 are the schema-seam rebuild: they must run against
+            # every pre-framework DB, never be bootstrap-marked.
+            continue
         conn.execute(
             "INSERT OR IGNORE INTO schema_migrations "
             "(version, name, applied_at, checksum, bootstrap) "
