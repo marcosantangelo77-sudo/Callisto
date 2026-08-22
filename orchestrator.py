@@ -657,6 +657,7 @@ import re as _re
 
 from tools.domain_registry import get_tool_registry
 from tools.domains.sports import build_sports_plugin
+from tools.domains.compute import register_if_available as _register_compute
 
 
 def _default_registry():
@@ -664,11 +665,13 @@ def _default_registry():
     point: adding a domain = register a plugin here, never edit the loop."""
     global _registry_seeded
     if not _registry_seeded:
-        get_tool_registry().core_tools[:] = [WEB_SEARCH_TOOL, CLAUDE_CODE_TOOL]
-        get_tool_registry().register(
-            build_sports_plugin(ODDS_TOOLS, _execute_sports_tool)
-        )
+        reg = get_tool_registry()
+        reg.core_tools[:] = [WEB_SEARCH_TOOL, CLAUDE_CODE_TOOL]
+        reg.register(build_sports_plugin(ODDS_TOOLS, _execute_sports_tool))
+        # B2's sandboxed compute (build/sandbox-artifacts) when merged.
+        _register_compute(reg)
         _registry_seeded = True
+        return reg
     return get_tool_registry()
 
 

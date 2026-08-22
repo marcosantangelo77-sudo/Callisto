@@ -35,15 +35,18 @@ class DomainPlugin:
     tool_schemas: list = field(default_factory=list)
     freshness: list = field(default_factory=list)  # [(compiled_regex, window)]
     execute: Optional[Callable[[str, dict], Awaitable]] = None
+    always: bool = False  # domain-general tools (e.g. sandboxed compute) join every session
 
     def serves(self, domain, query: str = "") -> bool:
         """Should this plugin's tools join the session's toolkit?
 
-        Domain match wins. A plugin that declares domains but does not
-        match on domain is NOT pulled in by keyword alone (keywords are a
-        fallback for plugins with no declared domains) — otherwise one
-        plugin's keywords could hijack every session.
+        ``always=True`` wins. Otherwise: domain match wins; a plugin that
+        declares domains but does not match on domain is NOT pulled in by
+        keyword alone (keywords are a fallback for plugins with no declared
+        domains) — otherwise one plugin's keywords could hijack every session.
         """
+        if self.always:
+            return True
         if domain is not None and getattr(domain, "value", domain) in self.domains:
             return True
         if self.keywords is not None and not self.domains and query:

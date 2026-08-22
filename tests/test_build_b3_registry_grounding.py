@@ -151,6 +151,37 @@ class TestSportsRegression:
         assert "_default_registry().tools_for(" in src
 
 
+class TestComputePluginHook:
+    """B2 handoff: sandboxed run_python joins every session when merged."""
+
+    def test_compute_plugin_degrades_cleanly_without_sandbox(self):
+        from tools.domain_registry import ToolRegistry
+        from tools.domains.compute import register_if_available
+        reg = ToolRegistry()
+        try:
+            import tools.sandbox  # noqa: F401
+            merged = True
+        except ImportError:
+            merged = False
+        result = register_if_available(reg)
+        assert result is merged
+        if not merged:
+            assert "run_python" not in reg.tool_names_for(None, "anything")
+
+    def test_compute_plugin_always_flag_serves_every_domain(self):
+        from tools.domain_registry import ToolRegistry, DomainPlugin
+        from tools.domains.compute import RUN_PYTHON_TOOL
+
+        async def ok(name, args):
+            return {"status": "ok"}
+
+        reg = ToolRegistry()
+        reg.register(DomainPlugin(name="compute", always=True,
+                                  tool_schemas=[RUN_PYTHON_TOOL], execute=ok))
+        for dom in (None, Domain.FINANCIAL, Domain.TECHNICAL, Domain.GENERAL):
+            assert "run_python" in reg.tool_names_for(dom, "")
+
+
 # ── Job 2: citation grounding ────────────────────────────────────────────────
 
 class TestProvenanceWiring:
