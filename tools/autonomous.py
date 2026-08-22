@@ -88,6 +88,12 @@ ANALYSIS_COOLDOWN = 120  # 2 min between analysis runs
 # Don't re-analyze the same edge within this window
 EDGE_DEDUP_WINDOW = 1800  # 30 minutes
 
+# GATE POLICY bounds for automated threshold modification (_phase_interpret_backtests).
+# An automated actor may raise a hypothesis's edge_threshold (tightening the gate)
+# but never lower it; refusals are logged to hypothesis notes for human review.
+MIN_EDGE_THRESHOLD_FLOOR = 0.005   # never below the creation default (hypothesis.py:488)
+MAX_EDGE_THRESHOLD_CEILING = 0.10  # sanity clamp against LLM garbage (e.g. 25.0)
+
 # Module-level regime cache — shared between AutonomousLoop and ResearchLoop.
 # ResearchLoop populates it; AutonomousLoop reads it for edge enrichment.
 # LRU-capped to prevent unbounded memory growth (~385 MB/hr leak source).
@@ -6163,21 +6169,59 @@ class ResearchLoop:
                         )
 
                     # Act: Modify thresholds for promising hypotheses
+                    # GATE POLICY (mirrors tools/self_repair.py): an automated
+                    # actor may STRENGTHEN a gate but never WEAKEN it.
+                    #   - new_threshold >= current  → applied (gate tightened/unchanged)
+                    #   - new_threshold <  current  → recorded for human review, NOT applied
+                    #   - out-of-range values clamped to [MIN_EDGE_THRESHOLD_FLOOR,
+                    #     MAX_EDGE_THRESHOLD_CEILING] before comparison
                     modified = 0
+                    refused = 0
                     for mod in actions.get("modify", []):
                         try:
                             hid = mod.get("id")
                             new_thresh = mod.get("new_threshold")
                             reason = mod.get("reason", "claude_threshold_adjust")
                             if hid and new_thresh is not None:
+                                new_thresh = max(MIN_EDGE_THRESHOLD_FLOOR,
+                                                 min(MAX_EDGE_THRESHOLD_CEILING,
+                                                     float(new_thresh)))
+                                cur = await db.execute(
+                                    "SELECT edge_threshold FROM hypotheses WHERE hypothesis_id = ?",
+                                    (hid,),
+                                )
+                                row = await cur.fetchone()
+                                current = float(row[0]) if row and row[0] is not None else None
+                                if current is None:
+                                    continue
+                                if new_thresh < current:
+                                    refused += 1
+                                    logger.warning(
+                                        "GATE POLICY REFUSED threshold LOWERING hyp=%s "
+                                        "%s -> %s (reason=%s) — recorded for human review",
+                                        hid, current, new_thresh, str(reason)[:120],
+                                    )
+                                    await db.execute(
+                                        "UPDATE hypotheses SET "
+                                        "notes = COALESCE(notes, '') || ? "
+                                        "WHERE hypothesis_id = ?",
+                                        (
+                                            f"\n[cycle {self._cycles}] REFUSED threshold "
+                                            f"lowering {current} -> {new_thresh}: {reason} "
+                                            f"(gate policy; human decision required)",
+                                            hid,
+                                        ),
+                                    )
+                                    await db.commit()
+                                    continue
                                 await db.execute(
                                     "UPDATE hypotheses SET edge_threshold = ?, "
                                     "notes = COALESCE(notes, '') || ? "
                                     "WHERE hypothesis_id = ?",
                                     (
                                         new_thresh,
-                                        f"\n[cycle {self._cycles}] threshold adjusted "
-                                        f"to {new_thresh}: {reason}",
+                                        f"\n[cycle {self._cycles}] threshold raised "
+                                        f"{current} -> {new_thresh}: {reason}",
                                         hid,
                                     ),
                                 )
@@ -6187,7 +6231,12 @@ class ResearchLoop:
                             logger.warning(f"Failed to modify threshold for hypothesis {mod.get('id', '?')}: {e}")
                     if modified:
                         logger.info(
-                            f"Research: Claude modified thresholds on {modified} hypotheses"
+                            f"Research: Claude raised thresholds on {modified} hypotheses"
+                        )
+                    if refused:
+                        logger.info(
+                            f"Research: {refused} threshold-lowering suggestions refused by "
+                            f"gate policy and logged to hypothesis notes for human review"
                         )
 
                     # Log insights
