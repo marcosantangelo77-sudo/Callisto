@@ -162,16 +162,23 @@ class TestTrustEscalatorArithmetic:
 
 
 class TestCitationCheckVacuity:
-    """ROADMAP C1: `_response_cites_urls` is `"http://" in text`. Printing ANY
-    URL — fabricated included — upgrades the response INFERRED(0.55) →
-    SECONDARY(0.75), i.e. +0.20 ceiling for zero evidentiary work. Pin both
-    the predicate and its consequence."""
+    """REPAIRED (build/tool-registry): `_response_cites_urls` is deleted.
+    Citation grounding now routes through the per-session ProvenanceLedger
+    (`agp/provenance.py`): a citation counts only if it names a URL the
+    session actually fetched. These tests pin the replacement property:
+    a fabricated URL — or the bare string 'http://' — buys nothing."""
 
-    def test_predicate_accepts_fabricated_url(self):
-        from orchestrator import _response_cites_urls
-        assert _response_cites_urls("see https://totally-fabricated.example.net/x")
-        assert _response_cites_urls("the string http:// appears here")
-        assert not _response_cites_urls("no links at all")
+    def test_ledger_rejects_fabricated_url(self):
+        from agp.provenance import ProvenanceLedger
+        ledger = ProvenanceLedger()
+        ledger.record_tool_result(
+            "web_search", "real result", urls=["https://actually-fetched.example.com/a"]
+        )
+        assert not ledger.cites_verified_url(
+            "see https://totally-fabricated.example.net/x"
+        )
+        assert not ledger.cites_verified_url("the string http:// appears here")
+        assert ledger.cites_verified_url("per https://actually-fetched.example.com/a")
 
     def test_upgrade_mechanism(self):
         from orchestrator import MAX_CONFIDENCE_BY_SOURCE

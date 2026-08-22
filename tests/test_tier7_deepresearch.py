@@ -149,13 +149,15 @@ class TestNoCodeExecutionOrArtifacts:
 # ── Q4: evidence acquisition / provenance ────────────────────────────────────
 
 class TestCitationGrounding:
-    def test_citation_check_is_substring_only(self):
-        """Instance-4-confirmed C1 hole, re-verified here: _response_cites_urls
-        does substring matching on http:// / https://. When this starts failing,
-        E0 landed — update DEEP_RESEARCH §4 accordingly."""
-        from orchestrator import _response_cites_urls
-        assert _response_cites_urls("see https://fabricated.example.com/x") is True
-        assert _response_cites_urls("no urls here") is False
+    def test_citation_check_is_provenance_backed(self):
+        """E0 LANDED (build/tool-registry): `_response_cites_urls` (substring
+        check) is deleted. Citations are verified against the per-session
+        ProvenanceLedger — only URLs actually fetched count. Update
+        DEEP_RESEARCH §4 accordingly."""
+        src = _read("orchestrator.py")
+        assert "_response_cites_urls" not in src
+        assert "cites_verified_url" in src
+        assert "ProvenanceLedger" in src
 
     def test_search_stack_is_domain_general(self):
         """search.py exposes backend-agnostic web_search — no sports vocabulary."""
