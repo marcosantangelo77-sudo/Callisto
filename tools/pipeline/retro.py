@@ -60,8 +60,18 @@ class PipelineResearcher(Researcher):
     def answer(self, prompts: list[dict],
                evidence: list[RetroEvidenceRecord],
                loops: int = 1) -> list[Prediction]:
-        return asyncio.get_event_loop().run_until_complete(
-            self.answer_async(prompts, evidence, loops))
+        # Batch callers (tools/retrodiction/batch.py) invoke this from inside
+        # a running loop; standalone harness callers do not. Support both.
+        try:
+            asyncio.get_running_loop()
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(1) as ex:
+                return ex.submit(
+                    lambda: asyncio.run(
+                        self.answer_async(prompts, evidence, loops))
+                ).result()
+        except RuntimeError:
+            return asyncio.run(self.answer_async(prompts, evidence, loops))
 
     async def answer_async(self, prompts, evidence, loops=1) -> list[Prediction]:
         # Cutoff enforcement already happened in the harness (CutoffEnforcer);
