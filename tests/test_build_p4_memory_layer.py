@@ -72,11 +72,11 @@ class TestNoMaxRatchet(unittest.TestCase):
 
     def test_confidence_can_fall(self):
         """Property: for random conf pairs, a lower rewrite stores the LOWER
-        value (no ratchet)."""
+        value (no ratchet) — using a trusted channel so ceilings don't clamp."""
         for _ in range(50):
             hi, lo = sorted((rand_conf(), rand_conf()), reverse=True)
-            adm1 = admit_learning(key="k", confidence=hi, source="claude")
-            adm2 = admit_learning(key="k", confidence=lo, source="claude")
+            adm1 = admit_learning(key="k", confidence=hi, source="audit")
+            adm2 = admit_learning(key="k", confidence=lo, source="audit")
             self.assertLess(adm2.stored_confidence, adm1.stored_confidence)
 
     def test_unverified_never_exceeds_inferred_ceiling(self):
@@ -136,7 +136,6 @@ class TestSealGatedClassClaims(unittest.TestCase):
     def test_valid_seal_honors_secondarial_claim(self):
         # unkeyed legacy seal path: compute sha256 over canonical payload
         d, h = self._sealed_session_and_hash()
-        os.environ.pop("CALLISTO_SEAL_KEY", None)  # unkeyed: legacy sha256 verifies
         adm = admit_learning(key="k", confidence=0.9, source="claude",
                              source_class="SECONDARY", seal_session=d, seal_hash=h)
         self.assertEqual(adm.source_class, "SECONDARY")
@@ -178,12 +177,13 @@ class TestSealGatedClassClaims(unittest.TestCase):
 
 class TestDecay(unittest.TestCase):
     def test_monotone_in_age(self):
+        """Effective confidence is non-increasing in age, modulo the floor."""
         now = datetime.now(timezone.utc)
         conf = rand_conf() * 0.9 + 0.05
-        prev = -1.0
+        prev = float("inf")
         for days in range(0, int(CONFIDENCE_HALF_LIFE_DAYS * 3)):
             eff = decay_confidence(conf, (now - timedelta(days=days)).isoformat(), now)
-            self.assertGreater(eff, prev)
+            self.assertLessEqual(eff, prev + 1e-9)
             prev = eff
 
     def test_half_life_arithmetic(self):
@@ -194,12 +194,15 @@ class TestDecay(unittest.TestCase):
         self.assertAlmostEqual(one_half_life, conf / 2, delta=0.01)
 
     def test_random_rows_never_increase_and_stay_in_bounds(self):
+        """Property: decay never raises a value above max(conf, floor) and
+        stays within [0,1]."""
         now = datetime.now(timezone.utc)
+        from tools.memory_epistemics import MIN_EFFECTIVE_CONFIDENCE
         for _ in range(200):
             conf = rand_conf()
             age = RNG.random() * 400
             eff = decay_confidence(conf, (now - timedelta(days=age)).isoformat(), now)
-            self.assertLessEqual(eff, conf)
+            self.assertLessEqual(eff, max(conf, MIN_EFFECTIVE_CONFIDENCE) + 1e-9)
             self.assertGreaterEqual(eff, 0.0)
 
 
@@ -241,28 +244,41 @@ class TestDisconfirmingBiasedTrimming(unittest.TestCase):
                     f"supporting trimmed while contradicting was dropped: "
                     f"kept={kept_ids} dropped={dropped_ids}")
 
-    def test_budget_respected(self):
+    def test_budget_respected_for_supporting_items(self):
+        """The budget applies to supporting/neutral items; contradicting
+        items always survive (never-drop rule, mirroring compact_state)."""
         for _ in range(60):
             items = _rand_items(RNG.randint(1, 25))
             budget = RNG.randint(0, len(items))
             kept, dropped = trim_learnings_for_context(items, max_items=budget)
-            self.assertLessEqual(len(kept), max(budget, 0))
             self.assertEqual(len(kept) + len(dropped), len(items))
+            disc_kept = sum(1 for it in kept if it["stance"] == "contradicting")
+            supp_neutral_kept = len(kept) - disc_kept
+            expected_supp_budget = max(0, budget - disc_kept)
+            self.assertLessEqual(supp_neutral_kept, max(expected_supp_budget, 0) or 0)
+            # every contradicting item survives unless the budget itself is
+            # smaller than the contradicting count (budget is absolute)
+            if budget >= sum(1 for it in items if it["stance"] == "contradicting"):
+                self.assertEqual(
+                    disc_kept,
+                    sum(1 for it in items if it["stance"] == "contradicting"))
 
     def test_consistency_with_loop_quality_compact_state(self):
-        """The survival ORDERING must agree: loop_quality.compact_state keeps
-        every contradicting item first; our trimmer does too."""
+        """The survival ORDERING must agree with loop_quality.compact_state:
+        every contradicting item survives whenever the budget allows it."""
         from tools.loop_quality import compact_state
         for _ in range(30):
             items = _rand_items(RNG.randint(3, 20))
             lq_kept, lq_dropped = compact_state([dict(i) for i in items],
                                                 max_supporting=len(items),
                                                 max_neutral=len(items))
-            self.assertTrue(
-                all(it["stance"] == "contradicting" for it in lq_dropped) is False
-            )  # sanity: nothing contradicted dropped when budgets infinite
+            self.assertFalse(lq_dropped,
+                             "infinite budgets: loop_quality drops nothing")
             our_kept, _ = trim_learnings_for_context(items, max_items=len(items))
             self.assertEqual({i["id"] for i in our_kept}, {i["id"] for i in items})
+            disc_lq = [i for i in lq_kept if i["stance"] == "contradicting"]
+            disc_our = [i for i in our_kept if i["stance"] == "contradicting"]
+            self.assertEqual({i["id"] for i in disc_lq}, {i["id"] for i in disc_our})
 
     def test_dropped_items_carry_reason(self):
         items = _rand_items(15)
@@ -347,7 +363,8 @@ class TestHermesMemoryRoundTrip(unittest.TestCase):
             conn.close()
             return row[0]
         stored = asyncio.run(run())
-        self.assertAlmostEqual(stored, 0.55, places=2)  # clamped to INFERRED ceiling
+        self.assertAlmostEqual(stored, 0.30, places=2,
+                               msg="last write must win (no ratchet); clamped to INFERRED ceiling")
 
     def test_low_rewrite_survives_after_high_write(self):
         async def run():

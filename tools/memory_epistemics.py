@@ -211,6 +211,8 @@ def decay_confidence(stored: float, learned_at_iso: str, now: datetime | None = 
 
 # ── Disconfirming-biased trimming (consistency with tools/loop_quality.py) ──
 
+# (stance ranking is inlined in trim_learnings_for_context; kept for callers
+# that want the canonical ordering)
 STANCE_RANK = {"contradicting": 0, "neutral": 1, "supporting": 2}
 
 
@@ -225,11 +227,13 @@ def trim_learnings_for_context(
     is the most expensive thing to lose, and dropping it silently corrupts
     everything downstream.
 
-    Ranking key (ascending = kept first):
-      stance rank (contradicting < neutral < supporting),
-      then lower tier wins (better provenance),
-      then HIGHER effective confidence wins,
-      then id for determinism.
+    Policy (in order):
+      1. EVERY contradicting item survives, however many there are (matching
+         compact_state's never-drop-contradicting rule). The budget applies
+         only to supporting/neutral items.
+      2. Remaining budget goes to supporting/neutral items, ranked by
+         stance (neutral before supporting), then better tier, then higher
+         effective confidence, then id for determinism.
 
     Unknown/missing stance → 'supporting' for MEMORY items (memory entries
     are assertions of pattern; only explicitly-marked disconfirmations count
@@ -238,10 +242,9 @@ def trim_learnings_for_context(
 
     Returns (kept, dropped); dropped items gain ``dropped_reason``.
     """
-    def sort_key(it: dict):
+    def rank_key(it: dict):
         stance = str(it.get("stance") or "supporting").lower()
-        if stance not in STANCE_RANK:
-            stance = "supporting"
+        stance_rank = 0 if stance == "neutral" else 1
         try:
             tier = int(it.get("tier", 3))
         except (TypeError, ValueError):
@@ -250,18 +253,24 @@ def trim_learnings_for_context(
             eff = -float(it.get("effective_confidence", 0.0))
         except (TypeError, ValueError):
             eff = 0.0
-        return (STANCE_RANK[stance], tier, eff, str(it.get("id")))
+        return (stance_rank, tier, eff, str(it.get("id")))
 
-    ordered = sorted(items, key=sort_key)
-    kept = [dict(it) for it in ordered[:max_items]]
+    contradicting = [dict(it) for it in items
+                     if str(it.get("stance") or "supporting").lower() == "contradicting"]
+    rest = [dict(it) for it in items
+            if str(it.get("stance") or "supporting").lower() != "contradicting"]
+
+    kept = list(contradicting)
     dropped = []
-    for it in ordered[max_items:]:
-        d = dict(it)
-        d["dropped_reason"] = (
+    remaining = max(0, max_items - len(kept))
+    ordered = sorted(rest, key=rank_key)
+    kept.extend(ordered[:remaining])
+    for it in ordered[remaining:]:
+        it["dropped_reason"] = (
             f"context budget ({max_items}) — supporting/neutral trimmed before "
             f"any contradicting item; lowest priority dropped first"
         )
-        dropped.append(d)
+        dropped.append(it)
     return kept, dropped
 
 

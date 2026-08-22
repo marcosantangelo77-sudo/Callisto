@@ -114,23 +114,30 @@ def dry_run(conn: sqlite3.Connection) -> dict:
         report["actions"].append(
             "ADD COLUMN source_class TEXT; ADD COLUMN provenance_seal TEXT"
         )
-    # Clamp preview: how many rows exceed their ceiling?
+    # Clamp preview: how many rows exceed their ceiling? (Before the column
+    # exists, every row is implicitly INFERRED — cap preview uses 0.55.)
     clamp_needed = 0
-    for cls_val, ceiling in CEILINGS.items():
-        if cls_val is None:
-            cnt = conn.execute(
-                "SELECT COUNT(*) FROM hermes_learnings "
-                "WHERE (source_class IS NULL OR source_class NOT IN "
-                "('PRIMARY','SECONDARY','SIGNAL','INFERRED')) AND confidence > ?",
-                (ceiling,),
-            ).fetchone()[0]
-        else:
-            cnt = conn.execute(
-                "SELECT COUNT(*) FROM hermes_learnings "
-                "WHERE source_class = ? AND confidence > ?",
-                (cls_val, ceiling),
-            ).fetchone()[0]
-        clamp_needed += cnt
+    if "source_class" in cols:
+        for cls_val, ceiling in CEILINGS.items():
+            if cls_val is None:
+                cnt = conn.execute(
+                    "SELECT COUNT(*) FROM hermes_learnings "
+                    "WHERE (source_class IS NULL OR source_class NOT IN "
+                    "('PRIMARY','SECONDARY','SIGNAL','INFERRED')) AND confidence > ?",
+                    (ceiling,),
+                ).fetchone()[0]
+            else:
+                cnt = conn.execute(
+                    "SELECT COUNT(*) FROM hermes_learnings "
+                    "WHERE source_class = ? AND confidence > ?",
+                    (cls_val, ceiling),
+                ).fetchone()[0]
+            clamp_needed += cnt
+    else:
+        clamp_needed = conn.execute(
+            "SELECT COUNT(*) FROM hermes_learnings WHERE confidence > ?",
+            (CEILINGS[None],),
+        ).fetchone()[0]
     if clamp_needed:
         report["actions"].append(f"clamp {clamp_needed} row(s) above provenance ceilings")
     report["rows_over_ceiling"] = clamp_needed

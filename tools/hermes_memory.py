@@ -251,20 +251,21 @@ class HermesMemory:
         Claude's prompt context.
 
         EPISTEMICS (P4, kills the trust escalator — findings/instance4.md P3):
-        the previous upsert used ``confidence=MAX(confidence, excluded.confidence)``,
+        the previous upsert used ``confidence=MAX(confidence, excluded.confidence)``
+        (quoted here only as history — no such upsert remains),
         a one-way ratchet that let one optimistic self-report contaminate a key
         forever and let the wiki admit unverified guesses at >= 0.5. Semantics now:
 
           - confidence REPLACES on upsert (no ratchet) and is clamped to the
-            ceiling of the learning's PROVENANCE class (see tools/memory_epistemics.py);
+            ceiling of the learning's PROVENANCE class (see memory_epistemics);
           - a claimed class above INFERRED requires a verifying seal carried in
             ``seal_session``/``seal_hash``; unsealed or failed-seal claims are
             capped to INFERRED (fail closed);
           - human/audit sources may exceed their class ceiling (operator channels).
 
-        Stored-data semantics change: existing rows were written under the
-        ratchet, so migration 015_hermes_confidence_decay resets contaminated
-        rows (dry-run-first, reversible; NOT auto-run here).
+        Stored-data semantics change: existing rows were written under the old
+        MAX-ratchet upsert, so migration 015_hermes_confidence_decay resets
+        contaminated rows (dry-run-first, reversible; NOT auto-run here).
         """
         try:
             key = self._sanitize_learning_key(key)
