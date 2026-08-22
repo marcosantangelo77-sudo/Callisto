@@ -245,3 +245,49 @@ buries the two that mattered. The goal is **find every piece of information
 RELEVANT to the question and use it to prove the claim right or wrong.**
 Decomposition determines which analyses bear on this question; the capability to
 produce many model types sits available and is selected, not sprayed.
+
+---
+
+## SOURCE REGISTRY — the real capability (supersedes "build the finance domain")
+
+**Correction of record.** An earlier brief justified building EDGAR/XBRL first
+because the owner works in real estate finance and could personally grade a DCF.
+That reasoning is wrong and the owner rejected it: he is not going to sit and
+check DCFs, and manual verification was never the design.
+
+**The correct framing:** local models are free to run 24/7, so inference cost
+stops being the binding constraint and DATA ACCESS becomes it. The capability
+worth building is not a finance module — it is a **source registry**, with EDGAR
+as the first instance of the pattern.
+
+Each source declares:
+  - what kinds of question it can answer
+  - its provenance class (tier 1-5, see §4 above)
+  - its cost, rate limits, and terms
+  - how its returns enter the provenance ledger
+
+The decomposer then selects sources by relevance to the question at hand. That
+is what "find every piece of information relevant to the question and use it to
+prove the claim right or wrong" actually requires.
+
+### Free, high-quality sources worth wiring
+
+  SEC EDGAR / XBRL     every filing, tagged financial facts        tier 1
+  FRED                 ~800k macro series                          tier 1
+  BLS, Census          employment, CPI components, housing starts  tier 1
+  Treasury FiscalData  rates, auctions, debt                       tier 1
+  USPTO                patents                                     tier 1
+  ClinicalTrials.gov   trial registrations, outcomes               tier 1
+  PubMed, arXiv        papers                                      tier 2
+  Kalshi, Polymarket   market-implied probabilities                tier 3
+  GDELT                machine-coded global news events            tier 2
+  Common Crawl         an actual web crawl, petabytes, free        tier 2-4
+  Wikidata dumps       structured entity graph                     tier 2
+
+Common Crawl and GDELT are the closest legitimate approach to "the whole
+internet" — the crawl already exists and is given away, so there is no reason to
+build one or to pay a vendor for access.
+
+**Build the pattern, not the domain.** If adding FRED after EDGAR is more than a
+config entry plus a thin adapter, the pattern is wrong and should be fixed
+before a third source is added.
