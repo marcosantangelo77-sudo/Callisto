@@ -43,6 +43,15 @@ from tools.market_microstructure import (
 )
 from tools.bankroll_sim import simulate_before_promote  # pre-LIVE sim gate
 
+# B1: base-rate-relative thresholds (tools/resolvers/base_rates.py).
+# The absolute 0.45 hit-rate floor is correct at ~50% base rates and
+# mass-rejects true positives in low-base-rate domains; these helpers derive
+# each claim's floor from its own expected base rate.
+from tools.resolvers.base_rates import (
+    base_rate_relative_floor,
+    expected_base_rate_from_events,
+)
+
 load_dotenv()
 
 logger = logging.getLogger("callisto.hypothesis")
@@ -1485,16 +1494,27 @@ class HypothesisManager:
             )
         )
 
-        # Losing record rejection: hit_rate below 45% after 12+ signals means
-        # the hypothesis is actively losing money. The p-value tiers (>0.50 at n>=15)
-        # miss these because a 44% hit rate at n=16 gives p≈0.35 — not high enough.
+        # Losing record rejection: hit_rate below the claim's BASE-RATE-
+        # RELATIVE floor after 12+ signals means the hypothesis is actively
+        # underperforming its own market prior. The old absolute 45% floor
+        # was correct only at ~50% base rates and mass-rejected true
+        # positives in low-base-rate domains. Derived floor = base_rate ×
+        # (1 + lift), clamped; unknown base rate → legacy 0.45.
         if not should_reject and not used_all_events and status == "backtesting":
             _hit_rate = report.get("results", {}).get("hit_rate", 0.5)
-            if n >= 12 and _hit_rate < 0.45:
+            # Base rate from the report's own expected_rate (mean market
+            # implied prob of the evaluated sample).
+            _base = report.get("results", {}).get("expected_rate")
+            if not isinstance(_base, (int, float)) or not 0 < _base <= 1:
+                _base = None
+            _floor = base_rate_relative_floor(_base, legacy_floor=0.45)
+            if n >= 12 and _hit_rate < _floor:
                 should_reject = True
                 checks.append(
-                    f"AUTO-REJECT: hit_rate={_hit_rate:.1%} < 45% with {n} signals — "
-                    f"actively losing, edge is negative"
+                    f"AUTO-REJECT: hit_rate={_hit_rate:.1%} < "
+                    f"{_floor:.1%} (base-rate-relative floor; expected base rate "
+                    f"{_base if _base is not None else 'unknown'}) with {n} signals — "
+                    f"actively losing against its own prior"
                 )
 
         # Low signal rate rejection: hypothesis tested 100+ distinct events but
@@ -2254,6 +2274,7 @@ class HypothesisManager:
         max_drawdown: float = 0.40,
         min_resolved: int = 10,
         clv_negative_threshold: float = 0.0,
+        base_rate_relative: bool = True,
     ) -> list[dict]:
         """Review all LIVE hypotheses and demote underperformers to 'paused'.
 
@@ -2261,9 +2282,17 @@ class HypothesisManager:
         (and clv_log as supplementary CLV evidence), computes rolling hit-rate,
         ROI, Sharpe, and max drawdown, and demotes when:
 
-          * hit_rate < hit_rate_floor         (sub-break-even)
-          * max_drawdown > max_drawdown       (excessive drawdown)
-          * avg CLV < clv_negative_threshold  (betting bad prices)
+          * hit_rate < effective_floor      (sub-prior performance)
+          * max_drawdown > max_drawdown     (excessive drawdown)
+          * avg CLV < clv_negative_threshold (betting bad prices)
+
+        Effective floor: when base_rate_relative=True (default), each
+        hypothesis's hit-rate floor is derived from its own expected base
+        rate (mean book implied probability of its trades) via
+        tools.resolvers.base_rates.base_rate_relative_floor; the
+        ``hit_rate_floor`` argument then acts only as the legacy ceiling.
+        Low-base-rate claims are judged against their own prior, not the
+        50%-domain constant.
 
         Returns a list of per-hypothesis outcome dicts.
         """
@@ -2362,9 +2391,25 @@ class HypothesisManager:
                 continue
 
             reasons = []
-            if hit_rate < hit_rate_floor:
+            # Base-rate-relative effective floor (B1): judge the claim
+            # against its own prior. Unknown base rate → legacy floor.
+            _eff_floor = hit_rate_floor
+            if base_rate_relative:
+                _base = expected_base_rate_from_events(
+                    [{"book_implied_prob": imp} for (_o, _r, _c, imp, _g) in rows
+                     if imp is not None]
+                )
+                _eff_floor = base_rate_relative_floor(
+                    _base, legacy_floor=hit_rate_floor
+                )
+                outcome["effective_hit_rate_floor"] = round(_eff_floor, 4)
+                outcome["expected_base_rate"] = (
+                    round(_base, 4) if _base is not None else None
+                )
+            if hit_rate < _eff_floor:
                 reasons.append(
-                    f"hit_rate {hit_rate:.1%} < {hit_rate_floor:.0%} floor"
+                    f"hit_rate {hit_rate:.1%} < {_eff_floor:.0%} floor"
+                    + (f" (base-rate-relative; prior={_base:.0%})" if base_rate_relative and _base is not None else "")
                 )
             if mdd > max_drawdown:
                 reasons.append(
