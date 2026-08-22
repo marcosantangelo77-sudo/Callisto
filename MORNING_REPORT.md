@@ -260,3 +260,62 @@ ingestion.
 Everything else built tonight — provenance, sealing, the adversary, the
 inheritance rule, preregistration, the sandbox — **worked**. The failure was in
 getting good evidence in, not in reasoning honestly about it.
+
+---
+
+# SECOND LIVE RUN — after the retrieval and query-authoring fixes
+
+Same question, same live model, after wave 4 landed.
+
+```
+BEFORE   118s · 5 leaves · 1 fetch  · REFUSED  (adversary: "retrieval failure")
+AFTER    243s · 5 leaves · 9 fetches · SEALED at SPECULATIVE 0.34
+```
+
+**It answered.** A real conclusion on foundry concentration and chokepoint
+governance, sealed — and scored 0.34, which is the important part.
+
+The adversary still objected, correctly:
+
+> "The 'null' findings are an artifact of the retrieval method, not the
+> literature. Every query used OpenAlex."
+>
+> "Refuting evidence was already present and underweighted."
+
+Nine fetches, but all from one source, so independence stayed at 1 and the
+confidence reflects it. **The system answered, stated how much to trust the
+answer, and named exactly why it wasn't more.** That is the behaviour the whole
+architecture exists to produce, and it now does it on a real question.
+
+## What wave 4 changed
+
+- **Iterative retrieval** — query, inspect what returned, refine, re-query,
+  stop on the information-gain terminator with a logged reason.
+- **Relevance gating at ingestion** — irrelevant hits are rejected before they
+  become evidence, with reason and content hash recorded. Zero admissible
+  evidence is an honest null.
+- **Enforced independence** — openalex + semantic_scholar collapse to ONE
+  independent source because they index the same literature. Two hits from one
+  family do not satisfy min_independent_sources=2.
+- **Query authoring per source** — live checking caught three bugs fixtures
+  passed: Federal Register 400s on comma-joined `fields[]`, a ClinicalTrials
+  status word in `query.term` zeroed results (0 vs 121 studies), and Treasury
+  "average interest rates" is genuinely ambiguous across ~1000 datasets so it
+  returns candidates rather than guessing.
+- **Checkpointing** — resume from the last good step; refuses to seal a resumed
+  run whose provenance cannot be verified across the boundary.
+- **Empirical model routing** — per-(model, role) scores from retrodiction feed
+  routing, with exploration. Disabled by default; byte-identical to today until
+  measurements exist.
+- **Cross-model adversarial review** — self-review is visible and capped at 0.54;
+  ambiguity resolves conservative; unanimity among independent critics weighs
+  more but still only subtracts.
+
+## THE NEXT BOTTLENECK, named by the system itself
+
+**Source diversity.** Nine fetches from one host is one independent source. The
+adversary said so unprompted. Fixing it means routable adapters beyond the four
+with generic search — which is the query-authoring backlog, now half-built.
+
+Two environmental blocks: SEC and ClinicalTrials.gov both 403 this machine after
+earlier live testing. Neither is a code defect; both need a cooldown.
