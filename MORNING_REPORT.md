@@ -112,3 +112,86 @@ to the instance already working the selection layer.
 **Related open finding (P1, verified):** generic fetch covers only 4 of 8
 sources — fred, bls, treasury and wikidata need query authoring. P1 skipped them
 rather than faking coverage, which was the right call.
+
+---
+
+## WHAT WAS BUILT
+
+168 commits, 1,665 tests passing (was 951, of which 12 failed). ~130M tokens
+across roughly 20 agent instances in three waves.
+
+**The epistemics — the part nothing else has**
+- `agp/provenance.py` — confidence assigned by which code path fetched the
+  bytes, not by the model's self-report. VERIFIED tier reachable for the first
+  time.
+- HMAC-keyed seal with rotation. Forging now needs the key, not repo access.
+- `agp/adversary.py` — a fourth role whose only job is to falsify a conclusion
+  before it seals, with its own scored track record so the critic is calibrated
+  too. It can lower confidence, never raise it.
+- `agp/preregistration.py` — commit, sealed, to what would confirm and refute
+  BEFORE evidence. Immutable after seal (enforced, not conventional);
+  amendments append with reasons and disclose the chain.
+- `agp/claims.py` — claims that stay open for months, accrue evidence, and
+  append a BeliefRecord every time confidence moves. Hash-chained journal:
+  rewriting history to flatter yourself breaks the chain and raises on load.
+- `tools/research_program.py` — the inheritance rule. A parent claim is capped
+  at SPECULATIVE forever until five descendants actually resolve.
+
+**The machinery**
+- `tools/pipeline/` — the eleven components wired into one chain.
+- `tools/retrodiction/` — cutoff enforcer, question generation, scoring, A/B
+  harness. I probed the cutoff with six attacks; all excluded, only the
+  legitimate case admitted.
+- `tools/sandbox.py` — I tried to break out five ways and could not: SSH key,
+  env secrets, network, filesystem, .env all blocked.
+- `tools/artifacts.py` / `charts.py` — content-addressed store, live-formula
+  workbooks.
+- `tools/loop_quality.py` — information-gain termination (verified correct on
+  five confidence trajectories), calibration trace, disconfirming-biased
+  compaction.
+- `tools/sources/` — 19 adapters, each declaring a non-empty `cannot_answer`.
+- `tools/edge.py`, `fermi.py`, `reference_class.py` — market quote → devigged
+  fair probability → edge → Kelly; Monte-Carlo uncertainty propagation.
+- `tools/schema/` core/plugin split with reversible, dry-run-first migrations.
+- `hermes-function-calling/` quarantined to `attic/` with a restore note.
+
+## WHAT I VERIFIED MYSELF vs TOOK ON TRUST
+
+**Verified by my own adversarial probes:** the sandbox boundary (5 escapes, all
+blocked), the retrodiction cutoff (6 attacks, all excluded), preregistration
+immutability, the adversary's inability to raise confidence (20,000 random
+inputs), the information-gain terminator across five trajectories, source
+selection against real questions, and that `agp/` contains zero domain
+vocabulary.
+
+**Taken on trust:** most of the per-module test suites. I ran them; I did not
+re-derive every assertion. The three cases where an agent's claim turned out
+wrong were all caught by merging and re-running, not by reading reports.
+
+## WHAT IS STILL UNPROVEN
+
+- **Nothing has answered a real question with a live model.** The pipeline runs
+  end-to-end against fixtures with a scripted model. That is a real test, not a
+  demo — but it is not the same as a live run.
+- **Selection is lexical, not semantic.** Fixed enough that ordinary questions
+  work; embeddings are the real answer.
+- Generic fetch covers 4 of 19 sources; the rest need query authoring.
+- `ProvenanceLedger` is memory-only — a durability gap for seals.
+- The real database is on the workstation. Migrations 013 and 015 have never
+  been run. **Back up before running either.**
+- SEC still 403s this machine.
+
+## THE VERDICT
+
+The components are mostly commodity. LangGraph and CrewAI orchestrate better;
+GPT-Researcher writes a better-reading report today. **The combination is not
+available anywhere**: a research system that is structurally incapable of
+overstating its own confidence — provenance-assigned rather than self-reported,
+sealed criteria committed before evidence, an adversary that can only subtract,
+and a track record that scores it against reality.
+
+For a one-off question, ask a frontier model. For repeated decisions where being
+confidently wrong costs money, this is worth more than a better-written answer.
+
+**The next thing is not a feature.** It is one real question, driven end to end
+with a live model. Whatever breaks is the real backlog.
