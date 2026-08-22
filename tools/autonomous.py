@@ -1427,6 +1427,20 @@ class ResearchLoop:
         self._spinning_detected = False
         self._last_progress_check = 0
         self._consecutive_no_progress = 0
+        # R2: the spinning diagnosis must fire ONCE per spin episode, not on
+        # every subsequent stagnant check. Reset when progress resumes.
+        self._diagnosis_fired_this_episode = False
+
+        # ── R2 loop-quality state ──
+        # Calibration trace: per-iteration confidence/evidence ledger, the
+        # record shape R1's retrodiction harness scores against outcomes.
+        from tools.loop_quality import LoopCalibrationTrace
+        self._calibration_trace = LoopCalibrationTrace(subject="research_loop")
+        # Per-phase task-class allocation for the ProviderRouter: framing
+        # (first) and adversarial review (last) get capability tiers, the
+        # middle grind routes to extraction-class endpoints.
+        from tools.loop_quality import LOOP_PHASE_TASK_CLASSES
+        self.loop_phase_task_classes = dict(LOOP_PHASE_TASK_CLASSES)
 
         # Regime analysis — uses module-level _regime_cache (shared with AutonomousLoop)
         # Refreshed every REGIME_ANALYSIS_INTERVAL cycles
@@ -7838,9 +7852,20 @@ class ResearchLoop:
         """Ralph loop pattern: detect spinning vs making progress.
 
         Every 10 cycles, snapshot key metrics and compare to previous window.
-        If no meaningful progress (0 new signals, 0 promotions, same rejection
-        count), the loop is spinning — shift to diagnostic mode.
+        If no meaningful progress (0 new signals, 0 promotions), the loop is
+        spinning — shift to diagnostic mode.
+
+        Since R2 this delegates the decision to the pure
+        ``tools.loop_quality.evaluate_progress_window`` so it is unit-testable;
+        two fixes over the inline original:
+          * the spinning diagnosis fires ONCE per spin episode (it previously
+            re-escalated to Claude on every subsequent stagnant check);
+          * a DB failure sentinel (-1) is treated as "unknown", never as
+            negative progress.
+        Everything else is behaviour-preserving (see characterization tests).
         """
+        from tools.loop_quality import evaluate_progress_window
+
         PROGRESS_CHECK_INTERVAL = 10
 
         if self._cycles % PROGRESS_CHECK_INTERVAL != 0:
@@ -7856,7 +7881,9 @@ class ResearchLoop:
             "claude_calls": self._claude_escalations,
         }
 
-        # Also query signal count from DB
+        # Also query signal count from DB (-1 sentinel = unknown on failure)
+        snapshot["total_signals"] = -1
+        snapshot["active_backtesting"] = -1
         try:
             db = self.hypothesis_manager._db
             cursor = await db.execute(
@@ -7871,51 +7898,45 @@ class ResearchLoop:
             row = await cursor.fetchone()
             snapshot["active_backtesting"] = row[0] if row else 0
         except Exception:
-            snapshot["total_signals"] = 0
-            snapshot["active_backtesting"] = 0
+            pass
+
+        prev = self._progress_window[-1] if self._progress_window else None
+
+        verdict = evaluate_progress_window(
+            prev,
+            snapshot,
+            self._consecutive_no_progress,
+            already_diagnosed_this_episode=getattr(
+                self, "_diagnosis_fired_this_episode", False),
+        )
 
         self._progress_window.append(snapshot)
         if len(self._progress_window) > 5:
             self._progress_window = self._progress_window[-5:]
 
-        # Need at least 2 snapshots to compare
-        if len(self._progress_window) < 2:
-            return
-
-        prev = self._progress_window[-2]
-        curr = self._progress_window[-1]
-
-        # Measure actual progress
-        new_promotions = curr["promotions"] - prev["promotions"]
-        new_signals = curr["total_signals"] - prev.get("total_signals", 0)
-        new_backtests = curr["backtests"] - prev["backtests"]
-        cycles_elapsed = curr["cycle"] - prev["cycle"]
-
-        is_progressing = (new_promotions > 0 or new_signals > 0)
-
-        if is_progressing:
+        if verdict.progressing:
             self._consecutive_no_progress = 0
             self._spinning_detected = False
-            logger.info(
-                f"Progress check: +{new_signals} signals, +{new_promotions} promotions "
-                f"over {cycles_elapsed} cycles — loop is productive"
-            )
-        else:
-            self._consecutive_no_progress += 1
-            logger.warning(
-                f"Progress check: 0 new signals, 0 promotions over {cycles_elapsed} "
-                f"cycles ({new_backtests} backtests ran). "
-                f"No-progress streak: {self._consecutive_no_progress}"
-            )
+            self._diagnosis_fired_this_episode = False
+            logger.info(f"Progress check: {verdict.detail} — loop is productive")
+            return
 
-            if self._consecutive_no_progress >= 3:
-                self._spinning_detected = True
-                logger.warning(
-                    f"SPINNING DETECTED: {self._consecutive_no_progress * PROGRESS_CHECK_INTERVAL} "
-                    f"cycles with no new signals or promotions. "
-                    f"Triggering diagnostic mode."
-                )
-                await self._run_spinning_diagnosis()
+        self._consecutive_no_progress = verdict.consecutive_no_progress
+        logger.warning(
+            f"Progress check: {verdict.detail}. "
+            f"No-progress streak: {self._consecutive_no_progress}"
+        )
+
+        if verdict.spinning:
+            self._spinning_detected = True
+            logger.warning(
+                f"SPINNING DETECTED: {self._consecutive_no_progress} "
+                f"consecutive checks with no new signals or promotions. "
+                f"Triggering diagnostic mode."
+            )
+        if verdict.diagnose:
+            self._diagnosis_fired_this_episode = True
+            await self._run_spinning_diagnosis()
 
     async def _run_spinning_diagnosis(self) -> None:
         """When spinning is detected, gather real data instead of re-theorizing.
@@ -8050,6 +8071,11 @@ class ResearchLoop:
             "claude_escalations": self._claude_escalations,
             "promotions": self._promotions,
             "rejections": self._rejections,
+            # R2: loop-quality telemetry — calibration trace + per-phase
+            # task-class map, consumed by R1's retrodiction harness.
+            "calibration": self._calibration_trace.summary(),
+            "calibration_records": self._calibration_trace.to_records()[-20:],
+            "phase_task_classes": dict(self.loop_phase_task_classes),
             "research_sports": RESEARCH_SPORTS,
             "claude_code": claude_stats(),
             "pipeline_integrity": integrity_report,
