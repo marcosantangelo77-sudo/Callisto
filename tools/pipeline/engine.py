@@ -33,6 +33,7 @@ from typing import Any, Callable, Optional
 
 from agp import (
     AGPSession,
+    ConfidenceTier,
     Domain,
     Evidence,
     SessionStep,
@@ -49,6 +50,7 @@ from agp.research_program import (
     SourceClassRank,
 )
 from agp.thresholds import MAX_CONFIDENCE_BY_SOURCE, DB_CONFIDENCE_FLOOR
+from agp import ConfidenceTier
 from tools.artifacts import ArtifactStore, ArtifactRef
 from tools.pipeline.model import (
     PipelineModel,
@@ -278,8 +280,7 @@ class ResearchPipeline:
             try:
                 source = RestSource(spec, ledger=self.ledger,
                                     transport=self.transport)
-                adapter = reg.instantiate(spec.name).__class__(source) \
-                    if False else _make_adapter(reg, spec.name, source)
+                adapter = _make_adapter(reg, spec.name, source)
                 fetched = getattr(adapter, method_name)(*args, **kwargs)
                 body = json.dumps(fetched, sort_keys=True)
                 rec = FetchResult(
@@ -287,7 +288,7 @@ class ResearchPipeline:
                     url=source.last_record.url if source.last_record else "",
                     content_sha256=_sha(body),
                     body=body, parsed=fetched, question_id=q.question_id)
-            except (SourceError, StopIteration, Exception) as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001 — a failed source is skipped
                 logger.info("source %s failed for %s: %s",
                             spec.name, q.question_id, e)
                 continue
@@ -337,19 +338,14 @@ class ResearchPipeline:
                 refs = _store_sandbox(sbx, self.store)
                 out.artifact_sha256s.extend(r.sha256 for r in refs)
                 self.artifact_refs.extend(refs)
-                # The computation itself is real executed bytes → SECONDARY
-                # floor evidence, recorded in the ledger.
+                # The computation itself is real executed output → recorded
+                # in the ledger; provenance assigns its class.
                 comp_body = f"sandbox code:\n{sbx.code}\nstdout:\n{sbx.stdout}"
                 self.ledger.record_tool_result("run_python", comp_body,
                                                primary=False)
                 comp_ev = Evidence(
                     content=comp_body[:4000],
-                    source_class=self.ledger.assign_source_class(
-                        Evidence(content=comp_body[:4000],
-                                 source_class=SourceClass.INFERRED,
-                                 confidence_score=0.3,
-                                 domain=session.domain or Domain.GENERAL,
-                                 origin_agent="sandbox")),
+                    source_class=SourceClass.INFERRED,
                     confidence_score=0.30,
                     domain=session.domain or Domain.GENERAL,
                     origin_agent="sandbox")
@@ -385,13 +381,9 @@ class ResearchPipeline:
         if reasons:
             clamped = min(clamped, 0.54)
 
-        from agp import ConfidenceTier
-        out.confidence = round(max(DB_CONFIDENCE_FLOOR if clamped > 0 else 0.0,
-                                   clamped), 2)
+        out.confidence = round(max(0.0, clamped), 2)
         out.tier = ConfidenceTier.from_score(out.confidence).value
         return out
-
-    artifact_refs: list[ArtifactRef]
 
     # ── The whole chain ───────────────────────────────────────────────────
 
@@ -409,8 +401,9 @@ class ResearchPipeline:
         session = AGPSession(question)
         session.scope = question
         session.domain = domain
+        session.advance_to(SessionStep.ASSIGN_DOMAIN)
         session.advance_to(SessionStep.SOURCE_ENUMERATION)
-        session.sources = [s.name for s in self._get_registry().specs()]
+        session.sources = [s["name"] for s in self._get_registry().specs()]
 
         for q in program.leaves:
             fetches = await self._fetch_for_question(q)
@@ -418,6 +411,7 @@ class ResearchPipeline:
             outcome = await self._answer_leaf(q, fetches, session)
             result.leaves.append(outcome)
 
+        session.advance_to(SessionStep.PRIMARY_COLLECTION)
         session.advance_to(SessionStep.CONTRADICTION_CHECK)
         session.advance_to(SessionStep.SYNTHESIS)
 
