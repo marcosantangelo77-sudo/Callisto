@@ -43,6 +43,15 @@ from tools.market_microstructure import (
 )
 from tools.bankroll_sim import simulate_before_promote  # pre-LIVE sim gate
 
+# B1: base-rate-relative thresholds (tools/resolvers/base_rates.py).
+# The absolute 0.45 hit-rate floor is correct at ~50% base rates and
+# mass-rejects true positives in low-base-rate domains; these helpers derive
+# each claim's floor from its own expected base rate.
+from tools.resolvers.base_rates import (
+    base_rate_relative_floor,
+    expected_base_rate_from_events,
+)
+
 load_dotenv()
 
 logger = logging.getLogger("callisto.hypothesis")
@@ -76,7 +85,15 @@ def _env_int(name: str, default: int) -> int:
 #   CALLISTO_LIVE_REVIEW_WINDOW_DAYS — rolling window for LIVE demotion review
 MIN_DAYS_PAPER = _env_int("CALLISTO_MIN_DAYS_PAPER", 7)
 MIN_PAPER_TRADES = _env_int("CALLISTO_MIN_PAPER_TRADES", 10)
-MIN_CLV_RATE = _env_float("CALLISTO_MIN_CLV_RATE", 0.005)  # 0.5% floor; CLV measurement unit bug tracked separately
+# Positive-CLV RATE floor (fraction of resolved forward-tests whose canonical
+# devigged CLV closed positive, 0..1). Pre-B1 default 0.005 was a unit error:
+# it read like a probability magnitude against a trade-rate, binding only when
+# literally every trade closed negative. Raised to a meaningful rate floor
+# (this TIGHTENS the gate — permitted; automated actors may never lower one).
+MIN_CLV_RATE = _env_float("CALLISTO_MIN_CLV_RATE", 0.50)
+# Minimum canonical (clv_log.clv_prob_bp) samples before the gate trusts the
+# devigged statistic over the legacy raw-implied-delta fallback.
+MIN_CANONICAL_CLV_SAMPLE = _env_int("CALLISTO_MIN_CANONICAL_CLV_SAMPLE", 3)
 LIVE_REVIEW_WINDOW_DAYS = _env_int("CALLISTO_LIVE_REVIEW_WINDOW_DAYS", 14)
 
 # FWER (Šidák) correction window in days. 'inf' counts every hypothesis ever
@@ -1185,14 +1202,75 @@ class HypothesisManager:
         else:
             checks.append(f"PASS: p-value {p:.4f} <= {max_p:.2e} (adaptive+FWER, base={base_p}, n={n}, fwer_n={fwer_n})")
 
-        # CLV rate
-        clv_rate = report.get("clv", {}).get("positive_clv_rate", 0)
+        # ── CLV gate (B1 rebuild) — reads the CANONICAL devigged statistic ──
+        # Canonical source: clv_log.clv_prob_bp, basis points of devigged
+        # probability between placement and close (positive = better price),
+        # unit-consistent by construction (instance2 VERIFIED finding).
+        # Gate statistic: fraction of resolved forward-tests whose canonical
+        # CLV closed positive, compared against min_clv_rate (a RATE floor,
+        # 0..1). Falls back to the legacy raw-implied-delta rate only when
+        # fewer than MIN_CANONICAL_CLV_SAMPLE canonical rows exist.
+        # NULL/insufficient data is reported honestly as insufficient, not
+        # rendered as a 0% failure.
         min_clv = gate["min_clv_rate"]
-        if clv_rate < min_clv:
-            checks.append(f"FAIL: CLV rate {clv_rate:.1%} < {min_clv:.0%}")
-            ready = False
+        clv_rate: Optional[float] = None
+        if min_clv <= 0:
+            checks.append(
+                f"INFO: CLV gate disabled for this transition (min_clv_rate={min_clv})"
+            )
         else:
-            checks.append(f"PASS: CLV rate {clv_rate:.1%} >= {min_clv:.0%}")
+            canon_mean_bp: Optional[float] = None
+            canon_n = 0
+            try:
+                from tools.resolvers.betting import BettingOutcomeResolver
+
+                _resolver = BettingOutcomeResolver(self._db)
+                canon_mean_bp, canon_n = await _resolver.mean_clv_prob_bp(hypothesis_id)
+            except Exception as e:
+                logger.debug(f"canonical CLV lookup failed for {hypothesis_id}: {e}")
+
+            if canon_n >= MIN_CANONICAL_CLV_SAMPLE:
+                # Rate over the same canonical sample.
+                try:
+                    pos_cur = await self._db.execute(
+                        "SELECT COUNT(*) FROM paper_trades pt "
+                        "JOIN clv_log cl ON cl.bet_id = 'pt:' || pt.trade_id "
+                        "WHERE pt.hypothesis_id = ? "
+                        "  AND pt.actual_result IN ('won','lost','push') "
+                        "  AND cl.clv_prob_bp IS NOT NULL AND cl.clv_prob_bp > 0",
+                        (hypothesis_id,),
+                    )
+                    canon_pos = int((await pos_cur.fetchone())[0] or 0)
+                    clv_rate: Optional[float] = canon_pos / canon_n
+                    clv_src = (
+                        f"canonical clv_log.clv_prob_bp "
+                        f"(n={canon_n}, mean={canon_mean_bp:.1f}bp)"
+                    )
+                except Exception:
+                    clv_rate = None
+                    clv_src = "canonical lookup error"
+            else:
+                # Legacy fallback: raw implied-delta fraction from the report
+                # (same 0..1 trade-rate scale as the threshold).
+                clv_rate = report.get("clv", {}).get("positive_clv_rate")
+                clv_n = report.get("clv", {}).get("clv_sample_size", 0)
+                clv_src = f"legacy clv_implied delta (n={clv_n}; canonical n={canon_n} < {MIN_CANONICAL_CLV_SAMPLE})"
+
+            if clv_rate is None:
+                checks.append(
+                    f"FAIL: CLV insufficient data — no usable CLV sample ({clv_src}); "
+                    f"need >= {MIN_CANONICAL_CLV_SAMPLE} canonical samples"
+                )
+                ready = False
+            elif clv_rate < min_clv:
+                checks.append(
+                    f"FAIL: CLV positive-rate {clv_rate:.2%} < {min_clv:.2%} [{clv_src}]"
+                )
+                ready = False
+            else:
+                checks.append(
+                    f"PASS: CLV positive-rate {clv_rate:.2%} >= {min_clv:.2%} [{clv_src}]"
+                )
 
         # Sharpe (backtest only)
         if "min_sharpe" in gate:
@@ -1416,16 +1494,27 @@ class HypothesisManager:
             )
         )
 
-        # Losing record rejection: hit_rate below 45% after 12+ signals means
-        # the hypothesis is actively losing money. The p-value tiers (>0.50 at n>=15)
-        # miss these because a 44% hit rate at n=16 gives p≈0.35 — not high enough.
+        # Losing record rejection: hit_rate below the claim's BASE-RATE-
+        # RELATIVE floor after 12+ signals means the hypothesis is actively
+        # underperforming its own market prior. The old absolute 45% floor
+        # was correct only at ~50% base rates and mass-rejected true
+        # positives in low-base-rate domains. Derived floor = base_rate ×
+        # (1 + lift), clamped; unknown base rate → legacy 0.45.
         if not should_reject and not used_all_events and status == "backtesting":
             _hit_rate = report.get("results", {}).get("hit_rate", 0.5)
-            if n >= 12 and _hit_rate < 0.45:
+            # Base rate from the report's own expected_rate (mean market
+            # implied prob of the evaluated sample).
+            _base = report.get("results", {}).get("expected_rate")
+            if not isinstance(_base, (int, float)) or not 0 < _base <= 1:
+                _base = None
+            _floor = base_rate_relative_floor(_base, legacy_floor=0.45)
+            if n >= 12 and _hit_rate < _floor:
                 should_reject = True
                 checks.append(
-                    f"AUTO-REJECT: hit_rate={_hit_rate:.1%} < 45% with {n} signals — "
-                    f"actively losing, edge is negative"
+                    f"AUTO-REJECT: hit_rate={_hit_rate:.1%} < "
+                    f"{_floor:.1%} (base-rate-relative floor; expected base rate "
+                    f"{_base if _base is not None else 'unknown'}) with {n} signals — "
+                    f"actively losing against its own prior"
                 )
 
         # Low signal rate rejection: hypothesis tested 100+ distinct events but
@@ -2185,6 +2274,7 @@ class HypothesisManager:
         max_drawdown: float = 0.40,
         min_resolved: int = 10,
         clv_negative_threshold: float = 0.0,
+        base_rate_relative: bool = True,
     ) -> list[dict]:
         """Review all LIVE hypotheses and demote underperformers to 'paused'.
 
@@ -2192,9 +2282,17 @@ class HypothesisManager:
         (and clv_log as supplementary CLV evidence), computes rolling hit-rate,
         ROI, Sharpe, and max drawdown, and demotes when:
 
-          * hit_rate < hit_rate_floor         (sub-break-even)
-          * max_drawdown > max_drawdown       (excessive drawdown)
-          * avg CLV < clv_negative_threshold  (betting bad prices)
+          * hit_rate < effective_floor      (sub-prior performance)
+          * max_drawdown > max_drawdown     (excessive drawdown)
+          * avg CLV < clv_negative_threshold (betting bad prices)
+
+        Effective floor: when base_rate_relative=True (default), each
+        hypothesis's hit-rate floor is derived from its own expected base
+        rate (mean book implied probability of its trades) via
+        tools.resolvers.base_rates.base_rate_relative_floor; the
+        ``hit_rate_floor`` argument then acts only as the legacy ceiling.
+        Low-base-rate claims are judged against their own prior, not the
+        50%-domain constant.
 
         Returns a list of per-hypothesis outcome dicts.
         """
@@ -2293,9 +2391,25 @@ class HypothesisManager:
                 continue
 
             reasons = []
-            if hit_rate < hit_rate_floor:
+            # Base-rate-relative effective floor (B1): judge the claim
+            # against its own prior. Unknown base rate → legacy floor.
+            _eff_floor = hit_rate_floor
+            if base_rate_relative:
+                _base = expected_base_rate_from_events(
+                    [{"book_implied_prob": imp} for (_o, _r, _c, imp, _g) in rows
+                     if imp is not None]
+                )
+                _eff_floor = base_rate_relative_floor(
+                    _base, legacy_floor=hit_rate_floor
+                )
+                outcome["effective_hit_rate_floor"] = round(_eff_floor, 4)
+                outcome["expected_base_rate"] = (
+                    round(_base, 4) if _base is not None else None
+                )
+            if hit_rate < _eff_floor:
                 reasons.append(
-                    f"hit_rate {hit_rate:.1%} < {hit_rate_floor:.0%} floor"
+                    f"hit_rate {hit_rate:.1%} < {_eff_floor:.0%} floor"
+                    + (f" (base-rate-relative; prior={_base:.0%})" if base_rate_relative and _base is not None else "")
                 )
             if mdd > max_drawdown:
                 reasons.append(
