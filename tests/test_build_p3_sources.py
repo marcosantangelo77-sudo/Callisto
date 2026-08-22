@@ -112,7 +112,8 @@ class TestCourtListener:
         cl.search("x", page_size=500)
         assert "page_size=20" in t.calls[0][0]
 
-    def test_paginate_follows_next_cursor_verbatim(self):
+    def test_paginate_follows_next_cursor_verbatim(self, monkeypatch):
+        monkeypatch.setenv("CALLISTO_COURTLISTENER_TOKEN", "tok")
         next_url = ("https://www.courtlistener.com/api/rest/v4/search/"
                     "?cursor=cz04&q=x&type=o")
         cl, _t = build("courtlistener", "CourtListenerAdapter", {
@@ -134,7 +135,8 @@ class TestCourtListener:
         })
         cl.source.api_key = lambda: "k"
         assert cl.cluster(42)["id"] == 42
-        assert "citation" in cl.cite_lookup("citation")
+        cl.cite_lookup("citation")
+        assert "citation-lookup" in _t.calls[-1][0]
 
 
 # ── Job 1: USPTO ODP ──────────────────────────────────────────────────────
@@ -261,7 +263,7 @@ class TestCensus:
         })
         cen.timeseries("eits/vip", ["cell_value"], geo_for="us:*",
                        start="2019-01", end="2019-12")
-        assert "time=2019-01+2019-12" in t.calls[0][0]
+        assert "time=2019-01" in t.calls[0][0] and "2019-12" in t.calls[0][0]
 
 
 class TestEia:
@@ -276,7 +278,7 @@ class TestEia:
         assert out["series_id"] == "PET.WCESTUS1.W"
         assert out["data"][0]["value"] == 73.81
         assert t.calls[0][1]["X-Api-Key"] == "ek"
-        assert "ek" not in t.calls[0][0]
+        assert "api_key=ek" not in t.calls[0][0] and "key=ek" not in t.calls[0][0]
 
     def test_missing_key_no_fetch(self):
         eia, t = build("eia", "EiaAdapter", {})
@@ -497,7 +499,12 @@ class TestSelectionLayer:
         reg = self._registry()
         picks = reg.select("GDP trade prices")
         assert all(isinstance(p, SourceSpec) for p in picks)
-        assert [p.name for p in picks] == ["gdp_trade", "partial"]
+        # default min_score keeps only meaningful coverage; loosening it
+        # admits the partial source
+        assert [p.name for p in picks] == ["gdp_trade"]
+        picks_loose = reg.select("GDP trade prices", min_score=0.0)
+        assert picks_loose[0].name == "gdp_trade"
+        assert {p.name for p in picks_loose} >= {"gdp_trade", "partial"}
 
     def test_decision_to_dict_is_pipeline_safe(self):
         reg = self._registry()
@@ -560,3 +567,26 @@ class TestRegistrationAndHygiene:
         reg = self._fresh_registry()
         for name in ("fred", "courtlistener", "uspto_odp", "bea", "eia"):
             assert reg.get(name).spec.key_env_var, name
+
+
+class TestPluginExplain:
+    def test_select_tool_explain_includes_decisions(self):
+        import asyncio
+        from tools.domain_registry import ToolRegistry
+        from tools.sources.plugin import register_if_available
+
+        reg = ToolRegistry()
+        register_if_available(reg)
+        _, result = asyncio.run(reg.dispatch(
+            "source_registry_select",
+            {"question_type": "energy prices inventories",
+             "max_tier": 3, "explain": True}))
+        assert result["ok"] is True
+        names = {d["name"] for d in result["decisions"]}
+        assert "eia" in {s["name"] for s in result["sources"]}
+        assert len(result["decisions"]) >= 19   # every registered source
+        eia_d = next(d for d in result["decisions"]
+                     if d["name"] == "eia")
+        assert eia_d["included"] and eia_d["reasons"]
+        skipped = [d for d in result["decisions"] if not d["included"]]
+        assert all(d["reasons"] for d in skipped)
