@@ -9,7 +9,6 @@ import json
 import logging
 import os
 import re
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
