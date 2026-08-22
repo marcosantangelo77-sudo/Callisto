@@ -1095,6 +1095,89 @@ class ProviderRouter:
             (routing.get("health_checks") or {}).get("enabled", True)
         )
 
+        # ── W2: empirical model routing ──
+        # Measured per-(role, model) scores reorder the candidate list BEFORE
+        # the configured order applies; with no measurements the policy
+        # returns basis="configured" and behaviour is byte-identical to the
+        # configured tier list. Nothing gets worse before measurements exist.
+        emp = routing.get("empirical_routing") or {}
+        self.empirical_routing_enabled = bool(emp.get("enabled", False))
+        self.empirical_cost_weight = float(emp.get("cost_weight", 0.5))
+        self.empirical_usd_per_brier_point = float(
+            emp.get("usd_per_brier_point", 5.0))
+        self._score_store = None
+        self._routing_policy = None
+
+    @property
+    def score_store(self):
+        """Lazy ModelScoreStore so importing tools.routing stays off the hot
+        construction path and tests can inject a tmp-path store."""
+        if self._score_store is None:
+            from tools.routing.scores import ModelScoreStore
+            self._score_store = ModelScoreStore()
+        return self._score_store
+
+    @score_store.setter
+    def score_store(self, store) -> None:
+        self._score_store = store
+
+    def _candidates_as_models(self, names: list[str]) -> list:
+        from tools.routing.policy import CandidateModel
+        out = []
+        for rank, n in enumerate(names):
+            ep = self.endpoints.get(n)
+            if ep is None:
+                continue
+            out.append(CandidateModel(
+                name=ep.model or n,
+                tier=n,
+                cost_per_1k_input=ep.cost_per_1k_input,
+                cost_per_1k_output=ep.cost_per_1k_output,
+                config_rank=rank,
+            ))
+        return out
+
+    def route_order(self, task_class: str,
+                    candidate_names: list[str],
+                    role: Optional[str] = None) -> tuple[list[str], dict]:
+        """Apply the empirical policy to one candidate list.
+
+        Returns (reordered_names, honesty_metadata). With empirical routing
+        disabled or zero measurements anywhere for this role, returns
+        (candidate_names unchanged, {"basis": "configured"}) — exact
+        degradation to today's configured behaviour.
+        """
+        meta: dict = {"basis": "configured", "role": role or task_class}
+        if not self.empirical_routing_enabled or len(candidate_names) < 2:
+            return candidate_names, meta
+        try:
+            from tools.routing.policy import ThompsonRoutingPolicy
+            if self._routing_policy is None:
+                self._routing_policy = ThompsonRoutingPolicy(
+                    store=self.score_store,
+                    cost_weight=self.empirical_cost_weight,
+                    usd_per_brier_point=self.empirical_usd_per_brier_point)
+            cands = self._candidates_as_models(candidate_names)
+            if not cands:
+                return candidate_names, meta
+            decision = self._routing_policy.decide(role or task_class, cands)
+        except Exception as e:  # never let measurement break a live call
+            logger.warning(f"Empirical routing failed ({e}) — using config order")
+            return candidate_names, {**meta, "error": str(e)}
+        meta.update({
+            "basis": decision.basis,
+            "chosen_model": decision.model,
+            "sampled_effective_loss": decision.sampled_effective_loss,
+            "scores": decision.scores_used,
+        })
+        if decision.tier in candidate_names:
+            # Chosen model first; the rest keep their failover order so a
+            # dead winner still degrades exactly as before.
+            ordered = [decision.tier] + [n for n in candidate_names
+                                         if n != decision.tier]
+            return ordered, meta
+        return candidate_names, meta
+
     # ── vocabulary ──
 
     def canonical_task_class(self, task_class: str) -> str:
@@ -1296,18 +1379,29 @@ class ProviderRouter:
         max_tokens: Optional[int] = None,
         timeout: float = 300.0,
         allow_budget_exceed: bool = False,
+        role: Optional[str] = None,
     ) -> dict:
         """One routed completion, with failover across the tier pool,
         per-endpoint concurrency limiting, and cost accounting.
 
-        Returns {"content", "parsed_json", "model", "tier", "task_class"}.
+        `role` (W2): when set AND empirical routing is enabled with measured
+        scores, the measured per-(role, model) record reorders the candidate
+        list. The returned dict carries "routing_basis" so every caller can
+        see whether this decision was measured or merely configured.
+
+        Returns {"content", "parsed_json", "model", "tier", "task_class",
+                 "routing_basis"}.
         Raises only when EVERY candidate endpoint failed (or none can serve
         the requested capability) — a dead endpoint degrades, never crashes.
         """
         msgs = self.build_messages(messages, system_context)
         errors: list[str] = []
 
-        for name in self.candidates_for(task_class, schema=schema):
+        base_candidates = self.candidates_for(task_class, schema=schema)
+        ordered, routing_meta = self.route_order(
+            task_class, base_candidates, role=role)
+
+        for name in ordered:
             endpoint = self.endpoints[name]
             state = self.states[name]
 
@@ -1356,6 +1450,7 @@ class ProviderRouter:
                     "model": endpoint.model,
                     "tier": name,
                     "task_class": task_class,
+                    "routing_basis": routing_meta.get("basis", "configured"),
                 }
             except Exception as e:
                 state.record_failure()
