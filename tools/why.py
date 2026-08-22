@@ -308,10 +308,13 @@ class WhyExplanation:
                 lines.append(f"  - {src}{r.reason}{cov}")
             lines.append("")
 
-        if self.steps:
+        if self.proposed > 0:
             lines.append("SCORE WALK")
-            lines.append(f"  start {self.steps[0].before:.2f} "
+            lines.append(f"  start {self.proposed:.2f} "
                          "(best leaf confidence)")
+            if not self.steps:
+                lines.append("  =   unchanged  (proposal already sat at or "
+                             "below every binding ceiling)")
             for s in self.steps:
                 delta = abs(s.before - s.after)
                 if delta > 1e-9:
@@ -403,7 +406,7 @@ def explain_result(result, ledger=None,
 
     # ── ceilings ──
     ceilings: list[CeilingWhy] = []
-    src_cap = MAX_CONFIDANCE_SRC_CAP = MAX_CONFIDENCE_BY_SOURCE.get(
+    src_cap = MAX_CONFIDENCE_BY_SOURCE.get(
         best_class_value, MAX_CONFIDENCE_NO_TOOL)
     ceilings.append(CeilingWhy(
         kind="source_class", value=src_cap,
@@ -497,15 +500,18 @@ def explain_result(result, ledger=None,
 
     # ── binding ceiling + the short answer ──
     numeric = [c.value for c in ceilings if c.value is not None]
-    binding_kind = ""
     if numeric:
         min_cap = min(numeric)
-        # Every ceiling sitting exactly at the effective minimum is binding.
+        # Every ceiling sitting exactly at the effective minimum binds.
         for c in ceilings:
             if c.value == min_cap:
                 c.binding = True
-                if not binding_kind:
-                    binding_kind = c.kind
+        # The inheritance rule with too-few resolutions is a STRUCTURAL cap
+        # ("SPECULATIVE forever"), binding even when a lower numeric cap
+        # happens to sit beneath it.
+        n_res = len(list(descendant_resolutions or []))
+        if n_res < MIN_RESOLVED_FOR_LIFT:
+            next(c for c in ceilings if c.kind == "inheritance").binding = True
 
     largest = _largest_constraint(steps, ceilings, veto_text,
                                   total_penalty, result, independence)
@@ -639,7 +645,7 @@ def explain_stored(payload: dict) -> WhyExplanation:
             independent_keys=list(ind.get("independent_keys", [])),
             n_independent=int(ind.get("n_independent", 0)),
             collapses=list(ind.get("collapses", [])))
-    return WhyExplanation(
+    _expl = WhyExplanation(
         root_query=payload.get("root_query", ""),
         sealed=bool(payload.get("sealed")),
         refusal_reason=payload.get("refusal_reason", ""),
@@ -653,9 +659,12 @@ def explain_stored(payload: dict) -> WhyExplanation:
         independence=independence,
         rejected=[RejectedWhy(**r)
                   for r in payload.get("rejected_at_ingestion", [])],
-        steps=[StepWhy(**s) for s in payload.get("score_walk", [])],
+        steps=[StepWhy(**{k: v for k, v in s.items()
+                         if k in StepWhy.__dataclass_fields__})
+               for s in payload.get("score_walk", [])],
         largest_constraint=payload.get("largest_constraint", ""),
     )
+    expl = _expl
     if not expl.largest_constraint:
         # Older payloads may lack the short answer; regenerate it from
         # whatever sections survived storage.
