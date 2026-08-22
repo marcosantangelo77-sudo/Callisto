@@ -68,6 +68,7 @@ class CourtListenerAdapter:
                order_by: str = "") -> dict:
         """One search page. search_type: o opinions, r dockets+docs,
         d dockets, p judges, oa oral arguments."""
+        self._require_key()  # fail before fetching, never mid-request
         params = {
             "q": query,
             "type": search_type,
@@ -98,13 +99,16 @@ class CourtListenerAdapter:
         return results
 
     def cluster(self, cluster_id: int) -> dict:
+        self._require_key()
         url = self.source.build_url(f"/clusters/{int(cluster_id)}/")
         return self.source.get_json(url)[0]
 
     def opinion(self, opinion_id: int) -> dict:
+        self._require_key()
         url = self.source.build_url(f"/opinions/{int(opinion_id)}/")
         return self.source.get_json(url)[0]
 
     def cite_lookup(self, citation: str) -> dict:
+        self._require_key()
         url = self.source.build_url("/citation-lookup/", {"citation": citation})
         return self.source.get_json(url)[0]
