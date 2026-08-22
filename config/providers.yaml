@@ -102,6 +102,22 @@ routing:
   health_checks:
     enabled: true
 
+  # ── W2: EMPIRICAL MODEL ROUTING ──────────────────────────────────────────
+  # When enabled, ProviderRouter.complete(role=...) consults the measured
+  # per-(role, model) score store (tools/routing/, fed by tools/retrodiction
+  # runs) and reorders the candidate tier list: Thompson sampling over each
+  # model's Brier record, with a cost penalty so a model that scores 2%
+  # better at 50x the price usually loses the draw. Local endpoints are free
+  # at the margin, so exploring them is nearly costless.
+  #
+  # OFF by default: with no measurements, or with this disabled, routing is
+  # byte-identical to the configured task_classes order. Nothing gets worse
+  # before measurements exist.
+  empirical_routing:
+    enabled: false          # flip on once retrodiction runs have scored models
+    cost_weight: 0.5        # 0 = pure quality; 1 = cost dominates
+    usd_per_brier_point: 5.0  # $ paid per 1.0 mean-Brier improvement = break-even
+
 notes: >-
   Plug-and-play contract: today this file describes exactly one 5060 Ti +
   a small grind server + an env-backed frontier endpoint, and degrades to
