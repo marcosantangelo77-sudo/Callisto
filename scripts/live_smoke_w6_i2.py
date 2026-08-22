@@ -8,6 +8,12 @@ QUERY tested is exactly what the planner authored.
 SEC and ClinicalTrials.gov are deliberately absent: both 403 this machine
 after earlier live testing (MORNING_REPORT, environmental blocks).
 
+STATUS 2026-08-22: GDELT throttling is IP-sticky — after a handful of
+smoke calls it returns the "limit requests to one every 5 seconds" text
+for 1h+ regardless of pacing. Earlier the SAME planner-authored query
+returned 18 artlist articles and a real timelinevol series, so the plan
+path is proven; expect [gdelt] FAILED until the block lifts.
+
 Usage: python3 scripts/live_smoke_w6_i2.py
 """
 
