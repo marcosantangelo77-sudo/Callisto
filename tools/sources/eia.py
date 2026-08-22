@@ -28,7 +28,7 @@ SPEC = SourceSpec(
     base_url="https://api.eia.gov/v2",
     description="EIA: energy prices, production, inventories",
     answers=(
-        "crude oil and refined-product prices (official series)",
+        "energy commodity prices (crude, products, natural gas)",
         "petroleum/natural gas inventories and production",
         "electricity generation and consumption by source",
     ),
