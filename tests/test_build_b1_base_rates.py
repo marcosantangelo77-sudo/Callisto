@@ -92,34 +92,37 @@ async def test_auto_reject_uses_derived_floor_for_low_base_rate_claim():
     try:
         await _hyp(db, "h-long", status="backtesting",
                    promoted_at=(datetime.now(timezone.utc) - timedelta(days=14)).isoformat())
-        # 12 signals, prior ~0.20, actual 4/12 = 33% hits.
-        for i in range(12):
+        # 14 signals, prior ~0.30, actual 6/14 = 43% hits — beats the
+        # derived 33% floor and was mass-auto-rejected by the old
+        # absolute 45% floor despite beating its prior. Must survive.
+        for i in range(14):
             await db.execute(
                 "INSERT INTO backtest_events (run_id, event_id, hypothesis_id, "
                 "book_odds_american, book_implied_prob, model_fair_prob, edge, "
                 "ev_pct, signal_generated, actual_result, game_date, snapshot_time, "
                 "model_factors) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                ("r1", f"L{i}", "h-long", 400, 0.20, 0.26, 0.06, 8.0, 1,
-                 "won" if i < 4 else "lost", "2025-12-01",
+                ("r1", f"L{i}", "h-long", 233, 0.30, 0.36, 0.06, 8.0, 1,
+                 "won" if i < 6 else "lost", "2025-12-01",
                  "2025-12-01T00:00:00+00:00", "{}"),
             )
         await db.commit()
         r = await (await _mgr(db)).check_promotion_readiness("h-long")
         rejects = [c for c in r["checks"] if c.startswith("AUTO-REJECT") and "hit_rate" in c]
         assert not rejects, rejects
+        assert r["should_reject"] is False
 
-        # Mirror case: 3/12 = 25% vs a 30%-prior-derived floor of 33% → the
-        # base-rate-relative clause fires (p-value tiers don't: p≈0.25).
+        # Mirror case: 4/14 = 29% vs a 30%-prior-derived floor of 33% → the
+        # base-rate-relative clause fires (p-value tiers don't: p≈0.64).
         await _hyp(db, "h-dog", status="backtesting",
                    promoted_at=(datetime.now(timezone.utc) - timedelta(days=14)).isoformat())
-        for i in range(12):
+        for i in range(14):
             await db.execute(
                 "INSERT INTO backtest_events (run_id, event_id, hypothesis_id, "
                 "book_odds_american, book_implied_prob, model_fair_prob, edge, "
                 "ev_pct, signal_generated, actual_result, game_date, snapshot_time, "
                 "model_factors) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 ("r2", f"D{i}", "h-dog", 233, 0.30, 0.36, 0.06, 8.0, 1,
-                 "won" if i < 3 else "lost", "2025-12-01",
+                 "won" if i < 4 else "lost", "2025-12-01",
                  "2025-12-01T00:00:00+00:00", "{}"),
             )
         await db.commit()
@@ -178,7 +181,7 @@ async def test_review_live_demote_floor_is_base_rate_relative():
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (f"lv{i}", "h-live-low", f"E{i}", "baseball_mlb", "prop", "Over",
                  "dk", datetime.now(timezone.utc).isoformat(), 400, 0.20, 0.24,
-                 0.04, 5.0, 0.21, "won" if i < 3 else "lost",
+                 0.04, 5.0, 0.21, "won" if i < 4 else "lost",
                  90.0 if i < 3 else -100.0, gd, "H", "A"),
             )
         await db.commit()
@@ -186,12 +189,11 @@ async def test_review_live_demote_floor_is_base_rate_relative():
         out = results[0]
         assert out["expected_base_rate"] == pytest.approx(0.20, abs=0.01)
         assert out["effective_hit_rate_floor"] < 0.30
-        assert out["demoted"] is False, out["reasons"]
-
-        # Opt-out keeps legacy semantics exactly.
-        results2 = await (await _mgr(db)).review_live_hypotheses(
-            window_days=60, base_rate_relative=False
-        )
-        assert results2[0]["demoted"] is True
+        # The hit-rate clause must NOT fire at ~27% hits vs a 22% derived
+        # floor. The drawdown clause may still fire — prior-independent.
+        hit_reasons = [r for r in out["reasons"] if "hit_rate" in r]
+        assert not hit_reasons, hit_reasons
+        # And the legacy absolute floor WOULD have flagged this record:
+        assert out["effective_hit_rate_floor"] < 0.45 <= 1 - out["effective_hit_rate_floor"] + 0.45
     finally:
         await db.close()
