@@ -78,3 +78,37 @@ These are about how the agents behaved, and they generalise.
 4. **Live API testing is a shared resource.** One agent's verification burned
    the SEC rate budget for everyone. Every source adapter now has cached
    fixtures and a no-socket guard that fails if a test opens a connection.
+
+---
+
+## THE MOST IMPORTANT FINDING — from actually running it
+
+Everything above was built and merged; **1,600 tests pass**. Then I drove the
+real source registry with real questions instead of test vocabulary:
+
+```
+HIT   "scholarly works"      -> openalex
+HIT   "papers"               -> openalex
+HIT   "unemployment rate"    -> fred
+MISS  "economic time series" -> []    <- fred's own description says "macro time series"
+MISS  "clinical trials"      -> []    <- the clinicaltrials adapter exists
+MISS  "scholarly literature about semiconductor supply chains" -> []
+```
+
+`SourceRegistry.select()` is brittle word-overlap. **Adding context words makes
+it worse**, and the phrase "clinical trials" fails to find the ClinicalTrials
+adapter. A real question selects no sources at all, so the pipeline would fetch
+nothing and correctly refuse to seal — a silent dead end that looks like
+epistemic caution.
+
+**No unit test caught this**, because every adapter's tests use that adapter's
+own vocabulary. It took one live run with ordinary phrasing.
+
+This is the argument for testing over building, made concrete. Eleven components
+were built, 1,600 tests pass, and the system could not have answered a single
+real question because of one brittle matcher. The failing cases above are handed
+to the instance already working the selection layer.
+
+**Related open finding (P1, verified):** generic fetch covers only 4 of 8
+sources — fred, bls, treasury and wikidata need query authoring. P1 skipped them
+rather than faking coverage, which was the right call.
