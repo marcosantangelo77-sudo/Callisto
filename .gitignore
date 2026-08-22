@@ -39,3 +39,7 @@ audit_output.txt
 models/*.joblib
 models/*.json
 models/*.drift.json
+
+# Quarantined to attic/ (P4). Local checkout may persist on disk;
+# never re-add it as an embedded repo. See attic/hermes-function-calling.README.md
+hermes-function-calling/
