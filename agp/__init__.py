@@ -5,8 +5,10 @@ Enums, dataclasses, and session lifecycle for the AGP 7-step research methodolog
 """
 
 import hashlib
+import hmac
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -26,6 +28,38 @@ logger = logging.getLogger("callisto.agp")
 # Sessions with this as their conclusion MUST NOT seal — they represent
 # garbage synthesis that would otherwise write a 0.30 SPECULATIVE row to DB.
 EMPTY_SYNTHESIS_MARKER = "No synthesis produced."
+
+
+# ── Seal keying ──────────────────────────────────────────────────────────
+# An unkeyed SHA-256 seal is not a seal — anyone with DB write access can
+# recompute it over tampered bytes (verify_seal is public code). A keyed
+# HMAC makes forgery require the key, not just the repo.
+#
+#   CALLISTO_SEAL_KEY  — hex-encoded secret; when set, seals are HMAC-SHA256.
+#   When unset, seals fall back to unkeyed SHA-256 for backward compatibility
+#   with existing sealed sessions (legacy seals still verify; new seals are
+#   unkeyed and remain forgeable — set the key to close that hole).
+#
+# Key rotation: verify tries the current key first, then the legacy unkeyed
+# digest, then any key listed in CALLISTO_SEAL_KEY_OLD (comma-separated hex).
+def _seal_keys() -> list[bytes]:
+    keys: list[bytes] = []
+    current = os.getenv("CALLISTO_SEAL_KEY", "").strip()
+    if current:
+        try:
+            keys.append(bytes.fromhex(current))
+        except ValueError:
+            logging.getLogger("callisto.agp").error(
+                "CALLISTO_SEAL_KEY is not valid hex — falling back to unkeyed seal"
+            )
+    for old in os.getenv("CALLISTO_SEAL_KEY_OLD", "").split(","):
+        old = old.strip()
+        if old:
+            try:
+                keys.append(bytes.fromhex(old))
+            except ValueError:
+                pass
+    return keys
 
 
 class Domain(str, Enum):
@@ -181,6 +215,19 @@ class SessionSummary:
         }
 
 
+def _seal_digest(payload: str) -> str:
+    """Compute the seal digest over a canonical payload.
+
+    HMAC-SHA256 with CALLISTO_SEAL_KEY when set (forgery now requires the
+    key); unkeyed SHA-256 fallback for backward compatibility with legacy
+    sealed sessions when no key is configured.
+    """
+    keys = _seal_keys()
+    if keys:
+        return hmac.new(keys[0], payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 class AGPSession:
     """7-step AGP session lifecycle with strict sequential advancement."""
 
@@ -205,6 +252,14 @@ class AGPSession:
         # they were UNVERIFIED. If this ever exceeds len(self.evidence) at seal
         # time, the session is mostly noise and seal() refuses.
         self.filtered_evidence_count: int = 0
+
+        # Independent seal reviewer (mechanism 4 of the earned-confidence
+        # design): a callable(session, summary) → Optional[str]. Non-empty /
+        # truthy return = veto reason; the seal is refused. This is the hook
+        # that lets a component which did NOT write the conclusion (the
+        # Sentinel) block a seal on "conclusion asserts X, evidence contains
+        # no X". None/absent = legacy behavior, nothing changes.
+        self.seal_veto = None
 
         self._sealed: bool = False
 
@@ -305,6 +360,9 @@ class AGPSession:
           - conclusion is empty or == EMPTY_SYNTHESIS_MARKER
           - len(evidence) == 0
           - filtered_evidence_count > len(evidence)  (mostly-rejected session)
+          - self.seal_veto(session, summary) returns a truthy reason — the
+            independent-reviewer hook (e.g. Sentinel fed conclusion +
+            evidence). Reviewer exceptions FAIL CLOSED (refuse).
 
         Raises AGPSealRefused in those cases instead of sealing a 0.30
         SPECULATIVE row into the DB.
@@ -349,9 +407,29 @@ class AGPSession:
                 f"filtered ({self.filtered_evidence_count}) > kept ({len(self.evidence)})"
             )
 
+        # ── Independent reviewer veto (fails closed) ──
+        if self.seal_veto is not None:
+            try:
+                reason = self.seal_veto(self, self.summary)
+            except Exception as e:
+                reason = f"reviewer crashed: {type(e).__name__}: {e}"
+                logger.error(
+                    "AGP seal veto reviewer raised for session %s — failing closed",
+                    self.session_id,
+                )
+            if reason:
+                logger.warning(
+                    "AGP seal refused for session %s by independent review: %s",
+                    self.session_id, reason,
+                )
+                raise AGPSealRefused(
+                    f"Session {self.session_id}: refusing to seal — "
+                    f"independent review veto: {reason}"
+                )
+
         self.sealed_at = datetime.now(timezone.utc).isoformat()
         payload = _canonical_payload(self.to_dict())
-        self.seal_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        self.seal_hash = _seal_digest(payload)
         self._sealed = True
         return self.seal_hash
 
@@ -378,8 +456,15 @@ class AGPSession:
             return False
 
         payload = _canonical_payload(data)
-        recomputed = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        return recomputed == stored_hash
+        # Accept: current key (or unkeyed fallback), then legacy unkeyed
+        # digest (pre-keying seals), then any rotation keys. Constant-time
+        # comparisons throughout.
+        candidates = [_seal_digest(payload), hashlib.sha256(payload.encode("utf-8")).hexdigest()]
+        for key in _seal_keys():
+            candidates.append(
+                hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+            )
+        return any(hmac.compare_digest(c, stored_hash) for c in candidates)
 
 
 def _canonical_payload(data: dict) -> str:

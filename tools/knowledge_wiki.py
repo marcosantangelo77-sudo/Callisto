@@ -116,6 +116,40 @@ MAX_ARTICLE_LENGTH = 4000       # Characters — keep articles focused
 STALE_THRESHOLD_HOURS = 72      # Flag articles not updated in 3 days
 
 
+# ── Article confidence: min-of-sources, never the mean ───────────────────
+#
+# Averaging identical uncorroborated sources manufactures corroboration
+# (instance4 finding: two 0.75 SECONDARY items averaged into a CORROBORATED
+# article). An article is a retrieval aid, not evidence — it must never be
+# stronger than the weakest thing that fed it.
+
+def _article_confidence(sources: list[dict]) -> float:
+    """MIN of source confidences (round to 3dp like the writers do)."""
+    if not sources:
+        return 0.5
+    return round(min(float(s.get("confidence", 0.5)) for s in sources), 3)
+
+
+def _merged_article_confidence(*, existing_confidence: float, compile_count: int,
+                               new_sources: list[dict]) -> float:
+    """Confidence after merging new sources into an existing article.
+
+    The historical weighted average is computed for continuity, but the
+    result is clamped to the weakest current input: min(existing, new-min).
+    New garbage pulls an article down promptly instead of glacially; new
+    strong sources cannot lift it above what is already there plus their own
+    weakness.
+    """
+    if not new_sources:
+        return round(float(existing_confidence), 3)
+    old_weight = max(int(compile_count), 1)
+    new_conf = sum(float(s.get("confidence", 0.5)) for s in new_sources) / len(new_sources)
+    weighted = (float(existing_confidence) * old_weight + new_conf) / (old_weight + 1)
+    floor_of_inputs = min(float(existing_confidence),
+                          min(float(s.get("confidence", 0.5)) for s in new_sources))
+    return round(min(weighted, floor_of_inputs), 3)
+
+
 class KnowledgeWiki:
     """LLM-compiled persistent knowledge base."""
 
@@ -192,7 +226,20 @@ class KnowledgeWiki:
         return stats
 
     async def _get_uncompiled_sources(self, db: aiosqlite.Connection) -> list[dict]:
-        """Get recent sessions and evidence not yet in any wiki article."""
+        """Get recent sessions and evidence not yet in any wiki article.
+
+        Epistemics (instance4 mechanism 3): only seal-verified bytes are
+        admitted as sessions. A row with a seal_hash that fails
+        AGPSession.verify_seal is REJECTED (tampered or corrupt). A row with
+        seal_hash NULL (pre-keying legacy) is admitted but marked
+        provenance_class=INFERRED with confidence capped at the INFERRED
+        ceiling — legacy content may inform compilation, never inflate it.
+        """
+        from agp import AGPSession
+        from agp.thresholds import MAX_CONFIDENCE_BY_SOURCE
+
+        inferred_cap = MAX_CONFIDENCE_BY_SOURCE["INFERRED"]
+
         # Get the latest compile timestamp
         cursor = await db.execute(
             "SELECT MAX(compiled_at) FROM wiki_compile_log"
@@ -202,23 +249,46 @@ class KnowledgeWiki:
 
         sources = []
 
-        # Recent AGP sessions with conclusions
+        # Recent AGP sessions with conclusions — seal-gated
         cursor = await db.execute(
-            "SELECT session_id, query, domain, conclusion, confidence_score, sealed_at "
+            "SELECT session_id, query, domain, conclusion, confidence_score, "
+            "sealed_at, full_session, seal_hash "
             "FROM sessions WHERE sealed_at > ? AND conclusion IS NOT NULL "
             "ORDER BY sealed_at DESC LIMIT ?",
             (last_compile, MAX_SOURCES_PER_COMPILE),
         )
+        rejected = 0
         for row in await cursor.fetchall():
+            (sid, query, domain, conclusion, conf, sealed_at,
+             full_session_json, seal_hash) = row
+            if seal_hash:
+                try:
+                    stored = json.loads(full_session_json) if full_session_json else {}
+                except (TypeError, ValueError):
+                    stored = {}
+                stored.setdefault("seal_hash", seal_hash)
+                if not AGPSession.verify_seal(stored):
+                    rejected += 1
+                    continue  # seal present but fails → tampered/corrupt
+                provenance_class = None  # seal-verified: keep stored confidence
+            else:
+                provenance_class = "INFERRED"  # legacy unsealed row
+            if provenance_class == "INFERRED":
+                conf = min(float(conf or 0.5), inferred_cap)
             sources.append({
                 "type": "session",
-                "id": row[0],
-                "query": row[1],
-                "domain": row[2],
-                "content": row[3],
-                "confidence": row[4] or 0.5,
-                "timestamp": row[5],
+                "id": sid,
+                "query": query,
+                "domain": domain,
+                "content": conclusion,
+                "confidence": conf or 0.5,
+                "provenance_class": provenance_class,
+                "timestamp": sealed_at,
             })
+        if rejected:
+            logger.warning(
+                f"Wiki compile: rejected {rejected} session(s) with failing seals"
+            )
 
         # Recent high-confidence evidence entries
         cursor = await db.execute(
@@ -372,7 +442,8 @@ class KnowledgeWiki:
         now = datetime.now(timezone.utc).isoformat()
         session_ids = [s["id"] for s in sources if s["type"] == "session"]
         entry_ids = [s["id"] for s in sources if s["type"] in ("evidence", "learning")]
-        avg_confidence = sum(s["confidence"] for s in sources) / len(sources)
+        # Min-of-sources: an article is only as strong as its weakest input.
+        avg_confidence = _article_confidence(sources)
         domain = self._best_domain(sources)
         content_hash = hashlib.md5(compiled["content"].encode()).hexdigest()[:12]
 
@@ -459,10 +530,14 @@ class KnowledgeWiki:
             [s["id"] for s in new_sources if s["type"] in ("evidence", "learning")]
         ))
 
-        # Weighted confidence: existing weight = compile_count, new = 1
-        old_weight = existing["compile_count"]
-        new_conf = sum(s["confidence"] for s in new_sources) / len(new_sources)
-        merged_conf = (existing["confidence"] * old_weight + new_conf) / (old_weight + 1)
+        # Weighted confidence: existing weight = compile_count, new = 1 —
+        # then clamped to the weakest current input (min-of-sources). New
+        # garbage demotes promptly; nothing can exceed its weakest source.
+        merged_conf = _merged_article_confidence(
+            existing_confidence=existing["confidence"],
+            compile_count=existing["compile_count"],
+            new_sources=new_sources,
+        )
 
         content_hash = hashlib.md5(compiled["content"].encode()).hexdigest()[:12]
 
