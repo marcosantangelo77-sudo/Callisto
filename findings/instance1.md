@@ -75,3 +75,48 @@ Falsifier: trace showing wait_for timeout reaches line 459.
 For: me
 
 ---
+## WORK UNIT 2 — orchestrator.py confidence pipeline (read 757-1896 + helpers)
+
+## [VERIFIED] orchestrator.py:731-742 — ROADMAP C1's `"http://" in text` citation check is still the live gate for SECONDARY tier
+Blast radius: HIGH (integrity — self-reported grounding)
+Evidence: `_response_cites_urls` returns True iff "http://" or "https://" appears
+anywhere in the response text (:742). `_step_escalate_to_claude` uses it at :1762 to
+choose SECONDARY (0.75 ceiling) vs INFERRED (0.55) for Claude's synthesis, and the
+same flag sets `summary.confidence_score` (:1783-1786). Printing ANY URL — including
+one fabricated inside the conclusion text itself — upgrades the session's own output.
+The docstring even claims this measures being "grounded" / "web-corroborated"; it
+measures string content only. No fetch, no verification the URL resolves or supports
+the claim. Q1/Q2 disagreement confirmed against current code.
+Falsifier: show a code path that validates cited URLs (fetch/DNS/match-to-evidence)
+before :1763. There is none between parse and Evidence construction.
+For: Instance 4 (epistemics) — I do not own the fix; noting it crosses my file.
+
+## [VERIFIED] orchestrator.py:1630-1632 — non-JSON Claude response mints confidence 0.70 from thin air
+Blast radius: SILENT
+Evidence: when Claude responds but not in JSON, code takes raw text and hardcodes
+confidence=0.70, which _clamp_confidence may keep if any SECONDARY-ish evidence
+exists. ROADMAP §5 predicted this shape ("non-JSON fallbacks mint 0.70"); verified it
+is still present. The value has no evidentiary derivation.
+Falsifier: send a non-JSON response with empty evidence; observe 0.70 clamped only by
+source-class ceiling, not reduced toward DB_CONFIDENCE_FLOOR.
+For: me (could tighten), pending characterization test
+
+## [VERIFIED] orchestrator.py:1849-1861 — Manager can adjust confidence DOWN but its objections have no veto
+Blast radius: SILENT (governance theater, same class as C4)
+Evidence: `_step_manager_review` applies adjusted_confidence only if lower (:1853),
+records objections (:1857-1861), and proceeds to seal regardless of objections. An
+"approved": false response changes nothing in the control flow — the session still
+seals and stores. The Manager reviews nothing; it decorates.
+Falsifier: a parsed {"approved": false} with objections that blocks sealing — no such
+branch exists.
+For: Instance 4 (protocol design); noted here because the code lives in my file
+
+## [VERIFIED] orchestrator.py:910-939 — seal-refusal path correctly refuses to store; behaves as designed
+Blast radius: n/a — CLEAN FINDING
+Evidence: AGPSealRefused → returns stored=False/sealed=False with reason; no SPECULATIVE
+row written (:912-926). Session registry cleaned in finally (:947-952). This is correct,
+well-built code and should not change.
+Falsifier: a session dict with sealed=true and error="seal_refused".
+For: unowned (recorded as gold per mandate Q8 permission)
+
+---
