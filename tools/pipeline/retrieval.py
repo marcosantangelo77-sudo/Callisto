@@ -39,6 +39,17 @@ logger = logging.getLogger("callisto.retrieval")
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
+#: registry name -> adapter method, mirrored from engine.GENERIC_CALLS so a
+#: retriever constructed standalone still has routes. The engine passes its
+#: own dict explicitly; keep these in sync.
+_DEFAULT_GENERIC_CALLS = {
+    "openalex": ("works_search", ("term",), {"limit": 3}),
+    "federalregister": ("search", (), {"query_term": "term", "limit": 3}),
+    "clinicaltrials": ("search_studies", (), {"query_term": "term"}),
+    "gdelt": ("doc_query", ("term",)),
+}
+
+
 # Words that carry no topical weight for relevance judging or query building.
 _QUERY_STOPWORDS = {
     "what", "does", "the", "say", "about", "recent", "research", "have",
@@ -267,10 +278,10 @@ class IterativeRetriever:
 
     def retrieve(self, question, question_type: str,
                  min_independent: int) -> RetrievalTrace:
-        from tools.pipeline.engine import GENERIC_CALLS, _make_adapter, _sha
+        from tools.pipeline.engine import _make_adapter, _sha
         from tools.sources.base import RestSource, SourceError
 
-        calls = self.generic_calls or GENERIC_CALLS
+        calls = self.generic_calls or _DEFAULT_GENERIC_CALLS
         trace = RetrievalTrace(question_id=question.question_id)
 
         translated, chosen = translate_question_type(
