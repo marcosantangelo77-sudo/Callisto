@@ -227,7 +227,16 @@ class HermesMemory:
     # WRITE: Claude stores discoveries back to Hermes
     # ──────────────────────────────────────────────────
 
-    async def record_learning(self, key: str, value: str, confidence: float = 0.5, source: str = "claude") -> None:
+    async def record_learning(
+        self,
+        key: str,
+        value: str,
+        confidence: float = 0.5,
+        source: str = "claude",
+        source_class=None,
+        seal_session: dict | None = None,
+        seal_hash: str | None = None,
+    ) -> None:
         """
         Store a discovery/pattern for future calls.
 
@@ -240,6 +249,22 @@ class HermesMemory:
         SECURITY (audit C-4): value is sanitized to neutralize prompt-injection
         sentinels because every learning is later re-injected verbatim into
         Claude's prompt context.
+
+        EPISTEMICS (P4, kills the trust escalator — findings/instance4.md P3):
+        the previous upsert used ``confidence=MAX(confidence, excluded.confidence)``,
+        a one-way ratchet that let one optimistic self-report contaminate a key
+        forever and let the wiki admit unverified guesses at >= 0.5. Semantics now:
+
+          - confidence REPLACES on upsert (no ratchet) and is clamped to the
+            ceiling of the learning's PROVENANCE class (see tools/memory_epistemics.py);
+          - a claimed class above INFERRED requires a verifying seal carried in
+            ``seal_session``/``seal_hash``; unsealed or failed-seal claims are
+            capped to INFERRED (fail closed);
+          - human/audit sources may exceed their class ceiling (operator channels).
+
+        Stored-data semantics change: existing rows were written under the
+        ratchet, so migration 015_hermes_confidence_decay resets contaminated
+        rows (dry-run-first, reversible; NOT auto-run here).
         """
         try:
             key = self._sanitize_learning_key(key)
@@ -248,9 +273,22 @@ class HermesMemory:
                 confidence = float(confidence)
             except (TypeError, ValueError):
                 confidence = 0.5
-            confidence = max(0.0, min(1.0, confidence))
             if source not in ("claude", "callisto", "hermes", "agent", "human", "self_repair", "audit"):
                 source = "claude"
+            from tools.memory_epistemics import admit_learning
+            admission = admit_learning(
+                key=key,
+                confidence=confidence,
+                source=source,
+                # Trusted operator channels (human/audit) bypass ceilings in
+                # admit_learning; everyone else defaults to INFERRED until they
+                # carry provenance.
+                source_class=source_class,
+                seal_session=seal_session,
+                seal_hash=seal_hash,
+            )
+            confidence = admission.stored_confidence
+            provenance_class = admission.source_class
             # WriteCoordinator path (single-writer pattern). Skips opening yet
             # another connection just to write one row.
             try:
@@ -270,13 +308,16 @@ class HermesMemory:
                     "VALUES (?, ?, ?, ?, ?) "
                     "ON CONFLICT(key) DO UPDATE SET "
                     "value=excluded.value, occurrences=occurrences+1, "
-                    "confidence=MAX(confidence, excluded.confidence), "
+                    "confidence=excluded.confidence, "
                     "learned_at=excluded.learned_at, source=excluded.source",
                     (key, value, datetime.now(timezone.utc).isoformat(), confidence, source),
                 )
                 self._cache.clear()
                 self._cache_time.clear()
-                logger.info(f"Hermes learning recorded: {key} (confidence={confidence:.2f})")
+                logger.info(
+                    f"Hermes learning recorded: {key} (confidence={confidence:.2f}, "
+                    f"class={provenance_class}; {admission.reason})"
+                )
                 return
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute("PRAGMA busy_timeout = 60000")
@@ -286,7 +327,7 @@ class HermesMemory:
                     "VALUES (?, ?, ?, ?, ?) "
                     "ON CONFLICT(key) DO UPDATE SET "
                     "value=excluded.value, occurrences=occurrences+1, "
-                    "confidence=MAX(confidence, excluded.confidence), "
+                    "confidence=excluded.confidence, "
                     "learned_at=excluded.learned_at, source=excluded.source",
                     (key, value, datetime.now(timezone.utc).isoformat(), confidence, source),
                 )
@@ -294,7 +335,10 @@ class HermesMemory:
                 # Invalidate cache so next read picks up the new learning
                 self._cache.clear()
                 self._cache_time.clear()
-                logger.info(f"Hermes learning recorded: {key} (confidence={confidence:.2f})")
+                logger.info(
+                    f"Hermes learning recorded: {key} (confidence={confidence:.2f}, "
+                    f"class={provenance_class}; {admission.reason})"
+                )
         except Exception as e:
             logger.error(f"Failed to record learning: {e}")
 
@@ -343,15 +387,16 @@ class HermesMemory:
                     (min_confidence, limit),
                 )
                 rows = await cursor.fetchall()
+                from tools.memory_epistemics import annotate_for_reinjection
                 return [
-                    {
+                    annotate_for_reinjection({
                         "key": r[0],
                         "value": r[1],
                         "confidence": r[2],
                         "occurrences": r[3],
                         "source": r[4],
                         "learned_at": r[5],
-                    }
+                    })
                     for r in rows
                 ]
         except Exception as e:
@@ -667,20 +712,78 @@ class HermesMemory:
             return ""
 
     async def _build_learnings(self, db: aiosqlite.Connection) -> str:
-        """Discoveries Claude has made and stored back to Hermes."""
+        """Discoveries Claude has made and stored back to Hermes.
+
+        EPISTEMICS (P4):
+          1. Effective confidence DECAYS with age (memory_epistemics.decay_
+             confidence) — a learning that is not re-observed loses standing.
+             No ratchet survives into the prompt.
+          2. Trimming is DISCONFIRMING-BIASED (consistent with
+             tools/loop_quality.compact_state): when the section exceeds its
+             budget, contradicting items outrank supporting ones for
+             retention. The one disconfirming source is the most expensive
+             thing to lose; dropping it silently corrupts the conclusion.
+          3. Every emitted line carries its provenance class and confidence
+             ceiling so a reinjected INFERRED learning is never mistaken for
+             primary evidence.
+        """
         try:
             rows = await db.execute_fetchall(
-                "SELECT key, value, confidence, occurrences, learned_at "
-                "FROM hermes_learnings ORDER BY confidence DESC, occurrences DESC LIMIT 10"
+                "SELECT key, value, confidence, occurrences, learned_at, source "
+                "FROM hermes_learnings ORDER BY learned_at DESC LIMIT 60"
             )
             if not rows:
                 return ""
 
+            from tools.memory_epistemics import (
+                annotate_for_reinjection, decay_confidence, trim_learnings_for_context,
+            )
+            now = datetime.now(timezone.utc)
+            items = []
+            for r in rows:
+                key, value, conf, occ, learned_at, source = r
+                eff = decay_confidence(conf, learned_at, now)
+                item = annotate_for_reinjection({
+                    "id": key,
+                    "value": value,
+                    "confidence": conf,
+                    "effective_confidence": eff,
+                    "occurrences": occ,
+                    "learned_at": learned_at,
+                    "source": source,
+                    # Memory rows do not carry stance today; only explicitly
+                    # marked disconfirmations count (conservative — see
+                    # trim_learnings_for_context).
+                    "stance": "contradicting" if str(key).startswith("disconfirm") or "contradict" in str(key).lower() else "supporting",
+                    # Provenance tier for retention ranking: human/audit best,
+                    # everything model-produced equal.
+                    "tier": 1 if source in ("human", "audit") else 3,
+                })
+                items.append(item)
+
+            kept, dropped = trim_learnings_for_context(items, max_items=10)
+            if dropped:
+                logger.info(
+                    "learnings trimmed for context: kept %d, dropped %d "
+                    "(disconfirming-biased retention)",
+                    len(kept), len(dropped),
+                )
+
             lines = ["<memory type=\"learnings\">"]
             lines.append("Discovered patterns (from your own analysis):")
-            for r in rows:
-                key, value, conf, occ, when = r
-                lines.append(f"  [{conf:.0%} conf, {occ}x seen] {key}: {value[:120]}")
+            for it in kept:
+                cls = it["source_class"]
+                ceiling = it["confidence_ceiling"]
+                lines.append(
+                    f"  [eff {it['effective_confidence']:.0%} conf, "
+                    f"provenance {cls} (ceiling {ceiling:.0%}), "
+                    f"{it['occurrences']}x seen] "
+                    f"{it['id']}: {str(it['value'])[:120]}"
+                )
+            lines.append(
+                "NOTE: provenance class caps how strongly a learning may be "
+                "treated — an INFERRED learning is a prior guess, not evidence."
+            )
             lines.append("</memory>")
             return "\n".join(lines)
         except Exception:
