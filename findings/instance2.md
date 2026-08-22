@@ -215,3 +215,78 @@ installed on this machine). Wave-1's 39.6/45.7/46.3% baselines were measured
 somewhere it worked; on this sandbox they are not reproducible as stated. My
 subset numbers above are reproducible here: kelly 72%, sizing 100%,
 bet_executor 55%, clv_tracker 30% (46% incl. pre-existing tests).
+
+---
+
+# BUILD PASS ADDENDUM — B2 (compute sandbox + artifact store)
+
+Branch `build/sandbox-artifacts`, four commits, all pushed. New files only:
+`tools/sandbox.py`, `tools/artifacts.py`, `tools/charts.py`,
+`tools/model_registry.py`, plus `tests/test_build_b2_{sandbox,artifacts,
+charts,models}.py` (62 tests passing). No existing file touched; sports
+subset re-verified green after landing (test_agp, test_agp_seal,
+test_confidence, test_devig, test_promotion_gates: 93 passed).
+
+## What landed (DEEP_RESEARCH §3 S0–S3)
+
+- **S0 sandbox** (`run_python(code, inputs)`): `python -I` child, env
+  scrubbed to a 3-var allowlist (seal keys and API tokens cannot be read —
+  pinned by test), HOME=/tmp, RLIMIT_AS/CPU, wall-clock kill with
+  status="timeout", scratch dir destroyed unless keep_workspace. Network
+  denied at three layers: macOS sandbox-exec profile (verified: write
+  outside workspace raises Operation not permitted), Linux unshare --net,
+  in-child socket replacement (always on). Code+stdout+return+file-hashes
+  form the reproducibility payload.
+- **S1 artifact store**: sha256 content addressing under data/artifacts/,
+  tamper verification (verify_artifacts re-hashes), canonical JSON dedupe,
+  first-seen provenance wins, index rebuildable from objects, corrupt-index
+  survival. ArtifactRef.to_dict() is seal-payload-shaped for AGP.
+- **S2 charts/spreadsheets** (`tools/charts.py`): chart_spec carries series
+  + producing-code hash; matplotlib when present, deterministic dependency-
+  free SVG fallback (both tested). Workbooks: Assumptions/Data/Model/
+  Scenarios with LIVE formulas in ModelLive cells (openpyxl now in
+  requirements); explicit degraded CSV listing marked live_formulas=False
+  when openpyxl absent.
+- **S3 model registry**: append-only immutable predictions per registered
+  model, resolve against any-domain ground truth, Brier/reliability-bin
+  track record over RESOLVED predictions only; zero resolutions →
+  resolved=False (confidence is unearned until outcomes land).
+
+## HOOK NEEDED IN orchestrator.py — exact diff (B3 owns the file)
+
+In `_execute_tool` (orchestrator.py:1261), add one dispatch arm:
+
+```python
+        if name == "run_python":
+            from tools.sandbox import run_python as _sbx_run
+            result = _sbx_run(
+                arguments.get("code", ""),
+                arguments.get("inputs"),
+                wall_clock_s=int(arguments.get("wall_clock_s", 60)),
+            )
+            return result.to_dict()
+```
+
+And add to whatever tool-schema/tool-list constant feeds the model's tool
+choices (same list that advertises web_search):
+
+```python
+{"name": "run_python", "description": "Execute Python in a no-network
+ sandbox for quantitative modeling. Inputs arrive as <name>.json files;
+ print or assign `result` to return structured output.",
+ "parameters": {"code": "str (required)", "inputs": "dict of
+ json-serialisable values", "wall_clock_s": "int, default 60"}}
+```
+
+Sealing hook (recommended second diff): after each run, call
+`tools.artifacts.store_sandbox_outputs(result)` and attach the returned
+ArtifactRef dicts to the session evidence so the keyed seal covers them.
+Not wired by me — orchestrator.py is out of my ownership.
+
+## Known limitation, stated plainly
+The sandbox is defense-in-depth hardening, not a VM boundary. It closes the
+prompt-injection attack class DEEP_RESEARCH names (env-secret reading,
+exfil via network) at three independent layers, but determined local
+adversary ≠ threat model here. Container isolation if/when Docker exists is
+a drop-in upgrade to run_python's argv construction.
+
