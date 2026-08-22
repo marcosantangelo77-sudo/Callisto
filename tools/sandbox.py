@@ -162,8 +162,12 @@ def _write_inputs(workspace: Path, inputs: Optional[dict[str, Any]]) -> list[str
     epilogue must exclude from output capture."""
     skip = []
     for name, value in (inputs or {}).items():
+        # Reject rather than sanitise. Stripping to [alnum_-] is escape-safe
+        # ("../evil" -> "evil", still inside the workspace), but it renames the
+        # file silently: the caller asks for "my.data", gets "mydata.json", and
+        # its own code then fails looking for a file that was never written.
         safe = "".join(c for c in str(name) if c.isalnum() or c in "_-")
-        if not safe or safe.startswith("."):
+        if not safe or safe.startswith(".") or safe != str(name):
             raise ValueError(f"invalid input name: {name!r}")
         fname = f"{safe}.json"
         (workspace / fname).write_text(json.dumps(value), encoding="utf-8")

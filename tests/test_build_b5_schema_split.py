@@ -179,7 +179,7 @@ def test_fresh_db_has_seam_shape(tmp_path):
             "books", "markets", "game_results",                   # sports
         }
         assert expected <= tables
-    asyncio.get_event_loop().run_until_complete(_run())
+    asyncio.run(_run())
 
 
 # ─────────────────────────────────────────────

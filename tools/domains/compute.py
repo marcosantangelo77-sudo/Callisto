@@ -53,9 +53,11 @@ def _run_sandbox(name: str, arguments: dict) -> dict:
 
 
 def build_compute_plugin() -> DomainPlugin:
-    loop = asyncio.get_event_loop()
-
     async def execute(name: str, arguments: dict):
+        # Resolve the loop at CALL time, not at plugin-build time. Registration
+        # happens at import, before any loop exists, so get_event_loop() there
+        # raises once an earlier async test has closed the default loop.
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _run_sandbox, name, arguments)
 
     return DomainPlugin(
