@@ -146,6 +146,17 @@ class TestThresholdModifyGatePolicy:
         assert 0 < auto.MIN_EDGE_THRESHOLD_FLOOR < auto.MAX_EDGE_THRESHOLD_CEILING
 
 
+class TestDeferredDrainGuarded:
+    """The work-queue drain replays interpret_backtests actions when Claude
+    was unavailable — it must carry the same direction guard."""
+
+    def test_deferred_drain_path_also_guarded(self):
+        import inspect
+        src = inspect.getsource(auto.ResearchLoop._process_drained_item)
+        assert "GATE POLICY REFUSED" in src
+        assert "MIN_EDGE_THRESHOLD_FLOOR" in src
+
+
 class TestStartupMigrationGated:
     """The four startup routines that lower gates / un-reject / rewrite evidence
     must be no-ops without CALLISTO_ALLOW_THRESHOLD_MIGRATION."""

@@ -2301,11 +2301,43 @@ class ResearchLoop:
                     except Exception:
                         pass
                 modified = 0
+                refused = 0
                 for mod in parsed.get("modify", []):
                     try:
                         hid = mod.get("id")
                         new_thresh = mod.get("new_threshold")
                         if hid and new_thresh is not None and db:
+                            # GATE POLICY: same direction guard as
+                            # _phase_interpret_backtests — automated actors may
+                            # raise a gate but never lower it. This drain path
+                            # previously bypassed that guard entirely.
+                            new_thresh = max(MIN_EDGE_THRESHOLD_FLOOR,
+                                             min(MAX_EDGE_THRESHOLD_CEILING,
+                                                 float(new_thresh)))
+                            cur = await db.execute(
+                                "SELECT edge_threshold FROM hypotheses WHERE hypothesis_id = ?",
+                                (hid,),
+                            )
+                            row = await cur.fetchone()
+                            current = float(row[0]) if row and row[0] is not None else None
+                            if current is None:
+                                continue
+                            if new_thresh < current:
+                                refused += 1
+                                logger.warning(
+                                    "GATE POLICY REFUSED (deferred drain) threshold "
+                                    "LOWERING hyp=%s %s -> %s — recorded for human review",
+                                    hid, current, new_thresh,
+                                )
+                                await db.execute(
+                                    "UPDATE hypotheses SET notes = COALESCE(notes, '') || ? "
+                                    "WHERE hypothesis_id = ?",
+                                    (f"\n[cycle {self._cycles}] REFUSED deferred-drain "
+                                     f"threshold lowering {current} -> {new_thresh} "
+                                     f"(gate policy; human decision required)", hid),
+                                )
+                                await db.commit()
+                                continue
                             await db.execute(
                                 "UPDATE hypotheses SET edge_threshold = ? WHERE hypothesis_id = ?",
                                 (new_thresh, hid),
@@ -2316,7 +2348,8 @@ class ResearchLoop:
                         pass
                 if rejected or modified:
                     logger.info(
-                        f"Deferred drain interpret: rejected {rejected}, modified {modified}"
+                        f"Deferred drain interpret: rejected {rejected}, "
+                        f"raised {modified}, refused {refused}"
                     )
 
             elif work_type == "system_improvement":
