@@ -34,6 +34,7 @@ from tools.pipeline.retrieval import (  # noqa: E402
     translate_question_type,
 )
 from tools.sources.registry import SourceRegistry, SourceAdapter  # noqa: E402
+from tools.sources.base import SourceSpec  # noqa: E402
 
 
 # ── fixtures ───────────────────────────────────────────────────────────────
@@ -76,26 +77,29 @@ class _FakeSpec:
 
 
 def _registry(*specs) -> SourceRegistry:
+    """specs: (name, answers, base_url). Adapters route any method through
+    RestSource against a fixture path derived from the query."""
     reg = SourceRegistry()
-    for name, answers, url in specs:
-        spec = _FakeSpec(name, answers, url)
 
-        def make_adapter(source, _name=name):
-            class _A:
-                def __getattr__(self, item):
-                    raise AttributeError(item)
-            a = _A()
-            a.spec_name = _name
-            return a
-        from tools.sources.base import SourceSpec
-        real_spec = SourceSpec(
-            name=spec.name, base_url=url,
-            description="", answers=tuple(answers), cannot_answer=("x",),
-            tier=1, min_interval_s=0.0)
-        reg.register(SourceAdapter(spec=real_spec,
-                                   make_adapter=lambda s: type(
-                                       "Ad", (), {"source": s})()))
+    def make_adapter(source):
+        class _Ad:
+            def __getattr__(self, method_name):
+                def call(*args, **kwargs):
+                    term = next((a for a in args if isinstance(a, str)),
+                                kwargs.get("query_term", "q"))
+                    url = source.build_url(
+                        "/works", {"search": term.replace(" ", "+")})
+                    return source.get_json(url)[0]
+                return call
+        return _Ad()
+
+    for name, answers, url in specs:
+        spec = SourceSpec(
+            name=name, base_url=url, description="", answers=tuple(answers),
+            cannot_answer=("x",), tier=1, min_interval_s=0.0)
+        reg.register(SourceAdapter(spec=spec, make_adapter=make_adapter))
     return reg
+
 
 
 def _routes(bodies: dict[str, str]) -> dict[str, str]:
@@ -125,12 +129,23 @@ def _retriever(reg, transport_routes, gate=None, max_rounds=3, **kw):
         }, **kw)
 
 
+# Adapter answer clauses must overlap the question's SUBJECT for selection;
+# that is the registry contract under test.
+_ALPHA_ANSWERS = ["semiconductor supply chain resilience scholarly works"]
+_BETA_ANSWERS = ["news events about semiconductor supply chains"]
+
+
+def _alpha_reg(name="alpha", url="https://a.example",
+               answers=_ALPHA_ANSWERS):
+    return _registry((name, answers, url))
+
+
+
 # ── JOB 2: relevance gating at ingestion ───────────────────────────────────
 
 
 def test_irrelevant_hit_rejected_before_ingestion_with_reason():
-    reg = _registry(("alpha", ["scholarly work search by topic"],
-                     "https://api.openalex.org"))
+    reg = _alpha_reg()
     trace = _retriever(reg, {"/works": IRRELEVANT_BODY}).retrieve(
         _q(), "", min_independent=1)
 
@@ -143,7 +158,7 @@ def test_irrelevant_hit_rejected_before_ingestion_with_reason():
 
 
 def test_irrelevant_hit_does_not_satisfy_min_independent():
-    reg = _registry(("alpha", ["scholarly work search"], "https://a.example"))
+    reg = _alpha_reg()
     trace = _retriever(reg, {"/works": IRRELEVANT_BODY}).retrieve(
         _q(min_ind=1), "", min_independent=1)
     assert trace.independent_keys == set()
@@ -163,8 +178,8 @@ def test_gate_threshold_is_respected_not_lowered_by_caller():
 
 def test_fanout_queries_multiple_selected_sources():
     reg = _registry(
-        ("alpha", ["scholarly work search"], "https://api.openalex.org"),
-        ("beta", ["news event search"], "https://api.gdeltproject.org"))
+        ("alpha", _ALPHA_ANSWERS, "https://api.openalex.org"),
+        ("beta", _BETA_ANSWERS, "https://api.gdeltproject.org"))
     routes = {"/works": _openalex_body(), "/doc": _openalex_body()}
     trace = _retriever(reg, routes).retrieve(_q(), "", min_independent=2)
     sources_hit = {r["name"] for rnd in trace.rounds
@@ -180,8 +195,7 @@ def test_overlap_family_collapses_to_one_independent_source():
 
 
 def test_two_hits_from_one_source_do_not_meet_min_independent_2():
-    reg = _registry(("alpha", ["scholarly work search"],
-                     "https://api.openalex.org"),
+    reg = _registry(("alpha", _ALPHA_ANSWERS, "https://api.openalex.org"),
                     ("beta", ["unrelated clause entirely"], "https://b.org"))
     # Only alpha is selected AND returns relevant data → 1 independent key.
     routes = {"/works": _openalex_body()}
@@ -197,13 +211,14 @@ def test_two_hits_from_one_source_do_not_meet_min_independent_2():
 
 
 def test_sufficiency_declared_only_at_real_independence():
-    reg = _registry(("alpha", ["scholarly work search"],
-                     "https://api.openalex.org"),
-                    ("beta", ["scholarly work index"], "https://s.example"))
+    reg = _registry(("alpha", _ALPHA_ANSWERS, "https://api.openalex.org"),
+                    ("beta", _BETA_ANSWERS, "https://s.example"))
     routes = {"/works": _openalex_body()}
     trace = _retriever(reg, routes).retrieve(_q(min_ind=2), "",
                                              min_independent=2)
-    assert len(trace.independent_keys) == 1  # overlap family collapses beta
+    # alpha+beta are in one overlap family (scholarly aggregators) so they
+    # collapse to ONE independent source even though both returned hits.
+    assert len(trace.independent_keys) == 1
     assert not trace.stop_reason.startswith("sufficient")
 
 
@@ -211,9 +226,9 @@ def test_sufficiency_declared_only_at_real_independence():
 
 
 def test_empty_first_round_refines_and_retries_other_sources():
-    reg = _registry(("alpha", ["scholarly work search"],
-                     "https://api.openalex.org"),
-                    ("beta", ["government rules search"], "https://c.org"))
+    reg = _registry(("alpha", _ALPHA_ANSWERS, "https://api.openalex.org"),
+                    ("beta", ["agency rules about supply chains"],
+                     "https://c.org"))
     # Round-agnostic route: alpha always returns junk, beta always good.
     routes = {"/works": IRRELEVANT_BODY, "/doc": _openalex_body()}
     trace = _retriever(reg, routes).retrieve(_q(), "", min_independent=1)
@@ -227,8 +242,7 @@ def test_empty_first_round_refines_and_retries_other_sources():
 
 
 def test_round_budget_stops_with_reason():
-    reg = _registry(("alpha", ["scholarly work search"],
-                     "https://api.openalex.org"))
+    reg = _alpha_reg()
     trace = _retriever(reg, {"/works": IRRELEVANT_BODY}, max_rounds=2)\
         .retrieve(_q(), "", min_independent=1)
     assert trace.n_admitted == 0
