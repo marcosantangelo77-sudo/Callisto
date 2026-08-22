@@ -83,3 +83,72 @@ graph TD
 ### 1.5 Entrypoints (15) — VERIFIED via `__main__` blocks or shell launchers
 
 `api`, `monitor`, `upstream_review` (root); `tools.autonomous`, `tools.callisto_mcp_server`, `tools.local_cc_bridge`, `tools.tci_scraper` (`__main__`); `tools.claude_code`, `tools.embeddings`, `tools.health`, `tools.line_monitor`, `tools.odds_api`, `tools.searxng`, `tools.environment`, `tools` (matched in `scripts/` shells / docker-compose / bridge scripts — stem-match evidence, medium confidence for the last four).
+
+---
+
+## 2. Dead code — VERIFIED (method + full lists)
+
+Two independent passes, then reconciled:
+
+1. **vulture 2.16, min-confidence 60** over `tools/ agp/ *.py`: **439 findings** (202 unused functions, 143 unused variables, 41 unused attributes, 29 unused methods, 22 unused imports, 1 class, 1 property).
+2. **AST reference pass** over 2,096 non-test function/method defs, counting every `Name`, `Attribute`, import alias, string literal (≥3 chars, catches `getattr`/dict-dispatch), and `__all__` export across the whole repo (tests and scripts included as reference sources).
+
+AST pass reconciliation — confidence labels:
+
+| category | count | confidence | meaning |
+|---|---|---|---|
+| **DEAD** — zero references anywhere in repo | **64** | high | no name/attr/string/import alias mentions at all |
+| dead-excluded (dynamic risk) | 100 | excluded | decorated (route/fixture/handler) or inherited-class method or in `__all__` |
+| **TEST-ONLY** — referenced only from `tests/` | 11 | high | production code never calls them |
+| **OWN-TEST-ONLY** — referenced only by the test file named after their own module | 8 | high | "kept alive only by its own test" |
+| module-internal-only | ~950 | n/a | private helpers used within their own file — alive, not listed |
+| live | 904 | n/a | referenced from ≥1 production file |
+
+**Method caveats (falsifiers in §6):** string-literal matching is deliberately over-inclusive (a comment saying "unused function foo" would keep `foo` alive — comments are not parsed, only strings); decorated functions are never claimed dead because FastAPI/pytest/click discover them by decoration; `self_repair`'s config-driven `__import__` can resurrect any module at runtime.
+
+### 2.1 The 64 high-confidence dead functions (VERIFIED zero references)
+
+Grouped by subsystem — **money-path items bolded** (they are Tier-0 adjacent and dead):
+
+**Execution / orders / money**
+- `tools/bet_executor.py:219` `BetExecutor.get_daily_stakes` — a stake-limit query nobody calls
+- `tools/order_reconciler.py:164` `_american_payout`
+- `tools/order_manager.py:730` `reset_manager`
+- `tools/local_compute.py:123` `local_kelly` — a *local* Kelly implementation, dead
+- `tools/math_utils.py:41` `decimal_to_implied`
+- `tools/correlation.py:398,405,552,994` `_prob_to_decimal`, `_adjust_joint_probability`, `detect_mispriced_correlation`, `estimate_sgp_vig`
+- `tools/ev.py:53` `ev_free_bet` (imported by `orchestrator` but never called — unused import)
+
+**Data plane**
+- `tools/dk_scraper.py:1098,1142,1242` all three golf functions; `tools/fanduel_scraper.py:305` golf outrights
+- `tools/odds_api_io.py:609,622,960` `get_outrights`, `snapshot_all_sports`, `get_odds_multi`
+- `tools/odds_ws.py:212` + `tools/line_monitor.py:591` both `get_ws_status` — the WebSocket status surface is dead on both ends (INFERRED: odds_ws streaming never wired)
+- `tools/line_monitor.py:1039` `_enrich_with_mgm`; `tools/betmgm_scraper.py:453` `scrape_betmgm_fixture`
+- `tools/action_network_scraper.py:633` `get_public_betting`; `tools/prop_scraper_free.py:147,1293` `_classify_dk_nash_prop`, `close_clients`
+- `tools/data_collector.py:845` `DataCollector.collect_date_range`
+- `tools/historical_odds.py:131` `get_prop_dates`; `tools/tci_scraper.py:609` `get_tci_matchup`
+
+**Gate / models**
+- `tools/hypothesis.py:2716` `HypothesisManager._get_paper_trades_all`
+- `tools/temporal_analysis.py:97,178,281,1075` four of its public loaders
+- `tools/line_analysis.py:1339` `full_line_analysis`
+- `tools/pace_model.py:1118,1235,1403` + `tools/simulation.py:451,663,985,1362` — the two Monte Carlo engines are ~40% unreferenced internally (pace/sim integration is INFERRED half-built)
+- `tools/sgp_scanner.py:184,190` `_is_player_leg`, `_is_team_leg`
+- `tools/schema.py:1975` `get_book_tier` — **the book-tier lookup is dead**; ROADMAP says VERIFIED tier is unreachable because tiers are never assigned; here is the matching dead accessor (INFERRED: same root cause)
+
+**Epistemics / infra**
+- `tools/knowledge_wiki.py:53` `get_write_stats`
+- `tools/hermes_memory.py:301,389` `record_learnings_batch`, `get_unread_messages`
+- `tools/embeddings.py:485,517,576,742` four VectorStore ops incl. `embed_prop_outcome`
+- `tools/health.py:302,870` `ErrorTracker.is_rate_exceeded`, `SystemHealth.is_subsystem_healthy`
+- `tools/telegram.py:435` `_cmd_query_safe`; `tools/game_scheduler.py:227` `get_upcoming`
+- `tools/injury_model.py:1557` `lookup_position_impact`; `tools/dead_numbers.py:476` `get_margin_distribution`
+- `tools/db_utils.py:197` `bulk_write`; `tools/odds_api.py:39` `_redact_url` (a redaction helper, dead)
+- `inference.py:28,34,760` `_get_hermes_tools`, `_get_hermes_validator`, `OllamaInference.aping`
+- `tools/local_cc_bridge.py:215` `_kill_process_tree`
+- `tools/news_ingestion.py:520` `_dedup_key`
+- `tools/market_psychology.py:687` `optimal_hedge_time`
+
+### 2.2 vulture-only signals worth eyes (60% confidence, not AST-corroborated)
+
+439 findings total; the full list is mechanical. Notable clusters: `tools/thesis_seeds.py` seed-coverage helpers, `tools/work_queue.py:321` unused `focus_context`, 22 unused imports across `tools/` (cheap hygiene), 1 unused class. Vulture's unused-*variable* hits (143) include many ORM-ish locals — treat as noise until triaged.
