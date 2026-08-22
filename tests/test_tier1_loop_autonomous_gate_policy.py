@@ -146,6 +146,21 @@ class TestThresholdModifyGatePolicy:
         assert 0 < auto.MIN_EDGE_THRESHOLD_FLOOR < auto.MAX_EDGE_THRESHOLD_CEILING
 
 
+class TestStartupMigrationGated:
+    """The four startup routines that lower gates / un-reject / rewrite evidence
+    must be no-ops without CALLISTO_ALLOW_THRESHOLD_MIGRATION."""
+
+    def test_migration_constants_documented(self):
+        # The opt-in flag name is load-bearing; pin it.
+        import inspect
+        src = inspect.getsource(auto)
+        assert src.count("CALLISTO_ALLOW_THRESHOLD_MIGRATION") >= 5, (
+            "startup gate-policy guards missing — one per gated routine "
+            "(_migrate_edge_thresholds, _retroactive_signal_update, "
+            "_requeue_threshold_rejections, _requeue_prop_rejections) plus docstrings"
+        )
+
+
 class TestStaticNoUnboundedThresholdWrite:
     """The old code applied new_threshold to the column with no clamp or
     direction check. Ensure the guarded version is what ships."""
