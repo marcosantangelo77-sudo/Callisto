@@ -334,7 +334,7 @@ def test_engine_records_rejections_and_caps_unmet_leaf(tmp_path):
     from tools.artifacts import ArtifactStore
     pipe = ResearchPipeline(
         model=model, adversary_router=_Quiet(),
-        transport=fixture_transport({"/a?": IRRELEVANT_BODY}),
+        transport=fixture_transport({"/works?": IRRELEVANT_BODY}),
         store=ArtifactStore(root=tmp_path / "art"))
     result = asyncio.run(pipe.run(
         "What does research say about the topic?",
