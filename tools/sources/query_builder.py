@@ -533,6 +533,9 @@ def _plan_wikidata(question: str) -> PlanResult:
 _KEYWORD_PLANNERS = {
     "openalex": _plan_openalex,
     "semantic_scholar": _plan_semantic_scholar,
+    # the registry registers this adapter as 'semanticscholar'; accept both
+    # spellings so planner coverage matches registry names
+    "semanticscholar": _plan_semantic_scholar,
     "clinicaltrials": _plan_clinicaltrials,
     "federalregister": _plan_federalregister,
     "gdelt": _plan_gdelt,
