@@ -38,6 +38,7 @@ import json
 import os
 import threading
 from dataclasses import dataclass, field, asdict
+import math
 from datetime import datetime, timezone
 from typing import Callable, Iterable, Optional
 
@@ -126,9 +127,14 @@ def clamp_with_ensemble(score: float,
     s = max(0.0, min(1.0, float(score)))
     ceil_ = ensemble_ceiling(evaluations)
     if ceil_ is None or s <= ceil_:
-        return round(s, 2), ""
+        # FLOOR, not round: round(0.836, 2) == 0.84 raises the score by 0.004.
+        # Trivial in magnitude, but this function's contract is "only ever pulls
+        # DOWN", and in a system whose premise is that no automated actor can
+        # inflate confidence, an invariant broken trivially is still broken —
+        # and repeated round-trips compound it.
+        return math.floor(s * 100) / 100, ""
     return (
-        round(ceil_, 2),
+        math.floor(ceil_ * 100) / 100,
         f"ensemble disagreement: spread across {len(set(round(x, 4) for x in evaluations))} "
         f"evaluations exceeds threshold; ceiling lowered to {ceil_}",
     )
