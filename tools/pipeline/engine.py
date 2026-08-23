@@ -23,6 +23,7 @@ The pipeline can only ever lower what the model proposes.
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import hashlib
 import json
@@ -152,6 +153,27 @@ class PipelineResult:
 Transport = Callable[[str, dict], "tuple[int, str]"]
 
 
+class _FetchRecorder:
+    """Per-leaf capture of provenance writes from an off-loop retrieval.
+
+    Parallel retrieval must not mutate the shared ledger from threads. Each
+    leaf records its `record_tool_result` calls here; the caller replays
+    them into the real ledger in leaf order, so the final ledger state is
+    byte-identical to the serial run's (same keys, same per-key order,
+    same first-wins url mapping). Any other attribute access fails loudly —
+    retrieval should never need more than this one method.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def record_tool_result(self, tool_name: str, content: str, *,
+                           primary: bool = False, urls=None):
+        self.calls.append((tool_name, content,
+                           bool(primary), list(urls or ())))
+        return None
+
+
 def fixture_transport(routes: dict[str, str]) -> Transport:
     """Serve canned bodies by URL substring. Replaces the HTTP layer entirely
     (tools/sources/base), so no socket is ever opened — safe under the
@@ -211,6 +233,11 @@ class ResearchPipeline:
         self._adversary_is_self_review = adversary_router is None
         # None = no checkpointing; behaviour identical to the pre-W3 run.
         self.checkpointer = checkpointer
+        # Parallel-leaf machinery: compute-path serialization and artifact
+        # refs collected during concurrent answers (extended onto
+        # self.artifact_refs in leaf order at assembly).
+        self._compute_lock = asyncio.Lock()
+        self._pending_artifact_refs: list[ArtifactRef] = []
 
     # -- lazy components ---------------------------------------------------
 
@@ -295,14 +322,14 @@ class ResearchPipeline:
 
     # ── Stage 2+3: select sources and fetch per leaf ──────────────────────
 
-    async def _fetch_for_question(self, q: ResearchQuestion,
-                                  question_type: str = "",
-                                  ) -> tuple[list[FetchResult], Any]:
-        """Iterative, gated, fanned-out retrieval for one leaf.
+    def _fetch_leaf_sync(self, q: ResearchQuestion, question_type: str,
+                         ledger) -> tuple[list[FetchResult], Any]:
+        """Synchronous body of per-leaf retrieval (runs off the event loop).
 
-        Returns (fetches, RetrievalTrace). Every returned fetch passed the
-        relevance gate; rejected items live on the trace with reasons. A
-        trace with zero admitted items is an honest null, surfaced as such."""
+        `ledger` is where THIS leaf's fetch records land. The parallel path
+        passes a scratch ledger so threads never mutate shared state; the
+        caller replays the records into the real ledger in leaf order.
+        """
         from tools.pipeline.retrieval import IterativeRetriever
 
         reg = self._get_registry()
@@ -313,10 +340,21 @@ class ResearchPipeline:
         # replaced the 4-entry GENERIC_CALLS table whose mono-source fan-out
         # kept independence at 1 in the second live run.
         retriever = IterativeRetriever(
-            registry=reg, ledger=self.ledger, transport=self.transport)
+            registry=reg, ledger=ledger, transport=self.transport)
         trace = retriever.retrieve(
             q, qt, min_independent=q.evidence_requirements.min_independent_sources)
         return list(trace.admitted), trace
+
+    async def _fetch_for_question(self, q: ResearchQuestion,
+                                  question_type: str = "",
+                                  ) -> tuple[list[FetchResult], Any]:
+        """Iterative, gated, fanned-out retrieval for one leaf.
+
+        Returns (fetches, RetrievalTrace). Every returned fetch passed the
+        relevance gate; rejected items live on the trace with reasons. A
+        trace with zero admitted items is an honest null, surfaced as such."""
+        return await asyncio.to_thread(
+            self._fetch_leaf_sync, q, question_type, self.ledger)
 
 
     # ── Stage 4+5: answer with optional sandbox compute + artifacts ───────
@@ -325,7 +363,13 @@ class ResearchPipeline:
                            fetches: list[FetchResult],
                            session: AGPSession,
                            trace: Any = None,
-                           ) -> LeafOutcome:
+                           call_tag: str = "",
+                           ) -> tuple[LeafOutcome, list[Evidence]]:
+        """Answer one leaf. SIDE-EFFECT ISOLATED: returns the evidence items
+        instead of appending them to the session, so concurrent leaf answers
+        can be assembled in deterministic leaf order by the caller. (The
+        legacy signature's session argument is retained for compatibility
+        but is no longer mutated here.)"""
         out = LeafOutcome(question_id=q.question_id, text=q.text)
         evidence_items: list[Evidence] = []
         best_class = SourceClass.INFERRED
@@ -340,7 +384,6 @@ class ResearchPipeline:
             ev.confidence_score = round(min(0.45, ceiling), 2) \
                 if assigned != SourceClass.PRIMARY else round(ceiling, 2)
             evidence_items.append(ev)
-            session.add_evidence(ev)
             out.source_classes.append(assigned.value)
             if _CLASS_RANK[assigned.value] > _CLASS_RANK[best_class.value]:
                 best_class = assigned
@@ -348,46 +391,51 @@ class ResearchPipeline:
 
         # Model proposes an answer, possibly requesting computation first.
         resp = await self.model.complete(
-            "Manager", answer_messages(q.text, [e.content for e in evidence_items]))
+            "Manager", answer_messages(q.text, [e.content for e in evidence_items]),
+            _call_tag=call_tag or q.question_id)
         proposal = parse_model_json(resp) or {}
 
         compute = proposal.get("compute")
         if compute and isinstance(compute, dict) and compute.get("code"):
-            # keep_workspace=True so produced file BYTES reach the artifact
-            # store — otherwise the child merely ATTESTS hashes and nothing
-            # downstream can re-verify them (property 3: evidence you can
-            # check). Workspace is destroyed right after sealing.
-            sbx = run_python(str(compute["code"]),
-                             inputs=compute.get("inputs") or {},
-                             keep_workspace=True)
-            out.sandbox_status = sbx.status
-            if sbx.status == "ok":
-                refs = _store_sandbox(sbx, self.store)
-                _cleanup_workspace(sbx)
-                out.artifact_sha256s.extend(r.sha256 for r in refs)
-                self.artifact_refs.extend(refs)
-                # The computation itself is real executed output → recorded
-                # in the ledger; provenance assigns its class.
-                comp_body = f"sandbox code:\n{sbx.code}\nstdout:\n{sbx.stdout}"
-                self.ledger.record_tool_result("run_python", comp_body,
-                                               primary=False)
-                comp_ev = Evidence(
-                    content=comp_body[:4000],
-                    source_class=SourceClass.INFERRED,
-                    confidence_score=0.30,
-                    domain=session.domain or Domain.GENERAL,
-                    origin_agent="sandbox")
-                comp_ev.source_class = self.ledger.assign_source_class(comp_ev)
-                comp_ev.confidence_score = round(min(
-                    0.45, MAX_CONFIDENCE_BY_SOURCE.get(
-                        comp_ev.source_class.value, 0.55)), 2)
-                evidence_items.append(comp_ev)
-                session.add_evidence(comp_ev)
-                out.n_sources += 1
+            # The compute path mutates shared stores (ledger, artifact
+            # store). It is rare; serialize it so cross-leaf interleaving
+            # cannot corrupt state, then continue.
+            async with self._compute_lock:
+                # keep_workspace=True so produced file BYTES reach the artifact
+                # store — otherwise the child merely ATTESTS hashes and nothing
+                # downstream can re-verify them (property 3: evidence you can
+                # check). Workspace is destroyed right after sealing.
+                sbx = await asyncio.to_thread(
+                    run_python, str(compute["code"]),
+                    inputs=compute.get("inputs") or {}, keep_workspace=True)
+                out.sandbox_status = sbx.status
+                if sbx.status == "ok":
+                    refs = _store_sandbox(sbx, self.store)
+                    _cleanup_workspace(sbx)
+                    out.artifact_sha256s.extend(r.sha256 for r in refs)
+                    self._pending_artifact_refs.extend(refs)
+                    # The computation itself is real executed output → recorded
+                    # in the ledger; provenance assigns its class.
+                    comp_body = f"sandbox code:\n{sbx.code}\nstdout:\n{sbx.stdout}"
+                    self.ledger.record_tool_result("run_python", comp_body,
+                                                   primary=False)
+                    comp_ev = Evidence(
+                        content=comp_body[:4000],
+                        source_class=SourceClass.INFERRED,
+                        confidence_score=0.30,
+                        domain=session.domain or Domain.GENERAL,
+                        origin_agent="sandbox")
+                    comp_ev.source_class = self.ledger.assign_source_class(comp_ev)
+                    comp_ev.confidence_score = round(min(
+                        0.45, MAX_CONFIDENCE_BY_SOURCE.get(
+                            comp_ev.source_class.value, 0.55)), 2)
+                    evidence_items.append(comp_ev)
+                    out.n_sources += 1
             # Re-ask for the final answer now that computation ran.
             resp = await self.model.complete(
                 "Manager", answer_messages(
-                    q.text, [e.content for e in evidence_items]))
+                    q.text, [e.content for e in evidence_items]),
+                _call_tag=call_tag or q.question_id)
             proposal = parse_model_json(resp) or {}
 
         out.answer = str(proposal.get("answer", "")).strip()
@@ -423,7 +471,7 @@ class ResearchPipeline:
 
         out.confidence = round(max(0.0, clamped), 2)
         out.tier = ConfidenceTier.from_score(out.confidence).value
-        return out
+        return out, evidence_items
 
     # ── The whole chain ───────────────────────────────────────────────────
 
@@ -431,6 +479,7 @@ class ResearchPipeline:
                   today: Optional[date] = None) -> PipelineResult:
         today = today or date.today()
         self.artifact_refs = []
+        self._pending_artifact_refs = []
         result = PipelineResult(root_query=question, sealed=False)
         cp = self.checkpointer
         trace: Optional[ckpt.RunTrace] = None
@@ -472,6 +521,19 @@ class ResearchPipeline:
         result.program = program
 
         # 2..5. Per leaf: select sources, fetch, compute, answer.
+        #
+        # PARALLEL-LEAF RESTRUCTURE (speed run 2026-08-23). The leaves of a
+        # decomposition are independent: leaf k's retrieval and answer depend
+        # on leaf k only. The old loop paid Σ(leaf work) serially — sync
+        # fetches that blocked the event loop plus an awaited model call per
+        # leaf. This costs a month on questions that need an answer this
+        # week. The restructure keeps byte-identical outputs:
+        #   Phase A — all retrievals concurrently off-loop; each writes a
+        #             scratch recorder replayed into the ledger in leaf order.
+        #   Phase B — all answers concurrently on-loop; evidence is returned
+        #             per leaf and appended to the session in leaf order, so
+        #             the conclusion and adversary see exactly what the serial
+        #             run saw.
         session = AGPSession(question)
         session.scope = question
         session.domain = domain
@@ -479,72 +541,185 @@ class ResearchPipeline:
         session.advance_to(SessionStep.SOURCE_ENUMERATION)
         session.sources = [s["name"] for s in self._get_registry().specs()]
 
-        for q in program.leaves:
-            async def _fetch_payload(q=q) -> dict:
-                fetches_q, trace_q = await self._fetch_for_question(
-                    q, self._question_types.get(q.question_id) or "")
-                # Store the relevance gate's VERDICTS, not just its admits.
-                # A resume that replays only stored fetches silently skips
-                # the gate — evidence the live run rejected would enter the
-                # resumed run, and zero reported rejections would make the
-                # resumed run look cleaner than it was. Restoring the whole
-                # trace (rejects included) keeps rejection itself auditable.
-                return {"fetches": [dataclasses.asdict(f)
-                                    for f in fetches_q],
-                        "rejections": [dataclasses.asdict(r)
-                                       for r in trace_q.rejected],
-                        "independent_keys": sorted(trace_q.independent_keys),
-                        "queries": list(trace_q.queries),
-                        "stop_reason": trace_q.stop_reason}
+        leaves = list(program.leaves)
+        n_leaves = len(leaves)
+
+        def _fetch_payload_dict(fetches_q: list[FetchResult],
+                                trace_q: Any) -> dict:
+            # Store the relevance gate's VERDICTS, not just its admits.
+            # A resume that replays only stored fetches silently skips
+            # the gate — evidence the live run rejected would enter the
+            # resumed run, and zero reported rejections would make the
+            # resumed run look cleaner than it was. Restoring the whole
+            # trace (rejects included) keeps rejection itself auditable.
+            return {"fetches": [dataclasses.asdict(f) for f in fetches_q],
+                    "rejections": [dataclasses.asdict(r)
+                                   for r in trace_q.rejected],
+                    "independent_keys": sorted(trace_q.independent_keys),
+                    "queries": list(trace_q.queries),
+                    "stop_reason": trace_q.stop_reason}
+
+        def _fetch_inputs(q: ResearchQuestion) -> dict:
+            return {"qid": q.question_id}
+
+        # ── Phase A: retrieval for every leaf ──────────────────────────────
+        # Checkpoint hits are detected up front; only misses retrieve.
+        fetch_hits: dict[int, ckpt.Checkpoint] = {}
+        if cp is not None:
+            for i, q in enumerate(leaves):
+                hit = cp.load(trace.run, "fetch_leaf",
+                              ckpt.hash_inputs(_fetch_inputs(q)))
+                if hit is not None:
+                    fetch_hits[i] = hit
+
+        fresh = [i for i in range(n_leaves) if i not in fetch_hits]
+
+        # R1 fix (speed run 2026-08-23-164040): each completed retrieval is
+        # checkpointed INSIDE the worker, immediately — a sibling leaf's
+        # failure must not forfeit paid fetch work. Saves happen off the
+        # shared trace (appended in leaf order during assembly below) so the
+        # trace stays deterministic; cp.save itself is atomic (tempfile +
+        # os.replace), so concurrent saves are safe. Serial contract
+        # preserved: the serial engine saved each leaf's checkpoint right
+        # after that leaf finished; this does exactly that, concurrently.
+        _fetch_saved: dict[int, ckpt.StageOutcome] = {}
+        async def _retrieve(i: int):
+            q = leaves[i]
+            rec = _FetchRecorder()
+            fetches_i, trace_i = await asyncio.to_thread(
+                self._fetch_leaf_sync, q,
+                self._question_types.get(q.question_id) or "", rec)
             if cp is not None:
-                f_oc = await ckpt.run_stage(
-                    cp, trace, "fetch_leaf", {"qid": q.question_id},
-                    _fetch_payload,
+                saved = cp.save(
+                    trace.run, "fetch_leaf",
+                    ckpt.hash_inputs(_fetch_inputs(q)),
+                    _fetch_payload_dict(fetches_i, trace_i),
                     claim_ids=[session.session_id])
+                _fetch_saved[i] = ckpt.StageOutcome(
+                    stage="fetch_leaf", resumed=False,
+                    payload=_fetch_payload_dict(fetches_i, trace_i),
+                    produced_at=saved.produced_at)
+            return i, fetches_i, trace_i, rec
+
+        retrieved: dict[int, tuple] = {}
+        if fresh:
+            outcomes = await asyncio.gather(
+                *[_retrieve(i) for i in fresh], return_exceptions=True)
+            # Fail in LEAF ORDER — identical error selection to the serial
+            # loop (first failing leaf decides the exception). Completed
+            # leaves' checkpoints are already on disk (saved in _retrieve).
+            for i, oc in zip(fresh, outcomes):
+                if isinstance(oc, BaseException):
+                    raise oc
+            for oc in outcomes:
+                retrieved[oc[0]] = oc[1:]
+            # Replay each leaf's provenance records into the real ledger in
+            # leaf order → same keys, same per-key order, same first-wins
+            # url mapping as the serial run produced.
+            for i in fresh:
+                for tool, body, primary, urls in retrieved[i][2].calls:
+                    self.ledger.record_tool_result(tool, body, primary=primary,
+                                                   urls=urls or None)
+
+        fetches_by_leaf: list[list[FetchResult]] = []
+        traces_by_leaf: list[Any] = []
+        for i, q in enumerate(leaves):
+            if i in fetch_hits:
+                ck = fetch_hits[i]
                 # Restore the fetched bytes into this run's ledger so
                 # source-class assignment works identically on a resume.
-                ck = cp.load_by_key(
-                    trace.run,
-                    ckpt.step_key(trace.run, "fetch_leaf",
-                                  ckpt.hash_inputs({"qid": q.question_id})))
-                if ck is not None:
-                    ckpt.replay_ledger(self.ledger, [ck])
-                fetches = [_fetch_from_payload(r)
-                           for r in f_oc.payload["fetches"]]
+                ckpt.replay_ledger(self.ledger, [ck])
+                trace.stages.append(ckpt.StageOutcome(
+                    stage="fetch_leaf", resumed=True, payload=ck.payload,
+                    produced_at=ck.produced_at))
+                fetches_i = [_fetch_from_payload(r)
+                             for r in ck.payload["fetches"]]
                 # Restore the FULL retrieval trace — admitted AND rejected —
                 # whether this stage was fresh or served from the checkpoint.
                 # The gate has already been applied to produce this payload;
                 # restoring it verbatim is how a resumed run scores exactly
                 # what the equivalent live run scored.
-                trace_q = _trace_from_payload(q.question_id, f_oc.payload)
-                rejected = trace_q.rejected
+                trace_q = _trace_from_payload(q.question_id, ck.payload)
             else:
-                fetches, trace_q = await self._fetch_for_question(
-                    q, self._question_types.get(q.question_id) or "")
-                rejected = trace_q.rejected
-            result.fetches.extend(fetches)
+                fetches_i, trace_q, _rec = retrieved[i]
+                if i in _fetch_saved:
+                    # Already persisted inside _retrieve (R1 fix); just
+                    # record the outcome on the trace in leaf order.
+                    trace.stages.append(_fetch_saved[i])
+            fetches_by_leaf.append(fetches_i)
+            traces_by_leaf.append(trace_q)
+            result.fetches.extend(fetches_i)
+            rejected = trace_q.rejected
             if rejected:
                 result.notes.append(
                     f"leaf '{q.text[:60]}': {len(rejected)} fetch(s) "
                     "rejected at ingestion: " + "; ".join(
                         f"[{r.source_name}] {r.reason}" for r in rejected))
 
-            async def _answer() -> dict:
-                before = len(session.evidence)
-                outcome = await self._answer_leaf(q, fetches, session,
-                                                  trace=trace_q)
-                # Persist what this leaf contributed to the session so a
-                # resume can rehydrate session.evidence without re-running
-                # the model — otherwise AGP would rightly refuse to seal a
-                # zero-evidence session.
-                return {"leaf": dataclasses.asdict(outcome),
-                        "evidence": [dataclasses.asdict(e)
-                                     for e in session.evidence[before:]]}
+        # ── Phase B: answers for every leaf ────────────────────────────────
+        # Answer-stage checkpoint hits skip the model exactly as before;
+        # misses run concurrently and are assembled in leaf order below.
+        answer_hits: dict[int, ckpt.Checkpoint] = {}
+        if cp is not None:
+            for i, q in enumerate(leaves):
+                hit = cp.load(trace.run, "answer_leaf",
+                              ckpt.hash_inputs({"qid": q.question_id}))
+                if hit is not None:
+                    answer_hits[i] = hit
+
+        async def _answer_fresh(i: int) -> dict:
+            outcome_i, ev_items = await self._answer_leaf(
+                leaves[i], fetches_by_leaf[i], session,
+                trace=traces_by_leaf[i], call_tag=f"leaf{i}")
+            return {"i": i,
+                    "leaf": dataclasses.asdict(outcome_i),
+                    "evidence": [dataclasses.asdict(e) for e in ev_items]}
+
+        to_run = [i for i in range(n_leaves) if i not in answer_hits]
+        payloads: dict[int, dict] = {}
+        resumed_answer: dict[int, dict] = {}
+        # R1 fix, answer stage: each completed answer is checkpointed INSIDE
+        # the worker immediately (same reasoning as the fetch stage above).
+        _answer_saved: dict[int, ckpt.StageOutcome] = {}
+        async def _answer_fresh(i: int) -> dict:
+            outcome_i, ev_items = await self._answer_leaf(
+                leaves[i], fetches_by_leaf[i], session,
+                trace=traces_by_leaf[i], call_tag=f"leaf{i}")
+            payload = {"i": i,
+                    "leaf": dataclasses.asdict(outcome_i),
+                    "evidence": [dataclasses.asdict(e) for e in ev_items]}
             if cp is not None:
-                a_oc = await ckpt.run_stage(
-                    cp, trace, "answer_leaf", {"qid": q.question_id}, _answer)
-                outcome = _leaf_from_payload(a_oc.payload["leaf"])
-                for e_rec in a_oc.payload.get("evidence") or []:
+                saved = cp.save(
+                    trace.run, "answer_leaf",
+                    ckpt.hash_inputs({"qid": leaves[i].question_id}),
+                    payload, claim_ids=[session.session_id])
+                _answer_saved[i] = ckpt.StageOutcome(
+                    stage="answer_leaf", resumed=False, payload=payload,
+                    produced_at=saved.produced_at)
+            return payload
+
+        if to_run:
+            ans_outcomes = await asyncio.gather(
+                *[_answer_fresh(i) for i in to_run], return_exceptions=True)
+            for i, oc in zip(to_run, ans_outcomes):
+                if isinstance(oc, BaseException):
+                    raise oc
+            for i, oc in zip(to_run, ans_outcomes):
+                payloads[i] = oc
+        for i in range(n_leaves):
+            if i in answer_hits:
+                ck = answer_hits[i]
+                resumed_answer[i] = ck.payload
+                trace.stages.append(ckpt.StageOutcome(
+                    stage="answer_leaf", resumed=True, payload=ck.payload,
+                    produced_at=ck.produced_at))
+
+        # ── Ordered assembly: identical observable state to the serial run ──
+        for i, q in enumerate(leaves):
+            if i in resumed_answer:
+                payload = resumed_answer[i]
+                outcome = _leaf_from_payload(payload["leaf"])
+                for e_rec in payload.get("evidence") or []:
                     ev = Evidence(
                         content=e_rec["content"],
                         source_class=SourceClass(e_rec["source_class"]),
@@ -554,9 +729,23 @@ class ResearchPipeline:
                         source_name=e_rec["source_name"])
                     session.add_evidence(ev)
             else:
-                outcome = await self._answer_leaf(q, fetches, session,
-                                                  trace=trace_q)
+                payload = payloads[i]
+                outcome = _leaf_from_payload(payload["leaf"])
+                for e_rec in payload["evidence"]:
+                    ev = Evidence(
+                        content=e_rec["content"],
+                        source_class=SourceClass(e_rec["source_class"]),
+                        confidence_score=e_rec["confidence_score"],
+                        domain=domain,
+                        origin_agent=e_rec["origin_agent"],
+                        source_name=e_rec["source_name"])
+                    session.add_evidence(ev)
+                if i in _answer_saved:
+                    # Already persisted inside _answer_fresh (R1 fix); just
+                    # record the outcome on the trace in leaf order.
+                    trace.stages.append(_answer_saved[i])
             result.leaves.append(outcome)
+        self.artifact_refs.extend(self._pending_artifact_refs)
 
 
         session.advance_to(SessionStep.PRIMARY_COLLECTION)
