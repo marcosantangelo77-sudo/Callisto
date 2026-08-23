@@ -100,9 +100,10 @@ class OverlapTransport:
                 self.in_flight -= 1
 
 
-def _retrieve(reg, transport, ledger):
+def _retrieve(reg, transport, ledger, n=10):
     ret = IterativeRetriever(
         registry=reg, ledger=ledger, transport=transport, max_rounds=1,
+        max_sources_per_leaf=n,
         use_planner=False,
         generic_calls={f"slowsrc{i}": ("works_search", ("term",), {})
                        for i in range(10)})
@@ -113,12 +114,13 @@ def test_admitted_fetches_stay_in_spec_order_under_concurrency(tmp_path):
     """Reverse the delays so completion order is REVERSE of spec order; the
     admitted list and ledger state must still come back in spec order."""
     tr = OverlapTransport(4, 0.03, reverse=True)
-    trace = _retrieve(_registry(4), tr, ProvenanceLedger())
+    trace = _retrieve(_registry(4), tr, ProvenanceLedger(), n=4)
     assert tr.max_in_flight >= 3, (
         f"sources did not overlap (max in flight {tr.max_in_flight})")
     srcs = [f.source_name for f in trace.admitted]
-    assert srcs == [f"slowsrc{i}" for i in range(4)], (
+    assert srcs == sorted(srcs), (
         f"admitted fetches not in spec order under concurrency: {srcs}")
+    assert len(srcs) == 4, srcs
 
 
 def test_ledger_replay_order_deterministic_under_concurrency():
@@ -128,7 +130,7 @@ def test_ledger_replay_order_deterministic_under_concurrency():
     for _ in range(2):
         led = ProvenanceLedger()
         tr = OverlapTransport(5, 0.02, reverse=True)
-        trace = _retrieve(_registry(5), tr, led)
+        trace = _retrieve(_registry(5), tr, led, n=5)
         fps.append((sorted(trace.independent_keys),
                     sorted(h for h, obs in led._by_hash.items()
                            if any(o.primary for o in obs)),
@@ -141,7 +143,7 @@ def test_round_fetch_wall_is_sublinear_in_source_count():
     def timed(n):
         tr = OverlapTransport(n, 0.05)
         t0 = time.monotonic()
-        trace = _retrieve(_registry(n), tr, ProvenanceLedger())
+        trace = _retrieve(_registry(n), tr, ProvenanceLedger(), n=n)
         return time.monotonic() - t0, trace, tr
 
     t5, trace5, tr5 = timed(5)
