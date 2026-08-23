@@ -1,0 +1,84 @@
+{
+  "generated_at": "2026-08-23T00:02:37.537266+00:00",
+  "n_total": 5,
+  "n_scored": 5,
+  "n_null": 0,
+  "null_rate": 0.0,
+  "mean_brier": 0.3129,
+  "mean_absolute_error_vs_half": 0.17,
+  "sealed_rate": 1.0,
+  "mean_elapsed_s": 2625.4,
+  "magnitude": {
+    "n_with_market": 5,
+    "mean_edge_taken": -0.31,
+    "mean_directional_edge": -0.254,
+    "beat_market_rate": 0.4
+  },
+  "calibration_overall": [
+    {
+      "bin_low": 0.0,
+      "bin_high": 0.2,
+      "n": 0,
+      "mean_p": null,
+      "realised": null
+    },
+    {
+      "bin_low": 0.2,
+      "bin_high": 0.4,
+      "n": 5,
+      "mean_p": 0.33,
+      "realised": 0.6
+    },
+    {
+      "bin_low": 0.4,
+      "bin_high": 0.6,
+      "n": 0,
+      "mean_p": null,
+      "realised": null
+    },
+    {
+      "bin_low": 0.6,
+      "bin_high": 0.8,
+      "n": 0,
+      "mean_p": null,
+      "realised": null
+    },
+    {
+      "bin_low": 0.8,
+      "bin_high": 1.0,
+      "n": 0,
+      "mean_p": null,
+      "realised": null
+    }
+  ],
+  "slices": {
+    "by_domain": {
+      "FINANCIAL": {
+        "n": 5,
+        "brier": 0.3129,
+        "mean_directional_edge": -0.254
+      }
+    },
+    "by_horizon": {
+      "short": {
+        "n": 5,
+        "brier": 0.3129,
+        "mean_directional_edge": -0.254
+      }
+    },
+    "by_question_type": {
+      "beat_or_miss": {
+        "n": 5,
+        "brier": 0.3129,
+        "mean_directional_edge": -0.254
+      }
+    },
+    "nulls_by_domain": {},
+    "errors_by_domain": {}
+  },
+  "failures": {
+    "refusals": [],
+    "errors": []
+  },
+  "verdict": "at or worse than chance \u2014 do not trust these predictions yet"
+}
