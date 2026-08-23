@@ -665,13 +665,28 @@ class KnowledgeWiki:
     async def _llm_compile(
         self, topic: str, sources: list[dict], existing_content: Optional[str]
     ) -> Optional[dict]:
-        """Use local LLM (Gemma 4) to compile sources into a wiki article.
+        """Compile sources into a wiki article via an LLM.
+
+        Routing (improve/memory-wiki): the compile call goes through
+        inference.get_router() under the ``wiki_compile`` task class so the
+        model that compiles knowledge is a providers.yaml concern. When the
+        router is unavailable (no config / no declared class), we fall back
+        to the historical direct-Ollama path unchanged.
 
         Returns {"title", "content", "summary", "related_topics"} or None on failure.
         """
-        from inference import OllamaInference, AgentConfig
+        prompt = self._compile_prompt(topic, sources, existing_content)
 
-        # Build source material summary
+        routed = await self._routed_json(prompt, task_class="wiki_compile")
+        if routed is not None:
+            parsed = self._validate_compiled(routed, topic)
+            if parsed is not None:
+                return parsed
+
+        # Fallback: direct Ollama (historical behaviour).
+        return await self._ollama_compile(topic, sources, existing_content)
+
+    def _compile_prompt(self, topic, sources, existing_content) -> str:
         source_text = []
         for s in sources[:15]:  # Cap to avoid context overflow
             label = f"[{s['type'].upper()}] (conf={s['confidence']:.2f})"
@@ -689,8 +704,8 @@ class KnowledgeWiki:
                 "Add new findings. Remove stale information."
             )
 
-        prompt = (
-            f"You are a knowledge compiler for an autonomous sports betting research system.\n\n"
+        return (
+            f"You are a knowledge compiler for an autonomous research system.\n\n"
             f"TOPIC: {topic}\n\n"
             f"NEW SOURCES:\n{sources_block}\n"
             f"{update_instruction}\n\n"
@@ -707,6 +722,58 @@ class KnowledgeWiki:
             f"- related_topics: other topic slugs this connects to\n"
             f"- Keep content under {MAX_ARTICLE_LENGTH} characters"
         )
+
+    COMPILE_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "content": {"type": "string"},
+            "related_topics": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["title", "summary", "content"],
+    }
+
+    async def _routed_json(self, prompt: str, *, task_class: str,
+                           schema: Optional[dict] = None) -> Optional[dict]:
+        """One ProviderRouter completion parsed as JSON, or None on any failure."""
+        try:
+            from inference import get_router
+            router = get_router()
+        except Exception as e:
+            logger.debug(f"Wiki routed call unavailable ({e}); using fallback")
+            return None
+        try:
+            resp = await asyncio.wait_for(
+                router.complete(task_class,
+                                messages=[{"role": "user", "content": prompt}],
+                                schema=schema if schema is not None else self.COMPILE_SCHEMA),
+                timeout=120.0,
+            )
+        except Exception as e:
+            logger.warning(f"Wiki routed {task_class} failed: {e}")
+            return None
+        parsed = resp.get("parsed_json")
+        return parsed if isinstance(parsed, dict) else None
+
+    def _validate_compiled(self, parsed: dict, topic: str) -> Optional[dict]:
+        """Enforce required fields and length on compiled output; else None."""
+        if not isinstance(parsed, dict):
+            return None
+        if not parsed.get("title") or not parsed.get("content"):
+            logger.warning(f"Wiki compile: missing required fields for '{topic}'")
+            return None
+        if len(parsed["content"]) > MAX_ARTICLE_LENGTH * 2:
+            parsed["content"] = parsed["content"][:MAX_ARTICLE_LENGTH]
+        return parsed
+
+    async def _ollama_compile(
+        self, topic: str, sources: list[dict], existing_content: Optional[str]
+    ) -> Optional[dict]:
+        """Historical direct-Ollama compile path (fallback when unrouted)."""
+        from inference import OllamaInference, AgentConfig
+
+        prompt = self._compile_prompt(topic, sources, existing_content)
 
         try:
             config = AgentConfig(
@@ -745,21 +812,14 @@ class KnowledgeWiki:
                 logger.warning(f"Wiki compile: failed to parse JSON for '{topic}'")
                 return None
 
-            # Validate required fields
-            if not parsed.get("title") or not parsed.get("content"):
-                logger.warning(f"Wiki compile: missing required fields for '{topic}'")
-                return None
-
-            # Enforce max length
-            if len(parsed["content"]) > MAX_ARTICLE_LENGTH * 2:
-                parsed["content"] = parsed["content"][:MAX_ARTICLE_LENGTH]
-
-            return parsed
+            validated = self._validate_compiled(parsed, topic)
+            if validated is not None:
+                return validated
 
         except Exception as e:
             logger.warning(f"Wiki LLM compile failed for '{topic}': {e}")
-            # Fallback: template-based compilation (no LLM needed)
-            return self._template_compile(topic, sources, existing_content)
+        # Fallback: template-based compilation (no LLM needed)
+        return self._template_compile(topic, sources, existing_content)
 
     def _template_compile(
         self, topic: str, sources: list[dict], existing_content: Optional[str]
@@ -961,6 +1021,38 @@ class KnowledgeWiki:
             "Only flag GENUINE contradictions, not merely different aspects of a topic."
         )
 
+        CONTRADICTION_SCHEMA = {
+            "type": "object",
+            "properties": {
+                "contradictions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "pair": {"type": "integer"},
+                            "article_a": {"type": "string"},
+                            "article_b": {"type": "string"},
+                            "claim_a": {"type": "string"},
+                            "claim_b": {"type": "string"},
+                            "severity": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            "required": ["contradictions"],
+        }
+
+        # Routed path first (model is a providers.yaml concern); direct
+        # Ollama only when routing is unavailable or fails.
+        routed = await self._routed_json(
+            prompt, task_class="classification", schema=CONTRADICTION_SCHEMA)
+        if routed is not None:
+            found = routed.get("contradictions", [])
+            if isinstance(found, list):
+                stored = await self._store_contradictions(db, found)
+                return stored
+
+        from inference import OllamaInference, AgentConfig, _parse_json_response
         try:
             config = AgentConfig(
                 model="qwen3.5:4b",  # Fast classifier — contradiction detection is classification
@@ -970,26 +1062,7 @@ class KnowledgeWiki:
             llm = OllamaInference(config)
             response = await llm.achat(
                 messages=[{"role": "user", "content": prompt}],
-                format={
-                    "type": "object",
-                    "properties": {
-                        "contradictions": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "pair": {"type": "integer"},
-                                    "article_a": {"type": "string"},
-                                    "article_b": {"type": "string"},
-                                    "claim_a": {"type": "string"},
-                                    "claim_b": {"type": "string"},
-                                    "severity": {"type": "string"},
-                                },
-                            },
-                        },
-                    },
-                    "required": ["contradictions"],
-                },
+                format=CONTRADICTION_SCHEMA,
             )
 
             text = response.get("content", "") or response.get("message", {}).get("content", "")
@@ -998,29 +1071,32 @@ class KnowledgeWiki:
                 return []
 
             found = parsed.get("contradictions", [])
-            now = datetime.now(timezone.utc).isoformat()
-
-            # Store new contradictions
-            for c in found:
-                if not c.get("article_a") or not c.get("claim_a"):
-                    continue
-                try:
-                    await db.execute(
-                        "INSERT OR IGNORE INTO wiki_contradictions "
-                        "(article_a, article_b, claim_a, claim_b, severity, detected_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
-                        (c["article_a"], c.get("article_b", ""),
-                         c["claim_a"], c.get("claim_b", ""),
-                         c.get("severity", "low"), now),
-                    )
-                except Exception as e:
-                    logger.debug(f"Failed to store contradiction: {e}")
-            await db.commit()
-            return found
+            return await self._store_contradictions(db, found)
 
         except Exception as e:
             logger.warning(f"Wiki contradiction detection failed: {e}")
             return []
+
+    async def _store_contradictions(self, db, found: list) -> list:
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Store new contradictions
+        for c in found:
+            if not c.get("article_a") or not c.get("claim_a"):
+                continue
+            try:
+                await db.execute(
+                    "INSERT OR IGNORE INTO wiki_contradictions "
+                    "(article_a, article_b, claim_a, claim_b, severity, detected_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (c["article_a"], c.get("article_b", ""),
+                     c["claim_a"], c.get("claim_b", ""),
+                     c.get("severity", "low"), now),
+                )
+            except Exception as e:
+                logger.debug(f"Failed to store contradiction: {e}")
+        await db.commit()
+        return found
 
     # ──────────────────────────────────────────────────
     # WRITE: Direct schema-correct article upsert (no LLM compile)

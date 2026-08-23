@@ -114,6 +114,10 @@ routing:
     backtest_interpretation: [gpu1, frontier, ox_alpha]
     promotion_judgment: [frontier, gpu1, ox_alpha]   # frontier preferred; falls back LOCAL if budget spent/unset
     adversarial_review: [frontier, gpu1, ox_alpha]
+    # Knowledge-wiki compilation (tools/knowledge_wiki). Local-first: the
+    # wiki is bulk background work — a resident local model is the right
+    # default, frontier available as failover.
+    wiki_compile: [gpu1, ox_alpha]
 
   escalation:
     # Cheap checks first. Escalation is the design, not an apology.
