@@ -487,7 +487,54 @@ class HypothesisManager:
         await self._db.execute("PRAGMA wal_autocheckpoint = 1000")
         await self._db.execute("PRAGMA journal_size_limit = 67108864")
         await self._db.execute("PRAGMA busy_timeout = 120000")
+        await self._load_table_shape()
         logger.info("Hypothesis manager initialized")
+
+    # ── schema-shape detection (pre/post migration 013) ──────────────────
+
+    async def _load_table_shape(self) -> None:
+        """Detect which shape the ``hypotheses`` table has, once.
+
+        Migration 013 (the schema seam) rebuilds ``hypotheses`` WITHOUT
+        ``sport``/``market_type`` — those move to the plugin-owned
+        ``hypothesis_sports_ext`` side table and a domain-general
+        ``domain`` column is added. Both shapes exist in the wild: a DB
+        that has not run migrations yet keeps the welded columns; every
+        DB after one api.py startup has the seam (api.py applies pending
+        migrations unconditionally at boot).
+
+        Measured 2026-08-23 on a fresh DB that ran ensure_schema +
+        apply_pending_migrations: create_hypothesis died with
+        "OperationalError: no such column: sport" because this module
+        still wrote the dropped columns. Every read/write below branches
+        on these flags instead of assuming either shape.
+        """
+        self._has_core_sport = False
+        self._has_domain_col = False
+        self._has_sports_ext = False
+        cur = await self._db.execute("PRAGMA table_info(hypotheses)")
+        cols = {row[1] for row in await cur.fetchall()}
+        self._has_core_sport = "sport" in cols
+        self._has_domain_col = "domain" in cols
+        if not self._has_core_sport:
+            cur = await self._db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='hypothesis_sports_ext'"
+            )
+            self._has_sports_ext = bool(await cur.fetchone())
+
+    def _hyp_from(self) -> str:
+        """FROM clause resolving the sports fields for hypothesis rows.
+
+        Pre-seam: the columns sit on core. Post-seam they live in the
+        plugin's side table; LEFT JOIN keeps general claims (no ext row)
+        with NULL sport so every consumer of ``h.get('sport')`` keeps
+        working unchanged.
+        """
+        if self._has_core_sport or not self._has_sports_ext:
+            return "FROM hypotheses"
+        return ("FROM hypotheses h LEFT JOIN hypothesis_sports_ext e "
+                "ON e.hypothesis_id = h.hypothesis_id")
 
     async def close(self) -> None:
         if self._db:
@@ -499,18 +546,27 @@ class HypothesisManager:
         self,
         name: str,
         thesis: str,
-        sport: str,
-        market_type: str,
-        model_config: dict,
+        sport: Optional[str] = None,
+        market_type: Optional[str] = None,
+        model_config: dict = None,
         edge_threshold: float = 0.005,
         min_sample_size: int = 50,
         significance_level: float = 0.05,
         notes: str = "",
+        domain: Optional[str] = None,
     ) -> str:
         """Create a new hypothesis. Returns hypothesis_id.
 
         If a hypothesis with the same name already exists, returns the existing
         hypothesis_id instead of creating a duplicate.
+
+        sport/market_type are optional from the schema seam (migration 013)
+        onward: pass neither for a domain-general claim, or both for a sports
+        hypothesis (values land in hypothesis_sports_ext). On a pre-seam
+        database the columns are NOT NULL on core, so sport is required there
+        — omitting it raises instead of writing a fake value. ``domain``
+        defaults to 'sports' when a sport is given, else 'general'; ignored on
+        pre-seam databases (no such column).
 
         Temporal metadata in model_config (set by temporal_analysis.py):
             - training_period_start: First date used for pattern discovery
@@ -519,6 +575,8 @@ class HypothesisManager:
 
         These fields are used by backtest.py to enforce temporal isolation.
         """
+        if model_config is None:
+            model_config = {}
         # ── Deduplication guard: skip if name already exists ──
         cursor = await self._db.execute(
             "SELECT hypothesis_id FROM hypotheses WHERE name = ? LIMIT 1",
@@ -535,12 +593,29 @@ class HypothesisManager:
         new_gf = model_config.get("game_filters") if model_config else None
         new_gf_normalized = json.dumps(new_gf, sort_keys=True) if new_gf else None
 
-        dup_cursor = await self._db.execute(
-            "SELECT hypothesis_id, name, model_config FROM hypotheses "
-            "WHERE sport = ? AND market_type = ? AND status IN ('draft', 'backtesting', 'paper_trading')",
-            (sport, market_type),
-        )
-        dup_rows = await dup_cursor.fetchall()
+        if self._has_core_sport:
+            dup_cursor = await self._db.execute(
+                "SELECT hypothesis_id, name, model_config FROM hypotheses "
+                "WHERE sport = ? AND market_type = ? AND status IN ('draft', 'backtesting', 'paper_trading')",
+                (sport, market_type),
+            )
+            dup_rows = await dup_cursor.fetchall()
+        elif self._has_sports_ext and sport is not None:
+            # Post-seam: the same guard, joined against the side table that
+            # now holds the sports fields.
+            dup_cursor = await self._db.execute(
+                "SELECT h.hypothesis_id, h.name, h.model_config "
+                "FROM hypotheses h JOIN hypothesis_sports_ext e "
+                "ON e.hypothesis_id = h.hypothesis_id "
+                "WHERE e.sport = ? AND e.market_type IS ? "
+                "AND h.status IN ('draft', 'backtesting', 'paper_trading')",
+                (sport, market_type),
+            )
+            dup_rows = await dup_cursor.fetchall()
+        else:
+            # General claim (or ext table absent): no sport/market pair to
+            # collide on; the name unique index above is the only dedup.
+            dup_rows = []
         for row in dup_rows:
             existing_mc = json.loads(row[2]) if row[2] else {}
             existing_gf = existing_mc.get("game_filters")
@@ -558,6 +633,16 @@ class HypothesisManager:
         hid = str(uuid.uuid4())[:12]
         now = datetime.now(timezone.utc).isoformat()
 
+        # Pre-seam DBs cannot store a claim without a sport — fail loudly
+        # rather than inventing one. Running migrations is the fix.
+        if self._has_core_sport and not sport:
+            raise ValueError(
+                "create_hypothesis requires sport on this database: the "
+                "hypotheses table still has the pre-seam NOT NULL sport "
+                "column. Pass sport/market_type, or apply pending "
+                "migrations to unweld the schema."
+            )
+
         # Log whether temporal metadata is present
         has_temporal = bool(model_config.get("training_period_end"))
         if not has_temporal:
@@ -574,17 +659,39 @@ class HypothesisManager:
                 f"gap {model_config.get('temporal_split_gap_days', 7)}d"
             )
 
+        insert_cols = [
+            "hypothesis_id", "name", "thesis", "model_config",
+            "edge_threshold", "status", "min_sample_size",
+            "significance_level", "created_at", "updated_at", "notes",
+        ]
+        insert_vals: list = [
+            hid, name, thesis, json.dumps(model_config),
+            edge_threshold, "draft", min_sample_size,
+            significance_level, now, now, notes,
+        ]
+        if self._has_domain_col:
+            insert_cols.append("domain")
+            insert_vals.append(domain or ("sports" if sport else "general"))
+        if self._has_core_sport:
+            insert_cols += ["sport", "market_type"]
+            insert_vals += [sport, market_type]
+        placeholders = ", ".join("?" for _ in insert_cols)
+
         for attempt in range(8):
             try:
                 await self._db.execute(
-                    "INSERT INTO hypotheses "
-                    "(hypothesis_id, name, thesis, sport, market_type, model_config, "
-                    "edge_threshold, status, min_sample_size, significance_level, "
-                    "created_at, updated_at, notes) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)",
-                    (hid, name, thesis, sport, market_type, json.dumps(model_config),
-                     edge_threshold, min_sample_size, significance_level, now, now, notes),
+                    f"INSERT INTO hypotheses ({', '.join(insert_cols)}) "
+                    f"VALUES ({placeholders})",
+                    tuple(insert_vals),
                 )
+                if (not self._has_core_sport and sport is not None
+                        and self._has_sports_ext):
+                    await self._db.execute(
+                        "INSERT OR REPLACE INTO hypothesis_sports_ext "
+                        "(hypothesis_id, sport, market_type, edge_threshold) "
+                        "VALUES (?, ?, ?, ?)",
+                        (hid, sport, market_type, edge_threshold),
+                    )
                 await self._db.commit()
                 logger.info(f"Hypothesis created: {hid} — {name}")
                 return hid
@@ -600,10 +707,14 @@ class HypothesisManager:
                     raise
 
     async def get_hypothesis(self, hypothesis_id: str) -> Optional[dict]:
-        cursor = await self._db.execute(
-            "SELECT * FROM hypotheses WHERE hypothesis_id = ?",
-            (hypothesis_id,),
-        )
+        if self._has_core_sport or not self._has_sports_ext:
+            sql = "SELECT * FROM hypotheses WHERE hypothesis_id = ?"
+        else:
+            sql = ("SELECT h.*, e.sport AS sport, e.market_type AS market_type "
+                   "FROM hypotheses h LEFT JOIN hypothesis_sports_ext e "
+                   "ON e.hypothesis_id = h.hypothesis_id "
+                   "WHERE h.hypothesis_id = ?")
+        cursor = await self._db.execute(sql, (hypothesis_id,))
         row = await cursor.fetchone()
         if not row:
             return None
@@ -613,11 +724,16 @@ class HypothesisManager:
         return h
 
     async def list_hypotheses(self, status: Optional[str] = None, limit: int = None) -> list[dict]:
+        joined = not self._has_core_sport and self._has_sports_ext
+        prefix = "h." if joined else ""
+        select = ("SELECT h.*, e.sport AS sport, e.market_type AS market_type "
+                  if joined else "SELECT * ")
         if status:
-            query = "SELECT * FROM hypotheses WHERE status = ? ORDER BY updated_at DESC"
+            query = (f"{select}{self._hyp_from()} WHERE {prefix}status = ? "
+                     "ORDER BY updated_at DESC")
             params: tuple = (status,)
         else:
-            query = "SELECT * FROM hypotheses ORDER BY updated_at DESC"
+            query = f"{select}{self._hyp_from()} ORDER BY updated_at DESC"
             params = ()
         if limit:
             query += f" LIMIT {int(limit)}"
@@ -2733,15 +2849,18 @@ class HypothesisManager:
         }
 
     async def _days_of_odds_data(self, hypothesis_id: str) -> Optional[int]:
-        """How many days of historical odds data exist for this hypothesis's sport."""
-        cursor = await self._db.execute(
-            "SELECT sport FROM hypotheses WHERE hypothesis_id = ?",
-            (hypothesis_id,),
-        )
-        row = await cursor.fetchone()
-        if not row:
+        """How many days of historical odds data exist for this hypothesis's sport.
+
+        Returns None when the claim has no sport (domain-general) — there is
+        no odds-cache notion to count; None reads as "unknown" to the gates,
+        never as zero days of evidence.
+        """
+        h = await self.get_hypothesis(hypothesis_id)
+        if not h:
             return None
-        sport = row[0]
+        sport = h.get("sport")
+        if not sport:
+            return None
         cursor = await self._db.execute(
             "SELECT COUNT(DISTINCT snapshot_date) FROM historical_odds_cache "
             "WHERE sport = ?",
