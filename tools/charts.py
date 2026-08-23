@@ -229,6 +229,40 @@ def store_chart(
 
 WORKBOOK_SHEETS = ("Assumptions", "Data", "Model", "Scenarios")
 
+# Spreadsheet-formula injection guard (B1). Fetched evidence is untrusted
+# bytes; our own Model formulas are code we wrote. The distinction is
+# mechanical: ONLY the explicit formula-write sites (Model column C and the
+# ModelLive cells, both fed from spec["model"][*]["formula"]) bypass the
+# guard. Every other cell written from spec content passes through
+# _guarded_text(), which prefixes an apostrophe to any string that a
+# spreadsheet would re-parse as a formula (=, or +/-/@ leading a non-number).
+_FORMULA_LEADS = ("=", "+", "-", "@")
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _guarded_text(value):
+    """Store attacker-influenced strings as text, never as formulas.
+
+    '=' always injects (openpyxl stores it as data_type 'f' and Excel
+    executes it on open). '+', '-', '@' inject only when the remainder is
+    NOT a plain number — so "-5" still reads as -5, while "-SUM(A1)" or
+    "@cmd" is neutralized to "'-SUM(A1)". Non-strings pass through.
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    if value.startswith("="):
+        return "'" + value
+    if value[0] in _FORMULA_LEADS[1:] and not _is_number(value):
+        return "'" + value
+    return value
+
 
 def build_workbook(spec: dict) -> bytes:
     """Build the standard 4-sheet xlsx from a workbook spec.
@@ -266,8 +300,9 @@ def build_workbook(spec: dict) -> bytes:
         c.font = bold
     assumption_row: dict[str, int] = {}
     for a in spec.get("assumptions", []):
-        ws.append([a["name"], a["value"], a.get("unit", ""),
-                   a.get("source", ""), a.get("note", "")])
+        ws.append([a["name"], _guarded_text(a["value"]), a.get("unit", ""),
+                   _guarded_text(a.get("source", "")),
+                   _guarded_text(a.get("note", ""))])
         assumption_row[a["name"]] = ws.max_row
     for col, w in zip("ABCDE", (28, 14, 10, 34, 40)):
         ws.column_dimensions[col].width = w
