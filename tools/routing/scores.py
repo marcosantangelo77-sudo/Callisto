@@ -142,6 +142,12 @@ class ModelScoreStore:
     def aggregate(records: list[dict]) -> Optional[dict]:
         """Aggregate one model's records into a routable summary.
 
+        K2 fix — question identity. Records are DEDUPED on question_id
+        (latest row wins): one question recorded 100x is ONE observation,
+        not one hundred. Volume must never substitute for breadth, so `n`
+        here is distinct questions measured, and the basis labels describe
+        breadth of evidence, not row count.
+
         Shrinkage toward the prior (0.25 = chance) keeps small samples from
         looking heroic: mean_loss is blended with a pseudo-count of PRIOR_N
         chance-level observations. With n=3 the blend dominates; by n=300 the
@@ -152,12 +158,20 @@ class ModelScoreStore:
             return None
         PRIOR_N = 10
         PRIOR_LOSS = 0.25
-        n = len(records)
-        raw_mean = sum(r["brier"] for r in records) / n
+        # Latest record per question_id wins (records arrive in append order).
+        by_q: dict[str, dict] = {}
+        for r in records:
+            by_q[r.get("question_id", "")] = r
+        unique = list(by_q.values())
+        duplicate_rows = len(records) - len(unique)
+        n = len(unique)
+        raw_mean = sum(r["brier"] for r in unique) / n
         shrunk = (raw_mean * n + PRIOR_LOSS * PRIOR_N) / (n + PRIOR_N)
-        total_cost = sum(float(r.get("cost_usd") or 0.0) for r in records)
+        total_cost = sum(float(r.get("cost_usd") or 0.0) for r in unique)
         return {
             "n": n,
+            "distinct_questions": n,
+            "duplicate_rows_ignored": duplicate_rows,
             "mean_brier_raw": round(raw_mean, 6),
             "mean_brier": round(shrunk, 6),
             "mean_cost_usd": round(total_cost / n, 6),

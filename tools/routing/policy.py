@@ -122,6 +122,15 @@ class ThompsonRoutingPolicy:
                 and r.get("model") == model]
         return recs, bool(recs)
 
+    def _slice_records(self, role: str, task_class: Optional[str],
+                       model: str) -> list[dict]:
+        """All records for (role, [task_class,] model) — the same slice
+        decide() judges on, used for distinct-question coverage."""
+        return [r for r in self.store.load_all()
+                if r.get("role") == role
+                and (not task_class or r.get("task_class") == task_class)
+                and r.get("model") == model]
+
     def _sample_loss(self, records: list[dict]) -> float:
         """One draw of the model's true mean loss from its posterior.
 
@@ -178,6 +187,14 @@ class ThompsonRoutingPolicy:
         (role, task_class) slice — falling back to the role-wide record only
         when the slice is empty — so a classification specialist cannot win
         synthesis calls it was never measured on.
+
+        K2 coverage gate: a comparator must not reward selective
+        participation. Each measured candidate's DISTINCT-question coverage
+        is compared against the best coverage among candidates for this
+        slice; a model that answered fewer distinct questions than a rival
+        is treated as unmeasured (wide chance-centred draw, never trusted)
+        no matter how good its subset mean looks. Answering ten easy
+        questions cannot outrank answering thirty.
         """
         summary = self.store.summary(role)
 
@@ -186,6 +203,14 @@ class ThompsonRoutingPolicy:
             chosen = ordered[0]
             return RoutingDecision(tier=chosen.tier, model=chosen.name,
                                    basis="configured", scores_used={})
+
+        # Distinct-question coverage per candidate on the judged slice.
+        def _coverage(name: str) -> int:
+            recs = self._slice_records(role, task_class, name)
+            return len({r.get("question_id", "") for r in recs})
+
+        coverages = {c.name: _coverage(c.name) for c in candidates}
+        max_coverage = max(coverages.values(), default=0)
 
         best_name, best_loss = None, math.inf
         details: dict[str, dict] = {}
@@ -197,6 +222,23 @@ class ThompsonRoutingPolicy:
                 recs, measured = self.store.records_for(role, c.name), True
             else:
                 recs, measured = [], False
+            # Coverage gate (K2): partial participation forfeits the role.
+            # A candidate measured on fewer distinct questions than the best-
+            # covering rival is EXCLUDED from winning this decision — it is
+            # scored for visibility in `details`, but never selected — because
+            # a subset mean is not evidence about the questions it skipped.
+            if measured and coverages[c.name] < max_coverage:
+                sampled = None
+                eff = math.inf
+                if agg is not None:
+                    details[c.name] = {
+                        **agg,
+                        "coverage": coverages[c.name],
+                        "max_coverage": max_coverage,
+                        "coverage_gated": True,
+                        "sampled_effective_loss": None,
+                    }
+                continue
             if measured:
                 sampled = self._sample_loss(recs)
             else:
