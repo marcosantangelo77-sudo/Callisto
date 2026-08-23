@@ -237,11 +237,17 @@ _TREASURY_DATASETS: dict[str, list[Candidate]] = {
         Candidate("v2/accounting/od/avg_interest_rates",
                   "Average interest rates", 0.7),
     ],
+    # I2 live smoke: v2/debt/mspd/mspd_table_1 is a 404; national-debt
+    # questions are served by Debt to the Penny (verified 2026-08-22).
     "national debt": [
-        Candidate("v2/debt/mspd/mspd_table_1", "Debt by instrument", 0.8),
+        Candidate("v2/accounting/od/debt_to_penny",
+                  "Debt to the Penny (total public debt outstanding)", 0.85),
     ],
     "debt": [
-        Candidate("v2/debt/mspd/mspd_table_1", "Debt by instrument", 0.75),
+        Candidate("v2/accounting/od/debt_to_penny",
+                  "Debt to the Penny (total public debt outstanding)", 0.8),
+        Candidate("v1/debt/mspd/mspd_table_1",
+                  "Monthly Statement of the Public Debt, table 1", 0.6),
     ],
 }
 
@@ -273,10 +279,11 @@ _SEC_CIKN: dict[str, list[Candidate]] = {
 
 _CIK_RE = re.compile(r"^[0-9]{10}$")
 
-#: characters allowed inside an FDIC filter value after an operator — must
-#: match fdic.py's own guard so authored filters cannot pass planning but
-#: fail at fetch time.
-_VALUE_OK = re.compile(r"^[A-Za-z0-9 .,:><=\-+()']*$")
+# characters allowed inside an FDIC filter/search value after an operator —
+# must match fdic.py's own guard so authored filters cannot pass planning
+# but fail at fetch time. Double quotes are allowed: the ES query-string
+# form search=NAME:"term" is the partial-friendly route (live-smoke finding).
+_VALUE_OK = re.compile(r"^[A-Za-z0-9 .,:><=\-+()\"']*$")
 
 
 def resolve_entity(entity_type: str, text: str) -> tuple[
@@ -312,9 +319,10 @@ def _resolve(slot: str, question: str,
     # FULLY UPPERCASE in the original text AND either contain a digit or be
     # in the curated known-id set.
     upper_tokens = {m.group(0) for m in
-                    re.finditer(r"\b[A-Z0-9][A-Z0-9_]+\b", question)}
+                    re.finditer(r"\b[A-Z0-9][A-Z0-9_]+(?:\.[A-Z0-9]+)*\b",
+                                question)}
     known_ids = {c.key for cands in table.values() for c in cands}
-    for tok in re.findall(r"[A-Za-z0-9_]+", question):
+    for tok in re.findall(r"[A-Za-z0-9_]+(?:\.[A-Z0-9]+)*", question):
         up = tok.upper()
         if up not in upper_tokens:
             continue
@@ -558,6 +566,19 @@ def _plan_wikidata(question: str) -> PlanResult:
     if "q_id" in cands:
         return PlanResult(False, reason="ambiguous entity class; "
                           "disambiguate before querying", candidates=cands)
+    if "q_id" in resolved:
+        # a bare Q-number IS the entity; nothing to author beyond recording
+        return PlanResult(True, resolved=resolved,
+                          queries=[PlannedQuery(
+                              source="wikidata", method="sparql",
+                              args=(f"SELECT ?item ?itemLabel ?itemDescription"
+                                    f" WHERE {{ BIND(wd:{resolved['q_id']}"
+                                    f" AS ?item)"
+                                    f" SERVICE wikibase:label {{ bd:"
+                                    f"serviceParam wikibase:language \"en\"."
+                                    f" }} }} LIMIT 1",),
+                              rationale="explicit Q-id supplied in question")],
+                          reason=f"{resolved['q_id']} supplied directly")
     terms = [w for w in core.split() if w.lower() not in _WIKIDATA_HINTS]
     subject = terms[0] if terms else core.split()[0]
     sparql = (
@@ -703,9 +724,6 @@ def _plan_wikidata_concept(question: str) -> tuple[dict, dict]:
     low = question.lower()
     matched = [(c, h) for h, c in _WIKIDATA_HINTS.items() if h in low]
     if matched:
-        # Longest matching hint wins ('companies' over 'company'); the
-        # original `-p[1]` negated the hint STRING itself and crashed with
-        # TypeError on any question matching more than one hint.
         matched.sort(key=lambda p: -len(p[1]))
         best = matched[0][0]
         others = [c for c, _ in matched[1:] if c != best]
@@ -785,13 +803,26 @@ def _plan_census(question: str) -> PlanResult:
     }
     matched = sorted(((k, v) for k, v in table.items() if k in low),
                      key=lambda p: -len(p[0]))
+    # live check 2026-08-22: Census now 302s to a "Missing Key" page even
+    # for light use — fail loudly at planning instead of mid-fetch.
+    import os
     if not matched:
+        if not os.environ.get("CALLISTO_CENSUS_API_KEY"):
+            return PlanResult(False, reason=(
+                "Census API requires a key even for light use (free at "
+                "api.census.gov/data/key_signup.html); set "
+                "CALLISTO_CENSUS_API_KEY before planning Census fetches."))
         core = core_query(question)
         return PlanResult(False, reason=(
             f"Census queries need year+dataset+GET variables from its "
             f"variable catalogue (no text search); no survey mapping "
             f"matched '{core}'. Browse api.census.gov/data.html and add "
             f"the mapping."))
+    if not os.environ.get("CALLISTO_CENSUS_API_KEY"):
+        return PlanResult(False, reason=(
+            "Census API requires a key even for light use (free at "
+            "api.census.gov/data/key_signup.html); set "
+            "CALLISTO_CENSUS_API_KEY before planning Census fetches."))
     get_vars, dataset, label = matched[0][1]
     start = end = ""
     years = re.findall(r"\b(19|20)\d{2}\b", question)
@@ -811,8 +842,8 @@ _EIA_SERIES: dict[str, list[Candidate]] = {
     "wti": [Candidate("PET.RWTC.M", "WTI spot price FOB, monthly", 0.9)],
     "brent": [Candidate("PET.RBRTE.M", "Brent spot price FOB, monthly", 0.9)],
     "crude oil prices": [
-        Candidate("PET.RWTC.M", "WTI spot price FOB, monthly", 0.9),
-        Candidate("PET.RBRTE.M", "Brent spot price FOB, monthly", 0.85),
+        Candidate("PET.RWTC.M", "WTI spot price FOB, monthly", 0.95),
+        Candidate("PET.RBRTE.M", "Brent spot price FOB, monthly", 0.8),
     ],
     "gasoline prices": [
         Candidate("PET.EER_EPD2DXL0_PFE_NUS_DPG.M",
@@ -868,20 +899,25 @@ def _plan_fdic(question: str) -> PlanResult:
             source="fdic", method="failures", kwargs={"limit": 50},
             rationale="failed-bank history requested directly")],
             reason="failed-bank history query")
-    # bank-name lookup via NAME filter when a proper-noun token exists
+    # bank-name lookup. LIVE-SMOKE FINDING: filters=NAME:x is an EXACT
+    # match on the FDIC side (NAME:Chase → 0 hits; the full legal name
+    # quoted → 1), while search=NAME:"term" is an Elasticsearch query
+    # string that matches partials (NAME:"chase" → 11 institutions incl.
+    # CERT 628 JPMorgan Chase N.A.). Author the search form.
     proper = [t for t in re.findall(r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)*\b",
                                     question)
               if t.lower() not in _FILLER and t.lower() not in {
                   "what", "which", "bank", "banks", "the"}]
     if proper:
         name = max(proper, key=len)
-        filters = f"NAME:{name}"
-        if not _VALUE_OK.fullmatch(filters):
-            return PlanResult(False, reason=f"unsafe FDIC filter {filters!r}")
+        search = f'NAME:"{name}"'
+        if not _VALUE_OK.fullmatch(search):
+            return PlanResult(False, reason=f"unsafe FDIC search {search!r}")
         return PlanResult(True, queries=[PlannedQuery(
-            source="fdic", method="institutions",
-            kwargs={"filters": filters, "fields": _FDIC_FIELDS, "limit": 20},
-            rationale=f"institution search on bank name {name!r}")],
+            source="fdic", method="search_institutions",
+            kwargs={"search": search, "fields": _FDIC_FIELDS, "limit": 20},
+            rationale=f"institution full-text search on bank name "
+                      f"{name!r} (filters=NAME would exact-match)")],
             resolved={"bank_name": name}, reason=f"institution match {name}")
     core = core_query(question)
     return PlanResult(False, reason=(
@@ -963,8 +999,12 @@ def _plan_uspto_odp(question: str) -> PlanResult:
     if not core:
         return PlanResult(False, reason="no searchable core")
     assignee = None
-    m = re.search(r"(?:patents?|applications?)\s+(?:assigned\s+)?(?:to|by|of)"
-                  r"\s+([A-Z][A-Za-z0-9&.\- ]{2,40})", question)
+    m = (re.search(r"(?:patents?|applications?)\s+assigned\s+to\s+"
+                   r"([A-Z][A-Za-z0-9&.\- ]{1,40})", question,
+                   re.IGNORECASE)
+         or re.search(r"(?:patents?|applications?)\s+(?:by|of)\s+"
+                      r"([A-Z][A-Za-z0-9&.\- ]{2,40})", question,
+                      re.IGNORECASE))
     if m:
         raw = m.group(1).strip()
         assignee = re.split(
@@ -1072,9 +1112,9 @@ _KEYWORD_PLANNERS = {
 #: other registered source now has a planner; the remaining entries below
 #: are the honest residue, each naming exactly what is missing.
 _HONEST_GAPS = {
-    "sec_fts": "SEC full-text search requires a declared contact and this "
-               "host is currently 403'd; query authoring deferred until "
-               "access is restored (deliberate, not forgotten).",
+    "sec_fulltext": "SEC full-text search requires a declared contact and "
+               "this host is currently 403'd; query authoring deferred "
+               "until access is restored (deliberate, not forgotten).",
 }
 
 

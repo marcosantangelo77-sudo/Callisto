@@ -35,8 +35,11 @@ SPEC = SourceSpec(
 # Well-known datasets from the public catalog (fiscaldata.treasury.gov/
 # datasets). Use query(dataset, ...) directly for anything else in the
 # catalog rather than adding per-dataset wrappers.
+# I2 live smoke: v2/debt/mspd/mspd_table_1 returns 404 — the MSPD table
+# lives at v1/debt/mspd/mspd_table_1, and "national debt" is best served
+# by v2/accounting/od/debt_to_penny (verified 2026-08-22).
 DATASET_AVG_INTEREST_RATES = "v2/accounting/od/avg_interest_rates"
-DATASET_DEBT_TO_PENNY = "v2/debt/mspd/mspd_table_1"
+DATASET_DEBT_TO_PENNY = "v2/accounting/od/debt_to_penny"
 
 
 class TreasuryAdapter:
