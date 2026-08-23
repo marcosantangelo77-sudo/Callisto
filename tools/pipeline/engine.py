@@ -23,6 +23,7 @@ The pipeline can only ever lower what the model proposes.
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import hashlib
 import json
@@ -144,6 +145,27 @@ class PipelineResult:
 Transport = Callable[[str, dict], "tuple[int, str]"]
 
 
+class _FetchRecorder:
+    """Per-leaf capture of provenance writes from an off-loop retrieval.
+
+    Parallel retrieval must not mutate the shared ledger from threads. Each
+    leaf records its `record_tool_result` calls here; the caller replays
+    them into the real ledger in leaf order, so the final ledger state is
+    byte-identical to the serial run's (same keys, same per-key order,
+    same first-wins url mapping). Any other attribute access fails loudly —
+    retrieval should never need more than this one method.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def record_tool_result(self, tool_name: str, content: str, *,
+                           primary: bool = False, urls=None):
+        self.calls.append((tool_name, content,
+                           bool(primary), list(urls or ())))
+        return None
+
+
 def fixture_transport(routes: dict[str, str]) -> Transport:
     """Serve canned bodies by URL substring. Replaces the HTTP layer entirely
     (tools/sources/base), so no socket is ever opened — safe under the
@@ -203,6 +225,11 @@ class ResearchPipeline:
         self._adversary_is_self_review = adversary_router is None
         # None = no checkpointing; behaviour identical to the pre-W3 run.
         self.checkpointer = checkpointer
+        # Parallel-leaf machinery: compute-path serialization and artifact
+        # refs collected during concurrent answers (extended onto
+        # self.artifact_refs in leaf order at assembly).
+        self._compute_lock = asyncio.Lock()
+        self._pending_artifact_refs: list[ArtifactRef] = []
 
     # -- lazy components ---------------------------------------------------
 
@@ -287,14 +314,14 @@ class ResearchPipeline:
 
     # ── Stage 2+3: select sources and fetch per leaf ──────────────────────
 
-    async def _fetch_for_question(self, q: ResearchQuestion,
-                                  question_type: str = "",
-                                  ) -> tuple[list[FetchResult], Any]:
-        """Iterative, gated, fanned-out retrieval for one leaf.
+    def _fetch_leaf_sync(self, q: ResearchQuestion, question_type: str,
+                         ledger) -> tuple[list[FetchResult], Any]:
+        """Synchronous body of per-leaf retrieval (runs off the event loop).
 
-        Returns (fetches, RetrievalTrace). Every returned fetch passed the
-        relevance gate; rejected items live on the trace with reasons. A
-        trace with zero admitted items is an honest null, surfaced as such."""
+        `ledger` is where THIS leaf's fetch records land. The parallel path
+        passes a scratch ledger so threads never mutate shared state; the
+        caller replays the records into the real ledger in leaf order.
+        """
         from tools.pipeline.retrieval import IterativeRetriever
 
         reg = self._get_registry()
@@ -305,10 +332,21 @@ class ResearchPipeline:
         # replaced the 4-entry GENERIC_CALLS table whose mono-source fan-out
         # kept independence at 1 in the second live run.
         retriever = IterativeRetriever(
-            registry=reg, ledger=self.ledger, transport=self.transport)
+            registry=reg, ledger=ledger, transport=self.transport)
         trace = retriever.retrieve(
             q, qt, min_independent=q.evidence_requirements.min_independent_sources)
         return list(trace.admitted), trace
+
+    async def _fetch_for_question(self, q: ResearchQuestion,
+                                  question_type: str = "",
+                                  ) -> tuple[list[FetchResult], Any]:
+        """Iterative, gated, fanned-out retrieval for one leaf.
+
+        Returns (fetches, RetrievalTrace). Every returned fetch passed the
+        relevance gate; rejected items live on the trace with reasons. A
+        trace with zero admitted items is an honest null, surfaced as such."""
+        return await asyncio.to_thread(
+            self._fetch_leaf_sync, q, question_type, self.ledger)
 
 
     # ── Stage 4+5: answer with optional sandbox compute + artifacts ───────
@@ -317,7 +355,12 @@ class ResearchPipeline:
                            fetches: list[FetchResult],
                            session: AGPSession,
                            trace: Any = None,
-                           ) -> LeafOutcome:
+                           ) -> tuple[LeafOutcome, list[Evidence]]:
+        """Answer one leaf. SIDE-EFFECT ISOLATED: returns the evidence items
+        instead of appending them to the session, so concurrent leaf answers
+        can be assembled in deterministic leaf order by the caller. (The
+        legacy signature's session argument is retained for compatibility
+        but is no longer mutated here.)"""
         out = LeafOutcome(question_id=q.question_id, text=q.text)
         evidence_items: list[Evidence] = []
         best_class = SourceClass.INFERRED
@@ -332,7 +375,6 @@ class ResearchPipeline:
             ev.confidence_score = round(min(0.45, ceiling), 2) \
                 if assigned != SourceClass.PRIMARY else round(ceiling, 2)
             evidence_items.append(ev)
-            session.add_evidence(ev)
             out.source_classes.append(assigned.value)
             if _CLASS_RANK[assigned.value] > _CLASS_RANK[best_class.value]:
                 best_class = assigned
@@ -340,46 +382,51 @@ class ResearchPipeline:
 
         # Model proposes an answer, possibly requesting computation first.
         resp = await self.model.complete(
-            "Manager", answer_messages(q.text, [e.content for e in evidence_items]))
+            "Manager", answer_messages(q.text, [e.content for e in evidence_items]),
+            _call_tag=q.question_id)
         proposal = parse_model_json(resp) or {}
 
         compute = proposal.get("compute")
         if compute and isinstance(compute, dict) and compute.get("code"):
-            # keep_workspace=True so produced file BYTES reach the artifact
-            # store — otherwise the child merely ATTESTS hashes and nothing
-            # downstream can re-verify them (property 3: evidence you can
-            # check). Workspace is destroyed right after sealing.
-            sbx = run_python(str(compute["code"]),
-                             inputs=compute.get("inputs") or {},
-                             keep_workspace=True)
-            out.sandbox_status = sbx.status
-            if sbx.status == "ok":
-                refs = _store_sandbox(sbx, self.store)
-                _cleanup_workspace(sbx)
-                out.artifact_sha256s.extend(r.sha256 for r in refs)
-                self.artifact_refs.extend(refs)
-                # The computation itself is real executed output → recorded
-                # in the ledger; provenance assigns its class.
-                comp_body = f"sandbox code:\n{sbx.code}\nstdout:\n{sbx.stdout}"
-                self.ledger.record_tool_result("run_python", comp_body,
-                                               primary=False)
-                comp_ev = Evidence(
-                    content=comp_body[:4000],
-                    source_class=SourceClass.INFERRED,
-                    confidence_score=0.30,
-                    domain=session.domain or Domain.GENERAL,
-                    origin_agent="sandbox")
-                comp_ev.source_class = self.ledger.assign_source_class(comp_ev)
-                comp_ev.confidence_score = round(min(
-                    0.45, MAX_CONFIDENCE_BY_SOURCE.get(
-                        comp_ev.source_class.value, 0.55)), 2)
-                evidence_items.append(comp_ev)
-                session.add_evidence(comp_ev)
-                out.n_sources += 1
+            # The compute path mutates shared stores (ledger, artifact
+            # store). It is rare; serialize it so cross-leaf interleaving
+            # cannot corrupt state, then continue.
+            async with self._compute_lock:
+                # keep_workspace=True so produced file BYTES reach the artifact
+                # store — otherwise the child merely ATTESTS hashes and nothing
+                # downstream can re-verify them (property 3: evidence you can
+                # check). Workspace is destroyed right after sealing.
+                sbx = await asyncio.to_thread(
+                    run_python, str(compute["code"]),
+                    inputs=compute.get("inputs") or {}, keep_workspace=True)
+                out.sandbox_status = sbx.status
+                if sbx.status == "ok":
+                    refs = _store_sandbox(sbx, self.store)
+                    _cleanup_workspace(sbx)
+                    out.artifact_sha256s.extend(r.sha256 for r in refs)
+                    self._pending_artifact_refs.extend(refs)
+                    # The computation itself is real executed output → recorded
+                    # in the ledger; provenance assigns its class.
+                    comp_body = f"sandbox code:\n{sbx.code}\nstdout:\n{sbx.stdout}"
+                    self.ledger.record_tool_result("run_python", comp_body,
+                                                   primary=False)
+                    comp_ev = Evidence(
+                        content=comp_body[:4000],
+                        source_class=SourceClass.INFERRED,
+                        confidence_score=0.30,
+                        domain=session.domain or Domain.GENERAL,
+                        origin_agent="sandbox")
+                    comp_ev.source_class = self.ledger.assign_source_class(comp_ev)
+                    comp_ev.confidence_score = round(min(
+                        0.45, MAX_CONFIDENCE_BY_SOURCE.get(
+                            comp_ev.source_class.value, 0.55)), 2)
+                    evidence_items.append(comp_ev)
+                    out.n_sources += 1
             # Re-ask for the final answer now that computation ran.
             resp = await self.model.complete(
                 "Manager", answer_messages(
-                    q.text, [e.content for e in evidence_items]))
+                    q.text, [e.content for e in evidence_items]),
+                _call_tag=q.question_id)
             proposal = parse_model_json(resp) or {}
 
         out.answer = str(proposal.get("answer", "")).strip()
@@ -410,7 +457,7 @@ class ResearchPipeline:
 
         out.confidence = round(max(0.0, clamped), 2)
         out.tier = ConfidenceTier.from_score(out.confidence).value
-        return out
+        return out, evidence_items
 
     # ── The whole chain ───────────────────────────────────────────────────
 
