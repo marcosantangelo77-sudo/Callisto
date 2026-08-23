@@ -477,6 +477,13 @@ class HypothesisManager:
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
         self._db: Optional[aiosqlite.Connection] = None
+        # Schema-shape flags (loaded lazily from the real table; class
+        # defaults describe the pre-seam shape so any path that never
+        # loads them behaves exactly like the pre-change code).
+        self._has_core_sport: bool = True
+        self._has_domain_col: bool = False
+        self._has_sports_ext: bool = False
+        self._shape_loaded: bool = False
 
     async def initialize(self) -> None:
         self._db = await aiosqlite.connect(self.db_path)
@@ -491,6 +498,13 @@ class HypothesisManager:
         logger.info("Hypothesis manager initialized")
 
     # ── schema-shape detection (pre/post migration 013) ──────────────────
+
+    async def _ensure_shape(self) -> None:
+        """Load the table shape once per manager, however the connection
+        was attached (initialize() or a directly assigned ``_db``)."""
+        if self._shape_loaded:
+            return
+        await self._load_table_shape()
 
     async def _load_table_shape(self) -> None:
         """Detect which shape the ``hypotheses`` table has, once.
@@ -522,6 +536,7 @@ class HypothesisManager:
                 "AND name='hypothesis_sports_ext'"
             )
             self._has_sports_ext = bool(await cur.fetchone())
+        self._shape_loaded = True
 
     def _hyp_from(self) -> str:
         """FROM clause resolving the sports fields for hypothesis rows.
@@ -575,6 +590,7 @@ class HypothesisManager:
 
         These fields are used by backtest.py to enforce temporal isolation.
         """
+        await self._ensure_shape()
         if model_config is None:
             model_config = {}
         # ── Deduplication guard: skip if name already exists ──
@@ -707,6 +723,7 @@ class HypothesisManager:
                     raise
 
     async def get_hypothesis(self, hypothesis_id: str) -> Optional[dict]:
+        await self._ensure_shape()
         if self._has_core_sport or not self._has_sports_ext:
             sql = "SELECT * FROM hypotheses WHERE hypothesis_id = ?"
         else:
@@ -724,6 +741,7 @@ class HypothesisManager:
         return h
 
     async def list_hypotheses(self, status: Optional[str] = None, limit: int = None) -> list[dict]:
+        await self._ensure_shape()
         joined = not self._has_core_sport and self._has_sports_ext
         prefix = "h." if joined else ""
         select = ("SELECT h.*, e.sport AS sport, e.market_type AS market_type "
@@ -2855,6 +2873,7 @@ class HypothesisManager:
         no odds-cache notion to count; None reads as "unknown" to the gates,
         never as zero days of evidence.
         """
+        await self._ensure_shape()
         h = await self.get_hypothesis(hypothesis_id)
         if not h:
             return None
