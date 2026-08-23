@@ -13,7 +13,7 @@ the loop is manufacturing overconfidence — measurable here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Optional
 
 from tools.retrodiction.cutoff import CutoffEnforcer, EvidenceRecord
 from tools.retrodiction.scoring import Prediction, score_brier
@@ -61,6 +61,13 @@ class RunConfig:
     # Fail-closed cutoff policy: with strict=True, any rejected record aborts
     # the arm instead of silently continuing with less evidence.
     strict_cutoff: bool = False
+    # Secret the publication proofs are signed under. None falls back to
+    # CALLISTO_CUTOFF_KEY / CALLISTO_SEAL_KEY inside CutoffEnforcer.
+    cutoff_signing_key: Optional[str] = None
+    # Score WITHOUT verifying publication proofs. Every date then becomes
+    # self-declared, so post-cutoff evidence can walk in by claiming an old
+    # date and the resulting scores mean nothing. Opt in only for fixtures.
+    allow_unsigned_proofs: bool = False
 
 
 @dataclass
@@ -90,7 +97,12 @@ class RunResult:
 
 
 def _run_arm(config: RunConfig, questions, evidence_records) -> RunResult:
-    enforcer = CutoffEnforcer(min(q.claim_date for q in questions))
+    # Pass the policy EXPLICITLY. This previously took the default, which
+    # silently disabled signature verification for every production run.
+    enforcer = CutoffEnforcer(
+        min(q.claim_date for q in questions),
+        signing_key=config.cutoff_signing_key,
+        allow_unsigned=config.allow_unsigned_proofs)
     admitted, rejected = enforcer.admit(evidence_records)
     if config.strict_cutoff and rejected:
         from tools.retrodiction.cutoff import CutoffViolation
