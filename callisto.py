@@ -85,9 +85,21 @@ def _result_record(result, question: str) -> dict:
 
     Everything needed to re-check the conclusion later: the conclusion
     text itself, every artifact hash (resolvable against the artifact
-    store), and per-fetch source/URL provenance.
+    store), per-fetch source/URL provenance, and — for sealed runs — the
+    FULL sealed AGP session dict including its seal_hash, so `show` can
+    re-verify the seal instead of trusting the verdict line. Without it,
+    editing the conclusion in the saved JSON shows tampered text under
+    SEALED VERIFIED (the seal existed but never travelled with the record).
     """
+    session_dict = None
+    sess = getattr(result, "session", None)
+    if sess is not None and getattr(result, "sealed", False):
+        try:
+            session_dict = sess.to_dict()
+        except Exception:
+            session_dict = None      # degrade to unverified, never crash ask
     return {
+        "session": session_dict,
         "recorded_at": datetime.datetime.now(
             datetime.timezone.utc).isoformat(timespec="seconds"),
         "question": question,
@@ -368,6 +380,30 @@ def _cmd_runs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _verify_session(rec: dict) -> str:
+    """Re-verify a sealed run's AGP seal against its stored session.
+
+    Returns one of:
+      "verified"       — seal recomputes over the stored session AND the
+                         record's conclusion/summary match what was sealed.
+      "TAMPERED"       — seal fails, or the printed conclusion differs from
+                         the sealed one (post-seal edit of this file).
+      "unsealed"       — run refused / pre-session record (legacy).
+    Never raises; `show` reports honestly instead of trusting the verdict.
+    """
+    sess = rec.get("session")
+    if not isinstance(sess, dict) or not sess.get("seal_hash"):
+        return "unsealed"
+    from agp import AGPSession
+    if not AGPSession.verify_seal(sess):
+        return "TAMPERED"
+    summary = sess.get("summary") or {}
+    sealed_concl = summary.get("conclusion") or ""
+    if (rec.get("conclusion") or "").strip() != sealed_concl.strip():
+        return "TAMPERED"            # conclusion edited after sealing
+    return "verified"
+
+
 def _cmd_show(args: argparse.Namespace) -> int:
     rec, path = _load_run(args.run_id)
     if rec is None:
@@ -379,6 +415,17 @@ def _cmd_show(args: argparse.Namespace) -> int:
     print(f"when     : {rec.get('recorded_at', '?')}")
     print(f"question : {rec.get('question', '?')}")
     print(f"{verdict:<9}: {conf.get('tier', '?')} {conf.get('score', 0):.2f}")
+    # The verdict line above is now CLAIMED, not trusted: the seal over the
+    # stored session is re-checked here. Artifacts were already re-hashed;
+    # this closes the same loop for the conclusion itself.
+    seal_status = _verify_session(rec)
+    if rec.get("sealed"):
+        label = {"verified": "seal     : verified against stored session",
+                 "TAMPERED": "seal     : TAMPERED — record does not match "
+                             "its seal; treat everything below as untrusted",
+                 "unsealed": "seal     : no sealed session in record "
+                             "(legacy/refused run) — unverifiable"}
+        print(label.get(seal_status, f"seal     : {seal_status}"))
     if rec.get("refusal_reason"):
         print(f"reason   : {rec['refusal_reason']}")
     if rec.get("conclusion"):

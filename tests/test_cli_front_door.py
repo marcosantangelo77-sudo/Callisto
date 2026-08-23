@@ -247,6 +247,7 @@ def _fake_result():
         sealed=True, refusal_reason="",
         conclusion="Foundry concentration is the binding constraint.",
         confidence_score=0.34, confidence_tier="SPECULATIVE",
+        session=_sealed_session("Foundry concentration is the binding constraint."),
         leaves=[_NS(text="leaf q", answer="leaf a", tier="SPECULATIVE",
                     confidence=0.4)],
         artifact_refs=[ArtifactRef(sha256="a" * 64, kind="csv",
@@ -255,6 +256,31 @@ def _fake_result():
                      content_sha256="b" * 64)],
         objections=[_NS(text="one independent source only")],
         notes=[])
+
+
+def _sealed_session(conclusion: str):
+    """A genuinely SEALED AGPSession whose summary carries *conclusion*.
+
+    Not a stub: the tests below depend on the real HMAC/SHA seal algorithm,
+    so tamper detection is proven against agp itself.
+    """
+    from agp import (AGPSession, Domain, Evidence, SessionStep, SessionSummary,
+                     SourceClass)
+    s = AGPSession("the question")
+    s.add_evidence(Evidence(content="some fetched bytes",
+                            source_class=SourceClass.SECONDARY,
+                            confidence_score=0.6, domain=Domain.GENERAL,
+                            origin_agent="test"))
+    for step in SessionStep:
+        try:
+            s.advance_to(step)
+        except Exception:
+            pass
+    s.summary = SessionSummary(scope="the question", domain=Domain.GENERAL,
+                               conclusion=conclusion, confidence_score=0.34,
+                               evidence_count=1, contradiction_count=0)
+    s.seal()
+    return s
 
 
 class TestRunPersistence:
@@ -350,3 +376,49 @@ class TestRunPersistence:
     def test_show_unknown_id_exits_one(self, runs_env, capsys):
         rc = _cmd_show(build_parser().parse_args(["show", "nope"]))
         assert rc == 1
+
+    # ── seal verification: the record carries its own proof ───────────────
+
+    def test_sealed_record_carries_session_and_show_verifies_it(
+            self, runs_env, capsys):
+        rec = _result_record(_fake_result(), "the question")
+        path = _persist_run(rec)
+        assert isinstance(rec["session"], dict) and rec["session"]["seal_hash"]
+        rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "seal     : verified" in out
+
+    def test_edited_conclusion_is_flagged_tampered(self, runs_env, capsys):
+        """THE attack this closes: edit the conclusion in the saved JSON,
+        `show` must not reprint it under SEALED without complaint."""
+        rec = _result_record(_fake_result(), "q")
+        path = _persist_run(rec)
+        rec2 = json.loads(path.read_text())
+        rec2["conclusion"] = "EDITED: now claims VERIFIED certainty"
+        path.write_text(json.dumps(rec2))
+        rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
+        out = capsys.readouterr().out
+        assert rc == 0                      # still prints — honest report
+        assert "TAMPERED" in out
+
+    def test_edited_stored_session_is_flagged_tampered(self, runs_env, capsys):
+        """Editing evidence inside the stored session breaks the seal."""
+        rec = _result_record(_fake_result(), "q")
+        path = _persist_run(rec)
+        rec2 = json.loads(path.read_text())
+        rec2["session"]["evidence"][0]["confidence_score"] = 0.99
+        path.write_text(json.dumps(rec2))
+        rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
+        assert "TAMPERED" in capsys.readouterr().out
+
+    def test_legacy_record_without_session_shows_unverifiable(
+            self, runs_env, capsys):
+        """Records written before sessions were persisted degrade honestly."""
+        rec = _result_record(_fake_result(), "q")
+        rec["session"] = None
+        path = _persist_run(rec)
+        rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "unverifiable" in out
