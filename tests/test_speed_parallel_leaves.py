@@ -390,7 +390,18 @@ def test_brier_regression_five_retro_questions(tmp_path):
 
     golden_path = GOLDEN_DIR / "five_question_brier.json"
     golden = json.loads(golden_path.read_text())
+    # The golden was captured under the OLD scorer (retro._leans_yes, a
+    # keyword scan defaulting to YES). Commit fa2bea9 replaced that with the
+    # DECLARED stance: AFFIRMS/DENIES set the sign, UNDETERMINED is p=0.5.
+    # A scripted model declares no stance, so every scripted forecast is
+    # honestly 0.5 — Brier 0.25 by construction. That is an INTENTIONAL
+    # semantic change in the scorer, not drift in this suite's parallelism:
+    # what this test guards is that the parallel engine reproduces the
+    # CURRENT serial semantics exactly, so the golden must be regenerated
+    # against current code (gen_speed_golden.py) whenever the bridge changes.
     assert round(brier, 9) == golden["brier"], (
-        f"Brier moved: {brier} vs serial golden {golden['brier']}")
+        f"Brier moved: {brier} vs golden {golden['brier']} — if the bridge "
+        f"semantics changed intentionally, regenerate the golden; if not, "
+        f"this is a regression")
     assert preds == golden["predictions"], (
         "per-question probabilities moved vs serial golden")

@@ -1,8 +1,8 @@
 {
-  "brier": 0.210125,
+  "brier": 0.25,
   "predictions": [
     {
-      "probability": 0.775,
+      "probability": 0.5,
       "question_id": "c1672ca2fb5444c9"
     },
     {
