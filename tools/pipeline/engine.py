@@ -574,12 +574,31 @@ class ResearchPipeline:
 
         fresh = [i for i in range(n_leaves) if i not in fetch_hits]
 
+        # R1 fix (speed run 2026-08-23-164040): each completed retrieval is
+        # checkpointed INSIDE the worker, immediately — a sibling leaf's
+        # failure must not forfeit paid fetch work. Saves happen off the
+        # shared trace (appended in leaf order during assembly below) so the
+        # trace stays deterministic; cp.save itself is atomic (tempfile +
+        # os.replace), so concurrent saves are safe. Serial contract
+        # preserved: the serial engine saved each leaf's checkpoint right
+        # after that leaf finished; this does exactly that, concurrently.
+        _fetch_saved: dict[int, ckpt.StageOutcome] = {}
         async def _retrieve(i: int):
             q = leaves[i]
             rec = _FetchRecorder()
             fetches_i, trace_i = await asyncio.to_thread(
                 self._fetch_leaf_sync, q,
                 self._question_types.get(q.question_id) or "", rec)
+            if cp is not None:
+                saved = cp.save(
+                    trace.run, "fetch_leaf",
+                    ckpt.hash_inputs(_fetch_inputs(q)),
+                    _fetch_payload_dict(fetches_i, trace_i),
+                    claim_ids=[session.session_id])
+                _fetch_saved[i] = ckpt.StageOutcome(
+                    stage="fetch_leaf", resumed=False,
+                    payload=_fetch_payload_dict(fetches_i, trace_i),
+                    produced_at=saved.produced_at)
             return i, fetches_i, trace_i, rec
 
         retrieved: dict[int, tuple] = {}
@@ -587,7 +606,8 @@ class ResearchPipeline:
             outcomes = await asyncio.gather(
                 *[_retrieve(i) for i in fresh], return_exceptions=True)
             # Fail in LEAF ORDER — identical error selection to the serial
-            # loop (first failing leaf decides the exception).
+            # loop (first failing leaf decides the exception). Completed
+            # leaves' checkpoints are already on disk (saved in _retrieve).
             for i, oc in zip(fresh, outcomes):
                 if isinstance(oc, BaseException):
                     raise oc
@@ -622,16 +642,10 @@ class ResearchPipeline:
                 trace_q = _trace_from_payload(q.question_id, ck.payload)
             else:
                 fetches_i, trace_q, _rec = retrieved[i]
-                if cp is not None:
-                    saved = cp.save(
-                        trace.run, "fetch_leaf",
-                        ckpt.hash_inputs(_fetch_inputs(q)),
-                        _fetch_payload_dict(fetches_i, trace_q),
-                        claim_ids=[session.session_id])
-                    trace.stages.append(ckpt.StageOutcome(
-                        stage="fetch_leaf", resumed=False,
-                        payload=_fetch_payload_dict(fetches_i, trace_q),
-                        produced_at=saved.produced_at))
+                if i in _fetch_saved:
+                    # Already persisted inside _retrieve (R1 fix); just
+                    # record the outcome on the trace in leaf order.
+                    trace.stages.append(_fetch_saved[i])
             fetches_by_leaf.append(fetches_i)
             traces_by_leaf.append(trace_q)
             result.fetches.extend(fetches_i)
@@ -664,14 +678,34 @@ class ResearchPipeline:
         to_run = [i for i in range(n_leaves) if i not in answer_hits]
         payloads: dict[int, dict] = {}
         resumed_answer: dict[int, dict] = {}
+        # R1 fix, answer stage: each completed answer is checkpointed INSIDE
+        # the worker immediately (same reasoning as the fetch stage above).
+        _answer_saved: dict[int, ckpt.StageOutcome] = {}
+        async def _answer_fresh(i: int) -> dict:
+            outcome_i, ev_items = await self._answer_leaf(
+                leaves[i], fetches_by_leaf[i], session,
+                trace=traces_by_leaf[i], call_tag=f"leaf{i}")
+            payload = {"i": i,
+                    "leaf": dataclasses.asdict(outcome_i),
+                    "evidence": [dataclasses.asdict(e) for e in ev_items]}
+            if cp is not None:
+                saved = cp.save(
+                    trace.run, "answer_leaf",
+                    ckpt.hash_inputs({"qid": leaves[i].question_id}),
+                    payload, claim_ids=[session.session_id])
+                _answer_saved[i] = ckpt.StageOutcome(
+                    stage="answer_leaf", resumed=False, payload=payload,
+                    produced_at=saved.produced_at)
+            return payload
+
         if to_run:
             ans_outcomes = await asyncio.gather(
                 *[_answer_fresh(i) for i in to_run], return_exceptions=True)
             for i, oc in zip(to_run, ans_outcomes):
                 if isinstance(oc, BaseException):
                     raise oc
-            for oc in ans_outcomes:
-                payloads[oc.pop("i")] = oc
+            for i, oc in zip(to_run, ans_outcomes):
+                payloads[i] = oc
         for i in range(n_leaves):
             if i in answer_hits:
                 ck = answer_hits[i]
