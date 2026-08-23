@@ -468,11 +468,86 @@ class ResearchPipeline:
         return out, evidence_items, leaf_artifact_refs
 
     # ── The whole chain ───────────────────────────────────────────────────
+    # ── One leaf, with its own error boundary ─────────────────────────────
+
+    async def _run_leaf_checked(self, idx: int, q: ResearchQuestion,
+                                question: str, domain: Domain,
+                                session_id: str) -> dict:
+        """Fetch + answer one leaf under the concurrency semaphore.
+
+        A leaf failing must not kill the run: any exception is captured and
+        returned as {"idx", "error"} so the merge phase can record an honest
+        failed-leaf outcome. Returns {"idx", "fetches", "trace",
+        "outcome": (LeafOutcome, [Evidence], [ArtifactRef]), "rejected"}
+        on success.
+        """
+        cp = self.checkpointer
+        trace = self._trace
+        try:
+            async def _fetch_payload() -> dict:
+                fetches_q, trace_q = await self._fetch_for_question(
+                    q, self._question_types.get(q.question_id) or "")
+                return {"fetches": [dataclasses.asdict(f)
+                                    for f in fetches_q]}
+
+            if cp is not None:
+                f_oc = await ckpt.run_stage(
+                    cp, trace, "fetch_leaf", {"qid": q.question_id},
+                    _fetch_payload,
+                    claim_ids=[session_id])
+                ck = cp.load_by_key(
+                    trace.run,
+                    ckpt.step_key(trace.run, "fetch_leaf",
+                                  ckpt.hash_inputs({"qid": q.question_id})))
+                if ck is not None:
+                    ckpt.replay_ledger(self.ledger.unwrapped, [ck])
+                fetches = [_fetch_from_payload(r)
+                           for r in f_oc.payload["fetches"]]
+                rejected = []
+                trace_q = None
+            else:
+                fetches, trace_q = await self._fetch_for_question(
+                    q, self._question_types.get(q.question_id) or "")
+                rejected = trace_q.rejected
+
+            async def _answer() -> dict:
+                outcome, new_ev, new_refs = await self._answer_leaf(
+                    q, fetches, trace=trace_q, domain=domain)
+                # Persist what this leaf contributed so a resume can
+                # rehydrate session.evidence without re-running the model.
+                return {"leaf": dataclasses.asdict(outcome),
+                        "evidence": [dataclasses.asdict(e) for e in new_ev]}
+
+            if cp is not None:
+                a_oc = await ckpt.run_stage(
+                    cp, trace, "answer_leaf", {"qid": q.question_id}, _answer)
+                outcome = _leaf_from_payload(a_oc.payload["leaf"])
+                new_evidence = [
+                    Evidence(content=e_rec["content"],
+                             source_class=SourceClass(e_rec["source_class"]),
+                             confidence_score=e_rec["confidence_score"],
+                             domain=domain,
+                             origin_agent=e_rec["origin_agent"],
+                             source_name=e_rec["source_name"])
+                    for e_rec in a_oc.payload.get("evidence") or []]
+                new_refs = []
+            else:
+                outcome, new_evidence, new_refs = await self._answer_leaf(
+                    q, fetches, trace=trace_q, domain=domain)
+            return {"idx": idx, "fetches": fetches, "trace": trace_q,
+                    "rejected": rejected,
+                    "outcome": (outcome, new_evidence, new_refs)}
+        except Exception as e:  # noqa: BLE001 — one leaf failing must not
+            # kill the run; the merge phase records an honest failed leaf,
+            # distinguishable from a leaf that legitimately found nothing.
+            logger.exception("leaf %s (%s) failed", q.question_id, q.text[:60])
+            return {"idx": idx, "error": f"{type(e).__name__}: {e}"}
 
     async def run(self, question: str, *, domain: Domain = Domain.GENERAL,
                   today: Optional[date] = None) -> PipelineResult:
         today = today or date.today()
         self.artifact_refs = []
+        self._trace: Optional[ckpt.RunTrace] = None
         result = PipelineResult(root_query=question, sealed=False)
         cp = self.checkpointer
         trace: Optional[ckpt.RunTrace] = None
@@ -512,6 +587,7 @@ class ResearchPipeline:
         else:
             program = await _do_decompose()
         result.program = program
+        self._trace = trace
 
         # 2..5. Per leaf: select sources, fetch, compute, answer.
         session = AGPSession(question)
