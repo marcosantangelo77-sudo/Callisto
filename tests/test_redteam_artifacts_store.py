@@ -339,6 +339,57 @@ def test_data_row_starting_with_equals_becomes_live_formula():
     )
 
 
+def test_negative_number_string_stays_numeric_not_text():
+    # B1 boundary: "-5" is a plain negative number and must be stored as a
+    # number (or at worst an unmodified string) — never "'-5".
+    spec = {
+        "assumptions": [{"name": "drift", "value": "-5"}],
+        "data": {"Pulls": {"columns": ["v"], "rows": [["-5"], ["+3"],
+                                                      ["@2"], ["-SUM(A1)"]]}},
+    }
+    wb = load_workbook_bytes(build_workbook(spec))
+    assert wb["Pulls"].cell(row=2, column=1).value == -5
+    assert wb["Pulls"].cell(row=2, column=1).data_type != "f"
+    assert wb["Assumptions"].cell(row=2, column=2).value == -5
+    # "+3" parses as a number, so it is stored as the number 3.
+    assert wb["Pulls"].cell(row=3, column=1).value == 3
+    assert wb["Pulls"].cell(row=3, column=1).data_type == "n"
+    # "@2" is not a number: neutralized to text so Excel can't run it as
+    # a macro/function lead.
+    assert wb["Pulls"].cell(row=4, column=1).value == "'@2"
+    # Non-number strings with +/-/@ leads are neutralized to text.
+    cell = wb["Pulls"].cell(row=5, column=1)
+    assert str(cell.value).startswith("'") or cell.data_type == "s"
+
+
+def test_plus_at_prefix_nonnumeric_strings_are_neutralized():
+    spec = {
+        "data": {"Pulls": {"columns": ["a", "b", "c"], "rows": [
+            ["+cmd|calc", "@SUM(A1)", "-HYPERLINK(\"http://evil\",\"x\")"],
+        ]}},
+    }
+    wb = load_workbook_bytes(build_workbook(spec))
+    for col in (1, 2, 3):
+        cell = wb["Pulls"].cell(row=2, column=col)
+        assert cell.data_type != "f", f"column {col} executed: {cell.value!r}"
+        assert str(cell.value).startswith("'")
+
+
+def test_legitimate_system_formulas_remain_live():
+    # Model formulas come from OUR code (spec["model"]), never fetched bytes;
+    # they must still land as live formulas so the workbook stays auditable.
+    spec = {
+        "model": [{"cell": "B2", "formula": "=Assumptions!B2*2",
+                   "label": "double"}],
+    }
+    wb = load_workbook_bytes(build_workbook(spec))
+    live = wb["ModelLive"]["B2"]
+    assert live.data_type == "f"
+    assert str(live.value).startswith("=")
+    listing = wb["Model"].cell(row=2, column=3)
+    assert listing.data_type == "f"
+
+
 def test_provenance_comment_for_unknown_column_lands_on_first_column():
     spec = {
         "data": {"Pulls": {"columns": ["a", "b"], "rows": [[1, 2]],
