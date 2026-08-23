@@ -412,14 +412,45 @@ def replay_ledger(ledger, checkpoints: list[Checkpoint]) -> dict:
             "integrity_failures": failures}
 
 
-def _is_fetch_stage(stage: str) -> bool:
-    """Stages whose checkpoints are REQUIRED to carry fetch records.
+def _is_fetch_stage(ck: "Checkpoint") -> bool:
+    """Is this checkpoint subject to the fetch-provenance rules?
+
+    CONTENT-BASED (red-team D2): the previous version grepped the stage NAME
+    string — `"fetch" in stage` — but `stage` is plain JSON on disk, editable
+    by anyone who can touch the checkpoint file. Renaming a fetch-bearing
+    checkpoint to "decompose" hid its records from every structural check
+    while replay_ledger (which reads only the payload) still minted their
+    bytes PRIMARY. A label is not evidence; the payload is. A checkpoint
+    counts as a fetch checkpoint when its NAME admits to fetching (so the C3
+    mandatory-`fetches`-key rule still fires on schema drift in genuinely
+    fetch-shaped payloads) OR its PAYLOAD actually carries fetch records,
+    whatever the file claims to be.
 
     Kept as one predicate so the rule cannot drift between call sites — the
     membership-rule bug in retrieval/why/base landed three separate times
     because the same test was reimplemented instead of shared.
     """
-    return "fetch" in (stage or "")
+    # ── AUTHENTICATION (red-team D2, decision) ────────────────────────────
+    # The C4 fix made checkpoints HMAC-signed over the whole record INCLUDING
+    # stage. In a keyed deployment a stage rename IS detectable: the signature
+    # no longer verifies, so the record's age is untrusted (infinite) and it
+    # is collected by gc(). That is a real defense and this content rule does
+    # not replace it — but it also does not make this check redundant:
+    #
+    #   1. The documented default deployment sets NO key
+    #      (_harness_key() -> None). Unsigned records verify nothing; a rename
+    #      is undetectable there, and only the payload itself can testify that
+    #      these are fetch records.
+    #   2. Even keyed, nothing in the load/replay/seal path calls
+    #     verify_signature() on a fetched record (D1) — an unverified
+    #      signature is decoration, not authentication.
+    #
+    # So: content-based rule as the ALWAYS-ON floor, HMAC verification as the
+    # keyed-regime layer on top (wired at the D1 seam). Defense in depth, not
+    # either/or.
+    if "fetch" in (getattr(ck, "stage", "") or ""):
+        return True
+    return bool((ck.payload or {}).get("fetches"))
 
 
 def partition_admissibility(
@@ -483,7 +514,7 @@ def provenance_is_intact(ledger, checkpoints: list[Checkpoint]) -> bool:
         # schema change — and the guard used to read that as intact, so a
         # resumed run could seal with zero verified provenance (red-team C3).
         # Stages that never fetch (decompose, answer_leaf) are unaffected.
-        if _is_fetch_stage(ck.stage) and "fetches" not in ck.payload:
+        if _is_fetch_stage(ck) and "fetches" not in ck.payload:
             return False
         for rec in ck.payload.get("fetches", []):
             body = rec.get("body", "")
