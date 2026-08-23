@@ -116,17 +116,27 @@ def _verdict(author, reviewers, models_objection=(), blocking=False):
 
 
 def test_unanimity_penalty_is_applied_not_zeroed():
-    """UNANIMITY_BONUS_PENALTY = 0.10 survived zeroed: unanimous independent
-    objection must cost MORE than the summed per-objection penalties alone."""
-    v = _verdict("author-m", ["critic-a", "critic-b"], ["critic-a", "critic-b"])
-    assert v.unanimous_unrebutted
-    with_panel, r1 = v.apply(0.80)
-    solo = _verdict("author-m", ["critic-a", "critic-b"], ["critic-a"])
-    with_solo, _ = solo.apply(0.80)
-    # two-objector panel must land strictly lower than a single objector:
-    # per-objection penalties are equal, so only the unanimity term explains it
-    assert with_panel < with_solo
-    assert any("unanimous" in r for r in r1.split(";"))
+    """UNANIMITY_BONUS_PENALTY = 0.10 survived zeroed. Isolate the unanimity
+    term from per-objection penalties: same single objection, with and without
+    a second independent critic joining — only the unanimity bonus explains
+    any difference, so it must be strictly positive."""
+    assert UNANIMITY_BONUS_PENALTY > 0.0
+    # one critic objects: not unanimous (only 1 of 2 independent reviewers)
+    v1 = _verdict("author-m", ["critic-a", "critic-b"], ["critic-a"])
+    assert not v1.unanimous_unrebutted
+    # both critics object on the SAME single objection axis: unanimity
+    v2 = _verdict("author-m", ["critic-a", "critic-b"], ["critic-a"])
+    v2.objections.append(AdversaryObjection(
+        claim_id="c", text="obj critic-a", model="critic-b", severity="MAJOR"))
+    assert v2.unanimous_unrebutted
+    s1, r1 = v1.apply(0.90)
+    s2, r2 = v2.apply(0.90)
+    # exact contract: one MAJOR = -0.15; two MAJOR + unanimity = -0.40.
+    # Zeroing UNANIMITY_BONUS_PENALTY yields 0.60 here, not 0.50.
+    assert s1 == pytest.approx(0.75)
+    assert s2 == pytest.approx(0.50)
+    assert any("unanimous" in r for r in r2.split(";"))
+    assert not any("unanimous" in r for r in r1.split(";"))
 
 
 def test_unanimity_means_every_independent_reviewer_attacked():
@@ -177,6 +187,18 @@ def test_negative_edge_is_never_actionable_even_with_positive_ev():
     # edge < 0 but check explicitly
     a = assess_edge("c", calibrated_prob=0.38, quote=q)
     assert a.edge < 0
+    assert not a.actionable
+
+
+def test_positive_edge_with_negative_ev_is_not_actionable():
+    """The AND in `edge >= min_edge AND ev > 0` survived as an OR. Against a
+    VIGGED price, an interval exists where the devigged edge clears the gate
+    but the raw price still makes the bet -EV (fair < p < raw implied).
+    There the OR mutant says ACTIONABLE and the AND contract says no."""
+    q = _two_sided(-110, -110)          # raw implied 0.5238, fair 0.500
+    a = assess_edge("c", calibrated_prob=0.52, quote=q)
+    assert a.edge >= edge_mod.MIN_EDGE_TO_ACT      # edge clears the gate...
+    assert a.ev_per_unit < 0                        # ...but the vig eats it
     assert not a.actionable
 
 
@@ -233,7 +255,7 @@ def test_best_class_rank_ordering_survives_flattening():
     INFERRED evidence could inherit a PRIMARY ceiling. best_class must be
     the genuinely highest-ranked class present, and an INFERRED-only group
     must stay capped at 0.55."""
-    groups = S.triangulate([_item("PRIMARY"), _item("INFERRED")])
+    groups = S.triangulate([_item("INFERRED"), _item("PRIMARY")])
     g = next(g for g in groups if len(g.items) == 2)
     assert g.best_class == "PRIMARY"
     g2 = next(g for g in S.triangulate([_item("INFERRED")]))

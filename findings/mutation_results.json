@@ -1,0 +1,287 @@
+{
+  "agp/adversary.py": {
+    "module": "agp/adversary.py",
+    "baseline_pass": null,
+    "mutations": [
+      {
+        "name": "blocking_objection_ignored",
+        "survived": false,
+        "seconds": 3.4
+      },
+      {
+        "name": "objection_penalties_negated",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "backend_failure_fails_open",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "ensemble_spread_threshold_widened",
+        "survived": false,
+        "seconds": 1.5
+      },
+      {
+        "name": "clamp_with_ensemble_returns_score_when_above_ceiling",
+        "survived": false,
+        "seconds": 1.7
+      }
+    ]
+  },
+  "agp/ensemble.py": {
+    "module": "agp/ensemble.py",
+    "baseline_pass": null,
+    "mutations": [
+      {
+        "name": "self_review_ceiling_widened_to_corroborated",
+        "survived": false,
+        "seconds": 2.1
+      },
+      {
+        "name": "unanimity_penalty_zeroed",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "independent_review_ambiguity_resolves_liberal",
+        "survived": false,
+        "seconds": 1.8
+      },
+      {
+        "name": "panel_provenance_ceiling_skipped",
+        "survived": false,
+        "seconds": 1.5
+      },
+      {
+        "name": "unanimity_requires_all_but_one",
+        "survived": false,
+        "seconds": 1.5
+      }
+    ]
+  },
+  "agp/provenance.py": {
+    "module": "agp/provenance.py",
+    "baseline_pass": null,
+    "mutations": [
+      {
+        "name": "primary_check_skipped",
+        "survived": false,
+        "seconds": 1.7
+      },
+      {
+        "name": "cites_verified_url_inverted",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "clamp_confidence_drops_ceiling_cap",
+        "survived": false,
+        "seconds": 1.5
+      },
+      {
+        "name": "relabel_demotion_count_zeroed",
+        "survived": false,
+        "seconds": 1.5
+      },
+      {
+        "name": "relabel_rank_comparison_flipped",
+        "survived": false,
+        "seconds": 1.6
+      }
+    ]
+  },
+  "agp/thresholds.py": {
+    "module": "agp/thresholds.py",
+    "baseline_pass": null,
+    "mutations": [
+      {
+        "name": "verified_min_lowered_090_to_085",
+        "survived": false,
+        "seconds": 1.5
+      },
+      {
+        "name": "secondary_ceiling_raised_075_to_080",
+        "survived": false,
+        "seconds": 1.4
+      },
+      {
+        "name": "critical_contradiction_penalty_zeroed",
+        "survived": false,
+        "seconds": 1.5
+      },
+      {
+        "name": "db_floor_lowered_030_to_010",
+        "survived": false,
+        "seconds": 1.5
+      }
+    ]
+  },
+  "tools/edge.py": {
+    "module": "tools/edge.py",
+    "baseline_pass": null,
+    "mutations": [
+      {
+        "name": "kelly_cap_widened_quarter_to_full",
+        "survived": false,
+        "seconds": 1.7
+      },
+      {
+        "name": "kelly_cap_dropped",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "edge_uses_raw_implied_not_devigged",
+        "survived": false,
+        "seconds": 1.5
+      },
+      {
+        "name": "min_edge_comparison_flipped",
+        "survived": false,
+        "seconds": 1.5
+      },
+      {
+        "name": "clv_requires_no_devig",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "kelly_floor_removed_negative_fractions_possible",
+        "survived": false,
+        "seconds": 1.6
+      }
+    ]
+  },
+  "tools/hypothesis.py": {
+    "module": "tools/hypothesis.py",
+    "baseline_pass": null,
+    "mutations": [
+      {
+        "name": "adaptive_threshold_relaxes_large_n",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "min_days_gate_comparison_flipped",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "min_paper_trades_gate_never_fails",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "binomial_pvalue_always_significant",
+        "survived": false,
+        "seconds": 1.5
+      }
+    ]
+  },
+  "tools/kelly.py": {
+    "module": "tools/kelly.py",
+    "baseline_pass": null,
+    "mutations": [
+      {
+        "name": "kelly_negative_fraction_not_floored",
+        "survived": false,
+        "seconds": 1.7
+      },
+      {
+        "name": "unverified_tier_still_bets",
+        "survived": false,
+        "seconds": 1.7
+      },
+      {
+        "name": "hard_cap_5pct_removed",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "variance_dampener_inverted",
+        "survived": false,
+        "seconds": 1.6
+      }
+    ]
+  },
+  "tools/pipeline/retrieval.py": {
+    "module": "tools/pipeline/retrieval.py",
+    "baseline_pass": null,
+    "mutations": [
+      {
+        "name": "relevance_gate_admits_everything",
+        "survived": false,
+        "seconds": 1.7
+      },
+      {
+        "name": "independence_family_collapse_disabled",
+        "survived": false,
+        "seconds": 1.8
+      },
+      {
+        "name": "min_independent_comparison_flipped",
+        "survived": false,
+        "seconds": 1.7
+      },
+      {
+        "name": "rejected_items_not_recorded",
+        "survived": false,
+        "seconds": 1.7
+      }
+    ]
+  },
+  "tools/pipeline/synthesis.py": {
+    "module": "tools/pipeline/synthesis.py",
+    "baseline_pass": null,
+    "mutations": [
+      {
+        "name": "contradiction_cap_widened_to_probable",
+        "survived": false,
+        "seconds": 2.0
+      },
+      {
+        "name": "class_rank_demotes_nothing",
+        "survived": false,
+        "seconds": 1.7
+      }
+    ]
+  },
+  "tools/research_program.py": {
+    "module": "tools/research_program.py",
+    "baseline_pass": null,
+    "mutations": [
+      {
+        "name": "min_resolved_for_lift_lowered_5_to_2",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "wilson_z_zeroed_no_confidence_discount",
+        "survived": false,
+        "seconds": 1.5
+      },
+      {
+        "name": "stale_penalty_negated",
+        "survived": false,
+        "seconds": 1.5
+      },
+      {
+        "name": "brier_calibration_inverted",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "source_class_cap_skipped",
+        "survived": false,
+        "seconds": 1.6
+      },
+      {
+        "name": "clamp_parent_returns_raw_score",
+        "survived": false,
+        "seconds": 1.6
+      }
+    ]
+  }
+}

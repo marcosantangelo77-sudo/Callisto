@@ -8,7 +8,8 @@ must occur exactly once in their module. Mutations are applied to COPIES only.
 MUTATIONS: dict[str, dict] = {
     # ──────────────────────────────────────────────────────── thresholds ──
     "agp/thresholds.py": {
-        "tests": ["tests/test_agp.py",
+        "tests": ["tests/test_verify_mutation_kills.py",
+                  "tests/test_agp.py",
                   "tests/test_lifecycle_seal.py",
                   "tests/test_tier0_money_kelly.py"],
         "mutations": [
@@ -28,7 +29,8 @@ MUTATIONS: dict[str, dict] = {
     },
     # ─────────────────────────────────────────────────────── provenance ──
     "agp/provenance.py": {
-        "tests": ["tests/test_tier3_epi_provenance.py",
+        "tests": ["tests/test_verify_mutation_kills.py",
+                  "tests/test_tier3_epi_provenance.py",
                   "tests/test_lifecycle_seal.py",
                   "tests/test_build_w1_retrieval.py"],
         "mutations": [
@@ -57,7 +59,8 @@ MUTATIONS: dict[str, dict] = {
     },
     # ──────────────────────────────────────────────────────── adversary ──
     "agp/adversary.py": {
-        "tests": ["tests/test_build_r3_adversary.py",
+        "tests": ["tests/test_verify_mutation_kills.py",
+                  "tests/test_build_r3_adversary.py",
                   "tests/test_build_gaps.py",
                   "tests/test_build_w4_cross_model.py"],
         "mutations": [
@@ -87,7 +90,8 @@ MUTATIONS: dict[str, dict] = {
     },
     # ──────────────────────────────────────────────────────── ensemble ──
     "agp/ensemble.py": {
-        "tests": ["tests/test_build_w4_cross_model.py",
+        "tests": ["tests/test_verify_mutation_kills.py",
+                  "tests/test_build_w4_cross_model.py",
                   "tests/test_build_r3_adversary.py"],
         "mutations": [
             {"name": "self_review_ceiling_widened_to_corroborated",
@@ -112,7 +116,8 @@ MUTATIONS: dict[str, dict] = {
     },
     # ──────────────────────────────────────────────── research_program ──
     "tools/research_program.py": {
-        "tests": ["tests/test_build_b4_inheritance.py",
+        "tests": ["tests/test_verify_mutation_kills.py",
+                  "tests/test_build_b4_inheritance.py",
                   "tests/test_build_b4_research_program.py",
                   "tests/test_build_r1_scoring.py",
                   "tests/test_build_p2_claims.py"],
@@ -139,7 +144,8 @@ MUTATIONS: dict[str, dict] = {
     },
     # ─────────────────────────────────────────────────────── synthesis ──
     "tools/pipeline/synthesis.py": {
-        "tests": ["tests/test_build_i3_synthesis.py",
+        "tests": ["tests/test_verify_mutation_kills.py",
+                  "tests/test_build_i3_synthesis.py",
                   "tests/test_build_r2_seams.py"],
         "mutations": [
             {"name": "contradiction_cap_widened_to_probable",
@@ -152,7 +158,8 @@ MUTATIONS: dict[str, dict] = {
     },
     # ─────────────────────────────────────────────────────── retrieval ──
     "tools/pipeline/retrieval.py": {
-        "tests": ["tests/test_build_w1_retrieval.py",
+        "tests": ["tests/test_verify_mutation_kills.py",
+                  "tests/test_build_w1_retrieval.py",
                   "tests/test_build_i3_synthesis.py",
                   "tests/test_build_i2_routable_coverage.py"],
         "mutations": [
@@ -178,7 +185,8 @@ MUTATIONS: dict[str, dict] = {
     },
     # ───────────────────────────────────────────────────────────── edge ──
     "tools/edge.py": {
-        "tests": ["tests/test_build_r5_edge.py",
+        "tests": ["tests/test_verify_mutation_kills.py",
+                  "tests/test_build_r5_edge.py",
                   "tests/test_tier0_money_kelly.py",
                   "tests/test_clv_paper_trades.py"],
         "mutations": [
@@ -208,7 +216,8 @@ MUTATIONS: dict[str, dict] = {
     },
     # ──────────────────────────────────────────────────────────── kelly ──
     "tools/kelly.py": {
-        "tests": ["tests/test_tier0_money_kelly.py",
+        "tests": ["tests/test_verify_mutation_kills.py",
+                  "tests/test_tier0_money_kelly.py",
                   "tests/test_tier0_money_sizing_and_units.py",
                   "tests/test_portfolio_sizing.py",
                   "tests/test_bankroll_sim.py",
@@ -230,7 +239,8 @@ MUTATIONS: dict[str, dict] = {
     },
     # ──────────────────────────────────────────────────────── hypothesis ──
     "tools/hypothesis.py": {
-        "tests": ["tests/test_hypothesis.py",
+        "tests": ["tests/test_verify_mutation_kills.py",
+                  "tests/test_hypothesis.py",
                   "tests/test_promotion_gates.py",
                   "tests/test_adaptive_timeout.py",
                   "tests/test_sidak_denominator.py"],
