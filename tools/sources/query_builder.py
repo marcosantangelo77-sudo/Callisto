@@ -1040,6 +1040,52 @@ def _plan_wayback(question: str) -> PlanResult:
         resolved={"url": url}, reason=f"snapshot lookup for {url}")
 
 
+def _plan_polymarket(question: str) -> PlanResult:
+    """Gamma public-search over the extracted core.
+
+    Prediction-market contracts are the ONLY source of market-implied
+    probability for questions like 'will X beat consensus'. The smoke5
+    batch selected polymarket for all five such questions but no planner
+    existed, so the fan-out silently skipped it — the adversary's
+    'tool-selection failure', located. Returns candidate events (with
+    slugs for a follow-up get_market/market_quote fetch).
+    """
+    core = core_query(
+        question,
+        extra_stop={"market", "markets", "prediction", "odds", "implied",
+                    "probability", "probabilities", "bet", "betting",
+                    "contract", "contracts"})
+    if not core:
+        return PlanResult(False, reason="no searchable core")
+    return PlanResult(True, queries=[PlannedQuery(
+        source="polymarket", method="public_search",
+        kwargs={"query": core, "limit_per_type": 10},
+        rationale="Gamma public-search over the extracted core; event "
+                  "slugs feed a follow-up get_market for the implied "
+                  "probability")],
+        reason=f"searched contracts as '{core}'")
+
+
+def _plan_kalshi(question: str) -> PlanResult:
+    """Kalshi v2 has NO free-text market search (verified against the
+    published OpenAPI, 2026-08: /events and /markets filter only by
+    ticker/series/status/category). A ticker or series passes through;
+    a topic question is refused honestly rather than paged through the
+    whole exchange hoping for a title match."""
+    for m in re.finditer(r"\b([A-Z][A-Z0-9]{3,}(?:-[A-Z0-9A-Z\-]+)+)\b",
+                         question):
+        ticker = m.group(1)
+        return PlanResult(True, queries=[PlannedQuery(
+            source="kalshi", method="get_market", args=(ticker,),
+            rationale="explicit market ticker supplied in question")],
+            resolved={"ticker": ticker}, reason=f"ticker {ticker}")
+    return PlanResult(False, reason=(
+        "Kalshi's public API has no free-text market search — markets are "
+        "addressable only by ticker/series. Supply a ticker, or use the "
+        "polymarket planner whose Gamma public-search endpoint does "
+        "topic search."))
+
+
 # keyword-capable adapters: same shape, source-specific knobs
 _KEYWORD_PLANNERS = {
     "openalex": _plan_openalex,
@@ -1062,15 +1108,20 @@ _KEYWORD_PLANNERS = {
     "uspto_odp": _plan_uspto_odp,
     "courtlistener": _plan_courtlistener,
     "wayback": _plan_wayback,
+    "polymarket": _plan_polymarket,
+    "kalshi": _plan_kalshi,
 }
 
 #: SEC deliberately unplannable here — the machine is rate-limited/403'd and
 #: the mandate forbids hitting it; planning would invite fetching. Every
 #: other registered source now has a planner; the remaining entries below
 #: are the honest residue, each naming exactly what is missing.
+#: NOTE: keyed by the registry name ('sec_fulltext', sec_fts.py's SPEC.name),
+#: not the module filename — a stale key silently degrades the deliberate
+#: refusal into 'unknown source'.
 _HONEST_GAPS = {
-    "sec_fts": "SEC full-text search requires a declared contact and this "
-               "host is currently 403'd; query authoring deferred until "
+    "sec_fulltext": "SEC full-text search requires a declared contact and "
+               "this host is currently 403'd; query authoring deferred until "
                "access is restored (deliberate, not forgotten).",
 }
 
