@@ -167,7 +167,7 @@ class TestSandboxRegistrySeam:
                 "json.dump({'target_2029': 210000, 'p_gt_100k': 0.62}, open('forecast.json','w'))\n")
         r = run_python(code, wall_clock_s=30)
         assert r.status == "ok"
-        refs = store_sandbox_outputs(r)
+        refs = store_sandbox_outputs(r, store)
         assert {x.kind for x in refs} == {"json", "txt"}
         # A6 fix: without a workspace, the child's reported hashes are a
         # CLAIM, not evidence. No byteless ref is minted; instead one stored
