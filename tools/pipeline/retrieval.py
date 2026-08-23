@@ -379,34 +379,63 @@ class IterativeRetriever:
             round_admitted = 0
             round_detail = {"round": rnd, "query": query,
                             "sources": [], "admitted": 0}
-            for spec in specs:
-                # ── query authoring: planner (W5) or legacy table (W1) ──
-                if legacy_calls is not None:
-                    call = legacy_calls.get(spec.name)
-                    if not call:
-                        round_detail["sources"].append(
-                            {"name": spec.name, "skipped": "no generic route"})
-                        continue
-                    method_name, pos_args, kw_args = call
-                    kwargs = {k: (query if v == "term" else v)
-                              for k, v in (kw_args or {}).items()}
-                    args = tuple(query if a == "term" else a for a in pos_args)
-                else:
-                    from tools.sources import query_builder
-                    plan = query_builder.build_plan(spec.name, question.text)
-                    if not plan.plannable or not plan.queries:
-                        reason = plan.reason or "no authored query possible"
-                        logger.info("planner skipped %s: %s",
-                                    spec.name, reason)
-                        excluded.add(spec.name)
-                        round_detail["sources"].append(
-                            {"name": spec.name, "skipped": reason[:120]})
-                        continue
-                    pq = plan.queries[0]
-                    method_name = pq.method
-                    args, kwargs = tuple(pq.args), dict(pq.kwargs)
+
+            # ── PARALLEL SOURCE FAN-OUT (speed run 2, 2026-08-23) ──────────
+            # The old loop fetched each selected source ONE AT A TIME: sync
+            # urllib through RestSource blocks, then gate, then next source.
+            # A leaf's sources are independent of one another, so Σ(F) was
+            # paid serially inside every leaf even after the leaves
+            # themselves were overlapped. Measured: 19 fetches land in 6
+            # serial waves; per-round fetch time was Σ_sources(F) ≈ 4.06s of
+            # a 10.16s wall at M=3s/F=0.8s.
+            #
+            # ORDER-PRESERVING CONTRACT (byte-identical outputs):
+            #   - every fetch+gate runs off-thread with its own scratch
+            #     recorder; RestSource writes land there, never on shared
+            #     state (same mechanism as the engine's per-leaf recorder);
+            #   - results are COLLECTED concurrently but PROCESSED below in
+            #     SPEC order, so trace.admitted / rejected / rounds /
+            #     queries, relevant_titles, refinement inputs, terminator
+            #     decisions and the scratch-ledger replay order are exactly
+            #     what the serial loop produced;
+            #   - a failed source still excludes only itself and continues;
+            #     exception selection is local to that source (no cross-
+            #     source ordering hazard exists);
+            #   - _RateLimiter is thread-safe per source spec, so politeness
+            #     intervals are unchanged. Per-host concurrency does not
+            #     exceed what parallel leaves already produce.
+            def _fetch_one(spec, rec):
+                """Fetch+gate one source off-thread.
+
+                Returns one of:
+                  ("skip", reason)
+                  ("fail", error_string)
+                  ("ok", url, body, fetched, admitted, cov, reason)
+                Never mutates shared state: RestSource's provenance writes
+                land in `rec`; the caller replays them in spec order.
+                """
                 try:
-                    source = RestSource(spec, ledger=self.ledger,
+                    if legacy_calls is not None:
+                        call = legacy_calls.get(spec.name)
+                        if not call:
+                            return ("skip", "no generic route")
+                        method_name, pos_args, kw_args = call
+                        kwargs = {k: (query if v == "term" else v)
+                                  for k, v in (kw_args or {}).items()}
+                        args = tuple(query if a == "term" else a
+                                     for a in pos_args)
+                    else:
+                        from tools.sources import query_builder
+                        plan = query_builder.build_plan(spec.name,
+                                                        question.text)
+                        if not plan.plannable or not plan.queries:
+                            return ("skip",
+                                    (plan.reason or
+                                     "no authored query possible")[:120])
+                        pq = plan.queries[0]
+                        method_name = pq.method
+                        args, kwargs = tuple(pq.args), dict(pq.kwargs)
+                    source = RestSource(spec, ledger=rec,
                                         transport=self.transport)
                     adapter = _make_adapter(self.registry, spec.name, source)
                     fetched = getattr(adapter, method_name)(*args, **kwargs)
@@ -416,18 +445,49 @@ class IterativeRetriever:
                             f"{spec.name} returned "
                             f"{getattr(source.last_record, 'status', '?')}")
                     body = __import__("json").dumps(fetched, sort_keys=True)
+                    ok, cov, reason = self.gate.judge(
+                        question.text, question_type, fetched)
+                    url = getattr(source.last_record, "url", "")
+                    return ("ok", url, body, fetched, ok, cov, reason)
                 except Exception as e:  # noqa: BLE001 — a failed source skips
                     logger.info("source %s failed: %s", spec.name, e)
+                    return ("fail", str(e)[:120])
+
+            from concurrent.futures import ThreadPoolExecutor
+            # engine's _FetchRecorder (parallel-leaf engine) — always present now.
+            from tools.pipeline.engine import _FetchRecorder
+            max_workers = min(len(specs), 8) if len(specs) > 1 else 1
+            recorders = [_FetchRecorder() for _ in specs]
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futs = [pool.submit(_fetch_one, spec, rec)
+                        for spec, rec in zip(specs, recorders)]
+                raw = [f.result() for f in futs]
+
+            for spec, rec, res in zip(specs, recorders, raw):
+                # Replay RestSource's provenance writes in SPEC order — the
+                # serial loop wrote them into self.ledger interleaved with
+                # this same order, so the scratch chain must be merged here
+                # identically before anything else observes it.
+                for tool, body_r, primary, urls in rec.calls:
+                    self.ledger.record_tool_result(tool, body_r,
+                                                   primary=primary,
+                                                   urls=urls or None)
+                kind = res[0]
+                if kind == "skip":
+                    reason = res[1]
+                    if legacy_calls is None:
+                        excluded.add(spec.name)
+                    round_detail["sources"].append(
+                        {"name": spec.name, "skipped": reason})
+                    continue
+                if kind == "fail":
                     excluded.add(spec.name)
                     round_detail["sources"].append(
-                        {"name": spec.name, "error": str(e)[:120]})
+                        {"name": spec.name, "error": res[1]})
                     continue
-                # GATE BEFORE INGESTION — the run's central fix.
-                ok, cov, reason = self.gate.judge(
-                    question.text, question_type, fetched)
-                fr = _mk_fetch(spec.name, getattr(source.last_record,
-                                                  "url", ""),
-                               body, fetched, question.question_id, _sha)
+                _, url, body, fetched, ok, cov, reason = res
+                fr = _mk_fetch(spec.name, url, body, fetched,
+                               question.question_id, _sha)
                 if not ok:
                     trace.rejected.append(RejectedItem(
                         source_name=spec.name,
