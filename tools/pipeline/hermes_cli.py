@@ -144,7 +144,7 @@ async def hermes_complete(messages: list[dict], *, role: str = "",
     stdout on a nonzero rc is returned, since the JSON may be intact.
     """
     from tools.pipeline.transport.agent_pool import (
-        AgentPoolTransport, SubprocessTransport, get_shared_pool)
+        SubprocessTransport, WarmWorkerPool, get_shared_pool)
     selected = _select_transport(transport)
     if isinstance(selected, SubprocessTransport):
         return await selected.complete(messages, role=role, binary=binary,
@@ -177,7 +177,7 @@ def _select_transport(force: Optional[str] = None) -> Any:
     """Resolve the transport once per process; reuse thereafter."""
     global _transport_instance, _transport_kind
     from tools.pipeline.transport.agent_pool import (
-        AgentPoolTransport, SubprocessTransport, get_shared_pool)
+        SubprocessTransport, WarmWorkerPool, get_shared_pool)
     forced = force or os.getenv("CALLISTO_HERMES_TRANSPORT", "").strip() or None
     with _transport_lock:
         if (_transport_instance is not None and _transport_kind == forced):

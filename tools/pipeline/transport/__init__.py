@@ -40,7 +40,7 @@ model calls than agents — so backpressure is structural, not configured.
 """
 
 from tools.pipeline.transport.agent_pool import (
-    AgentPoolTransport,
+    WarmWorkerPool as AgentPoolTransport,
     SubprocessTransport,
     get_shared_pool,
     reset_shared_pool,
