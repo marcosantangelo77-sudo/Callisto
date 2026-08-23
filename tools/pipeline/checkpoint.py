@@ -422,33 +422,49 @@ def _is_fetch_stage(stage: str) -> bool:
     return "fetch" in (stage or "")
 
 
-def admissible_checkpoints(
+def partition_admissibility(
     trace_run: str, checkpoints: list[Checkpoint],
     key: Optional[str] = None,
-) -> list[Checkpoint]:
+) -> tuple[list[Checkpoint], list[Checkpoint]]:
     """THE single definition of which checkpoints a run may consume.
 
-    A checkpoint is ADMISSIBLE iff it belongs to THIS run AND its record is
-    authenticated: under a keyed harness regime an unsigned or bad-HMAC
-    checkpoint is inadmissible everywhere — it is never replayed into a
-    ledger and never judged by seal_guard, because both consumers must see
-    the SAME world for the guard's verdict to cover what the seal seals
-    (red-team D3). With no key configured (unkeyed deployment) signature
-    verification cannot run, so only the run-scope filter applies.
+    Returns (admissible, rejected). A checkpoint is ADMISSIBLE iff it
+    belongs to THIS run AND its record is authenticated: under a keyed
+    harness regime an unsigned or bad-HMAC checkpoint is REJECTED everywhere
+    — it is never replayed into a ledger, and the guard REFUSES rather than
+    sealing over it, because both consumers must see the SAME world for the
+    guard's verdict to cover what the seal seals (red-team D3).
 
-    This function is the ONE place the rule lives. engine.py's replay path
-    and seal_guard() both call it; neither reimplements the predicate.
+    The split matters: silently dropping a rejected record would leave the
+    guard judging an empty world and sealing anyway. Rejected records are
+    evidence of tampering, not noise.
+
+    With no key configured (unkeyed deployment) signature verification
+    cannot run, so only the run-scope filter applies. This function is the
+    ONE place the rule lives: engine.py's replay path consumes [0],
+    seal_guard() refuses over [1] and judges [0]. Neither reimplements it.
     """
     k = key if key is not None else _harness_key()
-    out = []
+    ok: list[Checkpoint] = []
+    rejected: list[Checkpoint] = []
     for ck in checkpoints:
         if ck.run != trace_run:
             continue
         if k and not ck.verify_signature(k):
-            logger.warning("inadmissible checkpoint %s: signature fails", ck.key)
+            logger.warning("inadmissible checkpoint %s: signature fails",
+                           ck.key)
+            rejected.append(ck)
             continue
-        out.append(ck)
-    return out
+        ok.append(ck)
+    return ok, rejected
+
+
+def admissible_checkpoints(
+    trace_run: str, checkpoints: list[Checkpoint],
+    key: Optional[str] = None,
+) -> list[Checkpoint]:
+    """Admissible half of partition_admissibility (see there for contract)."""
+    return partition_admissibility(trace_run, checkpoints, key)[0]
 
 
 def provenance_is_intact(ledger, checkpoints: list[Checkpoint]) -> bool:
@@ -515,9 +531,17 @@ def seal_guard(
     # cp.list_all() — every checkpoint ever written, by every run. Both the
     # guard and the ledger-replay path must consume the SAME admissible set,
     # or the guard reasons over a world the seal does not cover (red-team
-    # D3). admissible_checkpoints() is the one definition: run-scope filter
+    # D3). partition_admissibility() is the one definition: run-scope filter
     # (red-team C2) plus signature verification (red-team D1) in ONE place.
-    checkpoints = admissible_checkpoints(trace.run, checkpoints)
+    # A REJECTED record is not dropped silently — its presence vetoes the
+    # seal, otherwise dropping it would leave this guard judging an empty
+    # world and returning SEAL over evidence it never saw.
+    checkpoints, rejected = partition_admissibility(trace.run, checkpoints)
+    if rejected:
+        return "REFUSE", (
+            f"{len(rejected)} checkpoint(s) for this run failed "
+            "authentication or belong to another run's scope; refusing to "
+            "seal over records whose provenance cannot be established")
 
     if not trace.is_resume:
         # Even fresh runs must not seal over checkpointed evidence whose
