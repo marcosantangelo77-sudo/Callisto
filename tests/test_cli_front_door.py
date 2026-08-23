@@ -230,3 +230,123 @@ class TestAsk:
         assert rc == 2
         assert "unreachable" in out
         assert "doctor" in out                        # next step named
+
+
+# ── run persistence: runs / show ──────────────────────────────────────────
+
+from types import SimpleNamespace as _NS
+
+from callisto import (_cmd_runs, _cmd_show, _load_run, _persist_run,
+                      _result_record, _verify_artifact)
+
+
+def _fake_result():
+    """A PipelineResult-shaped object like a real sealed run."""
+    from tools.artifacts import ArtifactRef
+    return _NS(
+        sealed=True, refusal_reason="",
+        conclusion="Foundry concentration is the binding constraint.",
+        confidence_score=0.34, confidence_tier="SPECULATIVE",
+        leaves=[_NS(text="leaf q", answer="leaf a", tier="SPECULATIVE",
+                    confidence=0.4)],
+        artifact_refs=[ArtifactRef(sha256="a" * 64, kind="csv",
+                                   name="concentration.csv")],
+        fetches=[_NS(source_name="openalex", url="https://api.openalex.org/x",
+                     content_sha256="b" * 64)],
+        objections=[_NS(text="one independent source only")],
+        notes=[])
+
+
+class TestRunPersistence:
+    @pytest.fixture
+    def wired(self, monkeypatch):
+        router = FakeRouter()
+        def load_router(path): return router
+        monkeypatch.setattr("callisto._load_router", load_router)
+        return router
+
+    @pytest.fixture
+    def runs_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CALLISTO_RUNS_DIR", str(tmp_path / "runs"))
+        return tmp_path / "runs"
+
+    def test_ask_persists_a_run_record_and_prints_path(
+            self, wired, runs_env, monkeypatch, capsys):
+        router = wired
+        def make_engine(router_, self_review):
+            eng = _NS(adversary_router=None if self_review else router_)
+            async def run(q): return _fake_result()
+            eng.run = run
+            return eng
+        monkeypatch.setattr("callisto._make_engine", make_engine)
+
+        rc = asyncio.run(_cmd_ask(build_parser().parse_args(["ask", "q"])))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "run      :" in out
+        saved = list(runs_env.glob("*.json"))
+        assert len(saved) == 1
+        rec = json.loads(saved[0].read_text())
+        assert rec["sealed"] is True
+        assert rec["question"] == "q"
+        assert rec["conclusion"].startswith("Foundry")
+        assert len(rec["artifacts"]) == 1
+        assert rec["fetches"][0]["url"] == "https://api.openalex.org/x"
+        assert "artifact :" in out                     # artifact hashes shown
+
+    def test_record_roundtrip_preserves_everything(self, runs_env):
+        rec = _result_record(_fake_result(), "some question")
+        path = _persist_run(rec)
+        loaded, _ = _load_run(path.stem)
+        assert loaded["confidence"]["tier"] == "SPECULATIVE"
+        assert loaded["objections"] == ["one independent source only"]
+        # deterministic re-serialisation: same content -> same dict
+        again = json.loads(json.dumps(rec))
+        assert again == loaded
+
+    def test_runs_lists_newest_first_and_empty_is_friendly(
+            self, runs_env, capsys):
+        rc = _cmd_runs(build_parser().parse_args(["runs"]))
+        assert rc == 0 and "no saved runs yet" in capsys.readouterr().out
+        for i in range(3):
+            r = _result_record(_fake_result(), f"q{i}")
+            _persist_run(r)
+        rc = _cmd_runs(build_parser().parse_args(["runs"]))
+        out = capsys.readouterr().out.strip().splitlines()
+        assert rc == 0 and len(out) == 3
+        assert all("SEALED" in line for line in out)
+
+    def test_show_reprints_conclusion_and_verifies_artifacts(
+            self, runs_env, tmp_path, capsys, monkeypatch):
+        rec = _result_record(_fake_result(), "the question")
+        path = _persist_run(rec)
+        # put the real bytes in a temp artifact store and point the env at it
+        import hashlib
+
+        from tools.artifacts import ArtifactStore
+        store = ArtifactStore(root=tmp_path / "arts")
+        monkeypatch.setenv("CALLISTO_ARTIFACT_DIR", str(tmp_path / "arts"))
+        store.put(b"payload", kind="csv", name="concentration.csv")
+        actual = hashlib.sha256(b"payload").hexdigest()
+        rec["artifacts"][0]["sha256"] = actual
+        path.write_text(json.dumps(rec))
+
+        rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "Foundry concentration" in out          # conclusion reprinted
+        assert "[ok" in out                             # artifact verified
+        assert "openalex" in out                        # fetch provenance
+
+    def test_show_reports_missing_artifact_honestly(
+            self, runs_env, capsys, monkeypatch):
+        rec = _result_record(_fake_result(), "q")
+        path = _persist_run(rec)   # hash not present in any store
+        rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "missing" in out or "unverifiable" in out
+
+    def test_show_unknown_id_exits_one(self, runs_env, capsys):
+        rc = _cmd_show(build_parser().parse_args(["show", "nope"]))
+        assert rc == 1

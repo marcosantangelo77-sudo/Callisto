@@ -4,7 +4,12 @@
 One CLI for the things a person sitting at this machine actually does:
 
   ask       one question through the full AGP pipeline; sealed or refused,
-            with its confidence, evidence and objections printed
+            with its confidence, evidence and objections printed. Every run
+            is persisted as a JSON record (conclusion, artifact hashes,
+            fetch provenance) under the state dir.
+  runs      list saved runs, newest first
+  show      re-print one run — conclusion, artifacts RE-HASHED against the
+            artifact store, fetch provenance
   status    hypothesis-pool / lifecycle counts from the local database
   doctor    can this box run a live question right now? (providers, sources)
 
@@ -30,7 +35,6 @@ import json
 import os
 import sqlite3
 import sys
-import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -102,7 +106,8 @@ def _result_record(result, question: str) -> dict:
         "artifacts": [r.to_dict() for r in getattr(result, "artifact_refs", [])],
         "fetches": [
             {"source": getattr(f, "source_name", "?"),
-             "url": getattr(f, "url", "")}
+             "url": getattr(f, "url", ""),
+             "content_sha256": getattr(f, "content_sha256", "")}
             for f in getattr(result, "fetches", [])
         ],
         "objections": [getattr(o, "text", str(o))
@@ -173,6 +178,17 @@ async def _cmd_ask(args: argparse.Namespace) -> int:
         print(f"notes    : {'; '.join(result.notes)[:300]}")
     snap = router.cost_ledger.snapshot()
     print(f"cost     : {json.dumps(snap.get('by_tier', {}))}")
+
+    # Persist the full record — conclusion, artifact hashes, fetch
+    # provenance — so a human can re-check it after the terminal scrolls.
+    try:
+        record = _result_record(result, args.question)
+        path = _persist_run(record)
+        print(f"run      : {path}")
+        for ref in getattr(result, "artifact_refs", []):
+            print(f"artifact : {ref.kind:<5} {ref.sha256[:16]}…  {ref.name}")
+    except Exception as exc:
+        print(f"run      : NOT SAVED ({exc})")
     return 0 if result.sealed else 1
 
 
@@ -308,6 +324,92 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+# ── runs / show ───────────────────────────────────────────────────────────
+
+def _load_run(run_id: str) -> tuple[Optional[dict], Optional[Path]]:
+    """Load a run record by id (filename stem) or unique prefix."""
+    runs = sorted(_runs_dir().glob(f"{run_id}*.json"))
+    if not runs:
+        return None, None
+    if len(runs) > 1:
+        raise SystemExit(
+            f"ambiguous run id '{run_id}' matches {len(runs)} records; "
+            "use a longer prefix")
+    return json.loads(runs[0].read_text(encoding="utf-8")), runs[0]
+
+
+def _verify_artifact(sha256: str) -> str:
+    """Re-hash the artifact against its recorded hash. Returns a status."""
+    try:
+        from tools.artifacts import ArtifactStore, sha256_bytes
+        store = ArtifactStore()
+        actual = sha256_bytes(store.get_bytes(sha256))
+        return "ok" if actual == sha256 else "CORRUPT"
+    except Exception as exc:
+        short = str(exc)
+        return "missing" if "not found" in short else f"unverifiable: {short}"
+
+
+def _cmd_runs(args: argparse.Namespace) -> int:
+    paths = sorted(_runs_dir().glob("*.json"), reverse=True)[:args.limit]
+    if not paths:
+        print("no saved runs yet — `callisto ask \"...\"` creates one")
+        return 0
+    for p in paths:
+        try:
+            rec = json.loads(p.read_text(encoding="utf-8"))
+            verdict = ("SEALED" if rec.get("sealed") else "REFUSED")
+            conf = rec.get("confidence", {})
+            q = (rec.get("question") or "?")[:60]
+            print(f"{p.stem}  {verdict:<8} "
+                  f"{conf.get('tier', '?')}/{conf.get('score', 0):.2f}  {q}")
+        except Exception as exc:
+            print(f"{p.stem}  (unreadable: {exc})")
+    return 0
+
+
+def _cmd_show(args: argparse.Namespace) -> int:
+    rec, path = _load_run(args.run_id)
+    if rec is None:
+        print(f"no run matching '{args.run_id}' — see `callisto runs`")
+        return 1
+    verdict = "SEALED" if rec.get("sealed") else "REFUSED"
+    conf = rec.get("confidence", {})
+    print(f"run      : {path.stem}")
+    print(f"when     : {rec.get('recorded_at', '?')}")
+    print(f"question : {rec.get('question', '?')}")
+    print(f"{verdict:<9}: {conf.get('tier', '?')} {conf.get('score', 0):.2f}")
+    if rec.get("refusal_reason"):
+        print(f"reason   : {rec['refusal_reason']}")
+    if rec.get("conclusion"):
+        print("\n--- conclusion ---")
+        print(rec["conclusion"])
+    arts = rec.get("artifacts", [])
+    if arts:
+        print(f"\n--- artifacts ({len(arts)}) — re-hashed against the store ---")
+        for a in arts:
+            status = _verify_artifact(a["sha256"])
+            print(f"  [{status:<12}] {a['kind']:<5} "
+                  f"{a['sha256'][:16]}…  {a.get('name', '')}")
+    fetches = rec.get("fetches", [])
+    if fetches:
+        print(f"\n--- fetches ({len(fetches)}) ---")
+        seen = set()
+        for f in fetches:
+            key = (f.get("source", "?"), f.get("url", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            print(f"  {key[0]:<18} {key[1][:90]}")
+    obs = rec.get("objections", [])
+    if obs:
+        print(f"\nobjections ({len(obs)}):")
+        for o in obs[:5]:
+            print(f"  - {str(o)[:200]}")
+    print(f"\nrecord   : {path}")
+    return 0
+
+
 # ── parser ────────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
@@ -329,6 +431,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_status = sub.add_parser(
         "status", help="hypothesis pool / lifecycle summary from the local DB")
+    p_runs = sub.add_parser(
+        "runs", help="list saved ask() runs (newest first)")
+    p_runs.add_argument("--limit", type=int, default=20)
+    p_show = sub.add_parser(
+        "show", help="show one run's conclusion, artifacts and provenance; "
+                     "re-verifies artifact hashes against the store")
+    p_show.add_argument("run_id", help="run id (or unique prefix) from `runs`")
     p_doc = sub.add_parser(
         "doctor", help="can this machine answer a live question today?")
     for p in (p_status, p_doc):
@@ -342,6 +451,10 @@ def main(argv=None) -> int:
         return asyncio.run(_cmd_ask(args))
     if args.command == "status":
         return _cmd_status(args)
+    if args.command == "runs":
+        return _cmd_runs(args)
+    if args.command == "show":
+        return _cmd_show(args)
     if args.command == "doctor":
         return _cmd_doctor(args)
     return 2
