@@ -422,6 +422,35 @@ def _is_fetch_stage(stage: str) -> bool:
     return "fetch" in (stage or "")
 
 
+def admissible_checkpoints(
+    trace_run: str, checkpoints: list[Checkpoint],
+    key: Optional[str] = None,
+) -> list[Checkpoint]:
+    """THE single definition of which checkpoints a run may consume.
+
+    A checkpoint is ADMISSIBLE iff it belongs to THIS run AND its record is
+    authenticated: under a keyed harness regime an unsigned or bad-HMAC
+    checkpoint is inadmissible everywhere — it is never replayed into a
+    ledger and never judged by seal_guard, because both consumers must see
+    the SAME world for the guard's verdict to cover what the seal seals
+    (red-team D3). With no key configured (unkeyed deployment) signature
+    verification cannot run, so only the run-scope filter applies.
+
+    This function is the ONE place the rule lives. engine.py's replay path
+    and seal_guard() both call it; neither reimplements the predicate.
+    """
+    k = key if key is not None else _harness_key()
+    out = []
+    for ck in checkpoints:
+        if ck.run != trace_run:
+            continue
+        if k and not ck.verify_signature(k):
+            logger.warning("inadmissible checkpoint %s: signature fails", ck.key)
+            continue
+        out.append(ck)
+    return out
+
+
 def provenance_is_intact(ledger, checkpoints: list[Checkpoint]) -> bool:
     """True iff EVERY checkpointed fetch's bytes are provably in the ledger.
 
@@ -482,13 +511,13 @@ def seal_guard(
     that, we refuse — sealing something unverifiable is worse than redoing
     the work.
     """
-    # SCOPE THE CHECKPOINTS TO THIS RUN. The engine passes cp.list_all() —
-    # every checkpoint ever written, by every run. Replaying those into this
-    # run's ledger imported another question's bytes as PRIMARY observations,
-    # so a later INFERRED claim here could re-class upward off evidence this
-    # run never collected (red-team C2). A run may only be judged on, and may
-    # only absorb, its own evidence.
-    checkpoints = [ck for ck in checkpoints if ck.run == trace.run]
+    # SCOPE + AUTHENTICATE VIA THE SHARED PREDICATE. The engine passes
+    # cp.list_all() — every checkpoint ever written, by every run. Both the
+    # guard and the ledger-replay path must consume the SAME admissible set,
+    # or the guard reasons over a world the seal does not cover (red-team
+    # D3). admissible_checkpoints() is the one definition: run-scope filter
+    # (red-team C2) plus signature verification (red-team D1) in ONE place.
+    checkpoints = admissible_checkpoints(trace.run, checkpoints)
 
     if not trace.is_resume:
         # Even fresh runs must not seal over checkpointed evidence whose
