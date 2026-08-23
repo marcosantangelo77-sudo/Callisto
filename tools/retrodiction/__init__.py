@@ -34,6 +34,9 @@ from tools.retrodiction.scoring import (
     calibration_curve,
     slice_breakdown,
     resolved_claim_record,
+    paired_significance,
+    brier_decomposition,
+    bootstrap_brier_ci,
 )
 from tools.retrodiction.harness import (
     Researcher,
@@ -49,7 +52,8 @@ __all__ = [
     "QuestionType", "RetrodictionQuestion",
     "generate_earnings_questions", "save_questions", "load_questions",
     "Prediction", "score_brier", "calibration_curve", "slice_breakdown",
-    "resolved_claim_record",
+    "resolved_claim_record", "paired_significance", "brier_decomposition",
+    "bootstrap_brier_ci",
     "Researcher", "StubResearcher", "RunConfig", "RunResult",
     "run_ab", "loop_calibration",
 ]

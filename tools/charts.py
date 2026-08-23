@@ -203,12 +203,13 @@ def store_chart(
     if data is None:
         data = render_svg(spec).encode("utf-8")
 
-    code = spec.pop("code", "")  # code lives in the spec artifact, not the image
+    # The stored spec carries the code; the caller's dict is NOT mutated
+    # (an earlier version popped `code` in place, corrupting the caller's
+    # spec and breaking regeneration recipes that reuse it).
+    code = spec.get("code", "")
+    stored_spec = {**spec, "code": code}
     spec_ref = store.put_json(
-        spec, name=f"{spec['title'][:40]} spec", meta={"renderer": renderer}
-    )
-    spec_ref = store.put_json(
-        {**spec, "code": code},
+        stored_spec,
         name=f"{spec['title'][:40]} spec",
         meta={"renderer": renderer},
     )

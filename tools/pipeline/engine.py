@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import re
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Callable, Optional
@@ -344,11 +345,17 @@ class ResearchPipeline:
 
         compute = proposal.get("compute")
         if compute and isinstance(compute, dict) and compute.get("code"):
+            # keep_workspace=True so produced file BYTES reach the artifact
+            # store — otherwise the child merely ATTESTS hashes and nothing
+            # downstream can re-verify them (property 3: evidence you can
+            # check). Workspace is destroyed right after sealing.
             sbx = run_python(str(compute["code"]),
-                             inputs=compute.get("inputs") or {})
+                             inputs=compute.get("inputs") or {},
+                             keep_workspace=True)
             out.sandbox_status = sbx.status
             if sbx.status == "ok":
                 refs = _store_sandbox(sbx, self.store)
+                _cleanup_workspace(sbx)
                 out.artifact_sha256s.extend(r.sha256 for r in refs)
                 self.artifact_refs.extend(refs)
                 # The computation itself is real executed output → recorded
@@ -687,8 +694,21 @@ def _make_adapter(registry, name: str, source: RestSource):
 
 
 def _store_sandbox(sbx, store: ArtifactStore) -> list[ArtifactRef]:
-    """Persist sandbox stdout + files. run_python deletes its workspace, so
-    only child-attested hashes are available here unless keep_workspace was
-    set; we accept attested hashes and mark them honestly."""
+    """Persist sandbox stdout + files. The engine runs run_python with
+    keep_workspace=True, so produced file bytes are read and re-hashed by
+    the store itself — the artifact chain is verifiable, not merely
+    attested by the child."""
     from tools.artifacts import store_sandbox_outputs
-    return store_sandbox_outputs(sbx, store, workspace=None)
+    workspace = getattr(sbx, "workspace", None)
+    return store_sandbox_outputs(sbx, store,
+                                 workspace=Path(workspace) if workspace else None)
+
+
+def _cleanup_workspace(sbx) -> None:
+    """Destroy the preserved scratch dir once its bytes are sealed."""
+    import shutil
+
+    ws = getattr(sbx, "workspace", None)
+    if ws:
+        shutil.rmtree(ws, ignore_errors=True)
+        sbx.workspace = None

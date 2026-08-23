@@ -120,21 +120,58 @@ def _seal_digest(payload: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def verify_seal_method(session: dict, seal_hash: str | None) -> str | None:
+    """Which verification path *seal_hash* passes over *session*, or None.
+
+    Returns one of:
+      "unsealed"       — no seal_hash at all (caller must treat as INFERRED)
+      "keyed"          — HMAC under the current key
+      "rotation"       — HMAC under a rotation key (CALLISTO_SEAL_KEY_OLD)
+      "unkeyed-regime" — digest matched the plain SHA-256 while NO key is
+                         configured (the pre-keying regime itself)
+      "legacy-fallback"— digest matched ONLY the public SHA-256 while a key
+                         IS configured. This proves nothing: anyone can
+                         recompute it (red-team R5). Callers gating a claimed
+                         provenance class MUST treat this as failure.
+      None             — no candidate matched / malformed input
+    """
+    if not session:
+        return None
+    if not seal_hash:
+        return "unsealed"
+    payload = _canonical_payload(session)
+    provided = str(seal_hash)
+    keys = _seal_keys()
+    if keys:
+        for i, key in enumerate(keys):
+            cand = hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+            if hmac.compare_digest(cand, provided):
+                return "keyed" if i == 0 else "rotation"
+        # Keyed regime: the public hash is forgeable by anyone — never proof.
+        legacy = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return "legacy-fallback" if hmac.compare_digest(legacy, provided) else None
+    # No key configured: the operating regime IS unkeyed; matching the plain
+    # SHA-256 proves the bytes are intact but proves nothing about WHO sealed
+    # them — anyone with DB access can recompute it (red-team R5). Under an
+    # unkeyed regime a seal therefore verifies integrity only; admit_learning
+    # treats it as insufficient to honor a claimed class above INFERRED.
+    legacy = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return "unkeyed-regime" if hmac.compare_digest(legacy, provided) else None
+
+
 def verify_learning_seal(session: dict, seal_hash: str | None) -> bool:
     """True iff *seal_hash* is a valid seal over *session* under the current
-    or rotation key — or the row is legacy-unsealed AND carries no claimed
-    class above INFERRED (caller handles the cap; this returns True only for
-    the trivially-consistent case of no seal at all)."""
-    if not session:
-        return False
-    if not seal_hash:
-        return True  # unsealed: caller must treat as INFERRED-capped
-    payload = _canonical_payload(session)
-    candidates = [
-        _seal_digest(payload),                                # current/rotation key
-        hashlib.sha256(payload.encode("utf-8")).hexdigest(),  # legacy unkeyed
-    ]
-    return any(hmac.compare_digest(c, str(seal_hash)) for c in candidates)
+    or rotation key. Under an unkeyed regime (no CALLISTO_SEAL_KEY) this
+    returns False for everything except the trivially-consistent no-seal
+    case: an unkeyed digest is forgeable by anyone, so it can never back a
+    provenance claim (see verify_seal_method; red-team R5).
+
+    NOTE: under a keyed regime this deliberately returns False for a digest
+    that matches only the legacy public SHA-256 — see verify_seal_method.
+    """
+    return verify_seal_method(session, seal_hash) in (
+        "keyed", "rotation",
+    )
 
 
 @dataclass
@@ -173,11 +210,20 @@ def admit_learning(
         if seal_session is None or not seal_hash:
             cls = "INFERRED"
             reason = "claimed class without seal evidence → capped to INFERRED"
-        elif not verify_learning_seal(seal_session, seal_hash):
-            cls = "INFERRED"
-            reason = "seal failed verification → collapsed to INFERRED (fail closed)"
         else:
-            reason = "seal verified → claimed class honored"
+            method = verify_seal_method(seal_session, seal_hash)
+            if method in ("legacy-fallback", "unkeyed-regime"):
+                # The digest is the public SHA-256 — forgeable by anyone
+                # with DB access (red-team R5), whether or not a key is
+                # configured. Fail closed in both regimes.
+                cls = "INFERRED"
+                reason = (f"{method} digest → forgeable, collapsed to "
+                          "INFERRED (fail closed)")
+            elif not method or method == "unsealed":
+                cls = "INFERRED"
+                reason = "seal failed verification → collapsed to INFERRED (fail closed)"
+            else:
+                reason = f"seal verified ({method}) → claimed class honored"
     else:
         reason = "declared INFERRED"
 
