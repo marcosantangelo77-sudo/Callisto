@@ -27,6 +27,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -177,11 +178,30 @@ class ArtifactStore:
         report["ok"] = not report["missing"] and not report["corrupt"]
         return report
 
-    def gc(self) -> list[str]:
-        """Remove objects absent from the index (orphans only — the index is
-        the reachability root alongside live refs)."""
+    def gc(self, *, allow_rebuild: bool = False) -> list[str]:
+        """Remove objects absent from the index (orphans only).
+
+        Safety direction: garbage may be kept; evidence must never be
+        destroyed. If the index file is unreadable/corrupt, gc REFUSES and
+        raises ArtifactIndexCorrupt — an empty index is indistinguishable
+        from "everything is an orphan", so deleting on its authority could
+        wipe the store.
+
+        allow_rebuild=True instead recovers: it rebuilds the index from the
+        objects on disk (the actual evidence) and proceeds. Provenance lost
+        in a rebuild is marked meta.reconstructed by rebuild_index().
+        """
+        idx = self._load_index(strict=True)
+        if idx is None:
+            if not allow_rebuild:
+                raise ArtifactIndexCorrupt(
+                    f"index at {self.index_path} is corrupt or unreadable; "
+                    "gc() refused to delete anything. Repair the index "
+                    "(rebuild_index()) and retry."
+                )
+            self.rebuild_index()
+            idx = self._load_index(strict=True) or {}
         removed = []
-        idx = self._load_index()
         for obj in self.objects.rglob("*"):
             if obj.is_file() and obj.name not in idx:
                 obj.unlink()
