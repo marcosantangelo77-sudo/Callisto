@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Callable, Optional
@@ -345,7 +346,8 @@ class ResearchPipeline:
         compute = proposal.get("compute")
         if compute and isinstance(compute, dict) and compute.get("code"):
             sbx = run_python(str(compute["code"]),
-                             inputs=compute.get("inputs") or {})
+                             inputs=compute.get("inputs") or {},
+                             keep_workspace=True)
             out.sandbox_status = sbx.status
             if sbx.status == "ok":
                 refs = _store_sandbox(sbx, self.store)
@@ -687,8 +689,24 @@ def _make_adapter(registry, name: str, source: RestSource):
 
 
 def _store_sandbox(sbx, store: ArtifactStore) -> list[ArtifactRef]:
-    """Persist sandbox stdout + files. run_python deletes its workspace, so
-    only child-attested hashes are available here unless keep_workspace was
-    set; we accept attested hashes and mark them honestly."""
+    """Persist sandbox stdout + files as REAL bytes.
+
+    run_python is called with keep_workspace=True, so the workspace survives
+    and store_sandbox_outputs re-hashes every produced file into the store.
+    The workspace is destroyed here, after sealing. Before this fix the
+    deleted workspace forced child-attested-only refs (hashes pointing at
+    bytes that no longer existed), so verify_artifacts failed ok=False on
+    every sealed claim citing sandbox output.
+    """
+    from pathlib import Path
+
     from tools.artifacts import store_sandbox_outputs
-    return store_sandbox_outputs(sbx, store, workspace=None)
+
+    ws = getattr(sbx, "workspace", None)
+    try:
+        return store_sandbox_outputs(
+            sbx, store,
+            workspace=Path(ws) if ws else None)
+    finally:
+        if ws:
+            shutil.rmtree(ws, ignore_errors=True)

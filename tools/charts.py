@@ -174,7 +174,7 @@ def store_chart(
     store = store or default_store()
     renderer = "svg"
     kind = "svg"
-    data: bytes
+    data: Optional[bytes] = None
     if prefer_matplotlib:
         try:
             import io
@@ -204,9 +204,6 @@ def store_chart(
         data = render_svg(spec).encode("utf-8")
 
     code = spec.pop("code", "")  # code lives in the spec artifact, not the image
-    spec_ref = store.put_json(
-        spec, name=f"{spec['title'][:40]} spec", meta={"renderer": renderer}
-    )
     spec_ref = store.put_json(
         {**spec, "code": code},
         name=f"{spec['title'][:40]} spec",
