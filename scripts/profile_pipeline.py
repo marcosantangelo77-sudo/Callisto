@@ -209,15 +209,16 @@ def _stage_table(profile: dict) -> list[tuple[str, float, int, int]]:
     d_dur, d_n = span(arch)
     rows.append(("decompose", d_dur, d_n, 0))
     # leaf sections are delimited by Manager calls: everything between the
-    # last Architect byte and the first non-Manager model call is leaf work.
+    # last Architect byte and the first adversary call is leaf work.
     leaf_fetches = [e for e in fetches if e["t0"] >= t_end_arch
                     and e["t0"] < (t0_adv if t0_adv != float("inf") else 9e18)]
     m_dur, m_n = span(managers)
     bytes_fetched = sum(e["bytes"] for e in leaf_fetches)
     f_dur, f_n = span(leaf_fetches)
-    rows.append((f"leaves({profile['n_leaves']}) fetch+answer", m_dur + f_dur,
-                 m_n, bytes_fetched))
-    a_dur, a_n = span(others)
+    rows.append((f"leaves({profile['n_leaves']}) fetch", f_dur, 0,
+                 bytes_fetched))
+    rows.append((f"leaves({profile['n_leaves']}) answer", m_dur, m_n, 0))
+    a_dur, a_n = span(advs)
     rows.append(("adversary(+seal)", a_dur, a_n, 0))
     return rows
 
