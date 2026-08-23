@@ -319,3 +319,53 @@ with generic search — which is the query-authoring backlog, now half-built.
 
 Two environmental blocks: SEC and ClinicalTrials.gov both 403 this machine after
 earlier live testing. Neither is a code defect; both need a cooldown.
+
+---
+
+# THE FIRST REAL CALIBRATION MEASUREMENT
+
+A retrodiction batch ran five questions end to end through the live pipeline
+with Ox Alpha. This is the first time the system has been scored against
+outcomes rather than inspected as code.
+
+```
+n_scored          5/5        sealed_rate  1.0     null_rate  0.0
+mean_brier        0.3129     ← WORSE than always answering 0.5 (0.25)
+beat_market_rate  0.40       ← loses to the market 60% of the time
+mean_edge_taken  -0.31       ← systematically takes NEGATIVE edge
+mean_elapsed_s    2625       ← 43 minutes per question
+calibration 0.2-0.4 bin:  predicted 0.33, realised 0.60
+```
+
+**The pipeline works and the answers are bad.** Every question scored and
+sealed, no nulls — the machinery runs. But a Brier of 0.31 is worse than
+uninformative, and the edge is negative.
+
+**The diagnosis is in the calibration line: the system is systematically
+UNDERCONFIDENT.** It says 33% where reality is 60%. That is not noise, it is a
+bias with a direction — and it explains the negative edge directly, because a
+system that understates probabilities will bet against things that happen.
+
+This is worth more than any code finding so far, because it is measured against
+reality instead of reasoned from the source. It also suggests the fix is not in
+retrieval: the answers are getting through, they are just shaded too low.
+
+**Prime suspect: the subtraction-only architecture.** Every mechanism here can
+lower a confidence and none can raise one — provenance ceilings, the adversary,
+self-review caps, the inheritance rule, ensemble spread. Individually each is
+defensible. Stacked, they may bias every estimate downward. That is the
+strongest case AGAINST the central design commitment, and it arrived as a
+number rather than an argument.
+
+**Do not "fix" this by letting things raise confidence.** The right response is
+to measure where the shading enters — run the same questions with each ceiling
+disabled in turn and see which one accounts for the gap. The A/B harness exists
+for exactly this.
+
+Cost note: 43 minutes per question. A 100-question batch is ~3 days serial.
+Parallelism or a faster model is required before this scales.
+
+**Process failure worth recording:** I killed this agent as a hung slot without
+reading what it had produced. It had finished its job hours earlier and was
+sitting idle. The result above was nearly discarded. Monitoring for dead
+processes is not monitoring for finished work.
