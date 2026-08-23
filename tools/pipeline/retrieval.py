@@ -28,6 +28,7 @@ raises the bar for calling a leaf satisfied.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -302,7 +303,8 @@ class IterativeRetriever:
                  max_sources_per_leaf: int = 3,
                  max_fetches_per_round: int = 4,
                  generic_calls: Optional[dict] = None,
-                 use_planner: bool = True):
+                 use_planner: bool = True,
+                 max_concurrent_fetches: int = 8):
         self.registry = registry
         self.ledger = ledger
         self.transport = transport
@@ -310,6 +312,10 @@ class IterativeRetriever:
         self.max_rounds = max(1, int(max_rounds))
         self.max_sources_per_leaf = max(1, int(max_sources_per_leaf))
         self.max_fetches_per_round = max(1, int(max_fetches_per_round))
+        #: bound on sources fetched SIMULTANEOUSLY within a round. Same
+        #: hazard as leaf concurrency: the provider 429s past ~8-10
+        #: simultaneous sessions. Fetches are IO-bound, so a thread pool.
+        self.max_concurrent_fetches = max(1, int(max_concurrent_fetches))
         #: None + use_planner=True -> per-source query authoring via
         #: tools.sources.query_builder.build_plan (W5). An explicit dict
         #: keeps the legacy W1 behaviour byte-for-byte.
@@ -379,33 +385,41 @@ class IterativeRetriever:
             round_admitted = 0
             round_detail = {"round": rnd, "query": query,
                             "sources": [], "admitted": 0}
-            for spec in specs:
-                # ── query authoring: planner (W5) or legacy table (W1) ──
-                if legacy_calls is not None:
-                    call = legacy_calls.get(spec.name)
-                    if not call:
-                        round_detail["sources"].append(
-                            {"name": spec.name, "skipped": "no generic route"})
-                        continue
-                    method_name, pos_args, kw_args = call
-                    kwargs = {k: (query if v == "term" else v)
-                              for k, v in (kw_args or {}).items()}
-                    args = tuple(query if a == "term" else a for a in pos_args)
-                else:
-                    from tools.sources import query_builder
-                    plan = query_builder.build_plan(spec.name, question.text)
-                    if not plan.plannable or not plan.queries:
-                        reason = plan.reason or "no authored query possible"
-                        logger.info("planner skipped %s: %s",
-                                    spec.name, reason)
-                        excluded.add(spec.name)
-                        round_detail["sources"].append(
-                            {"name": spec.name, "skipped": reason[:120]})
-                        continue
-                    pq = plan.queries[0]
-                    method_name = pq.method
-                    args, kwargs = tuple(pq.args), dict(pq.kwargs)
+
+            # ── Fan out across sources, BOUNDED, determinism-preserving. ──
+            # Each worker does only PURE work: query authoring, the fetch,
+            # the relevance judgment. It returns a result record and mutates
+            # NOTHING shared. The main thread then applies every result in
+            # SPEC ORDER (not completion order), so ledger insertion order,
+            # admitted/rejected lists, exclusion sets and round_detail are
+            # identical to the serial run — byte for byte.
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _fetch_one(spec):
                 try:
+                    if legacy_calls is not None:
+                        call = legacy_calls.get(spec.name)
+                        if not call:
+                            return (spec, {"name": spec.name,
+                                           "skipped": "no generic route"},
+                                    None)
+                        method_name, pos_args, kw_args = call
+                        kwargs = {k: (query if v == "term" else v)
+                                  for k, v in (kw_args or {}).items()}
+                        args = tuple(query if a == "term" else a
+                                     for a in pos_args)
+                    else:
+                        from tools.sources import query_builder
+                        plan = query_builder.build_plan(spec.name,
+                                                        question.text)
+                        if not plan.plannable or not plan.queries:
+                            reason = plan.reason or \
+                                "no authored query possible"
+                            return (spec, {"name": spec.name,
+                                           "skipped": reason[:120]}, None)
+                        pq = plan.queries[0]
+                        method_name = pq.method
+                        args, kwargs = tuple(pq.args), dict(pq.kwargs)
                     source = RestSource(spec, ledger=self.ledger,
                                         transport=self.transport)
                     adapter = _make_adapter(self.registry, spec.name, source)
@@ -416,18 +430,39 @@ class IterativeRetriever:
                             f"{spec.name} returned "
                             f"{getattr(source.last_record, 'status', '?')}")
                     body = __import__("json").dumps(fetched, sort_keys=True)
+                    ok, cov, reason = self.gate.judge(
+                        question.text, question_type, fetched)
+                    fr = _mk_fetch(spec.name,
+                                   getattr(source.last_record, "url", ""),
+                                   body, fetched, question.question_id, _sha)
+                    return (spec, None, (ok, cov, reason, fr))
                 except Exception as e:  # noqa: BLE001 — a failed source skips
                     logger.info("source %s failed: %s", spec.name, e)
-                    excluded.add(spec.name)
-                    round_detail["sources"].append(
-                        {"name": spec.name, "error": str(e)[:120]})
+                    return (spec, {"name": spec.name,
+                                   "error": str(e)[:120]}, None)
+
+            with ThreadPoolExecutor(
+                    max_workers=self.max_concurrent_fetches) as pool:
+                results = list(pool.map(_fetch_one, specs))
+
+            # Apply results in SPEC ORDER — deterministic regardless of
+            # which thread finished first.
+            for spec, skip_or_error, judged in results:
+                if skip_or_error is not None:
+                    detail = dict(skip_or_error)
+                    if "error" in detail:
+                        excluded.add(spec.name)
+                    elif "skipped" in detail and legacy_calls is None:
+                        # planner could not serve this source
+                        unplannable.add(spec.name)
+                        if not any(s["name"] == spec.name
+                                   for s in trace.skipped_sources):
+                            trace.skipped_sources.append(
+                                {"name": spec.name,
+                                 "reason": detail.get("skipped", "")[:120]})
+                    round_detail["sources"].append(detail)
                     continue
-                # GATE BEFORE INGESTION — the run's central fix.
-                ok, cov, reason = self.gate.judge(
-                    question.text, question_type, fetched)
-                fr = _mk_fetch(spec.name, getattr(source.last_record,
-                                                  "url", ""),
-                               body, fetched, question.question_id, _sha)
+                ok, cov, reason, fr = judged
                 if not ok:
                     trace.rejected.append(RejectedItem(
                         source_name=spec.name,
@@ -437,16 +472,15 @@ class IterativeRetriever:
                     round_detail["sources"].append(
                         {"name": spec.name, "rejected": reason})
                     continue
-                # Every result lands in the ledger exactly once as
-                # primary bytes (RestSource already recorded the raw body;
-                # this is the canonical sorted-JSON form the pipeline
-                # carries forward, so it is registered too).
+                # Every result lands in the ledger exactly once as primary
+                # bytes; applied here in the main thread, in spec order.
                 self.ledger.record_tool_result(
-                    f"{spec.name}_fetch", body, primary=True, urls=[fr.url])
+                    f"{spec.name}_fetch", fr.body, primary=True,
+                    urls=[fr.url])
                 trace.admitted.append(fr)
                 trace.independent_keys.add(
                     independence_key(spec.name, spec.base_url))
-                relevant_titles.extend(_titles(fetched))
+                relevant_titles.extend(_titles(json.loads(fr.body)))
                 round_admitted += 1
                 round_detail["sources"].append(
                     {"name": spec.name, "admitted": True,
