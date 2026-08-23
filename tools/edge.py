@@ -51,6 +51,15 @@ def _raw_implied(price: Quote) -> float:
     if isinstance(price, int) and price != 0 and abs(price) >= 100:
         # American odds are integers with |value| >= 100 by convention.
         return _american_to_implied(price)
+    if 2 <= price < 100 and float(price).is_integer():
+        # H1a (red team): a WHOLE number in [2, 100) is a contract price
+        # quoted in cents (Kalshi/Polymarket), not decimal odds of 47-to-1.
+        # int 47 and float 47.0 are the same price and must parse the same;
+        # previously both silently became decimal odds -> implied 2.1%.
+        # Non-integral values in this band stay decimal odds (2.13 is
+        # legitimately 2.13-to-1); callers with cent prices should still
+        # prefer kind="contract_cents".
+        return float(price) / 100.0
     return _continuous_to_prob(float(price))
 
 

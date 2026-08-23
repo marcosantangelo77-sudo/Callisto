@@ -230,6 +230,27 @@ def devig_market(
     overround = sum(1 / o for o in odds_list) - 1.0
     param = None
 
+    # H1c (red team): a book summing to <= 1.0 has NO vig to remove — it is
+    # crossed, locked-below-fair, or garbage. Normalising it would manufacture
+    # fair probabilities ABOVE the quoted prices: free money out of a broken
+    # feed. Refuse. (Exactly-fair locked books pass: overround 0 is legitimate.)
+    if overround < -1e-9:
+        return {
+            "error": (
+                f"sub-fair book: overround {round(overround, 6)} < 0 — nothing "
+                f"to devig; refusing to normalise a crossed/sub-fair market"
+            ),
+            "method": "refused",
+            "raw_implied": [round(1 / o, 6) for o in odds_list],
+            "overround": round(overround, 6),
+            "overround_pct": round(overround * 100, 2),
+            "hold_pct": round(overround / sum(1 / o for o in odds_list) * 100, 2),
+            "fair_probabilities": [],
+            "fair_decimal_odds": [],
+            "fair_american_odds": [],
+            "solver_param": None,
+        }
+
     if method == "auto":
         if overround < 0.03:
             method = "multiplicative"
