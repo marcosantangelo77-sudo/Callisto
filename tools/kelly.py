@@ -156,6 +156,11 @@ def kelly_full(edge: float, odds: int | float) -> float:
     Returns:
         Optimal fraction of bankroll (0.0 if no edge).  Never negative.
     """
+    # H2a (red team): a poisoned edge (NaN/inf) must never size a position.
+    # NaN survives max(0.0, min(1.0, nan)) unclamped, so the guard has to
+    # come before any arithmetic.
+    if not math.isfinite(edge) or not math.isfinite(odds):
+        return 0.0
     implied = calculate_implied_probability(int(odds))
     p = implied + edge  # true probability
     p = max(0.0, min(1.0, p))  # clamp
@@ -235,6 +240,30 @@ def kelly_dynamic(
     Returns:
         Dict with stake, fraction, reasoning, and component breakdown.
     """
+    # H2a (red team): non-finite input must zero the stake, not poison the
+    # arithmetic downstream (NaN slips through min/max clamps in CPython).
+    if not (math.isfinite(edge) and math.isfinite(confidence_score)
+            and math.isfinite(variance_estimate) and math.isfinite(bankroll)):
+        return {
+            "stake": 0.0,
+            "fraction": 0.0,
+            "kelly_full": 0.0,
+            "kelly_base": 0.0,
+            "tier": "UNVERIFIED",
+            "tier_multiplier": 0.0,
+            "variance_dampener": 0.0,
+            "hard_cap_applied": False,
+            "reasoning": "Non-finite edge/odds/confidence/variance/bankroll "
+                         "refused: no position is sized from a poisoned input.",
+            "components": {
+                "edge": edge if math.isfinite(edge) else 0.0,
+                "odds": odds,
+                "confidence_score": confidence_score if math.isfinite(confidence_score) else 0.0,
+                "variance_estimate": variance_estimate if math.isfinite(variance_estimate) else 0.0,
+                "bankroll": bankroll if math.isfinite(bankroll) else 0.0,
+            },
+        }
+
     # Step 1: Base fractional Kelly
     base_fraction = kelly_fractional(edge, odds, fraction=kelly_base_fraction)
 
@@ -401,7 +430,7 @@ def kelly_portfolio(bets: list[dict]) -> list[dict]:
 
     # Step 4: Per-bet correlation adjustment
     # Bets with higher individual correlation get penalized more.
-    results = []
+    finals_exact = []
     for i, bet in enumerate(bets):
         ik = individual_kellys[i]
         rho_i = max(0.0, correlations[i])
@@ -413,7 +442,27 @@ def kelly_portfolio(bets: list[dict]) -> list[dict]:
 
         final_fraction = ik["confidence_adjusted"] * scale_factor * individual_corr_penalty
         # Per-bet hard cap at 5%
-        final_fraction = min(final_fraction, 0.05)
+        finals_exact.append(min(final_fraction, 0.05))
+
+    # H3/H5 (red team): the individual correlation penalties act INSIDE the
+    # portfolio scaling, so a book that mixes correlated and uncorrelated
+    # bets can sum far past the 20% cap (the over-cap rescale divides by the
+    # penalized total, then the per-bet penalties multiply part of it back).
+    # The cap must bind on the FINAL numbers, whatever the mix.
+    total_final = math.fsum(finals_exact)
+    if total_final > PORTFOLIO_CAP:
+        shrink = PORTFOLIO_CAP / total_final
+        finals_exact = [f * shrink for f in finals_exact]
+
+    results = []
+    for i, bet in enumerate(bets):
+        ik = individual_kellys[i]
+        rho_i = max(0.0, correlations[i])
+        individual_corr_penalty = max(0.1, 1.0 - (rho_i * 0.25))
+        # H5 (red team): rounding to 6dp can only ever round UP past the
+        # caps — with 40 bets that's up to 2e-5 of phantom allocation.
+        # Never let the stored fraction exceed the computed one.
+        stored_fraction = min(round(finals_exact[i], 6), finals_exact[i])
 
         results.append({
             "description": bet.get("description", f"Bet {i+1}"),
@@ -423,8 +472,8 @@ def kelly_portfolio(bets: list[dict]) -> list[dict]:
             "confidence_adjusted_kelly": ik["confidence_adjusted"],
             "correlation": round(correlations[i], 3),
             "individual_corr_penalty": round(individual_corr_penalty, 4),
-            "final_fraction": round(final_fraction, 6),
-            "final_pct": round(final_fraction * 100, 3),
+            "final_fraction": stored_fraction,
+            "final_pct": round(stored_fraction * 100, 3),
             "tier": ik["tier"],
         })
 
@@ -825,7 +874,10 @@ def calculate_units(
     if unit_size is None:
         unit_size = bankroll * 0.01
 
-    if unit_size <= 0 or bankroll <= 0:
+    if (bankroll is None
+            or not math.isfinite(bankroll)
+            or not math.isfinite(unit_size)
+            or unit_size <= 0 or bankroll <= 0):
         return {
             "units": 0.0,
             "dollar_amount": 0.0,
@@ -853,7 +905,13 @@ def calculate_units(
     #   fraction = edge * kelly_fraction * tier_mult
     # This is a linearized approximation of Kelly that works well for
     # small edges (which is what sharps typically bet on).
-    fraction = edge * kelly_fraction * tier_mult
+    # H2a (red team): NaN edge would ride the clamp upward and size a real
+    # dollar stake from a poisoned input — refuse instead.
+    if not math.isfinite(edge) or not math.isfinite(confidence) \
+            or not math.isfinite(kelly_fraction):
+        fraction = 0.0
+    else:
+        fraction = edge * kelly_fraction * tier_mult
 
     # Safety: cap at 5% of bankroll
     fraction = max(0.0, min(fraction, 0.05))
