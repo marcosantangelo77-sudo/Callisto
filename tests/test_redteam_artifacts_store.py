@@ -155,19 +155,29 @@ def test_failed_run_still_seals_stdout_and_attested_files_without_workspace():
 
 
 def test_child_attested_ref_has_no_bytes_in_store():
+    """A6 — FIXED. The attested path no longer mints refs from hashes
+    reported by the sandbox child: a child-attested hash is a claim, not
+    evidence. The claim is stored as an explicit non-citable JSON record,
+    and every returned ref has bytes in the store."""
     s = _store()
     sbx = _FakeSandboxResult("print('hi')", "hi\n",
                              files=[{"name": "model.csv", "sha256": "a" * 64}])
     refs = store_sandbox_outputs(sbx, s)
-    attested = [r for r in refs if r.meta.get("attested_by_child_only")]
-    assert attested, "expected the attested-path ref to exist (to pin behaviour)"
-    r = attested[0]
-    # The engine extends LeafOutcome.artifact_sha256s with this hash and cites
-    # it in the conclusion — citing bytes nobody stored and nothing verifies.
-    assert not s.exists(r.sha256)
-    report = s.verify_artifacts([r])
-    assert report["ok"] is False and report["missing"], \
-        "verify_artifacts should flag the phantom artifact"
+    # Invariant 1: no ref exists whose bytes are not in the store.
+    for r in refs:
+        assert s.exists(r.sha256), \
+            f"cited ref {r.name} has no bytes in store"
+    # Invariant 2: the child's claim is preserved, as a record, and is
+    # explicitly marked unfit for citation as quantitative evidence.
+    claims = [r for r in refs if r.kind == "json"
+              and r.name == "attestation_claim"]
+    assert claims, "expected the attestation claim record to be stored"
+    claim = json.loads(s.get_bytes(claims[0].sha256).decode("utf-8"))
+    assert claim.get("citable_as_evidence") is False
+    assert claim["files_reported_by_child"][0]["sha256"] == "a" * 64
+    # Regression guard: verify_artifacts passes over everything cited.
+    report = s.verify_artifacts(refs)
+    assert report["ok"] is True
 
 
 # ── A9: dedupe rewrites code_sha256 when first entry lacked one ────────────

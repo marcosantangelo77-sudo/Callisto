@@ -316,17 +316,36 @@ def store_sandbox_outputs(
                     code_sha256=code_hash,
                     data_refs=[stdout_ref.sha256],
                 ))
-    elif result.status == "ok":
-        # Without workspace access we can only attest what the child hashed.
-        for f in result.files:
-            ext = Path(f["name"]).suffix.lstrip(".").lower()
-            kind = ext if ext in ALLOWED_KINDS else "txt"
-            refs.append(ArtifactRef(
-                sha256=f["sha256"],
-                kind=kind,
-                name=f["name"],
-                code_sha256=code_hash,
-                data_refs=[stdout_ref.sha256],
-                meta={"attested_by_child_only": True},
-            ))
+    elif result.status == "ok" and result.files:
+        # RED TEAM A6: without workspace access the child's hashes are
+        # CLAIMS, not evidence. We used to mint citable ArtifactRefs from
+        # them (meta attested_by_child_only) — bytes nobody stored, cited by
+        # sealed conclusions, verified by nothing. Policy: a ref may only
+        # exist if its bytes are in the store. So the claim itself becomes
+        # the stored artifact: one verifiable JSON record documenting what
+        # the child reported, explicitly marked unfit for citation as
+        # quantitative evidence.
+        claim = {
+            "type": "sandbox_attestation_claim",
+            "status": result.status,
+            "code_sha256": code_hash,
+            "stdout_ref": stdout_ref.sha256,
+            "files_reported_by_child": list(result.files),
+            "citable_as_evidence": False,
+            "note": ("hashes below were reported by the sandbox child; the "
+                     "parent never observed these bytes. Kept as a record "
+                     "of the claim, not as evidence."),
+        }
+        claim_ref = store.put_json(
+            claim,
+            name="attestation_claim",
+            code_sha256=code_hash,
+            data_refs=[stdout_ref.sha256],
+        )
+        # Self-check on the new invariant: every returned ref has stored bytes.
+        for r in (*refs, claim_ref):
+            if not store.exists(r.sha256):
+                raise RuntimeError(
+                    f"invariant violated: ref {r.name} has no bytes in store")
+        refs.append(claim_ref)
     return refs

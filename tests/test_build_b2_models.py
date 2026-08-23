@@ -167,11 +167,16 @@ class TestSandboxRegistrySeam:
                 "json.dump({'target_2029': 210000, 'p_gt_100k': 0.62}, open('forecast.json','w'))\n")
         r = run_python(code, wall_clock_s=30)
         assert r.status == "ok"
-        refs = store_sandbox_outputs(r)
+        refs = store_sandbox_outputs(r, store)
         assert {x.kind for x in refs} == {"json", "txt"}
-        # attested-only ref (no workspace): hash known, bytes not in store
-        attested = next(x for x in refs if x.meta.get("attested_by_child_only"))
-        assert not store.exists(attested.sha256)
+        # A6 fix: without a workspace, the child's reported hashes are a
+        # CLAIM, not evidence. No byteless ref is minted; instead one stored
+        # JSON claim record documents what the child reported, marked
+        # non-citable. Every returned ref must have bytes in the store.
+        assert all(store.exists(x.sha256) for x in refs), \
+            "byteless ref minted from child-attested hash"
+        claims = [x for x in refs if x.name == "attestation_claim"]
+        assert claims and store.get_meta(claims[0].sha256)["kind"] == "json"
 
         forecast = r.return_value or {}
         if not forecast:

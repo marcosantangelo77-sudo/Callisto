@@ -658,6 +658,17 @@ class ResearchPipeline:
                 result.refusal_reason = reason
                 result.trace = trace
                 return result
+        # RED TEAM A6: verify_artifacts had zero production callers — the
+        # system LOOKED checked while nothing was. Wire it at the one point
+        # where a conclusion becomes sealed: every artifact the leaves cite
+        # must have stored bytes matching its hash, or the seal is refused.
+        # (Dead verification is worse than none; this makes the check real.)
+        refusal = verify_artifact_gate(self.store, self.artifact_refs)
+        if refusal is not None:
+            result.refusal_reason = refusal
+            logger.warning("seal refused for %s: %s",
+                           session.session_id, refusal)
+            return result
         try:
             seal_hash = session.seal()
         except Exception as e:  # noqa: BLE001 — AGPSealRefused et al.
@@ -736,6 +747,23 @@ def _make_adapter(registry, name: str, source: RestSource):
     if entry is None:
         raise StopIteration(name)
     return entry.make_adapter(source)
+
+
+def verify_artifact_gate(store: ArtifactStore, refs) -> Optional[str]:
+    """RED TEAM A6 — the seal gate over artifacts. Returns None when every
+    cited artifact's bytes are in the store and match its hash; otherwise a
+    refusal reason. This is the production caller of
+    ArtifactStore.verify_artifacts, which previously had zero callers."""
+    refs = list(refs or [])
+    if not refs:
+        return None
+    report = store.verify_artifacts(refs)
+    if report.get("ok"):
+        return None
+    bad = report.get("missing", []) + report.get("corrupt", [])
+    example = (bad[0] or "?")[:16]
+    return ("artifact verification failed before seal: "
+            f"{len(bad)} missing/corrupt (e.g. {example}…)")
 
 
 def _store_sandbox(sbx, store: ArtifactStore) -> list[ArtifactRef]:
