@@ -124,8 +124,8 @@ def _fingerprint(result, ledger) -> dict:
 
 
 def _run_scenario(tmp_path, *, n_leaves=5, adversary=None, manager=None,
-                  decompose=None, checkpointer=None, ledger=None,
-                  routes_override=None):
+                  manager_tagged=None, decompose=None, checkpointer=None,
+                  ledger=None, routes_override=None):
     model = ScriptedModel({"Architect": [decompose or _decompose(n_leaves)]})
     adversary = adversary if adversary is not None else _Adversary()
     store = ArtifactStore(root=tmp_path / "artifacts")
@@ -139,6 +139,20 @@ def _run_scenario(tmp_path, *, n_leaves=5, adversary=None, manager=None,
         checkpointer=checkpointer)
     if manager:
         model.script("Manager", *manager)
+    if manager_tagged:
+        # Tagged dispatch keys on the engine's deterministic leaf ordinal.
+        # On a SERIAL engine (no script_for) fall back to the legacy FIFO
+        # flattened in leaf order — identical arrival order there, so the
+        # same scripts feed the same leaves either way. This keeps the
+        # golden generator runnable against the pre-restructure engine.
+        for i in range(n_leaves):
+            resp = manager_tagged.get(f"leaf{i}")
+            if resp is None:
+                continue
+            if hasattr(model, "script_for"):
+                model.script_for(f"leaf{i}", "Manager", *resp)
+            else:  # serial engine
+                model.script("Manager", *resp)
     result = asyncio.run(pipeline.run(
         "Will Apple report quarterly results above Wall Street consensus "
         "expectations in its next earnings report?",
@@ -155,10 +169,12 @@ SCENARIOS = {
                            manager=[_answer(0.7)] * 12),
     "leaves5_distinct_per_leaf": dict(
         n_leaves=3,
-        # Distinct responses ride the legacy FIFO; the fingerprint pins
-        # whatever pairing the serial run produced, so a pairing change is
-        # visible as a fingerprint diff.
-        manager=[_answer(0.8), _answer(0.6), _answer(0.7)]),
+        # Distinct responses per leaf via TAGGED scripting (the engine's
+        # deterministic leaf ordinal). Confidence values differ so any
+        # cross-leaf mixing is visible in the fingerprint.
+        manager_tagged={"leaf0": [_answer(0.8)],
+                        "leaf1": [_answer(0.6)],
+                        "leaf2": [_answer(0.7)]}),
     "adversary_blocking_refuses": dict(
         n_leaves=2,
         manager=[_answer(0.7)] * 6,
@@ -186,14 +202,18 @@ SCENARIOS = {
                  _answer(0.75, answer="mean computed as 2.0")]),
     "two_computing_leaves": dict(
         n_leaves=2,
-        manager=[{"content": json.dumps(
-                     {"answer": None,
-                      "compute": {"code": "result = {'v': 1}", "inputs": {}}})},
-                 _answer(0.7, answer="computed v"),
-                 {"content": json.dumps(
-                     {"answer": None,
-                      "compute": {"code": "result = {'w': 2}", "inputs": {}}})},
-                 _answer(0.65, answer="computed w")]),
+        # Both leaves compute, with DISTINCT codes and answers, dispatched
+        # by tag so concurrency cannot cross the pairing. This pins
+        # concurrent sandbox/ledger/artifact safety AND per-leaf isolation.
+        manager_tagged={
+            "leaf0": [{"content": json.dumps(
+                {"answer": None,
+                 "compute": {"code": "result = {'v': 1}", "inputs": {}}})},
+                _answer(0.7, answer="computed v")],
+            "leaf1": [{"content": json.dumps(
+                {"answer": None,
+                 "compute": {"code": "result = {'w': 2}", "inputs": {}}})},
+                _answer(0.65, answer="computed w")]}),
     "all_unanswered_refuses": dict(
         n_leaves=2, manager=[_answer(0.7, answer=""), _answer(0.7, answer="")]),
     "rejected_fetches_noted": dict(

@@ -355,6 +355,7 @@ class ResearchPipeline:
                            fetches: list[FetchResult],
                            session: AGPSession,
                            trace: Any = None,
+                           call_tag: str = "",
                            ) -> tuple[LeafOutcome, list[Evidence]]:
         """Answer one leaf. SIDE-EFFECT ISOLATED: returns the evidence items
         instead of appending them to the session, so concurrent leaf answers
@@ -383,7 +384,7 @@ class ResearchPipeline:
         # Model proposes an answer, possibly requesting computation first.
         resp = await self.model.complete(
             "Manager", answer_messages(q.text, [e.content for e in evidence_items]),
-            _call_tag=q.question_id)
+            _call_tag=call_tag or q.question_id)
         proposal = parse_model_json(resp) or {}
 
         compute = proposal.get("compute")
@@ -426,7 +427,7 @@ class ResearchPipeline:
             resp = await self.model.complete(
                 "Manager", answer_messages(
                     q.text, [e.content for e in evidence_items]),
-                _call_tag=q.question_id)
+                _call_tag=call_tag or q.question_id)
             proposal = parse_model_json(resp) or {}
 
         out.answer = str(proposal.get("answer", "")).strip()
@@ -642,7 +643,7 @@ class ResearchPipeline:
         async def _answer_fresh(i: int) -> dict:
             outcome_i, ev_items = await self._answer_leaf(
                 leaves[i], fetches_by_leaf[i], session,
-                trace=traces_by_leaf[i])
+                trace=traces_by_leaf[i], call_tag=f"leaf{i}")
             return {"i": i,
                     "leaf": dataclasses.asdict(outcome_i),
                     "evidence": [dataclasses.asdict(e) for e in ev_items]}
