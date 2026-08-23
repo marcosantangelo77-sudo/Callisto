@@ -1,0 +1,151 @@
+{
+  "gate": "CALLISTO_SOURCE_HEALTH_NET",
+  "results": [
+    {
+      "source": "bea",
+      "verdict": "SKIPPED",
+      "evidence": "requires CALLISTO_BEA_API_KEY, not configured",
+      "url": "https://apps.bea.gov/api/data",
+      "duration_s": 0.0
+    },
+    {
+      "source": "bls",
+      "verdict": "BROKEN",
+      "evidence": "SourceError: non-JSON response from https://api.bls.gov/public/api/v2/timeseries/data | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "url": "https://api.bls.gov/public/api/v2",
+      "duration_s": 0.3235126019571908
+    },
+    {
+      "source": "census",
+      "verdict": "SKIPPED",
+      "evidence": "requires CALLISTO_CENSUS_API_KEY, not configured",
+      "url": "https://api.census.gov/data",
+      "duration_s": 0.0
+    },
+    {
+      "source": "cftc_cot",
+      "verdict": "OK",
+      "evidence": "10 result rows from known-good query",
+      "url": "https://publicreporting.cftc.gov/resource",
+      "duration_s": 0.46577489498304203
+    },
+    {
+      "source": "clinicaltrials",
+      "verdict": "OK",
+      "evidence": "10 result rows from known-good query",
+      "url": "https://clinicaltrials.gov/api/v2",
+      "duration_s": 0.25994776998413727
+    },
+    {
+      "source": "courtlistener",
+      "verdict": "SKIPPED",
+      "evidence": "requires CALLISTO_COURTLISTENER_TOKEN, not configured",
+      "url": "https://www.courtlistener.com/api/rest/v4",
+      "duration_s": 0.0
+    },
+    {
+      "source": "eia",
+      "verdict": "SKIPPED",
+      "evidence": "requires CALLISTO_EIA_API_KEY, not configured",
+      "url": "https://api.eia.gov/v2",
+      "duration_s": 0.0
+    },
+    {
+      "source": "fdic",
+      "verdict": "DEGRADED",
+      "evidence": "reachable but probe returned 0 rows (200-with-zero-results is a FAILURE)",
+      "url": "https://banks.data.fdic.gov/api",
+      "duration_s": 0.8812590199522674
+    },
+    {
+      "source": "federalregister",
+      "verdict": "DEGRADED",
+      "evidence": "reachable but probe returned 0 rows (200-with-zero-results is a FAILURE)",
+      "url": "https://www.federalregister.gov/api/v1",
+      "duration_s": 0.11945421900600195
+    },
+    {
+      "source": "fred",
+      "verdict": "SKIPPED",
+      "evidence": "requires CALLISTO_FRED_API_KEY, not configured",
+      "url": "https://api.stlouisfed.org/fred",
+      "duration_s": 0.0
+    },
+    {
+      "source": "gdelt",
+      "verdict": "BROKEN",
+      "evidence": "SourceError: non-JSON response from https://api.gdeltproject.org/api/v2/doc/doc?query=semiconductor&mode=artlist&format=json&maxrecords=25&timespan=1w | ^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "url": "https://api.gdeltproject.org/api/v2/doc",
+      "duration_s": 11.42525252699852
+    },
+    {
+      "source": "kalshi",
+      "verdict": "OK",
+      "evidence": "20 result rows from known-good query",
+      "url": "https://api.elections.kalshi.com/trade-api/v2",
+      "duration_s": 0.42368557199370116
+    },
+    {
+      "source": "openalex",
+      "verdict": "DEGRADED",
+      "evidence": "reachable but probe returned 0 rows (200-with-zero-results is a FAILURE)",
+      "url": "https://api.openalex.org",
+      "duration_s": 0.1331988539895974
+    },
+    {
+      "source": "sec_fulltext",
+      "verdict": "OK",
+      "evidence": "10 result rows from known-good query",
+      "url": "https://efts.sec.gov/LATEST",
+      "duration_s": 2.839893271040637
+    },
+    {
+      "source": "semanticscholar",
+      "verdict": "SKIPPED",
+      "evidence": "requires CALLISTO_S2_API_KEY, not configured",
+      "url": "https://api.semanticscholar.org/graph/v1",
+      "duration_s": 0.0
+    },
+    {
+      "source": "treasury",
+      "verdict": "OK",
+      "evidence": "10 result rows from known-good query",
+      "url": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service",
+      "duration_s": 0.5487391619826667
+    },
+    {
+      "source": "uspto_odp",
+      "verdict": "SKIPPED",
+      "evidence": "requires CALLISTO_USPTO_ODP_KEY, not configured",
+      "url": "https://api.uspto.gov/api/v1",
+      "duration_s": 0.0
+    },
+    {
+      "source": "wayback",
+      "verdict": "OK",
+      "evidence": "1 result rows from known-good query",
+      "url": "https://archive.org/wayback",
+      "duration_s": 1.9946291200467385
+    },
+    {
+      "source": "wikidata",
+      "verdict": "OK",
+      "evidence": "5 result rows from known-good query",
+      "url": "https://query.wikidata.org",
+      "duration_s": 0.3168552140123211
+    },
+    {
+      "source": "worldbank",
+      "verdict": "OK",
+      "evidence": "3 result rows from known-good query",
+      "url": "https://api.worldbank.org/v2",
+      "duration_s": 0.33751698600826785
+    }
+  ],
+  "counts": {
+    "BROKEN": 2,
+    "DEGRADED": 3,
+    "OK": 8,
+    "SKIPPED": 7
+  }
+}
