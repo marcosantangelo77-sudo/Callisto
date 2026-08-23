@@ -93,7 +93,7 @@ class EstimateCeiling:
         that is the entire point of the split: a provenance clamp no longer
         destroys the belief it bounds."""
         c = float(ceiling)
-        if c > self.ceiling + 1e-12:
+        if c > self.ceiling * (1 + 1e-9) + 1e-9:   # tolerate fp drift only
             raise ValueError(
                 f"ceiling may not rise: {self.ceiling} -> {c}")
         return EstimateCeiling(estimate=self.estimate, ceiling=max(0.0, c))
@@ -111,7 +111,9 @@ class EstimateCeiling:
     def apply_adversary_penalty(self, penalty: float) -> "EstimateCeiling":
         """Adversary verdicts (agp.adversary.apply_verdict semantics): lower
         the ceiling, never touch the estimate. There is no bonus path."""
-        p = max(0.0, float(penalty))
+        p = float(penalty)
+        if p < 0:
+            raise ValueError("adversary penalty must be non-negative: no bonus path")
         return self.with_ceiling(self.ceiling - p)
 
     # ── serialisation for the DB / seal payload ──────────────────────────
