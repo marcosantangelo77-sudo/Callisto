@@ -145,6 +145,10 @@ async def hermes_complete(messages: list[dict], *, role: str = "",
     """
     from tools.pipeline.transport.agent_pool import (
         SubprocessTransport, WarmWorkerPool, get_shared_pool)
+    # A caller passing an explicit binary wants the subprocess path by
+    # definition (the pool ignores binaries) — keep the legacy API honest.
+    if binary and transport is None:
+        transport = "subprocess"
     selected = _select_transport(transport)
     if isinstance(selected, SubprocessTransport):
         return await selected.complete(messages, role=role, binary=binary,
