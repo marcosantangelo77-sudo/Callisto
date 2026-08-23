@@ -50,7 +50,11 @@ def test_subprocess_vs_pool_ratio():
             os.path.expanduser("~/.hermes/bin/hermes"), "-z",
             "Reply with exactly: ok",
             stdout=sp.PIPE, stderr=sp.DEVNULL, env=clean_env)
-        out, _ = await proc.communicate()
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise AssertionError("subprocess baseline exceeded 120s")
         sub_s = time.monotonic() - t0
         assert proc.returncode == 0 and out.decode().strip()
 
