@@ -41,6 +41,7 @@ from tools.resolvers.generic import (
     InMemoryOutcomeResolver,
     SqlitePredictionResolver,
 )
+from tools.resolvers.store import PredictionStore
 
 __all__ = [
     "EvidenceRecord",
@@ -50,6 +51,7 @@ __all__ = [
     "GenericPredictionResolver",
     "InMemoryOutcomeResolver",
     "SqlitePredictionResolver",
+    "PredictionStore",
     "STAGE_SEMANTICS",
     "BETTING_OUTCOME_MAP",
     "OUTCOME_POSITIVE",
