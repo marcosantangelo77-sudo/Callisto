@@ -890,6 +890,11 @@ class HypothesisManager:
                         f"Hypothesis {hypothesis_id}: 0 paper trades, falling back "
                         f"to {len(events)} backtest signals for promotion evaluation"
                     )
+        elif stage == "generic":
+            # Domain-general evidence: predictions/outcomes read through the
+            # OutcomeResolver seam. No fallback to sports tables — a general
+            # claim is scored on exactly its own recorded evidence.
+            events = await self._get_generic_evidence(hypothesis_id)
         else:
             return {"error": f"Unknown stage: {stage}"}
 
@@ -925,15 +930,26 @@ class HypothesisManager:
         expected_rates = [e["book_implied_prob"] for e in events if e.get("book_implied_prob")]
         expected_rate = sum(expected_rates) / len(expected_rates) if expected_rates else 0.50
 
-        # Per-bet returns for t-test and Sharpe
+        # Per-bet returns for t-test and Sharpe. A row contributes a return
+        # observation only where a REAL price or a realized payoff exists —
+        # a decided outcome with neither is excluded rather than assigned an
+        # invented ±1 (which would fabricate variance the t-test would read
+        # as signal). Sports rows always carry odds, so their behavior here
+        # is unchanged.
         returns = []
         for e in events:
             if e["actual_result"] == "won":
-                from tools.math_utils import american_to_decimal
-                dec = american_to_decimal(e["book_odds_american"])
-                returns.append(dec - 1)  # profit on $1 bet
+                if e.get("book_odds_american") is not None:
+                    from tools.math_utils import american_to_decimal
+                    dec = american_to_decimal(e["book_odds_american"])
+                    returns.append(dec - 1)  # profit on $1 bet
+                elif e.get("payoff") is not None:
+                    returns.append(float(e["payoff"]))
             elif e["actual_result"] == "lost":
-                returns.append(-1.0)
+                if e.get("book_odds_american") is not None:
+                    returns.append(-1.0)
+                elif e.get("payoff") is not None:
+                    returns.append(float(e["payoff"]))
             elif e["actual_result"] == "push":
                 returns.append(0.0)
 
@@ -978,16 +994,27 @@ class HypothesisManager:
         predicted_edges = []
         realized_edges = []
         for e in events:
-            if e.get("edge") is not None and e["actual_result"] in ("won", "lost"):
-                predicted_edges.append(e["edge"])
-                # Realized edge: 1 means the prediction was correct at the predicted
-                # edge magnitude; -1 means it was wrong. Scale by edge for correlation.
-                if e["actual_result"] == "won":
+            if e.get("edge") is None or e["actual_result"] not in ("won", "lost"):
+                continue
+            # Rows without a recorded price have no realized-return analogue;
+            # including them would correlate edge against an invented -1.
+            if e.get("book_odds_american") is None and e.get("payoff") is None:
+                continue
+            predicted_edges.append(e["edge"])
+            # Realized edge: 1 means the prediction was correct at the predicted
+            # edge magnitude; -1 means it was wrong. Scale by edge for correlation.
+            if e["actual_result"] == "won":
+                if e.get("book_odds_american") is not None:
                     from tools.math_utils import american_to_decimal
                     dec = american_to_decimal(e["book_odds_american"])
                     realized_edges.append(dec - 1.0)  # actual return
                 else:
+                    realized_edges.append(float(e.get("payoff") or 0.0))
+            else:
+                if e.get("book_odds_american") is not None:
                     realized_edges.append(-1.0)
+                else:
+                    realized_edges.append(float(e.get("payoff") or 0.0))
         ic = _information_coefficient(predicted_edges, realized_edges)
 
         # ROI
@@ -1006,8 +1033,9 @@ class HypothesisManager:
         # Calibration
         preds = []
         for e in events:
-            if e["actual_result"] in ("won", "lost"):
-                preds.append((e["model_fair_prob"], e["actual_result"] == "won"))
+            mp = e.get("model_fair_prob")
+            if e["actual_result"] in ("won", "lost") and mp is not None:
+                preds.append((mp, e["actual_result"] == "won"))
         cal_bins = calibration_bins(preds)
 
         # Recommendation
@@ -1157,13 +1185,18 @@ class HypothesisManager:
         if status == "draft":
             return {"ready": True, "next_stage": "backtesting", "reason": "Draft → backtesting requires no data."}
 
+        # Domain dispatch: a non-sports claim's evidence lives in the core
+        # predictions/outcomes tables (read through the resolver seam), never
+        # in paper_trades/backtest_events.
+        is_general = (h.get("domain") or "sports") != "sports"
+
         # Determine transition and evaluate
         if status == "backtesting":
             transition = "backtesting→paper_trading"
-            stage = "backtest"
+            stage = stage_override or ("generic" if is_general else "backtest")
         elif status == "paper_trading":
             transition = "paper_trading→live"
-            stage = stage_override or "paper_trade"
+            stage = stage_override or ("generic" if is_general else "paper_trade")
         else:
             return {"ready": False, "reason": f"Unknown status: {status}"}
 
@@ -1229,25 +1262,38 @@ class HypothesisManager:
         # paper_trade sample is insufficient. Audit finding hypothesis.py:1613.
         if "min_paper_trades" in gate:
             required_trades = gate["min_paper_trades"]
-            try:
-                trade_cur = await self._db.execute(
-                    "SELECT COUNT(*) FROM paper_trades "
-                    "WHERE hypothesis_id = ? AND actual_result IN ('won','lost','push')",
-                    (hypothesis_id,),
+            if is_general:
+                # General claims: resolved forward-tests recorded in the core
+                # predictions/outcomes tables ARE the paper-trade sample.
+                resolved_paper_trades = await self._count_resolved_generic(
+                    hypothesis_id
                 )
-                resolved_paper_trades = int((await trade_cur.fetchone())[0] or 0)
-            except Exception as e:
-                logger.warning(f"paper_trade count failed for {hypothesis_id}: {e}")
-                resolved_paper_trades = 0
+            else:
+                try:
+                    trade_cur = await self._db.execute(
+                        "SELECT COUNT(*) FROM paper_trades "
+                        "WHERE hypothesis_id = ? AND actual_result IN ('won','lost','push')",
+                        (hypothesis_id,),
+                    )
+                    resolved_paper_trades = int((await trade_cur.fetchone())[0] or 0)
+                except Exception as e:
+                    logger.warning(f"paper_trade count failed for {hypothesis_id}: {e}")
+                    resolved_paper_trades = 0
             if resolved_paper_trades < required_trades:
+                sample_noun = (
+                    "resolved forward-tests" if is_general else "resolved paper trades"
+                )
                 checks.append(
                     f"FAIL: paper_trade_sample_insufficient — "
-                    f"{resolved_paper_trades}/{required_trades} resolved paper trades"
+                    f"{resolved_paper_trades}/{required_trades} {sample_noun}"
                 )
                 ready = False
             else:
+                sample_noun = (
+                    "resolved forward-tests" if is_general else "resolved paper trades"
+                )
                 checks.append(
-                    f"PASS: {resolved_paper_trades}/{required_trades} resolved paper trades"
+                    f"PASS: {resolved_paper_trades}/{required_trades} {sample_noun}"
                 )
 
         # Sample size
@@ -1462,7 +1508,7 @@ class HypothesisManager:
         # Silent-skip when the metadata isn't present (e.g. legacy rows
         # from before the 2026-04-22 fix) — the re-eval harness quantifies
         # historic damage separately.
-        if transition == "backtesting→paper_trading":
+        if transition == "backtesting→paper_trading" and not is_general:
             try:
                 quality_cur = await self._db.execute(
                     "SELECT "
@@ -1513,7 +1559,17 @@ class HypothesisManager:
         # didn't fire on those. Same bug was fixed for rejections in commit 10e61db.
         # A hypothesis with 10 winning signals should not be blocked because 6
         # non-signal events drag the average negative.
-        if transition == "backtesting→paper_trading":
+        if transition == "backtesting→paper_trading" and is_general:
+            # The sports block reads backtest_events.signal_generated, a
+            # concept that does not exist for generic evidence — every
+            # recorded prediction IS an evaluated instance. Its honest
+            # analogue (positive edge rate against the market prior) is
+            # already gated above via min_positive_edge_rate / max_p_value.
+            checks.append(
+                "INFO: signal-edge distribution N/A for generic evidence — "
+                "positive_edge_rate and p-value gates apply instead"
+            )
+        elif transition == "backtesting→paper_trading":
             try:
                 edge_cursor = await self._db.execute(
                     "SELECT event_id, MAX(edge) FROM backtest_events "
@@ -1749,9 +1805,17 @@ class HypothesisManager:
         # with an existing LIVE hypothesis's signals on the same event_ids.
         # Correlated bets behave as ONE bet for risk — 21 LIVE signals on the
         # same Dodgers–Giants game are not 21 independent edges.
-        # Grandfathered for legacy hypotheses.
+        # Grandfathered for legacy hypotheses. General claims have no
+        # shared-event portfolio (their evidence is claim-scoped by
+        # construction), so the gate reports N/A rather than passing
+        # silently.
         portfolio_overlap = None
-        if ready and transition == "paper_trading→live" and not is_legacy:
+        if ready and transition == "paper_trading→live" and is_general:
+            checks.append(
+                "INFO: portfolio_correlation N/A for general claims — "
+                "evidence is claim-scoped, no shared-event portfolio exists"
+            )
+        elif ready and transition == "paper_trading→live" and not is_legacy:
             try:
                 portfolio_overlap = await self._compute_portfolio_overlap(hypothesis_id)
                 worst_pair = None
@@ -1787,34 +1851,44 @@ class HypothesisManager:
             and SIM_GATE_ENABLED
             and not is_legacy
         ):
-            try:
-                sim_result = simulate_before_promote(
-                    hypothesis_id,
-                    n_sims=PRE_PROMOTE_N_SIMS,
-                    horizon_days=PRE_PROMOTE_HORIZON,
+            if is_general:
+                # The simulator models a SPORTS bankroll (per-bet ROI paths
+                # from paper_trades). A general claim has no stake-sized
+                # return stream yet; the gate reports N/A instead of
+                # simulating on an empty book.
+                checks.append(
+                    "INFO: pre-live simulation N/A for general claims — "
+                    "no per-event return stream to simulate"
                 )
-                ruin = sim_result.get("ruin_prob_30d", 0.0)
-                if ruin > MAX_PRE_PROMOTE_RUIN:
-                    checks.append(
-                        f"FAIL: simulation_ruin_risk — ruin_prob_30d={ruin:.3%} > "
-                        f"cap {MAX_PRE_PROMOTE_RUIN:.1%}. Expected monthly ROI "
-                        f"{sim_result.get('expected_monthly_roi', 0):.2%}, "
-                        f"median drawdown {sim_result.get('expected_drawdown', 0):.1%} "
-                        f"across {sim_result.get('hyp_count', '?')} hyps."
+            else:
+                try:
+                    sim_result = simulate_before_promote(
+                        hypothesis_id,
+                        n_sims=PRE_PROMOTE_N_SIMS,
+                        horizon_days=PRE_PROMOTE_HORIZON,
                     )
-                    ready = False
-                else:
-                    checks.append(
-                        f"PASS: simulation_ruin_risk — ruin_prob_30d={ruin:.3%} "
-                        f"(cap {MAX_PRE_PROMOTE_RUIN:.1%}), monthly ROI "
-                        f"{sim_result.get('expected_monthly_roi', 0):.2%}"
-                    )
-            except Exception as e:
-                # Simulation must not be a silent-failure vector — surface the
-                # error so operators see "simulation failed" rather than the
-                # gate being skipped invisibly.
-                logger.warning(f"simulate_before_promote failed for {hypothesis_id}: {e}")
-                checks.append(f"WARN: simulation_gate_error — {e}")
+                    ruin = sim_result.get("ruin_prob_30d", 0.0)
+                    if ruin > MAX_PRE_PROMOTE_RUIN:
+                        checks.append(
+                            f"FAIL: simulation_ruin_risk — ruin_prob_30d={ruin:.3%} > "
+                            f"cap {MAX_PRE_PROMOTE_RUIN:.1%}. Expected monthly ROI "
+                            f"{sim_result.get('expected_monthly_roi', 0):.2%}, "
+                            f"median drawdown {sim_result.get('expected_drawdown', 0):.1%} "
+                            f"across {sim_result.get('hyp_count', '?')} hyps."
+                        )
+                        ready = False
+                    else:
+                        checks.append(
+                            f"PASS: simulation_ruin_risk — ruin_prob_30d={ruin:.3%} "
+                            f"(cap {MAX_PRE_PROMOTE_RUIN:.1%}), monthly ROI "
+                            f"{sim_result.get('expected_monthly_roi', 0):.2%}"
+                        )
+                except Exception as e:
+                    # Simulation must not be a silent-failure vector — surface the
+                    # error so operators see "simulation failed" rather than the
+                    # gate being skipped invisibly.
+                    logger.warning(f"simulate_before_promote failed for {hypothesis_id}: {e}")
+                    checks.append(f"WARN: simulation_gate_error — {e}")
 
         # ── REGIME-DIVERSITY GATE (paper_trading → live only) ──
         # feat/regime-aware-sizing (2026-04-22): a hypothesis whose resolved
@@ -1833,8 +1907,44 @@ class HypothesisManager:
             and not is_legacy
             and os.getenv("CALLISTO_REGIME_DIVERSITY_GATE", "1") == "1"
         ):
-            try:
-                cur = await self._db.execute(
+            if is_general:
+                # General analogue of the regime gate: a claim whose resolved
+                # forward-tests all share one context has not proven it
+                # generalises. context_key is the domain-free regime bucket
+                # recorded with every prediction.
+                try:
+                    ctx_cur = await self._db.execute(
+                        "SELECT DISTINCT p.context_key FROM predictions p "
+                        "JOIN outcomes o ON o.prediction_id = p.id "
+                        "WHERE p.claim_id = ? AND p.context_key IS NOT NULL "
+                        "AND o.resolved_outcome IN ('positive','negative','indeterminate')",
+                        (hypothesis_id,),
+                    )
+                    contexts_seen = {
+                        r[0] for r in await ctx_cur.fetchall() if r[0]
+                    }
+                    resolved_generic = await self._count_resolved_generic(
+                        hypothesis_id
+                    )
+                    if resolved_generic >= 2 and len(contexts_seen) < 2:
+                        checks.append(
+                            f"FAIL: single_context_sample — all {resolved_generic} "
+                            f"resolved forward-tests fall in one context "
+                            f"({next(iter(contexts_seen), 'unknown')}); need >=2 "
+                            f"distinct contexts to promote"
+                        )
+                        ready = False
+                    elif contexts_seen:
+                        checks.append(
+                            f"PASS: context_diversity — {len(contexts_seen)} "
+                            f"distinct contexts across {resolved_generic} "
+                            f"resolved forward-tests ({sorted(contexts_seen)})"
+                        )
+                except Exception as e:
+                    logger.debug(f"context-diversity gate error: {e}")
+            else:
+                try:
+                    cur = await self._db.execute(
                     "SELECT DISTINCT sport, game_date FROM paper_trades "
                     "WHERE hypothesis_id = ? "
                     "AND actual_result IN ('won','lost','push','win','loss')",
@@ -2974,6 +3084,37 @@ class HypothesisManager:
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
         return [dict(zip(cols, row)) for row in rows]
+
+    # ── domain-general evidence (OutcomeResolver seam) ───────────────────
+
+    async def _get_generic_evidence(self, hypothesis_id: str) -> list[dict]:
+        """EvidenceRecords from the core predictions/outcomes tables, shaped
+        like betting rows so every statistic in evaluate_significance runs
+        unchanged. This is the seam that lets a non-sports claim be scored:
+        no paper_trades row is consulted or required."""
+        from tools.resolvers.base import evidence_records_to_eval_rows
+        from tools.resolvers.generic import SqlitePredictionResolver
+
+        resolver = SqlitePredictionResolver(self._db)
+        records = [r async for r in resolver.iter_evidence(hypothesis_id)]
+        return evidence_records_to_eval_rows(records)
+
+    async def _count_resolved_generic(self, hypothesis_id: str) -> int:
+        """How many recorded predictions for this claim have a scoreable
+        outcome — the general analogue of 'resolved paper trades'. Zero on a
+        pre-seam database (no tables), which reads as not-yet-tested."""
+        try:
+            cur = await self._db.execute(
+                "SELECT COUNT(*) FROM predictions p "
+                "JOIN outcomes o ON o.prediction_id = p.id "
+                "WHERE p.claim_id = ? "
+                "AND o.resolved_outcome IN ('positive','negative','indeterminate')",
+                (hypothesis_id,),
+            )
+            return int((await cur.fetchone())[0] or 0)
+        except Exception as e:
+            logger.debug(f"generic resolution count failed: {e}")
+            return 0
 
     async def get_hypothesis_report(self, hypothesis_id: str) -> dict:
         """Full report across all stages."""

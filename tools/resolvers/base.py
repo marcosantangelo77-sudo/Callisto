@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Iterable, Optional
 
 # Generalised outcome vocabulary. The betting strings map:
 #   "won" -> POSITIVE, "lost" -> NEGATIVE, "push" -> INDETERMINATE.
@@ -152,6 +152,72 @@ class ResolutionSummary:
             s.positive_clv_rate = sum(1 for c in clvs if c > 0) / len(clvs)
         s.fully_resolved = s.unresolved == 0 and s.total > 0
         return s
+
+
+# Inverse of BETTING_OUTCOME_MAP: general vocabulary onto the row shape
+# evaluate_significance() has always consumed.
+GENERAL_OUTCOME_TO_BETTING = {
+    OUTCOME_POSITIVE: "won",
+    OUTCOME_NEGATIVE: "lost",
+    OUTCOME_INDETERMINATE: "push",
+}
+
+
+def evidence_records_to_eval_rows(
+    records: Iterable[EvidenceRecord],
+) -> list[dict]:
+    """Map EvidenceRecords onto the betting-row dict shape that
+    HypothesisManager.evaluate_significance() consumes, so every existing
+    statistic (binomial p, Brier, IC, Sharpe, CLV rate, calibration bins)
+    runs unchanged over any domain's evidence.
+
+    Honesty rules:
+
+    * ``edge``/``ev_pct`` are computed only where BOTH the claim's own
+      probability and a recorded market-implied probability exist — never
+      fabricated.
+    * ``clv_implied`` carries clv_prob_bp converted to a 0..1-scale rate
+      (basis points / 10_000), matching the legacy clv_implied units the
+      report averages.
+    * ``book_odds_american`` and ``payoff`` pass through as-is; rows without
+      either contribute no return observation rather than an invented one.
+    """
+    rows: list[dict] = []
+    for rec in records:
+        outcome = GENERAL_OUTCOME_TO_BETTING.get(rec.resolved_outcome)
+        if outcome is None:
+            outcome = "unresolved"
+        prob = (
+            rec.predicted_prob
+            if rec.predicted_prob is not None
+            else rec.model_fair_prob
+        )
+        row: dict = {"actual_result": outcome}
+        if prob is not None:
+            row["model_fair_prob"] = prob
+        if rec.book_implied_prob is not None:
+            row["book_implied_prob"] = rec.book_implied_prob
+        if rec.odds_american is not None:
+            row["book_odds_american"] = int(rec.odds_american)
+        if rec.payoff is not None:
+            row["payoff"] = float(rec.payoff)
+        if rec.clv_prob_bp is not None:
+            row["clv_implied"] = rec.clv_prob_bp / 10000.0
+        if prob is not None and rec.book_implied_prob is not None:
+            row["edge"] = prob - rec.book_implied_prob
+            if rec.odds_american is not None:
+                try:
+                    from tools.math_utils import american_to_decimal
+
+                    dec = american_to_decimal(int(rec.odds_american))
+                    row["ev_pct"] = (prob * dec - 1.0) * 100.0
+                except Exception:
+                    # A malformed price must not fabricate an EV number.
+                    pass
+        if rec.context_key is not None:
+            row["context_key"] = rec.context_key
+        rows.append(row)
+    return rows
 
 
 def _norm_outcome(raw: str) -> str:

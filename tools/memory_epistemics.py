@@ -59,11 +59,19 @@ MIN_EFFECTIVE_CONFIDENCE = 0.05
 
 
 def clamp_to_ceiling(confidence: float, source_class: str | None) -> float:
-    """Clamp *confidence* to the ceiling of its provenance class."""
+    """Clamp *confidence* to the ceiling of its provenance class.
+
+    Quantises DOWNWARD (agp.thresholds.floor_conf): round(0.5497, 3) is
+    0.55 — an INCREASE across the INFERRED ceiling boundary, which makes a
+    clamp a bonus path of up to +0.0005 per application. A clamp may only
+    ever move a score DOWN, so it rounds DOWN. Same rule the red team
+    enforced on apply_verdict/clamp_parent_confidence/relabel_evidence;
+    this site was missed.
+    """
     conf = max(0.0, min(1.0, float(confidence)))
     if not source_class:
-        return round(min(conf, DEFAULT_CEILING), 3)
-    return round(min(conf, PROVENANCE_CEILINGS.get(source_class, DEFAULT_CEILING)), 3)
+        return min(conf, DEFAULT_CEILING)
+    return min(conf, PROVENANCE_CEILINGS.get(source_class, DEFAULT_CEILING))
 
 
 def normalize_source_class(value) -> str | None:

@@ -58,6 +58,7 @@ class HermesMemory:
         self._cache_ttl: float = 90  # Refresh every 90 seconds
         self._cache_max_entries: int = 20  # Hard cap to prevent memory leak
         self._db_initialized = False
+        self._learnings_cols: set[str] | None = None
 
     async def _ensure_tables(self, db: aiosqlite.Connection) -> None:
         """Create Hermes tables if they don't exist."""
@@ -227,6 +228,52 @@ class HermesMemory:
     # WRITE: Claude stores discoveries back to Hermes
     # ──────────────────────────────────────────────────
 
+    async def _learning_columns(self, db) -> set[str]:
+        """Column names of hermes_learnings (cached per instance)."""
+        if self._learnings_cols is None:
+            cursor = await db.execute("PRAGMA table_info(hermes_learnings)")
+            rows = await cursor.fetchall()
+            self._learnings_cols = {r[1] for r in rows}
+        return self._learnings_cols
+
+    async def _write_learning_row(
+        self, db, key: str, value: str, confidence: float, source: str,
+        provenance_class: str | None, seal_hash: str | None,
+    ) -> None:
+        """Upsert one learning row.
+
+        EPISTEMICS: the admission decision is PERSISTED, not just logged.
+        Migration 015 adds source_class / provenance_seal and the wiki's
+        compile path reads them to gate what enters an article; writing
+        only the legacy five columns meant every seal-verified class claim
+        degraded back to anonymous 0.55-capped INFERRED the moment it hit
+        disk. Columns are written when present (post-015 schema), skipped
+        otherwise so a pre-migration database keeps working unchanged.
+        """
+        cols = await self._learning_columns(db)
+        base_cols = ["key", "value", "learned_at", "confidence", "source"]
+        vals = [key, value, datetime.now(timezone.utc).isoformat(),
+                confidence, source]
+        if "source_class" in cols:
+            base_cols.append("source_class")
+            vals.append(provenance_class)
+        if "provenance_seal" in cols:
+            base_cols.append("provenance_seal")
+            vals.append(seal_hash)
+        placeholders = ", ".join("?" for _ in base_cols)
+        updates = ", ".join(
+            f"{c}=excluded.{c}" for c in base_cols
+            if c not in ("key",)
+        )
+        # occurrences is a counter, not a replaced value
+        updates += ", occurrences=occurrences+1"
+        await db.execute(
+            f"INSERT INTO hermes_learnings ({', '.join(base_cols)}) "
+            f"VALUES ({placeholders}) "
+            f"ON CONFLICT(key) DO UPDATE SET {updates}",
+            vals,
+        )
+
     async def record_learning(
         self,
         key: str,
@@ -304,14 +351,9 @@ class HermesMemory:
                 if not self._db_initialized:
                     async with aiosqlite.connect(self.db_path) as db:
                         await self._ensure_tables(db)
-                await coord.execute(
-                    "INSERT INTO hermes_learnings (key, value, learned_at, confidence, source) "
-                    "VALUES (?, ?, ?, ?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET "
-                    "value=excluded.value, occurrences=occurrences+1, "
-                    "confidence=excluded.confidence, "
-                    "learned_at=excluded.learned_at, source=excluded.source",
-                    (key, value, datetime.now(timezone.utc).isoformat(), confidence, source),
+                await self._write_learning_row(
+                    coord, key, value, confidence, source,
+                    provenance_class, seal_hash,
                 )
                 self._cache.clear()
                 self._cache_time.clear()
@@ -323,14 +365,9 @@ class HermesMemory:
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute("PRAGMA busy_timeout = 60000")
                 await self._ensure_tables(db)
-                await db.execute(
-                    "INSERT INTO hermes_learnings (key, value, learned_at, confidence, source) "
-                    "VALUES (?, ?, ?, ?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET "
-                    "value=excluded.value, occurrences=occurrences+1, "
-                    "confidence=excluded.confidence, "
-                    "learned_at=excluded.learned_at, source=excluded.source",
-                    (key, value, datetime.now(timezone.utc).isoformat(), confidence, source),
+                await self._write_learning_row(
+                    db, key, value, confidence, source,
+                    provenance_class, seal_hash,
                 )
                 await db.commit()
                 # Invalidate cache so next read picks up the new learning

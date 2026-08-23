@@ -318,23 +318,55 @@ class KnowledgeWiki:
                 "timestamp": row[5],
             })
 
-        # Recent hermes learnings
+        # Recent hermes learnings — provenance-gated (instance4 mechanism 3,
+        # read side). The write path persists source_class/provenance_seal
+        # (hermes_memory._write_learning_row) AFTER admit_learning has
+        # verified any above-INFERRED claim against a keyed seal, so:
+        #   - a learning claiming SECONDARY+ with NO stored seal was never
+        #     verified → REJECTED here (fail closed);
+        #   - NULL/unknown class means legacy row → INFERRED, capped;
+        #   - a carried class keeps its ceiling downstream.
+        # (The HMAC itself cannot be re-checked here — the sealed session
+        # bytes are not stored on the row; admission-time verification under
+        # the same key regime is the authority, recorded by provenance_seal.)
+        cols = {r[1] for r in await (
+            await db.execute("PRAGMA table_info(hermes_learnings)")).fetchall()}
         cursor = await db.execute(
-            "SELECT key, value, confidence, learned_at "
-            "FROM hermes_learnings WHERE learned_at > ? AND confidence >= 0.5 "
+            "SELECT key, value, confidence, learned_at"
+            + (", source_class, provenance_seal" if "source_class" in cols else "")
+            + " FROM hermes_learnings WHERE learned_at > ? AND confidence >= 0.5 "
             "ORDER BY learned_at DESC LIMIT ?",
             (last_compile, MAX_SOURCES_PER_COMPILE),
         )
+        rejected_learnings = 0
+        from tools.memory_epistemics import PROVENANCE_CEILINGS
         for row in await cursor.fetchall():
+            key, value, conf, learned_at, src_class, seal = row
+            cls = str(src_class).upper() if src_class else None
+            if cls not in PROVENANCE_CEILINGS:
+                cls = "INFERRED"          # legacy / unknown → capped below
+                cap = PROVENANCE_CEILINGS["INFERRED"]
+                conf = min(float(conf or 0.0), cap)
+            elif cls != "INFERRED" and not seal:
+                # Claimed above-INFERRED class without a verifying seal on
+                # record → the claim was never earned.
+                rejected_learnings += 1
+                continue
             sources.append({
                 "type": "learning",
-                "id": row[0],
-                "query": row[0],
+                "id": key,
+                "query": key,
                 "domain": "GENERAL",
-                "content": row[1],
-                "confidence": row[2],
-                "timestamp": row[3],
+                "content": value,
+                "confidence": float(conf or 0.0),
+                "provenance_class": cls,
+                "timestamp": learned_at,
             })
+        if rejected_learnings:
+            logger.warning(
+                f"Wiki compile: rejected {rejected_learnings} learning(s) claiming "
+                f"above-INFERRED provenance without a verifying seal"
+            )
 
         return sources
 
