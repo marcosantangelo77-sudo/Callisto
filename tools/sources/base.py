@@ -52,6 +52,12 @@ PROVENANCE_TIERS = {
 }
 
 MAX_RETRIES = 3
+# A REMOTE SERVER MUST NEVER DECIDE HOW LONG WE FREEZE. OpenAlex answered 429
+# with a large Retry-After; this file honoured it verbatim via a BLOCKING
+# time.sleep() inside the asyncio event loop, and the entire pipeline sat for
+# 6h49m at ~0% CPU — every parallel leaf frozen with it, not just this fetch.
+# Retry-After is a hint from an untrusted party. Honour it, bounded.
+MAX_RETRY_AFTER_S = 30
 
 
 class SourceError(RuntimeError):
@@ -212,18 +218,22 @@ class RestSource:
             except urllib.error.HTTPError as exc:
                 last_err = f"HTTP {exc.code} for {url}"
                 if exc.code in (403, 429):
-                    retry_after = float(exc.headers.get("Retry-After", 0) or 0)
-                    time.sleep(max(retry_after, 2 ** attempt))
+                    try:
+                        retry_after = float(exc.headers.get("Retry-After", 0) or 0)
+                    except (TypeError, ValueError):
+                        retry_after = 0.0
+                    time.sleep(min(max(retry_after, 2 ** attempt),
+                                   MAX_RETRY_AFTER_S))
                     continue
                 if 500 <= exc.code < 600:
-                    time.sleep(2 ** attempt)
+                    time.sleep(min(2 ** attempt, MAX_RETRY_AFTER_S))
                     continue
                 raise SourceError(last_err) from exc
             except SourceError:
                 raise
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 last_err = f"network error fetching {url}: {exc}"
-                time.sleep(2 ** attempt)
+                time.sleep(min(2 ** attempt, MAX_RETRY_AFTER_S))
         raise SourceError(f"exhausted retries; last error: {last_err}")
 
     def post(self, url: str, payload: dict) -> tuple[int, str]:

@@ -40,6 +40,7 @@ Design constraints:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -94,6 +95,24 @@ def magnitude_score(probability: float, answer_binary: bool,
         "edge_taken": round(edge, 6),
         "directional_edge": round(abs(edge) if right else -abs(edge), 6),
     }
+
+
+# ── Researcher call seam ───────────────────────────────────────────────────
+
+async def _call_researcher(researcher, prompts: list[dict]) -> list:
+    """Invoke a researcher's answer() whether it is sync or async.
+
+    The batch runner is async; the real PipelineResearcher.answer() is a
+    SYNC method that internally runs its own event loop. Calling that from a
+    running loop raises 'RuntimeError: This event loop is already running'
+    — which is exactly how every question in the first live batch failed.
+    Sync researchers are executed on a worker thread so they may freely own
+    their own loop; async-native researchers are awaited directly.
+    """
+    answer = getattr(researcher, "answer")
+    if inspect.iscoroutinefunction(answer):
+        return await answer(prompts, [], loops=1)
+    return await asyncio.to_thread(answer, prompts, [], 1)
 
 
 # ── Result record ──────────────────────────────────────────────────────────
@@ -219,7 +238,7 @@ class RetrodictionBatch:
         try:
             researcher = self.researcher_factory()
             prompts = [q.prompt_for_researcher()]
-            preds = researcher.answer(prompts, [], loops=1)
+            preds = await _call_researcher(researcher, prompts)
             pred = next((p for p in preds
                          if p.question_id == q.question_id), None)
         except Exception as e:  # noqa: BLE001 — a failed question is a row,
@@ -240,7 +259,7 @@ class RetrodictionBatch:
             brier=round((pred.probability -
                          (1.0 if q.answer_binary else 0.0)) ** 2, 6),
             magnitude=magnitude_score(pred.probability, q.answer_binary,
-                                      getattr(q, "market_implied", None)),
+                                      q.market_implied),
             elapsed_s=elapsed, **base)
         # enrich from the researcher's own run trace where available
         pr = getattr(researcher, "results", None)
@@ -352,6 +371,32 @@ def build_report(results: dict[str, BatchResult]) -> dict:
             out.append(entry)
         return out
 
+    from tools.retrodiction.scoring import (
+        brier_decomposition,
+        bootstrap_brier_ci,
+    )
+    scored_preds = [
+        Prediction(question_id=r.question_id,
+                   probability=r.predicted_probability or 0.5)
+        for r in scored]
+    qs_by_id = {}
+    for res in results.values():
+        if res.status == "scored" and res.answer_binary is not None:
+            qs_by_id[res.question_id] = RetrodictionQuestion(
+                question_id=res.question_id, answer_binary=res.answer_binary)
+    questions = list(qs_by_id.values())
+    try:
+        decomp = brier_decomposition(scored_preds, questions)
+        decomp = {k: (round(v, 6) if isinstance(v, float) else v)
+                  for k, v in decomp.items()}
+    except ValueError:
+        decomp = None
+    try:
+        ci_lo, ci_hi = bootstrap_brier_ci(scored_preds, questions)
+        brier_ci = [round(ci_lo, 4), round(ci_hi, 4)]
+    except ValueError:
+        brier_ci = None
+
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "n_total": len(rows),
@@ -360,6 +405,7 @@ def build_report(results: dict[str, BatchResult]) -> dict:
         "null_rate": round(len(nulls) / len(rows), 4) if rows else None,
         "mean_brier": (round(sum(r.brier for r in scored) / len(scored), 6)
                        if scored else None),
+        "brier_ci95": brier_ci,
         "mean_absolute_error_vs_half": (
             round(sum(abs((r.predicted_probability or 0.5) - 0.5)
                       for r in scored) / len(scored), 6) if scored else None),
@@ -368,6 +414,7 @@ def build_report(results: dict[str, BatchResult]) -> dict:
         "mean_elapsed_s": (round(sum(r.elapsed_s for r in scored)
                                  / len(scored), 1) if scored else None),
         "magnitude": _magnitude_summary(scored),
+        "brier_decomposition": decomp,
         "calibration_overall": _calibration(scored),
         "slices": {
             "by_domain": _slice_table(scored, "domain"),
@@ -504,9 +551,24 @@ def render_report(report: dict) -> str:
              f"nulls/errors: {report['n_null']}  "
              f"(null rate {report['null_rate']})")
     if report["mean_brier"] is not None:
-        L.append(f"mean Brier: {report['mean_brier']}   "
-                 f"sealed rate: {report['sealed_rate']}   "
+        L.append(f"mean Brier: {report['mean_brier']}"
+                 + (f"  (95% CI {report['brier_ci95'][0]}–"
+                    f"{report['brier_ci95'][1]})"
+                    if report.get("brier_ci95") else "")
+                 + f"   sealed rate: {report['sealed_rate']}   "
                  f"mean {report['mean_elapsed_s']}s/question")
+    dec = report.get("brier_decomposition")
+    if dec:
+        L.append(f"Brier decomposition: reliability {dec['reliability']} "
+                 f"(calibration error) · resolution {dec['resolution']} "
+                 f"(signal) · uncertainty {dec['uncertainty']} (floor)")
+        if dec["reliability"] < 0.02 and dec["resolution"] < 0.01:
+            L.append("  → honest but uninformative: predictions carry almost "
+                     "no signal beyond the base rate")
+        elif dec["reliability"] > 2 * (dec["resolution"] or 1e-9) \
+                and dec["resolution"] > 0:
+            L.append("  → miscalibration dominates the score; fix confidence, "
+                     "not retrieval")
     mag = report["magnitude"]
     if mag.get("n_with_market"):
         L.append(f"magnitude vs market (n={mag['n_with_market']}): "

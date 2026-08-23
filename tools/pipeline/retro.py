@@ -60,8 +60,15 @@ class PipelineResearcher(Researcher):
     def answer(self, prompts: list[dict],
                evidence: list[RetroEvidenceRecord],
                loops: int = 1) -> list[Prediction]:
-        return asyncio.get_event_loop().run_until_complete(
-            self.answer_async(prompts, evidence, loops))
+        # The batch runner executes sync researchers on a worker thread, where
+        # no current event loop exists (get_event_loop() would raise). Create
+        # and close our own — this method owns its loop lifetime completely.
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(
+                self.answer_async(prompts, evidence, loops))
+        finally:
+            loop.close()
 
     async def answer_async(self, prompts, evidence, loops=1) -> list[Prediction]:
         # Cutoff enforcement already happened in the harness (CutoffEnforcer);

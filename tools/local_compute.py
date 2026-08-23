@@ -122,43 +122,20 @@ async def local_significance_test(events: list[dict]) -> dict:
 
 async def local_kelly(edge: float, odds: float, bankroll: float,
                        fraction: float = 0.25) -> dict:
+    """DEPRECATED — do not call.
+
+    Superseded by tools/edge.assess_edge, which devigs the market quote
+    (this function computed fair_prob = RAW implied + edge, baking the
+    vig in as phantom edge), applies the MAX_FRACTION_FULL_KELLY cap,
+    and records the claim-time price for CLV grading. This stub raises
+    so a stale caller fails loudly instead of silently mis-sizing.
+    Kept as an error shim so an import does not break mid-upgrade.
     """
-    Calculate Kelly criterion bet size locally.
-
-    Args:
-        edge: Estimated edge as decimal (e.g., 0.03 for 3%)
-        odds: American odds (e.g., -110, +150)
-        bankroll: Current bankroll in dollars
-        fraction: Kelly fraction (default 0.25 = quarter Kelly)
-
-    Returns:
-        Dict with kelly_fraction, recommended_stake, full_kelly_pct
-    """
-    decimal_odds = _american_to_decimal(odds)
-    if decimal_odds <= 1:
-        return {"kelly_fraction": 0, "recommended_stake": 0, "full_kelly_pct": 0}
-
-    implied_prob = 1 / decimal_odds
-    fair_prob = implied_prob + edge
-
-    # Kelly: f* = (bp - q) / b where b = decimal_odds - 1, p = fair_prob, q = 1 - p
-    b = decimal_odds - 1
-    p = min(max(fair_prob, 0.01), 0.99)
-    q = 1 - p
-
-    full_kelly = (b * p - q) / b if b > 0 else 0
-    full_kelly = max(0, full_kelly)  # Never negative
-
-    fractional = full_kelly * fraction
-    stake = round(bankroll * fractional, 2)
-
-    return {
-        "kelly_fraction": round(fractional, 4),
-        "full_kelly_pct": round(full_kelly * 100, 2),
-        "recommended_stake": stake,
-        "edge": round(edge, 4),
-        "decimal_odds": round(decimal_odds, 3),
-    }
+    raise NotImplementedError(
+        "local_kelly is retired: it computed fair probability from the "
+        "raw implied price plus edge with no devig (phantom-edge bug "
+        "class). Use tools.edge.assess_edge(calibrated_prob, MarketQuote) "
+        "instead — see attic/local_kelly/RESTORE_NOTE.md.")
 
 
 # ── Helpers ──

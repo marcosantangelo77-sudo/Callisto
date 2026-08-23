@@ -73,15 +73,20 @@ class RunResult:
     n_evidence_admitted: int = 0
     n_evidence_rejected: int = 0
     predictions: list = field(default_factory=list)
+    # Paired permutation result vs the other arm (two-arm run_ab only).
+    significance: dict = field(default_factory=dict)
 
     def summary(self) -> dict:
-        return {
+        s = {
             "label": self.config_label, "axes": self.axes,
             "loops": self.loops, "brier": round(self.brier, 6),
             "n": self.n_scored,
             "evidence": {"admitted": self.n_evidence_admitted,
                          "rejected": self.n_evidence_rejected},
         }
+        if self.significance:
+            s["significance"] = self.significance
+        return s
 
 
 def _run_arm(config: RunConfig, questions, evidence_records) -> RunResult:
@@ -105,10 +110,20 @@ def _run_arm(config: RunConfig, questions, evidence_records) -> RunResult:
 def run_ab(configs, questions, evidence_records) -> dict[str, RunResult]:
     """Run the SAME question set under each configuration and compare.
     Returns {config_label: RunResult}. Identical questions, different arms —
-    any Brier difference is attributable to the config axis."""
+    any Brier difference is attributable to the config axis.
+
+    When exactly two arms are compared, a paired permutation test is attached
+    to each result as `.significance`: raw Brier means alone do not say
+    whether a gap is real or sampling noise on N small questions."""
     results = {}
     for cfg in configs:
         results[cfg.label] = _run_arm(cfg, questions, evidence_records)
+    if len(results) == 2:
+        (a, b) = list(results.values())
+        from tools.retrodiction.scoring import paired_significance
+        sig = paired_significance(a.predictions, b.predictions, questions)
+        a.significance = sig
+        b.significance = sig
     return results
 
 

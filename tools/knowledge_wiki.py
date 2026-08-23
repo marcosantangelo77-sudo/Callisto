@@ -124,10 +124,19 @@ STALE_THRESHOLD_HOURS = 72      # Flag articles not updated in 3 days
 # stronger than the weakest thing that fed it.
 
 def _article_confidence(sources: list[dict]) -> float:
-    """MIN of source confidences (round to 3dp like the writers do)."""
+    """MIN of source confidences (round to 3dp like the writers do).
+
+    Two fail-closed defaults (red-team R7):
+      - an article compiled from NO sources has earned nothing — 0.0, not
+        the historical 0.5 that happened to sit at the compile-admission
+        threshold and let an empty article look compile-worthy;
+      - a source dict with no confidence field counts as 0.0, never as a
+        silent 0.5 floor for the whole article. Omitting the field must
+        pull confidence DOWN, not hold it up.
+    """
     if not sources:
-        return 0.5
-    return round(min(float(s.get("confidence", 0.5)) for s in sources), 3)
+        return 0.0
+    return round(min(float(s.get("confidence", 0.0) or 0.0) for s in sources), 3)
 
 
 def _merged_article_confidence(*, existing_confidence: float, compile_count: int,
@@ -137,16 +146,17 @@ def _merged_article_confidence(*, existing_confidence: float, compile_count: int
     The historical weighted average is computed for continuity, but the
     result is clamped to the weakest current input: min(existing, new-min).
     New garbage pulls an article down promptly instead of glacially; new
-    strong sources cannot lift it above what is already there plus their own
-    weakness.
+    strong sources cannot lift it above what is already there plus their
+    own weakness. Missing-confidence sources count as 0.0 (fail closed,
+    same rule as _article_confidence).
     """
     if not new_sources:
         return round(float(existing_confidence), 3)
     old_weight = max(int(compile_count), 1)
-    new_conf = sum(float(s.get("confidence", 0.5)) for s in new_sources) / len(new_sources)
+    new_confs = [float(s.get("confidence", 0.0) or 0.0) for s in new_sources]
+    new_conf = sum(new_confs) / len(new_confs)
     weighted = (float(existing_confidence) * old_weight + new_conf) / (old_weight + 1)
-    floor_of_inputs = min(float(existing_confidence),
-                          min(float(s.get("confidence", 0.5)) for s in new_sources))
+    floor_of_inputs = min(float(existing_confidence), min(new_confs))
     return round(min(weighted, floor_of_inputs), 3)
 
 
