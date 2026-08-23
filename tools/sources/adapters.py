@@ -47,6 +47,7 @@ def register_all(registry: SourceRegistry) -> None:
         ("semantic_scholar", "SemanticScholarAdapter"),
         ("wayback", "WaybackAdapter"),
         ("kalshi", "KalshiAdapter"),
+        ("polymarket", "PolymarketAdapter"),
     ]:
         try:
             spec, cls = _entry(mod_name, cls_name)
