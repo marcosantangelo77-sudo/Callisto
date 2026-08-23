@@ -341,7 +341,11 @@ class KnowledgeWiki:
         rejected_learnings = 0
         from tools.memory_epistemics import PROVENANCE_CEILINGS
         for row in await cursor.fetchall():
-            key, value, conf, learned_at, src_class, seal = row
+            if "source_class" in cols:
+                key, value, conf, learned_at, src_class, seal = row
+            else:
+                key, value, conf, learned_at = row
+                src_class, seal = None, None
             cls = str(src_class).upper() if src_class else None
             if cls not in PROVENANCE_CEILINGS:
                 cls = "INFERRED"          # legacy / unknown → capped below
