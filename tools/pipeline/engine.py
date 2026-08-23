@@ -628,7 +628,6 @@ class ResearchPipeline:
                 ck = fetch_hits[i]
                 # Restore the fetched bytes into this run's ledger so
                 # source-class assignment works identically on a resume.
-<<<<<<< HEAD
                 # The replay consumes the SAME admissible set seal_guard
                 # will judge (run-scope + verified signature, one shared
                 # predicate) — a record the guard cannot see must never
@@ -642,16 +641,11 @@ class ResearchPipeline:
                     admissible = ckpt.admissible_checkpoints(trace.run, [ck])
                     if admissible:
                         ckpt.replay_ledger(self.ledger, admissible)
-                fetches = [_fetch_from_payload(r)
-                           for r in f_oc.payload["fetches"]]
-=======
-                ckpt.replay_ledger(self.ledger, [ck])
                 trace.stages.append(ckpt.StageOutcome(
                     stage="fetch_leaf", resumed=True, payload=ck.payload,
                     produced_at=ck.produced_at))
                 fetches_i = [_fetch_from_payload(r)
                              for r in ck.payload["fetches"]]
->>>>>>> d68e673
                 # Restore the FULL retrieval trace — admitted AND rejected —
                 # whether this stage was fresh or served from the checkpoint.
                 # The gate has already been applied to produce this payload;
