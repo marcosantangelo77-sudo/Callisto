@@ -150,6 +150,23 @@ def claim_key(claim: str) -> tuple[str, ...]:
     }))
 
 
+def has_content_words(claim: str) -> bool:
+    """True iff the claim carries at least one non-stopword word token.
+
+    A claim with no content words cannot corroborate anything: there is
+    nothing for two independent sources to agree ON. Used by triangulate()
+    to refuse grouping such items (S5).
+
+    Deliberately a WEAKER bar than claim_key(): claim_key drops short
+    tokens because they make poor grouping keys; here even a two- or
+    one-letter real word ("AI", a symbol, an initialism) counts as
+    content. Only claims made of nothing — empty, whitespace,
+    punctuation-only, or stopword-only text — fail.
+    """
+    return any(w not in _CLAIM_STOPWORDS
+               for w in _WORD_RE.findall((claim or "").lower()))
+
+
 # ── 1. Triangulation ─────────────────────────────────────────────────────
 
 
@@ -178,15 +195,34 @@ class ClaimGroup:
 
 
 def triangulate(items: Iterable[EvidenceItem]) -> list[ClaimGroup]:
-    """Group evidence by claim. Order of groups is deterministic (by key)."""
+    """Group evidence by claim. Order of groups is deterministic (by key).
+
+    Items whose claim has NO content words are never grouped (S5): the
+    empty claim_key would otherwise collapse every vacuous item into one
+    group, manufacturing "independent voices agree" out of extractor junk.
+    They are still returned — each as its own single-item group with
+    confidence 0 — so no evidence is silently dropped from the report; a
+    vacuous group simply cannot corroborate, because there is nothing for
+    two sources to agree ON.
+    """
     groups: dict[tuple[str, ...], ClaimGroup] = {}
+    vacuous: list[EvidenceItem] = []
     for it in items:
+        if not has_content_words(it.claim):
+            vacuous.append(it)
+            continue
         k = claim_key(it.claim)
         g = groups.get(k)
         if g is None:
             g = groups[k] = ClaimGroup(claim=it.claim)
         g.items.append(it)
-    return [groups[k] for k in sorted(groups)]
+    # deterministic order: real groups by key, then vacuous ones by source
+    out = [groups[k] for k in sorted(groups)]
+    for it in sorted(vacuous, key=lambda x: x.indep_key):
+        g = ClaimGroup(claim=it.claim)
+        g.items.append(it)
+        out.append(g)
+    return out
 
 
 # ── 2. Contradiction ─────────────────────────────────────────────────────
@@ -311,6 +347,12 @@ def confidence_from_agreement(group: ClaimGroup,
         f"ceiling {ceiling:.2f} from provenance-assigned class "
         f"{group.best_class}"]
     n_indep = group.independent_sources
+    # S5: a claim with no content words cannot corroborate anything —
+    # there is nothing for independent sources to agree ON. Score 0,
+    # regardless of how many voices repeat the nothing.
+    if not has_content_words(group.claim):
+        return 0.0, ["vacuous claim (no content words): agreement over "
+                     "nothing is not evidence — score held at 0"]
     frac = min(1.0, _SINGLE_VOICE_FRACTION
                + _PER_EXTRA_VOICE * max(0, n_indep - 1))
     score = floor_conf(ceiling * frac)
