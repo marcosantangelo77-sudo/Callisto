@@ -83,7 +83,8 @@ def test_engine_seal_path_refuses_on_phantom_end_to_end():
         session.summary = SessionSummary(
             scope="q", domain=Domain.GENERAL,
             conclusion="a conclusion with content",
-            confidence_score=0.5, evidence_count=1)
+            confidence_score=0.5, evidence_count=1,
+            contradiction_count=0)
         result = eng.PipelineResult(root_query="q", sealed=False)
         result.session = session
         # Drive only the gate exactly as the engine does at the seal point.
