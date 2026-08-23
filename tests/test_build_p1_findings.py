@@ -95,12 +95,12 @@ def test_finding_generic_fetch_covers_4_of_8_sources():
 
 
 def test_finding_sandbox_outputs_are_child_attested(tmp_path):
-    """FINDING: run_python deletes its workspace, so store_sandbox_outputs
-    can only attest file hashes the child reported — the artifact bytes are
-    not independently re-hashed by the store unless keep_workspace=True is
-    used. The pipeline marks such refs meta['attested_by_child_only']=True
-    (set inside store_sandbox_outputs). Honest, but a gap for tamper-proof
-    artifact chains."""
+    """RESOLVED at the pipeline seam: the engine now runs run_python with
+    keep_workspace=True and passes the workspace to store_sandbox_outputs,
+    so file BYTES are re-hashed into the store — no attested-only refs from
+    the pipeline (pinned by tests/test_build_artifacts_sandbox_improve.py).
+    The store_sandbox_outputs(workspace=None) path below remains honest
+    fallback behaviour for direct callers who do not keep the workspace."""
     from tools.sandbox import run_python
     from tools.artifacts import store_sandbox_outputs, ArtifactStore
     sbx = run_python("result = 1 + 1")
