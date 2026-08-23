@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
@@ -134,21 +135,43 @@ class EvidenceRecord:
         return errs
 
 
+def harness_key() -> Optional[str]:
+    """The secret publication proofs are signed and verified under.
+
+    ONE resolver for both ends. The signing side (tools/sources/wayback.py)
+    and the verifying side (CutoffEnforcer) must agree, and before this existed
+    they did not even try: sign_key was never supplied anywhere in production,
+    so every proof was unsigned and the enforcer's signature check was disabled
+    by default to compensate. Dead code guarding dead code.
+    """
+    return os.getenv("CALLISTO_CUTOFF_KEY") or os.getenv("CALLISTO_SEAL_KEY") \
+        or None
+
+
 class CutoffEnforcer:
     """Filters evidence to records provably published before the cutoff.
 
     Policy (all defaults are fail-closed):
       - no proof                       → EXCLUDED
+      - unsigned proof (no key set)    → EXCLUDED unless allow_unsigned
       - proof whose bytes don't match  → EXCLUDED
       - published_on == cutoff date    → EXCLUDED (strictly-before only)
       - unparseable dates              → EXCLUDED
     """
 
-    def __init__(self, cutoff: date, signing_key: Optional[str] = None):
+    def __init__(self, cutoff: date, signing_key: Optional[str] = None,
+                 *, allow_unsigned: bool = False):
         self.cutoff = _as_date(cutoff)
         if self.cutoff is None:
             raise TypeError("cutoff must be a date")
-        self._signing_key = signing_key
+        # Fall back to the configured harness secret so the SAFE path is also
+        # the DEFAULT path. Previously the default constructor took no key,
+        # which silently disabled the signature check everywhere in production.
+        self._signing_key = signing_key or harness_key()
+        # Running without signature verification is a real choice with real
+        # consequences (every date becomes self-declared), so it must be made
+        # explicitly and visibly at the call site — never inherited by default.
+        self._allow_unsigned = bool(allow_unsigned)
 
     @property
     def violations(self) -> list[str]:
@@ -181,11 +204,20 @@ class CutoffEnforcer:
         errs = rec.verify_proof()
         if errs:
             return errs[0]
-        # Signature check (when a key is configured): an unsigned or forged
-        # proof is exactly as untrustworthy as no proof at all. This closes
-        # the "declare any date over any bytes" forgery path.
-        if self._signing_key and not rec.proof.has_valid_signature(
-                self._signing_key):
+        # Signature check. This used to run only `if self._signing_key`, and
+        # the default constructor supplied none — so the one check standing
+        # between the harness and a fabricated publication date was OFF by
+        # default, and off in production (harness.py built it with no key).
+        # An unsigned proof is forgeable by anyone who controls the bytes,
+        # exactly like an unkeyed seal in memory_epistemics (red-team R5), so
+        # it can never back an admission decision. Fail closed.
+        if self._allow_unsigned:
+            pass
+        elif not self._signing_key:
+            return ("unkeyed regime: publication proofs are unverifiable, so "
+                    "no record can be admitted (set CALLISTO_CUTOFF_KEY, pass "
+                    "signing_key, or opt in explicitly with allow_unsigned)")
+        elif not rec.proof.has_valid_signature(self._signing_key):
             return "proof signature missing or invalid"
         pub = _as_date(rec.proof.published_on)
         if pub is None:

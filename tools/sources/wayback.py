@@ -33,7 +33,8 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Optional
 
-from tools.retrodiction.cutoff import ProofKind, PublicationProof
+from tools.retrodiction.cutoff import (ProofKind, PublicationProof,
+                                       harness_key as _harness_key)
 from tools.sources.base import RestSource, SourceError, SourceSpec
 
 SPEC = SourceSpec(
@@ -133,8 +134,13 @@ class WaybackAdapter:
             locator=snapshot_url,
             content_sha256=rec.content_sha256,
         )
-        if sign_key:
-            proof = proof.sign(sign_key)
+        # Fall back to the shared harness secret. sign_key was never supplied
+        # by any production caller, so proofs went out unsigned and the
+        # enforcer could not verify anything (W5). Both ends now resolve the
+        # same key, so the signed path is the DEFAULT path.
+        _k = sign_key or _harness_key()
+        if _k:
+            proof = proof.sign(_k)
         return proof, ""
 
     def evidence_record(self, url: str, query: str, before,
@@ -170,8 +176,13 @@ class WaybackAdapter:
             locator=snapshot_url,
             content_sha256=rec.content_sha256,
         )
-        if sign_key:
-            proof = proof.sign(sign_key)
+        # Fall back to the shared harness secret. sign_key was never supplied
+        # by any production caller, so proofs went out unsigned and the
+        # enforcer could not verify anything (W5). Both ends now resolve the
+        # same key, so the signed path is the DEFAULT path.
+        _k = sign_key or _harness_key()
+        if _k:
+            proof = proof.sign(_k)
         ts = fetched_at or _dt.datetime.now(_dt.timezone.utc).replace(
             tzinfo=None)
         return EvidenceRecord(

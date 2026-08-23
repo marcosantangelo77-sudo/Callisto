@@ -375,9 +375,16 @@ class TestWaybackProofs:
         }
         return build("wayback", "WaybackAdapter", routes)
 
-    def test_snapshot_proof_minted_and_admitted(self):
+    def test_snapshot_proof_minted_and_admitted(self, monkeypatch):
+        """End-to-end on the SIGNED path: wayback signs, enforcer verifies.
+
+        Both ends resolve the same secret via cutoff.harness_key(). Before W5
+        was fixed nothing signed and the enforcer skipped verification, so this
+        test passed while the signature system was entirely inert.
+        """
         import datetime as dt
         from tools.retrodiction.cutoff import CutoffEnforcer, ProofKind
+        monkeypatch.setenv("CALLISTO_CUTOFF_KEY", "harness-secret")
 
         wb, _t = self._staged()
         before = dt.date(2026, 1, 1)
