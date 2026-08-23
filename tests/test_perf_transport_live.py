@@ -21,7 +21,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tools.pipeline.transport.agent_pool import AgentPoolTransport  # noqa: E402
+from tools.pipeline.transport.agent_pool import WarmWorkerPool  # noqa: E402
+
+pool = WarmWorkerPool(pool_size=1)
 
 PROMPT = [{"role": "user",
            "content": "Reply with exactly: ok"}]
@@ -42,8 +44,7 @@ def test_subprocess_vs_pool_ratio():
         sub_s = time.monotonic() - t0
         assert res_sub["content"].strip()
 
-        # 2) warm pool: first call includes one-time agent build
-        pool = AgentPoolTransport(pool_size=1)
+        # 2) warm pool: first call includes one-time worker spawn + build
         t0 = time.monotonic()
         res_pool = await pool.complete(PROMPT, role="perf")
         first_s = time.monotonic() - t0
