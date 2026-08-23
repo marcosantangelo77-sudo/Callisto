@@ -7,6 +7,7 @@ descendants that lift a parent claim's ceiling.
 
 from __future__ import annotations
 
+import random
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -137,3 +138,133 @@ def resolved_claim_record(question, prediction,
         "loops": prediction.loops,
         "recorded_at": datetime.utcnow().isoformat(),
     }
+
+
+# ── Significance: is config A actually better than config B? ──────────────
+#
+# The A/B harness reports two Brier means; nothing said whether the gap is a
+# real property of the configs or noise from N small questions. NEXT.md's
+# whole thesis is that conclusions carry trustworthy confidence — an A/B
+# verdict that ignores sampling error violates it. These are pure-Python:
+# no numpy/scipy dependency (the repo has none).
+
+
+def _paired_briers(predictions_a, predictions_b, questions):
+    """Per-question Brier vectors for the questions BOTH configs answered.
+    Paired: identical questions, so per-question differences cancel question
+    difficulty and the test needs far smaller N than unpaired."""
+    qmap = {q.question_id: q.answer_binary for q in questions}
+    ids = sorted({p.question_id for p in predictions_a}
+                 & {p.question_id for p in predictions_b})
+    pa = {p.question_id: p.probability for p in predictions_a}
+    pb = {p.question_id: p.probability for p in predictions_b}
+    da = [pa[i] - (1.0 if qmap[i] else 0.0) for i in ids]
+    db = [pb[i] - (1.0 if qmap[i] else 0.0) for i in ids]
+    return [(x ** 2, y ** 2) for x, y in zip(da, db)]
+
+
+def paired_significance(predictions_a, predictions_b, questions,
+                        n_permutations: int = 10_000,
+                        seed: int = 0) -> dict:
+    """Exact-ish paired permutation test on mean Brier difference.
+
+    Under H0 (both configs equivalent), swapping each question's pair of
+    scores between configs is equally likely, so the sign pattern of the
+    differences is exchangeable. p = fraction of resampled sign patterns
+    whose |mean difference| >= the observed one. Two-sided.
+
+    Returns {brier_a, brier_b, delta (a − b; negative = A better),
+             n, p_value, better ('A'|'B'|None), significant_at_0_05}.
+    """
+    pairs = _paired_briers(predictions_a, predictions_b, questions)
+    if not pairs:
+        raise ValueError("no questions answered by both configs")
+    diffs = [a - b for a, b in pairs]
+    observed = sum(diffs) / len(diffs)
+    rng = random.Random(seed)
+    extremes = 0
+    for _ in range(n_permutations):
+        m = sum(d if rng.random() < 0.5 else -d for d in diffs) / len(diffs)
+        if abs(m) >= abs(observed) - 1e-12:
+            extremes += 1
+    p_value = extremes / n_permutations
+    return {
+        "brier_a": sum(a for a, _ in pairs) / len(pairs),
+        "brier_b": sum(b for _, b in pairs) / len(pairs),
+        "delta": observed,
+        "n": len(diffs),
+        "p_value": p_value,
+        "better": ("A" if observed < 0 else "B") if p_value < 0.05 else None,
+        "significant_at_0_05": p_value < 0.05,
+    }
+
+
+def brier_decomposition(predictions, questions, n_bins: int = 5) -> dict:
+    """Murphy decomposition of the mean Brier score:
+
+        Brier = RELIABILITY − RESOLUTION + UNCERTAINTY
+
+    reliability — penalty for miscalibration (want → 0)
+    resolution  — how much the forecasts distinguish outcomes (want large)
+    uncertainty — irreducible variance of the outcome itself (floor)
+
+    Reliability near zero with low resolution means the model is honest but
+    uninformative — a different failure than overconfidence, and invisible to
+    the raw score alone. UNCERTAINTY uses the realised base rate, which is
+    exact for binary outcomes.
+    """
+    qmap = {q.question_id: q.answer_binary for q in questions}
+    pairs = [(p.probability, qmap[p.question_id]) for p in predictions
+             if p.question_id in qmap]
+    if not pairs:
+        raise ValueError("no predictions matched any question")
+    n = len(pairs)
+    base_rate = sum(y for _, y in pairs) / n
+    uncertainty = base_rate * (1.0 - base_rate)
+    width = 1.0 / n_bins
+    rel = 0.0
+    res = 0.0
+    used = 0
+    for i in range(n_bins):
+        lo, hi = i * width, (i + 1) * width
+        bucket = [(p, y) for p, y in pairs
+                  if lo <= p < hi or (i == n_bins - 1 and p == 1.0)]
+        if not bucket:
+            continue
+        nk = len(bucket)
+        used += nk
+        pk = sum(p for p, _ in bucket) / nk
+        ok = sum(1 for _, y in bucket if y) / nk
+        rel += nk * (pk - ok) ** 2
+        res += nk * (ok - base_rate) ** 2
+    rel /= n
+    res /= n
+    return {
+        "reliability": rel,
+        "resolution": res,
+        "uncertainty": uncertainty,
+        "brier_from_parts": rel - res + uncertainty,
+        "n": used,
+        "base_rate": base_rate,
+    }
+
+
+def bootstrap_brier_ci(predictions, questions, n_bootstraps: int = 10_000,
+                       confidence: float = 0.95, seed: int = 0) -> tuple:
+    """Percentile bootstrap CI on the mean Brier score, resampling questions.
+    The honest companion to every headline 'mean Brier' this harness prints."""
+    qmap = {q.question_id: q.answer_binary for q in questions}
+    scores = [_brier_one(p.probability, qmap[p.question_id])
+              for p in predictions if p.question_id in qmap]
+    if not scores:
+        raise ValueError("no predictions matched any question")
+    rng = random.Random(seed)
+    n = len(scores)
+    means = []
+    for _ in range(n_bootstraps):
+        means.append(sum(scores[rng.randrange(n)] for _ in range(n)) / n)
+    means.sort()
+    alpha = (1.0 - confidence) / 2.0
+    lo_i = max(0, int(alpha * n_bootstraps))
+    hi_i = min(n_bootstraps - 1, int((1.0 - alpha) * n_bootstraps))
+    return (means[lo_i], means[hi_i])
