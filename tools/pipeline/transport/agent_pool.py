@@ -71,7 +71,9 @@ class _Worker:
     def __init__(self, model: str, timeout_s: float):
         self.model = model
         self.timeout_s = timeout_s
-        self.lock = threading.Lock()
+        # RLock: healthy() and complete() both take the lock, and _run_once
+        # holds it across the borrow — reentrancy is required on one thread.
+        self.lock = threading.RLock()
         self.proc: Optional[subprocess.Popen] = None
 
     # ── low-level ────────────────────────────────────────────────────────
