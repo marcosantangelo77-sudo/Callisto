@@ -370,7 +370,9 @@ class TestHermesMemoryRoundTrip(unittest.TestCase):
             learned_at TEXT NOT NULL,
             confidence REAL DEFAULT 0.5,
             occurrences INTEGER DEFAULT 1,
-            source TEXT DEFAULT 'claude')""")
+            source TEXT DEFAULT 'claude',
+            source_class TEXT,
+            provenance_seal TEXT)""")
         conn.commit()
         conn.close()
         from tools.hermes_memory import HermesMemory
@@ -492,10 +494,47 @@ class TestProvenanceSeamCarries(unittest.TestCase):
 
     def setUp(self):
         import asyncio, os, tempfile
+        from tools.hermes_memory import HermesMemory
+        self._HermesMemory = HermesMemory
         self._loop = asyncio.new_event_loop()
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
+        # hermes context build reads bets/ev_opportunities/hypotheses too;
+        # create the minimal tables so the degraded-context fallback never fires.
+        import sqlite3
+        conn = sqlite3.connect(path)
+        for ddl in (
+            "CREATE TABLE bankroll (balance REAL, timestamp TEXT)",
+            """CREATE TABLE bets (
+                id INTEGER PRIMARY KEY, game_description TEXT, team TEXT,
+                market TEXT, bookmaker TEXT, placement_odds REAL,
+                result TEXT, stake REAL, payout REAL, clv_implied REAL,
+                placed_at TEXT, notes TEXT)""",
+            """CREATE TABLE ev_opportunities (
+                sport TEXT, team TEXT, market TEXT, bookmaker TEXT,
+                american_odds REAL, edge REAL, expected_value REAL,
+                kelly_fraction REAL, detected_at TEXT)""",
+            "CREATE TABLE sessions (query TEXT, conclusion TEXT,"
+            " confidence_score REAL, confidence_tier TEXT, sealed_at TEXT)",
+            "CREATE TABLE hypotheses (status TEXT, name TEXT, sport TEXT,"
+            " market_type TEXT, thesis TEXT, hypothesis_id TEXT, updated_at TEXT)",
+            "CREATE TABLE backtest_events (hypothesis_id TEXT, event_id TEXT,"
+            " signal_generated INTEGER, edge REAL)",
+            """CREATE TABLE hermes_learnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE,
+                value TEXT NOT NULL, learned_at TEXT NOT NULL,
+                confidence REAL DEFAULT 0.5, occurrences INTEGER DEFAULT 1,
+                source TEXT DEFAULT 'claude',
+                source_class TEXT, provenance_seal TEXT)""",
+            """CREATE TABLE hermes_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL,
+                sender TEXT NOT NULL, message TEXT NOT NULL, read INTEGER DEFAULT 0)""",
+        ):
+            conn.execute(ddl)
+        conn.commit()
+        conn.close()
         self.db = HermesMemory(db_path=path)
+        self.db._db_initialized = True  # tables exist; skip DDL path
         # Keyed regime so seal verification can succeed.
         import secrets
         os.environ["CALLISTO_SEAL_KEY"] = secrets.token_hex(32)
@@ -526,7 +565,6 @@ class TestProvenanceSeamCarries(unittest.TestCase):
             self.assertIsNotNone(m, f"no provenance annotation in context:\n{ctx}")
             self.assertEqual(m.group(1), "PRIMARY")
         self._loop.run_until_complete(run())
-
     def test_unsealed_write_reads_as_inferred(self):
         async def run():
             await self.db.record_learning(
@@ -566,16 +604,22 @@ class TestProvenanceSeamCarries(unittest.TestCase):
 
     def test_ensure_tables_upgrades_preexisting_table(self):
         """_ensure_tables itself adds the missing columns to an old table."""
-        import sqlite3
-        conn = sqlite3.connect(self.db.db_path)
+        import sqlite3, tempfile, os as _os
+        import aiosqlite
+        fd, path = tempfile.mkstemp(suffix=".db")
+        _os.close(fd)
+        self.addCleanup(lambda: _os.path.exists(path) and _os.unlink(path))
+        conn = sqlite3.connect(path)
         conn.execute("CREATE TABLE hermes_learnings (key TEXT UNIQUE)")
         conn.commit()
         conn.close()
-        self.db._db_initialized = False
+
+        cols: set = set()
 
         async def run():
-            async with aiosqlite.connect(self.db.db_path) as db:
-                await self.db._ensure_tables(db)
+            nonlocal cols
+            async with aiosqlite.connect(path) as db:
+                await self._HermesMemory(db_path=path)._ensure_tables(db)
                 cols = {r[1] for r in await db.execute_fetchall(
                     "PRAGMA table_info(hermes_learnings)")}
         self._loop.run_until_complete(run())
