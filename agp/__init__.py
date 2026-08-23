@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 from agp.thresholds import (
     TIER_VERIFIED_MIN,
@@ -253,6 +253,16 @@ class AGPSession:
         # time, the session is mostly noise and seal() refuses.
         self.filtered_evidence_count: int = 0
 
+        # Artifact verification hook (family 1, instance A7 — a check that
+        # never ran). A session that CITES artifacts must be able to prove
+        # those bytes exist unmodified at seal time. This is a callable
+        # (session) → str; empty string = all cited artifacts verified, a
+        # non-empty string = the refusal reason. The CALLER implements it
+        # against whatever store holds its bytes, so agp stays
+        # storage-agnostic. None = no artifacts claimed / legacy behaviour.
+        # Fails closed: a crash in the checker refuses the seal.
+        self.artifact_check: Optional[Callable] = None
+
         # Independent seal reviewer (mechanism 4 of the earned-confidence
         # design): a callable(session, summary) → Optional[str]. Non-empty /
         # truthy return = veto reason; the seal is refused. This is the hook
@@ -406,6 +416,30 @@ class AGPSession:
                 f"Session {self.session_id}: refusing to seal — "
                 f"filtered ({self.filtered_evidence_count}) > kept ({len(self.evidence)})"
             )
+
+        # ── Artifact gate: cited bytes must exist and re-hash clean ──
+        # Family 1 (a verification layer that never ran), instance A7.
+        # verify_artifacts() previously had ZERO production callers; a sealed
+        # conclusion could cite artifacts nobody stored. Fails closed.
+        if self.artifact_check is not None:
+            try:
+                reason = self.artifact_check(self)
+            except Exception as e:
+                logger.error(
+                    "AGP artifact checker raised for session %s — failing closed",
+                    self.session_id, exc_info=True)
+                raise AGPSealRefused(
+                    f"Session {self.session_id}: refusing to seal — "
+                    f"artifact check crashed: {type(e).__name__}: {e}"
+                ) from e
+            if reason:
+                logger.warning(
+                    "AGP seal refused for session %s by artifact check: %s",
+                    self.session_id, reason)
+                raise AGPSealRefused(
+                    f"Session {self.session_id}: refusing to seal — "
+                    f"artifact verification failed ({reason})"
+                )
 
         # ── Independent reviewer veto (fails closed) ──
         if self.seal_veto is not None:

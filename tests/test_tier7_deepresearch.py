@@ -132,10 +132,16 @@ class TestNoCodeExecutionOrArtifacts:
         }
         assert not (set(names) & forbidden), f"new exec tool appeared: {names}"
 
-    def test_no_artifact_return_path_in_synthesis(self):
-        """SessionSummary has no artifact references — synthesis returns prose+scores."""
-        src = _read("agp/__init__.py")
-        assert "artifact" not in src.lower()
+    def test_session_summary_has_no_artifact_references(self):
+        """SessionSummary itself still has no artifact references — synthesis
+        returns prose+scores; artifact refs live on the pipeline result and
+        are verified at seal time via AGPSession.artifact_check (family-1
+        A7 fix). The old repo-wide 'artifact not in agp' assertion was
+        falsified when the seal gained an artifact verification hook — that
+        is the string 'artifact_check' appearing as a GATE, not as a claim."""
+        src = _read("agp/__init__.py").lower()
+        assert "artifact" in src  # the gate exists now
+        assert '"artifacts"' not in src  # but SessionSummary.to_dict still carries none
 
     def test_local_compute_is_wrapped_betting_math_not_a_sandbox(self):
         """local_compute wraps devig/significance helpers; it is not a general

@@ -133,6 +133,7 @@ class BatchResult:
     sealed: bool = False
     refusal_reason: str = ""
     n_fetches: int = 0
+    artifacts: list[dict] = field(default_factory=list)
     objections: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     error: str = ""
@@ -268,6 +269,13 @@ class RetrodictionBatch:
             result.sealed = bool(getattr(r, "sealed", False))
             result.refusal_reason = str(getattr(r, "refusal_reason", "") or "")
             result.n_fetches = len(getattr(r, "fetches", []) or [])
+            # Persist the artifact chain per row (A8): a batch is the system's
+            # scored track record; without refs in the record there is no way
+            # to re-check what any scored conclusion was backed by.
+            result.artifacts = [
+                {"kind": getattr(a, "kind", ""), "sha256": a.sha256,
+                 "name": getattr(a, "name", "")}
+                for a in (getattr(r, "artifact_refs", []) or [])]
             result.objections = [getattr(o, "text", str(o))
                                  for o in (getattr(r, "objections", []) or [])]
             result.notes = list(getattr(r, "notes", []) or [])

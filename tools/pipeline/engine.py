@@ -601,6 +601,25 @@ class ResearchPipeline:
             confidence_score=max(0.0, clamped),
             evidence_count=len(session.evidence),
             contradiction_count=len(session.contradictions))
+        # Artifact gate at seal time (family 1, A7): the refs this run
+        # accumulated must re-hash clean against the store or the seal is
+        # refused. Installed here — after the leaves ran, so it sees every
+        # artifact the run produced. This is verify_artifacts()'s first
+        # production caller; previously nothing verified cited artifacts
+        # between storage and the CLI's post-hoc `callisto show`.
+        if self.artifact_refs:
+            def _artifact_check(_session, _store=self.store,
+                                _refs=list(self.artifact_refs)) -> str:
+                report = _store.verify_artifacts(_refs)
+                if report["ok"]:
+                    return ""
+                parts = [f"{len(report['missing'])} missing"] \
+                    if report["missing"] else []
+                parts += [f"{len(report['corrupt'])} corrupt"] \
+                    if report["corrupt"] else []
+                return "; ".join(parts)
+
+            session.artifact_check = _artifact_check
         session.advance_to(SessionStep.SESSION_CLOSE)
 
         # 8. Seal or refuse. Only a BLOCKING objection vetoes; MAJOR/MINOR
