@@ -56,9 +56,44 @@ except ImportError:  # pragma: no cover
 
 # ── Resolution records ───────────────────────────────────────────────────
 
+# Outcome-vocabulary bridge (failure-family 2 fix: the resolver side speaks
+# positive/negative/indeterminate — see tools/resolvers/base.py — while this
+# module canonically speaks hit/miss/stale/void. Until 2026-08-23 nothing
+# translated, so every resolver-produced record was silently UNCOUNTED:
+# inherited_ceiling() returned the SPECULATIVE cap for a perfect track record,
+# identical to zero descendants. Normalisation happens HERE so both sides'
+# callers work regardless of which vocabulary they use.)
+_RESOLVER_TO_RECORD_OUTCOME = {
+    # tools/resolvers/base.py OUTCOME_* values and their aliases
+    "positive": "hit",
+    "won": "hit",
+    "win": "hit",
+    "true": "hit",
+    "yes": "hit",
+    "confirmed": "hit",
+    "negative": "miss",
+    "lost": "miss",
+    "loss": "miss",
+    "false": "miss",
+    "no": "miss",
+    "retracted": "miss",
+    "indeterminate": "stale",   # no decided ground truth → stale, not void:
+    "push": "stale",            # it still counts as unresolved-at-deadline
+    "cancelled": "void",
+    "n/a": "void",
+}
+
+
 @dataclass
 class ResolutionRecord:
-    """One descendant's settled outcome. The unit of earned confidence."""
+    """One descendant's settled outcome. The unit of earned confidence.
+
+    ``outcome`` accepts either this module's canonical vocabulary
+    ("hit" | "miss" | "stale" | "void") or the OutcomeResolver vocabulary
+    ("positive" | "negative" | "indeterminate"); it is normalised in
+    __post_init__. Unknown tokens raise ValueError — a malformed outcome must
+    fail loudly, not silently drop one observation from the parent's record.
+    """
     question_id: str
     resolved_at: date
     outcome: str                     # "hit" | "miss" | "stale" | "void"
@@ -70,7 +105,14 @@ class ResolutionRecord:
     best_source_class: str = "SECONDARY"
 
     def __post_init__(self):
-        self.outcome = str(self.outcome).lower()
+        raw = str(self.outcome).strip().lower()
+        mapped = _RESOLVER_TO_RECORD_OUTCOME.get(raw, raw)
+        if mapped not in ("hit", "miss", "stale", "void"):
+            raise ValueError(
+                f"unknown resolution outcome {self.outcome!r} for question "
+                f"{self.question_id!r}: expected hit/miss/stale/void or "
+                f"a resolver token (positive/negative/indeterminate)")
+        self.outcome = mapped
 
     @property
     def counted(self) -> bool:

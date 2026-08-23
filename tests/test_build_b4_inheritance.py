@@ -178,3 +178,75 @@ class TestDomainGenerality:
         score, tier = clamp_parent_confidence(
             0.85, [{"question_id": "none", "outcome": "void"}])
         assert score <= SPECULATIVE_CAP
+
+
+class TestResolverVocabularyBridge:
+    """2026-08-23: the OutcomeResolver side speaks positive/negative/
+    indeterminate; this module canonically speaks hit/miss/stale/void.
+    Before the bridge, resolver-produced records were silently uncounted —
+    inherited_ceiling returned SPECULATIVE_CAP for a perfect track record."""
+
+    def test_positive_resolutions_lift_the_ceiling(self):
+        recs = [{"question_id": f"x{i}", "resolved_at": "2027-01-01",
+                 "outcome": "positive", "best_source_class": "PRIMARY"}
+                for i in range(12)]
+        assert inherited_ceiling(recs) > SPECULATIVE_CAP
+
+    def test_bridge_matches_canonical_vocabulary_exactly(self):
+        canon = [{"question_id": f"x{i}", "resolved_at": "2027-01-01",
+                  "outcome": "hit", "best_source_class": "PRIMARY"}
+                 for i in range(12)]
+        bridged = [{"question_id": f"x{i}", "resolved_at": "2027-01-01",
+                    "outcome": "positive", "best_source_class": "PRIMARY"}
+                   for i in range(12)]
+        assert inherited_ceiling(bridged) == inherited_ceiling(canon)
+
+    def test_indeterminate_counts_as_stale_not_dropped(self):
+        # stale demotes (up to -0.20); it must not silently vanish from n
+        stale = [{"question_id": f"s{i}", "resolved_at": "2027-01-01",
+                  "outcome": "stale"} for i in range(5)]
+        indet = [{"question_id": f"s{i}", "resolved_at": "2027-01-01",
+                  "outcome": "indeterminate"} for i in range(5)]
+        assert inherited_ceiling(stale) == inherited_ceiling(indet)
+
+    def test_unknown_outcome_token_raises(self):
+        import pytest
+        from tools.research_program import ResolutionRecord
+        with pytest.raises(ValueError):
+            ResolutionRecord(question_id="q", resolved_at=date(2027, 1, 1),
+                             outcome="positve")  # typo
+
+    def test_record_normalises_resolver_tokens(self):
+        from tools.research_program import ResolutionRecord
+        r = ResolutionRecord(question_id="q", resolved_at=date(2027, 1, 1),
+                             outcome="POSITIVE")
+        assert r.outcome == "hit" and r.counted
+
+    def test_migration_tables_feed_resolver_end_to_end(self):
+        """The domain-general tables exist and SqlitePredictionResolver can
+        read them — before migration 016 nothing could store a resolution."""
+        import asyncio, sqlite3, tempfile
+        from tools.migrations.runner import discover_migrations
+        migs = {m.name: m for m in discover_migrations()}
+        mig = migs["domain_general_predictions"]
+        db = tempfile.mktemp(suffix=".db")
+        raw = sqlite3.connect(db)
+        mig.up(raw)
+        raw.execute("INSERT INTO predictions (claim_id,event_id,predicted_prob)"
+                    " VALUES ('c1','e1',0.62)")
+        raw.execute("INSERT INTO outcomes (prediction_id,resolved_outcome,"
+                    "payoff,source) VALUES (1,'positive',1.0,'test')")
+        raw.commit()
+        import aiosqlite
+        from tools.resolvers.generic import SqlitePredictionResolver
+
+        async def main():
+            aconn = await aiosqlite.connect(db)
+            r = SqlitePredictionResolver(aconn)
+            s = await r.summarize("c1")
+            await aconn.close()
+            return s
+
+        s = asyncio.run(main())
+        assert s.total == 1 and s.positive == 1 and s.fully_resolved
+        raw.close()
