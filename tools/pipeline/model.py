@@ -144,6 +144,27 @@ def decompose_messages(root_query: str) -> list[dict]:
             {"role": "user", "content": f"QUESTION: {root_query}"}]
 
 
+PREREG_SYSTEM = (
+    "You are the Architect. BEFORE any evidence is collected, commit to the "
+    "criteria that would settle this question. Return JSON only: "
+    '{"confirm_markers": [str, ...], "refute_markers": [str, ...], '
+    '"ambiguous_markers": [str, ...], "threshold": number | null, '
+    '"direction": "gte" | "lte" | null, "min_evidence_items": int, '
+    '"min_source_class": "INFERRED" | "SIGNAL" | "SECONDARY" | "PRIMARY"}.\n'
+    "Markers are short literal phrases that may appear verbatim in a "
+    "research conclusion. Both confirm_markers and refute_markers MUST be "
+    "non-empty — criteria that cannot state what would refute the claim are "
+    "not criteria. min_evidence_items is the fewest evidence items below "
+    "which no verdict may be reached at all. Commit now: these criteria are "
+    "SEALED and cannot be changed after evidence arrives."
+)
+
+
+def prereg_messages(root_query: str) -> list[dict]:
+    return [{"role": "system", "content": PREREG_SYSTEM},
+            {"role": "user", "content": f"QUESTION: {root_query}"}]
+
+
 ANSWER_SYSTEM = (
     "You are the research synthesizer. Given evidence items (each tagged "
     "with its provenance-assigned class), answer the question. Cite ONLY "

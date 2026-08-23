@@ -75,6 +75,11 @@ class AGPRole:
     MANAGER = "Manager"
     SENTINEL = "Sentinel"
     ADVERSARY = "Adversary"
+    # Preregistration authoring is Architect-class judgment (committing to
+    # what would confirm/refute BEFORE evidence). It gets its own ROLE name
+    # so scripted tests and per-role routing can address it separately, but
+    # routes through the same task classes as the Architect by default.
+    PREREGISTER = "Preregister"
 
     # Frontier where judgment is scarce (framing, criticism); local where
     # volume dominates (search/collate/extract). These are DEFAULTS —
@@ -84,6 +89,7 @@ class AGPRole:
         MANAGER: ["extraction", "classification", "screening"],
         SENTINEL: ["adversarial_review"],
         ADVERSARY: ["adversarial_review"],
+        PREREGISTER: ["hypothesis_generation"],
     }
 
 

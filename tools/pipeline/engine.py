@@ -60,6 +60,7 @@ from tools.pipeline.model import (
     answer_messages,
     decompose_messages,
     parse_model_json,
+    prereg_messages,
 )
 from tools.research_program import ResolutionRecord, clamp_parent_confidence
 from tools.sandbox import run_python
@@ -123,6 +124,17 @@ class PipelineResult:
     #: present only when a checkpointer was injected — records which stages
     #: were resumed vs fresh, so stale evidence is visible to the caller.
     trace: Optional[ckpt.RunTrace] = None
+    #: Sealed preregistration committed BEFORE evidence collection
+    #: (agp.preregistration). Empty when criteria authoring failed twice —
+    #: fail-soft, recorded in notes; absence never weakens a gate.
+    prereg_seal_hash: str = ""
+    prereg_criteria: dict = field(default_factory=dict)
+    #: Verdict scored against the sealed criteria at conclusion time:
+    #: CONFIRMED | REFUTED | AMBIGUOUS. "" when no preregistration exists.
+    prereg_verdict: str = ""
+    prereg_divergences: list[str] = field(default_factory=list)
+    #: ClaimStore id of the persisted claim (sealed runs with prereg only).
+    claim_id: str = ""
 
     def summary_dict(self) -> dict:
         return {
@@ -136,6 +148,9 @@ class PipelineResult:
             "n_fetches": len(self.fetches),
             "artifacts": [r.sha256[:12] for r in self.artifact_refs],
             "objections": [getattr(o, "text", str(o)) for o in self.objections],
+            "prereg_seal_hash": self.prereg_seal_hash,
+            "prereg_verdict": self.prereg_verdict,
+            "claim_id": self.claim_id,
         }
 
 
@@ -284,6 +299,69 @@ class ResearchPipeline:
         if errs:
             raise ValueError(f"decomposition invalid: {errs}")
         return program
+
+    # ── Stage 1b: preregister (BEFORE any evidence exists) ────────────────
+
+    async def _preregister(self, question: str,
+                           _repair: str = "") -> "Preregistration":
+        """Author and SEAL confirmation/refutation criteria.
+
+        This runs before a single fetch: the whole value of preregistration
+        is that the criteria cannot have been shaped by the evidence. The
+        module (agp.preregistration) enforces immutability after seal; this
+        method only ever creates fresh criteria from the bare question.
+        """
+        from agp.preregistration import Criteria, Preregistration
+
+        msgs = prereg_messages(question)
+        if _repair:
+            msgs = msgs + [{"role": "user", "content":
+                            "Your previous criteria were REJECTED:\n"
+                            f"{_repair}\n"
+                            "Return corrected JSON in the same shape. Fix "
+                            "only what was rejected."}]
+        resp = await self.model.complete(AGPRole.PREREGISTER, msgs)
+        parsed = parse_model_json(resp) or {}
+
+        def _markers(key: str) -> list[str]:
+            raw = parsed.get(key) or []
+            if not isinstance(raw, list):
+                return []
+            return [str(m).strip()[:120] for m in raw if str(m).strip()][:8]
+
+        def _maybe_threshold() -> Optional[float]:
+            try:
+                v = parsed.get("threshold")
+                return None if v is None else float(v)
+            except (TypeError, ValueError):
+                return None
+
+        direction = parsed.get("direction")
+        if direction not in ("gte", "lte"):
+            direction = None
+        try:
+            min_items = max(1, int(parsed.get("min_evidence_items") or 1))
+        except (TypeError, ValueError):
+            min_items = 1
+        min_class = str(parsed.get("min_source_class") or "SECONDARY")
+        if min_class not in ("INFERRED", "SIGNAL", "SECONDARY", "PRIMARY"):
+            min_class = "SECONDARY"
+
+        criteria = Criteria(
+            confirm_markers=_markers("confirm_markers"),
+            refute_markers=_markers("refute_markers"),
+            ambiguous_markers=_markers("ambiguous_markers"),
+            threshold=_maybe_threshold(),
+            direction=direction,
+            min_evidence_items=min_items,
+            min_source_class=min_class,
+        )
+        errs = criteria.validate()
+        if errs:
+            raise ValueError("; ".join(errs))
+        prereg = Preregistration(query=question, criteria=criteria)
+        prereg.seal()
+        return prereg
 
     # ── Stage 2+3: select sources and fetch per leaf ──────────────────────
 
@@ -458,6 +536,46 @@ class ResearchPipeline:
             program = await _do_decompose()
         result.program = program
 
+        # 1b. Preregister — seal confirmation/refutation criteria BEFORE any
+        # evidence exists (NEXT.md harness mechanism 6). Fail-soft: criteria
+        # that cannot be authored after one repair turn leave the run
+        # preregistration-free, with a note; absence never weakens a gate.
+        # Checkpointed so a RESUME replays the sealed criteria byte-identical
+        # instead of re-authoring them after evidence — re-authoring at that
+        # point would let the fetched content shape its own acceptance test.
+        from agp.adversary import AGPRole
+        from agp.preregistration import Preregistration as _Prereg
+
+        async def _prereg_payload() -> dict:
+            try:
+                prereg = await self._preregister(question)
+            except ValueError as first:
+                result.notes.append(
+                    f"preregistration repair attempted: {first}")
+                try:
+                    prereg = await self._preregister(question,
+                                                     _repair=str(first))
+                except ValueError as second:
+                    return {"skipped": True, "reason": str(second)}
+            return {"prereg": prereg.to_dict()}
+
+        if cp is not None:
+            p_oc = await ckpt.run_stage(cp, trace, "prereg",
+                                        {"question": question},
+                                        _prereg_payload)
+            p_payload = p_oc.payload
+        else:
+            p_payload = await _prereg_payload()
+        prereg = (_Prereg.from_dict(p_payload["prereg"])
+                  if p_payload.get("prereg") else None)
+        if prereg is None and p_payload.get("skipped"):
+            result.notes.append(
+                "preregistration unavailable — run proceeds without sealed "
+                f"criteria: {p_payload.get('reason', '')}")
+        else:
+            result.prereg_seal_hash = prereg.seal_hash or ""
+            result.prereg_criteria = prereg.criteria.to_dict()
+
         # 2..5. Per leaf: select sources, fetch, compute, answer.
         session = AGPSession(question)
         session.scope = question
@@ -566,6 +684,42 @@ class ResearchPipeline:
         clamped, tier = clamp_parent_confidence(
             proposed, self.descendant_resolutions)
 
+        # 6b. Score the conclusion AGAINST THE SEALED CRITERIA. Only ever
+        # subtracts (the preregistration is an adversary too): a refuted
+        # verdict takes the MAJOR penalty magnitude from the same table the
+        # Adversary uses; anything non-CONFIRMED caps at 0.55, mirroring the
+        # module's own rule that confidence claimed past 0.55 while the
+        # sealed criteria score AMBIGUOUS is not earned.
+        if prereg is not None:
+            _rank = {"INFERRED": 0, "SIGNAL": 1, "SECONDARY": 2,
+                     "PRIMARY": 3}
+            best_class_val = "INFERRED"
+            for lf in result.leaves:
+                for cv in lf.source_classes:
+                    if _rank.get(cv, -1) > _rank.get(best_class_val, -1):
+                        best_class_val = cv
+            try:
+                outcome = prereg.score(
+                    observed_text=conclusion,
+                    evidence_count=len(session.evidence),
+                    best_source_class=best_class_val,
+                    claimed_confidence=clamped)
+                result.prereg_verdict = outcome.verdict.value
+                result.prereg_divergences = list(outcome.divergences)
+                if outcome.verdict.value == "REFUTED":
+                    clamped = max(0.0, clamped - 0.15)
+                    result.notes.append(
+                        "preregistration: sealed refute-criteria matched — "
+                        "confidence penalised by 0.15")
+                elif outcome.verdict.value == "AMBIGUOUS":
+                    clamped = min(clamped, 0.55)
+                    result.notes.append(
+                        "preregistration: sealed criteria score AMBIGUOUS — "
+                        "confidence capped at 0.55")
+            except Exception as e:  # noqa: BLE001 — scoring must never kill a run
+                result.notes.append(
+                    f"preregistration scoring failed (run continues): {e}")
+
         # 7. Adversary. When no dedicated router was injected, the author's
         # own model attacks — recorded honestly as self-review in the notes.
         if self._adversary_is_self_review:
@@ -580,6 +734,13 @@ class ResearchPipeline:
         result.objections = objections
         from agp.adversary import Adversary
         clamped, _ = Adversary.apply_verdict(clamped, objections)
+
+        # Tier is recomputed AFTER every subtractive step (inheritance,
+        # preregistration, adversary) — previously it stayed at the
+        # pre-adversary band, so a heavily penalised score could report a
+        # tier two bands above what the score justified.
+        clamped = max(0.0, clamped)
+        tier = ConfidenceTier.from_score(clamped).value
 
         session.summary = SessionSummary(
             scope=question, domain=domain, conclusion=conclusion,

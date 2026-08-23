@@ -113,6 +113,16 @@ def _result_record(result, question: str) -> dict:
         "objections": [getattr(o, "text", str(o))
                        for o in getattr(result, "objections", [])],
         "notes": list(getattr(result, "notes", [])),
+        # Preregistration: criteria sealed BEFORE evidence, and the verdict
+        # scored against them at conclusion time. This is what makes a run
+        # auditable against its own pre-commitment.
+        "preregistration": {
+            "seal_hash": getattr(result, "prereg_seal_hash", ""),
+            "criteria": getattr(result, "prereg_criteria", {}),
+            "verdict": getattr(result, "prereg_verdict", ""),
+            "divergences": list(getattr(result, "prereg_divergences", [])),
+        },
+        "claim_id": getattr(result, "claim_id", ""),
     }
 
 
@@ -406,6 +416,24 @@ def _cmd_show(args: argparse.Namespace) -> int:
         print(f"\nobjections ({len(obs)}):")
         for o in obs[:5]:
             print(f"  - {str(o)[:200]}")
+    pre = rec.get("preregistration") or {}
+    if pre.get("seal_hash"):
+        crit = pre.get("criteria") or {}
+        print(f"\n--- preregistration (sealed before evidence) ---")
+        print(f"  seal     : {pre['seal_hash'][:32]}…")
+        for key in ("confirm_markers", "refute_markers", "ambiguous_markers"):
+            vals = crit.get(key) or []
+            if vals:
+                print(f"  {key:<18}: {'; '.join(str(v) for v in vals[:4])}")
+        if crit.get("threshold") is not None:
+            print(f"  threshold        : {crit['threshold']} "
+                  f"({crit.get('direction', '?')})")
+        print(f"  verdict against sealed criteria: "
+              f"{pre.get('verdict') or '?'}")
+        for d in pre.get("divergences", [])[:5]:
+            print(f"  ! {d}")
+    if rec.get("claim_id"):
+        print(f"claim    : {rec['claim_id']}")
     print(f"\nrecord   : {path}")
     return 0
 
