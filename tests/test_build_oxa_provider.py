@@ -199,6 +199,11 @@ class TestRouterDispatch:
         fake.chmod(0o755)
         monkeypatch.setattr(hermes_cli, "resolve_binary",
                             lambda b=None: str(fake))
+        # perf wave: hermes_complete now prefers the warm worker pool; this
+        # test pins the SUBPROCESS contract (fake binary), so force that
+        # transport explicitly. No live network in unit tests.
+        monkeypatch.setenv("CALLISTO_HERMES_TRANSPORT", "subprocess")
+        hermes_cli.reset_transport_selection()
         router = inference.ProviderRouter(config_path=str(cfg))
 
         async def run():
