@@ -72,6 +72,42 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_runs_source_finished
     ON ingestion_runs(source, finished_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ingestion_runs_status
     ON ingestion_runs(status, finished_at DESC);
+
+-- ──────────────────────────────────────────
+-- PREDICTIONS / OUTCOMES: the domain-general resolution record.
+--
+-- One prediction = one falsifiable instance of a recurring claim (claim_id
+-- matches hypotheses.hypothesis_id for lifecycle-tracked claims), with the
+-- claim-time probability AND the market's implied probability at that
+-- moment — CLV generalised (NEXT.md §2). One outcome = ground truth when it
+-- arrives. tools/resolvers/generic.py reads exactly this pair; nothing may
+-- UPDATE a prediction after commit (the first committed probability stands,
+-- preregistration-style) and UNIQUE(claim_id, event_id) means the same
+-- event can never double-count toward a claim's sample.
+-- ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    claim_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    predicted_prob REAL,
+    book_implied_prob REAL,
+    odds_american INTEGER,
+    model_fair_prob REAL,
+    clv_prob_bp REAL,
+    context_key TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(claim_id, event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_predictions_claim ON predictions(claim_id);
+
+CREATE TABLE IF NOT EXISTS outcomes (
+    prediction_id INTEGER PRIMARY KEY REFERENCES predictions(id),
+    resolved_outcome TEXT NOT NULL
+        CHECK(resolved_outcome IN ('positive', 'negative', 'indeterminate')),
+    payoff REAL,
+    resolved_at TEXT
+);
 """
 
 

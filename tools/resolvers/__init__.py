@@ -21,8 +21,9 @@ Everything downstream (Brier, IC, calibration bins, binomial significance)
 already operates on prediction-vs-outcome pairs; this package is what feeds
 them without a sportsbook present.
 
-Nothing in this package arms execution or touches money. It is read-only
-over whatever store the resolver's domain uses.
+Nothing in this package arms execution or touches money. It writes only
+prediction/outcome records (the claim's own evidence) and is read-only over
+every market, book, and order surface.
 """
 
 from tools.resolvers.base import (
@@ -40,6 +41,8 @@ from tools.resolvers.generic import (
     GenericPredictionResolver,
     InMemoryOutcomeResolver,
     SqlitePredictionResolver,
+    record_outcome,
+    record_prediction,
 )
 
 __all__ = [
@@ -50,6 +53,8 @@ __all__ = [
     "GenericPredictionResolver",
     "InMemoryOutcomeResolver",
     "SqlitePredictionResolver",
+    "record_prediction",
+    "record_outcome",
     "STAGE_SEMANTICS",
     "BETTING_OUTCOME_MAP",
     "OUTCOME_POSITIVE",
