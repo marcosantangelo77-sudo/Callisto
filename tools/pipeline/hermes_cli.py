@@ -145,9 +145,12 @@ async def hermes_complete(messages: list[dict], *, role: str = "",
     """
     from tools.pipeline.transport.agent_pool import (
         SubprocessTransport, WarmWorkerPool, get_shared_pool)
-    # A caller passing an explicit binary wants the subprocess path by
-    # definition (the pool ignores binaries) — keep the legacy API honest.
-    if binary and transport is None:
+    # A caller passing an explicit NON-default binary wants the subprocess
+    # path by definition (the pool ignores binaries) — keep the legacy API
+    # honest. HermesCliModel's own resolved default must NOT count, or the
+    # shim would never reach the pool.
+    if (binary and transport is None
+            and binary != resolve_binary(None)):
         transport = "subprocess"
     selected = _select_transport(transport)
     if isinstance(selected, SubprocessTransport):
