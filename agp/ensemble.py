@@ -30,6 +30,7 @@ Four properties, all enforced here:
 Domain-general throughout: models, claims, evidence — no domain vocabulary.
 """
 
+from agp.thresholds import floor_conf
 import asyncio
 import math
 import re
@@ -208,7 +209,7 @@ class PanelVerdict:
         s = max(0.0, min(1.0, float(confidence_score)))
         if self.has_blocking:
             block = next(o for o in self.objections if o.is_blocking)
-            return round(s, 2), f"adversary panel veto: {block.text}"
+            return floor_conf(s), f"adversary panel veto: {block.text}"
 
         reasons = []
         # 1. per-objection penalties (pooled across all critics)
@@ -229,7 +230,7 @@ class PanelVerdict:
             clamped = self.ensemble_spread_ceiling
             reasons.append("ensemble score disagreement")
         clamped = math.floor(clamped * 100 + 1e-9) / 100
-        if clamped < round(s, 2):
+        if clamped < floor_conf(s):
             default_reason = (f"adversary panel: {len(self.objections)} objection(s)"
                               f", -{penalty:.2f}")
             return clamped, "; ".join(reasons) or default_reason

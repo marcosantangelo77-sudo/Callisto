@@ -10,9 +10,8 @@ HARD RULES (mirroring BUILD_MANDATE §4):
   - READ-ONLY. Nothing here writes to any component, mutates any object it
     is handed, or computes a new confidence. Every number reported is either
     read off the result or recomputed FROM THE SAME RULES the scorers used,
-    purely for display. If a rule value drifts, this module reports the
-    drifted world faithfully — it cannot make a score friendlier.
-  - Domain-general: nothing here knows what a bet or a semiconductor is.
+    purely for display. It cannot make a score friendlier.
+  - Domain-general: nothing here knows what a wager or a semiconductor is.
 
 Usage:
     expl = explain_result(pipeline_result, ledger=pipeline.ledger)
@@ -24,23 +23,17 @@ refusal and the refusal itself is explained.
 """
 from __future__ import annotations
 
-import hashlib
+
+from agp.thresholds import floor_conf
 import re
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import Iterable, Optional
 
-from agp.adversary import (
-    DISAGREEMENT_CEILING,
-    DISAGREEMENT_SPREAD_THRESHOLD,
-    MILD_DISAGREEMENT_CEILING,
-)
-from agp.provenance import ProvenanceLedger
 from agp.thresholds import (
     DB_CONFIDENCE_FLOOR,
     MAX_CONFIDENCE_BY_SOURCE,
     MAX_CONFIDENCE_NO_TOOL,
 )
-from tools.pipeline.engine import FetchResult, PipelineResult
 from tools.pipeline.retrieval import _OVERLAP_FAMILIES, independence_key
 from tools.research_program import (
     INHERITED_CEILING_BY_SOURCE,
@@ -57,11 +50,6 @@ _CLASS_RANK = {"INFERRED": 0, "SIGNAL": 1, "SECONDARY": 2, "PRIMARY": 3}
 _REQUIREMENT_GATE_CAP = 0.54
 
 
-def _sha12(text: str) -> str:
-    return hashlib.sha256(
-        (text or "").encode("utf-8", errors="replace")).hexdigest()[:12]
-
-
 # ═════════════════════════════════════════════════════════════════════════
 # Explanation records
 # ═════════════════════════════════════════════════════════════════════════
@@ -70,7 +58,7 @@ def _sha12(text: str) -> str:
 @dataclass
 class EvidenceWhy:
     """One evidence item: the class provenance assigned it, and WHY."""
-    label: str                       # short identifier (source name / hash prefix)
+    label: str                       # short identifier (source name / index)
     source_class: str
     reason: str                      # the provenance rule that fired
     ceiling: float                   # confidence ceiling implied by the class
@@ -83,7 +71,7 @@ class EvidenceWhy:
 @dataclass
 class CeilingWhy:
     """One constraint that bounded the score."""
-    kind: str            # source_class | self_review | inheritance | requirement_gate | ensemble_spread | db_floor
+    kind: str            # source_class | requirement_gate | inheritance | ...
     value: Optional[float]   # the numeric ceiling (None for vetoes/floors)
     detail: str          # plain-language why
     binding: bool = False
@@ -156,7 +144,7 @@ class StepWhy:
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# Provenance: why did THIS item get THIS class?
+# Provenance replay: why did THIS item get THIS class?
 # ═════════════════════════════════════════════════════════════════════════
 
 _PRIMARY_RULE = ("exact bytes returned by a real tool call this session "
@@ -169,19 +157,25 @@ _INFERRED_RULE = ("no tool bytes or fetched URL back it — model output "
                   "without verification")
 
 
+class _probe:
+    """Minimal Evidence-shaped object for ledger queries."""
+
+    def __init__(self, content: str):
+        self.content = content
+        self.source_class = None
+
+
 def assignment_reason(evidence_content: str,
-                      ledger: Optional[ProvenanceLedger]) -> tuple[str, str]:
+                      ledger) -> tuple[str, str]:
     """(source_class_value, reason) for one evidence item.
 
-    Recomputes the assignment with the SAME ledger the pipeline used and
-    names the specific rule that fires. With no ledger available, reports
-    the class as recorded and says the deciding rule could not be replayed.
+    Replays the assignment with the SAME ledger rules the pipeline used and
+    names the specific rule that fires. With no ledger available, returns
+    ("", "") — callers fall back to the recorded class, honestly marked.
     """
-    from agp import SourceClass
     if ledger is None:
-        return "", ""      # caller falls back to the recorded class
-    ev_probe = _probe(content=evidence_content)
-    assigned = ledger.assign_source_class(ev_probe)
+        return "", ""
+    assigned = ledger.assign_source_class(_probe(content=evidence_content))
     if ledger.is_primary_bytes(evidence_content):
         reason = _PRIMARY_RULE
     elif ledger.has_observation(evidence_content):
@@ -193,16 +187,8 @@ def assignment_reason(evidence_content: str,
     return assigned.value, reason
 
 
-class _probe:
-    """Minimal Evidence-shaped object for ledger queries."""
-
-    def __init__(self, content: str):
-        self.content = content
-        self.source_class = None
-
-
 # ═════════════════════════════════════════════════════════════════════════
-# Ingestion rejections: from notes when traces are unavailable
+# Ingestion rejections: parsed from result.notes when traces are gone
 # ═════════════════════════════════════════════════════════════════════════
 
 _REJECT_NOTE_RE = re.compile(
@@ -210,7 +196,7 @@ _REJECT_NOTE_RE = re.compile(
 _REJECT_ITEM_RE = re.compile(r"\[(?P<src>[^\]]+)\] (?P<reason>[^;]+)")
 
 
-def _parse_rejections(notes: Iterable[str]) -> list[RejectedWhy]:
+def parse_rejections(notes: Optional[Iterable[str]]) -> list[RejectedWhy]:
     out: list[RejectedWhy] = []
     for note in notes or ():
         m = _REJECT_NOTE_RE.search(note)
@@ -300,7 +286,9 @@ class WhyExplanation:
         if self.objections:
             for o in self.objections:
                 cost = "VETO" if o.veto else f"-{o.penalty:.2f}"
-                lines.append(f"  - [{o.severity}/{o.kind}] {cost}: {o.text}")
+                status = f" [{o.status}]" if o.status else ""
+                lines.append(f"  - [{o.severity}/{o.kind}] {cost}{status}: "
+                             f"{o.text}")
         else:
             lines.append("  - the conclusion withstood attack unchanged.")
         lines.append("")
@@ -322,18 +310,22 @@ class WhyExplanation:
                 lines.append(f"  - {src}{r.reason}{cov}")
             lines.append("")
 
-        if self.steps:
+        if self.proposed > 0:
             lines.append("SCORE WALK")
-            cur = self.steps[0].before
-            lines.append(f"  start {cur:.2f} (best leaf confidence)")
+            lines.append(f"  start {self.proposed:.2f} "
+                         "(best leaf confidence)")
+            if not self.steps:
+                lines.append("  =   unchanged  (proposal already sat at or "
+                             "below every binding ceiling)")
             for s in self.steps:
-                arrow = "->" if s.after >= s.before else "-="
                 delta = abs(s.before - s.after)
                 if delta > 1e-9:
-                    lines.append(f"  {arrow} {delta:.2f}  {s.stage} "
-                                 f"({s.rule}) -> {s.after:.2f}")
+                    sign = "-" if s.after < s.before else "+"
+                    lines.append(
+                        f"  {sign}{delta:.2f}  {s.stage} ({s.rule})"
+                        f" -> {s.after:.2f}")
                 else:
-                    lines.append(f"  =  unchanged  {s.stage} ({s.rule})")
+                    lines.append(f"  =   unchanged  {s.stage} ({s.rule})")
             lines.append("")
 
         lines.append(f"THE SHORT ANSWER: {self.largest_constraint}")
@@ -343,60 +335,70 @@ class WhyExplanation:
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# The walker
+# Independence accounting
 # ═════════════════════════════════════════════════════════════════════════
 
 
-def _independence_from_fetches(fetches: list[FetchResult]) -> IndependenceWhy:
-    keys: set[str] = set()
+def independence_from_fetches(fetches) -> IndependenceWhy:
+    from tools.pipeline.retrieval import in_family as _in_family
+    """Count independent sources exactly as retrieval does, with the
+    family-collapse statements spelled out."""
+    keys: set = set()
     collapses: list[str] = []
-    seen_family_members: dict[str, set[str]] = {}
+    seen_family_members: dict[str, set] = {}
     for f in fetches or []:
-        key = independence_key(f.source_name, f.url or f.source_name)
+        key = independence_key(getattr(f, "source_name", ""),
+                               getattr(f, "url", "") or
+                               getattr(f, "source_name", ""))
         keys.add(key)
         for family, members in _OVERLAP_FAMILIES.items():
-            if f.source_name in members:
-                seen_family_members.setdefault(family, set()).add(f.source_name)
+            if _in_family(getattr(f, "source_name", ""), members):
+                seen_family_members.setdefault(family, set()).add(
+                    f.source_name)
     for family, members in sorted(seen_family_members.items()):
+        names = ", ".join(sorted(members))
         if len(members) > 1:
             collapses.append(
-                f"'{family}' collapse: {', '.join(sorted(members))} count as "
-                "ONE independent source (they index the same underlying pool)")
+                f"'{family}' collapse: {names} count as ONE independent "
+                "source (they index the same underlying pool)")
         elif members:
             collapses.append(
-                f"'{family}' collapse applies to {next(iter(members))}; any "
-                "other member would not have added an independent source")
+                f"'{family}' collapse applies to {names}; any other member "
+                "would not have added an independent source")
     return IndependenceWhy(
         n_fetches=len(fetches or []),
-        independent_keys=sorted(keys),
+        independent_keys=sorted(str(k) for k in keys),
         n_independent=len(keys),
         collapses=collapses)
 
 
-def explain_result(result: PipelineResult,
-                   ledger: Optional[ProvenanceLedger] = None,
-                   descendant_resolutions: Optional[list] = None) -> WhyExplanation:
+# ═════════════════════════════════════════════════════════════════════════
+# The walker
+# ═════════════════════════════════════════════════════════════════════════
+
+
+def explain_result(result, ledger=None,
+                   descendant_resolutions=None) -> WhyExplanation:
     """Walk a pipeline result's whole scoring chain and assemble the answer.
 
     Pure read: nothing passed in is mutated, nothing is written anywhere.
+    ``ledger`` is the run's ProvenanceLedger (for replaying per-item class
+    assignments); without it the recorded classes are reported but marked
+    as unreplayable.
     """
-    from agp import ConfidenceTier
-
-    session = result.session
     answered = [l for l in result.leaves if l.answer]
     proposed = max((l.confidence for l in answered), default=0.0)
 
     # ── evidence ──
     evidence_whys: list[EvidenceWhy] = []
     best_class_value = "INFERRED"
-    if session is not None:
-        for i, ev in enumerate(session.evidence):
+    if result.session is not None:
+        for i, ev in enumerate(result.session.evidence):
             label = ev.source_name or f"evidence#{i}"
             cls_val, reason = assignment_reason(ev.content, ledger)
             if not cls_val:
-                # No ledger to replay: report the class the pipeline
-                # recorded, honestly marked as not independently replayed.
-                cls_val = getattr(ev.source_class, "value", str(ev.source_class))
+                cls_val = getattr(ev.source_class, "value",
+                                  str(ev.source_class))
                 reason = ("as recorded by the pipeline at ingestion; no "
                           "provenance ledger supplied to replay the decision")
             evidence_whys.append(EvidenceWhy(
@@ -407,8 +409,8 @@ def explain_result(result: PipelineResult,
 
     # ── ceilings ──
     ceilings: list[CeilingWhy] = []
-    src_cap = MAX_CONFIDENCE_BY_SOURCE.get(best_class_value,
-                                           MAX_CONFIDENCE_NO_TOOL)
+    src_cap = MAX_CONFIDENCE_BY_SOURCE.get(
+        best_class_value, MAX_CONFIDENCE_NO_TOOL)
     ceilings.append(CeilingWhy(
         kind="source_class", value=src_cap,
         detail=(f"best provenance-assigned evidence class is "
@@ -420,7 +422,7 @@ def explain_result(result: PipelineResult,
             detail=("evidence requirements unmet on some leaf: "
                     + "; ".join(reasons))))
     inh_cap = inherited_ceiling(descendant_resolutions or [])
-    n_resolved = len([r for r in (descendant_resolutions or [])])
+    n_resolved = len(list(descendant_resolutions or []))
     inh_detail = (f"{n_resolved} resolved descendant(s) feed the inheritance "
                   f"rule; ceiling from their track record is {inh_cap:.2f}")
     if n_resolved < MIN_RESOLVED_FOR_LIFT:
@@ -433,32 +435,27 @@ def explain_result(result: PipelineResult,
     objection_whys: list[ObjectionWhy] = []
     total_penalty = 0.0
     veto_text = ""
-    statuses: dict[str, str] = {}
-    if session is not None:
-        try:
-            for ob in (pipeline_adversary_ledger_statuses(result) or {}).values():
-                statuses[ob[0]] = ob[1]
-        except Exception:  # noqa: BLE001 — status enrichment is best-effort
-            statuses = {}
+    statuses = pipeline_adversary_ledger_statuses(result)
     for ob in result.objections or []:
         pen = getattr(ob, "penalty", 0.0)
         blocking = bool(getattr(ob, "is_blocking", False))
         total_penalty += 0.0 if blocking else pen
+        text = getattr(ob, "text", "")
         if blocking and not veto_text:
-            veto_text = getattr(ob, "text", "")
+            veto_text = text
         objection_whys.append(ObjectionWhy(
-            text=getattr(ob, "text", str(ob)),
+            text=text,
             kind=getattr(ob, "kind", "unspecified"),
             severity=getattr(ob, "severity", "?"),
             penalty=pen, veto=blocking,
-            status=statuses.get(getattr(ob, "text", ""), "")))
+            status=statuses.get(text, "")))
     total_penalty = round(total_penalty, 4)
 
     # ── independence + rejections ──
-    independence = _independence_from_fetches(list(result.fetches or []))
-    rejected = _parse_rejections(result.notes or [])
+    independence = independence_from_fetches(list(result.fetches or []))
+    rejected = parse_rejections(result.notes or [])
 
-    # ── the arithmetic walk (display-only recomputation of the same mins) ──
+    # ── the arithmetic walk (display-only replay of the same mins/minus) ──
     steps: list[StepWhy] = []
     cur = proposed
     if proposed > 0:
@@ -466,14 +463,17 @@ def explain_result(result: PipelineResult,
         if after < cur - 1e-9:
             steps.append(StepWhy(
                 stage="source-class clamp", before=cur, after=after,
-                rule=f"min(proposed, {best_class_value} ceiling {src_cap:.2f})"))
+                rule=f"min(proposed, {best_class_value} ceiling "
+                     f"{src_cap:.2f})"))
             cur = after
-        gate = next((c for c in ceilings if c.kind == "requirement_gate"), None)
+        gate = next((c for c in ceilings if c.kind == "requirement_gate"),
+                    None)
         if gate is not None and cur > _REQUIREMENT_GATE_CAP:
             steps.append(StepWhy(
                 stage="evidence-requirement gate", before=cur,
                 after=_REQUIREMENT_GATE_CAP,
-                rule=f"unmet requirements cap at {_REQUIREMENT_GATE_CAP:.2f}"))
+                rule=f"unmet requirements cap at "
+                     f"{_REQUIREMENT_GATE_CAP:.2f}"))
             cur = _REQUIREMENT_GATE_CAP
         if inh_cap < cur - 1e-9:
             steps.append(StepWhy(
@@ -482,36 +482,41 @@ def explain_result(result: PipelineResult,
             cur = inh_cap
         if veto_text:
             steps.append(StepWhy(
-                stage="adversary veto", before=cur, after=result.confidence_score,
-                rule=f"BLOCKING objection vetoes the seal: \"{veto_text[:80]}\""))
+                stage="adversary veto", before=cur,
+                after=result.confidence_score,
+                rule=f'BLOCKING objection vetoes the seal: '
+                     f'"{veto_text[:80]}"'))
             cur = result.confidence_score
         elif total_penalty > 0:
             after = round(max(0.0, cur - total_penalty), 2)
             steps.append(StepWhy(
                 stage="adversary penalties", before=cur, after=after,
-                rule=f"-{total_penalty:.2f} across {len(objection_whys)} "
-                     "objection(s)"))
+                rule=f"-{total_penalty:.2f} across "
+                     f"{len(objection_whys)} objection(s)"))
             cur = after
-        floor_note = ""
-        if cur < DB_CONFIDENCE_FLOOR:
-            floor_note = (f" (below the DB floor {DB_CONFIDENCE_FLOOR}, "
-                          "which refuses rather than stores)")
+        if cur < DB_CONFIDENCE_FLOOR and result.refusal_reason \
+                and "floor" in result.refusal_reason:
             steps.append(StepWhy(
                 stage="db floor check", before=cur, after=cur,
-                rule=floor_note.strip()))
+                rule=(f"below the DB floor {DB_CONFIDENCE_FLOOR}, which "
+                      "refuses rather than stores")))
 
     # ── binding ceiling + the short answer ──
     numeric = [c.value for c in ceilings if c.value is not None]
-    binding_kind = ""
     if numeric:
         min_cap = min(numeric)
+        # Every ceiling sitting exactly at the effective minimum binds.
         for c in ceilings:
             if c.value == min_cap:
                 c.binding = True
-                binding_kind = c.kind
-                break
+        # The inheritance rule with too-few resolutions is a STRUCTURAL cap
+        # ("SPECULATIVE forever"), binding even when a lower numeric cap
+        # happens to sit beneath it.
+        n_res = len(list(descendant_resolutions or []))
+        if n_res < MIN_RESOLVED_FOR_LIFT:
+            next(c for c in ceilings if c.kind == "inheritance").binding = True
 
-    largest = _largest_constraint(steps, binding_kind, veto_text,
+    largest = _largest_constraint(steps, ceilings, veto_text,
                                   total_penalty, result, independence)
 
     return WhyExplanation(
@@ -520,7 +525,7 @@ def explain_result(result: PipelineResult,
         refusal_reason=result.refusal_reason,
         score=float(result.confidence_score),
         tier=str(result.confidence_tier),
-        proposed=round(proposed, 2),
+        proposed=floor_conf(proposed),
         evidence=evidence_whys,
         ceilings=ceilings,
         objections=objection_whys,
@@ -532,10 +537,9 @@ def explain_result(result: PipelineResult,
     )
 
 
-def _largest_constraint(steps: list[StepWhy], binding_kind: str,
+def _largest_constraint(steps: list[StepWhy], ceilings: list[CeilingWhy],
                         veto_text: str, total_penalty: float,
-                        result: PipelineResult,
-                        independence: IndependenceWhy) -> str:
+                        result, independence: IndependenceWhy) -> str:
     """The single sentence: this is X because Y."""
     q = result.root_query
     score = result.confidence_score
@@ -545,9 +549,25 @@ def _largest_constraint(steps: list[StepWhy], binding_kind: str,
                     f"BLOCKING objection — {veto_text}")
         return f'"{q}" was REFUSED: {result.refusal_reason}'
     if not steps:
+        # No drop anywhere: name the binding ceiling if one exists, else say
+        # nothing constrained it.
+        binding = [c for c in ceilings if c.binding]
+        if binding and score > 0:
+            names = ", ".join(sorted({c.kind for c in binding}))
+            vals = "/".join(f"{c.value:.2f}" for c in binding)
+            return (f'"{q}" is {score:.2f} because it is held at the '
+                    f"binding {names} ceiling ({vals}); the proposal never "
+                    "exceeded it.")
+        if binding:
+            names = ", ".join(sorted({c.kind for c in binding}))
+            return (f'"{q}" scored 0.00: the proposal itself was 0, with the '
+                    f"binding {names} ceiling in force.")
         return (f'"{q}" scores {score:.2f} because nothing constrained it '
                 "beyond the proposal itself.")
     biggest = max(steps, key=lambda s: s.drop)
+    if biggest.drop <= 1e-9:
+        return (f'"{q}" is {score:.2f} because every constraint already '
+                "applied left the proposal unchanged.")
     if biggest.stage == "adversary penalties":
         return (f'"{q}" is {score:.2f} because the adversary\'s objections '
                 f"subtracted {total_penalty:.2f} — the largest single "
@@ -557,10 +577,9 @@ def _largest_constraint(steps: list[StepWhy], binding_kind: str,
                 "at the track-record ceiling of its resolved descendants.")
     if biggest.stage == "evidence-requirement gate":
         return (f'"{q}" is {score:.2f} because its evidence requirements were '
-                f"unmet (capped at {_REQUIREMENT_GATE_CAP:.2f}); "
-                f"independence counted {independence.n_independent} "
-                f"independent source(s) from {independence.n_fetches} "
-                "fetches.")
+                f"unmet (capped at {_REQUIREMENT_GATE_CAP:.2f}); independence "
+                f"counted {independence.n_independent} independent source(s) "
+                f"from {independence.n_fetches} fetch(es).")
     if biggest.stage == "source-class clamp":
         return (f'"{q}" is {score:.2f} because its best evidence never rose '
                 "above a source class whose provenance ceiling sits below "
@@ -571,19 +590,19 @@ def _largest_constraint(steps: list[StepWhy], binding_kind: str,
             f"(-{biggest.drop:.2f}).")
 
 
-def pipeline_adversary_ledger_statuses(result: PipelineResult) -> dict:
-    """Best-effort objection statuses from the run's dissent ledger.
+def pipeline_adversary_ledger_statuses(result) -> dict:
+    """Best-effort objection statuses from the dissent ledger.
 
-    Returns {objection_text: (text, status)}. Only works when the pipeline's
-    adversary ledger is reachable and contains this session id; absence is
-    normal for stored claims and simply leaves statuses blank.
+    Returns {objection_text: status}. Only reads the state-dir JSONL when it
+    exists; absence is normal for stored claims and simply leaves statuses
+    blank. Never raises.
     """
-    out: dict[str, tuple[str, str]] = {}
-    session = result.session
+    out: dict = {}
+    session = getattr(result, "session", None)
     if session is None:
         return out
-    try:  # the engine does not retain its AdversaryLedger on the result;
-         # look for a state-dir ledger only if explicitly cheap to reach.
+    try:
+        import json
         import os
         state_dir = os.environ.get(
             "CALLISTO_STATE_DIR",
@@ -591,8 +610,7 @@ def pipeline_adversary_ledger_statuses(result: PipelineResult) -> dict:
         path = os.path.join(state_dir, "adversary_dissent.jsonl")
         if not os.path.exists(path):
             return out
-        import json
-        want = session.session_id
+        want = getattr(session, "session_id", "")
         with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -604,15 +622,14 @@ def pipeline_adversary_ledger_statuses(result: PipelineResult) -> dict:
                     continue
                 if rec.get("claim_id") != want:
                     continue
-                out[rec.get("text", "")] = (
-                    rec.get("text", ""), rec.get("status", ""))
+                out[rec.get("text", "")] = rec.get("status", "")
     except Exception:  # noqa: BLE001 — enrichment must never break explaining
         return {}
     return out
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# Stored-claim seam: explain from the machine-readable dict alone
+# Stored-claim seam: rehydrate from the machine-readable dict alone
 # ═════════════════════════════════════════════════════════════════════════
 
 
@@ -620,18 +637,18 @@ def explain_stored(payload: dict) -> WhyExplanation:
     """Rehydrate a WhyExplanation from its to_dict() form.
 
     This is how the same explanation attaches to a stored claim: store
-    ``why.to_dict()`` beside the seal, reload it here weeks later, and the
+    ``why.to_dict()`` beside the seal, reload it weeks later, and the
     plain-language rendering survives intact.
     """
     independence = None
     if payload.get("independence"):
         ind = payload["independence"]
         independence = IndependenceWhy(
-            n_fetches=ind.get("n_fetches", 0),
+            n_fetches=int(ind.get("n_fetches", 0)),
             independent_keys=list(ind.get("independent_keys", [])),
-            n_independent=ind.get("n_independent", 0),
+            n_independent=int(ind.get("n_independent", 0)),
             collapses=list(ind.get("collapses", [])))
-    return WhyExplanation(
+    _expl = WhyExplanation(
         root_query=payload.get("root_query", ""),
         sealed=bool(payload.get("sealed")),
         refusal_reason=payload.get("refusal_reason", ""),
@@ -643,7 +660,30 @@ def explain_stored(payload: dict) -> WhyExplanation:
         objections=[ObjectionWhy(**o) for o in payload.get("objections", [])],
         total_penalty=float(payload.get("adversary_total_penalty", 0.0)),
         independence=independence,
-        rejected=[RejectedWhy(**r) for r in payload.get("rejected_at_ingestion", [])],
-        steps=[StepWhy(**s) for s in payload.get("score_walk", [])],
+        rejected=[RejectedWhy(**r)
+                  for r in payload.get("rejected_at_ingestion", [])],
+        steps=[StepWhy(**{k: v for k, v in s.items()
+                         if k in StepWhy.__dataclass_fields__})
+               for s in payload.get("score_walk", [])],
         largest_constraint=payload.get("largest_constraint", ""),
     )
+    expl = _expl
+    if not expl.largest_constraint:
+        # Older payloads may lack the short answer; regenerate it from
+        # whatever sections survived storage.
+        expl.largest_constraint = _largest_constraint(
+            expl.steps, expl.ceilings,
+            next((o.text for o in expl.objections if o.veto), ""),
+            expl.total_penalty,
+            _StoredShim(expl), expl.independence or IndependenceWhy(0, [], 0, []))
+    return expl
+
+
+class _StoredShim:
+    """Minimal .root_query/.sealed/.refusal_reason/.confidence_score view."""
+
+    def __init__(self, expl: WhyExplanation):
+        self.root_query = expl.root_query
+        self.sealed = expl.sealed
+        self.refusal_reason = expl.refusal_reason
+        self.confidence_score = expl.score

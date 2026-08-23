@@ -30,6 +30,7 @@ implementation can feed it without importing this module.
 
 from __future__ import annotations
 
+from agp.thresholds import floor_conf
 import math
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -264,5 +265,5 @@ def clamp_parent_confidence(raw_score: float,
     """
     raw = max(0.0, min(1.0, float(raw_score)))
     ceil_ = inherited_ceiling(descendant_resolutions)
-    clamped = round(min(raw, ceil_), 2)
+    clamped = floor_conf(min(raw, ceil_))
     return clamped, tier_ceiling_from_score(clamped)

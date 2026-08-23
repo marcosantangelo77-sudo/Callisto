@@ -17,6 +17,7 @@ findings/instance4.md as a PROPOSAL (orchestrator.py is read-only for this
 instance).
 """
 
+from agp.thresholds import floor_conf
 import hashlib
 import re
 from dataclasses import dataclass, field
@@ -139,7 +140,7 @@ def clamp_confidence_provenance(score: float, source_class: SourceClass,
                                 max_by_source: dict[str, float]) -> float:
     """Clamp to the ceiling of the PROVENANCE-assigned class, not the declared one."""
     score = max(0.0, min(1.0, float(score)))
-    return round(min(score, max_by_source.get(source_class.value, 0.55)), 2)
+    return floor_conf(min(score, max_by_source.get(source_class.value, 0.55)))
 
 
 def relabel_evidence(evidence_list: "Iterable[Evidence]",
@@ -161,7 +162,15 @@ def relabel_evidence(evidence_list: "Iterable[Evidence]",
         if rank.get(assigned.value, 0) < rank.get(ev.source_class.value, 0):
             demoted += 1
         ev.source_class = assigned
-        conf = max(floor, min(float(ev.confidence_score),
+        # NEVER let the DB floor RAISE a score. max(floor, ...) applied to an
+        # already-lower confidence turns a DEMOTION into an increase — a red
+        # team found relabel_evidence pushing 0.05 up to 0.30. The floor exists
+        # to satisfy a DB CHECK, not to improve a claim: clamp downward to the
+        # class ceiling, and only apply the floor where it cannot exceed what
+        # the item already had.
+        prior = float(ev.confidence_score)
+        conf = min(prior, min(float(ev.confidence_score),
                               max_by_source.get(assigned.value, 0.55)))
-        ev.confidence_score = round(conf, 2)
+        ev.confidence_score = floor_conf(min(prior, max(floor, conf))
+                                 if prior >= floor else min(prior, conf))
     return demoted
