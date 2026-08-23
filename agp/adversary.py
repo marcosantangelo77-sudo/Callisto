@@ -275,20 +275,29 @@ class AdversaryLedger:
                     self._append(ob)
 
     # ── queries ──
+    def _latest(self) -> list[AdversaryObjection]:
+        """Replay the journal taking the LAST entry per objection.
+
+        Statuses and resolutions are recorded by APPENDING an updated copy of
+        the record; the in-memory dict already reflects that, but a freshly
+        loaded one would see every historical copy as a separate objection
+        (and the earliest copy's stale RAISED/PENDING state). Last-wins replay
+        is the single correct read of the append-only format, and every
+        query below goes through this so in-memory and reloaded ledgers
+        report identically. (This logic previously existed only in
+        agp.human_critic, which could not fix the ledger's own methods.)
+        """
+        latest: dict[tuple, AdversaryObjection] = {}
+        for obs in self._objections.values():
+            for ob in obs:
+                latest[(ob.claim_id, ob.created_at, ob.text)] = ob
+        return list(latest.values())
+
     def objections_for(self, claim_id: str) -> list[AdversaryObjection]:
         return list(self._objections.get(claim_id, []))
 
     def all_resolved(self) -> list[AdversaryObjection]:
-        out = []
-        seen = set()
-        for obs in self._objections.values():
-            for ob in obs:
-                key = (ob.claim_id, ob.created_at, ob.text)
-                if key in seen:
-                    continue  # later appends supersede earlier lines
-                seen.add(key)
-                out.append(ob)
-        return [o for o in out if o.outcome]
+        return [o for o in self._latest() if o.outcome]
 
     def calibration(self) -> dict:
         """Track-record summary: is the critic too harsh, too soft, or honest?
@@ -299,12 +308,15 @@ class AdversaryLedger:
         Also reports volume so 'critic says nothing' shows up as n=0, not as
         a flattering ratio.
         """
-        resolved = self.all_resolved()
+        latest = self._latest()
+        resolved = [o for o in latest if o.outcome]
         scored = [o for o in resolved if o.outcome in ("RIGHT", "WRONG")]
         right = sum(1 for o in scored if o.outcome == "RIGHT")
-        total_raised = len({id(o) for obs in self._objections.values() for o in obs})
-        sustained = sum(1 for obs in self._objections.values()
-                        for o in obs if o.status == "SUSTAINED")
+        # Count DISTINCT objections, not journal lines: every status update
+        # appends a new copy, so summing raw entries inflated this number by
+        # the lifecycle length (3 copies for raise->overrule->resolve).
+        total_raised = len(latest)
+        sustained = sum(1 for o in latest if o.status == "SUSTAINED")
         return {
             "n_raised": total_raised,
             "n_sustained": sustained,

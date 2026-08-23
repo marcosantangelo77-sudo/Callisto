@@ -265,31 +265,12 @@ class HumanCritic:
 
     # ── calibration ──
     def _latest(self) -> list[AdversaryObjection]:
-        """Replay this critic's lines from the shared JSONL taking the LAST
-        entry per objection (status/resolution are recorded by appending an
-        updated copy). AdversaryLedger.all_resolved keeps the FIRST copy,
-        which drops lifecycle updates on reload — we cannot edit that module,
-        so the human side replays correctly here."""
-        latest: dict[tuple, AdversaryObjection] = {}
-        try:
-            with open(self.ledger.path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        rec = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if rec.get("model") != self.key:
-                        continue
-                    ob = AdversaryObjection(**{
-                        k: v for k, v in rec.items()
-                        if k in AdversaryObjection.__dataclass_fields__})
-                    latest[(ob.claim_id, ob.created_at, ob.text)] = ob
-        except FileNotFoundError:
-            pass
-        return list(latest.values())
+        """This critic's objections, replayed last-wins from the shared
+        ledger. AdversaryLedger._latest now provides exactly this read for
+        every model key; delegating keeps one implementation of the
+        append-only format instead of two that could drift."""
+        return [o for o in self.ledger._latest()
+                if o.model == self.key]
 
     def my_resolved(self, domain: Optional[str] = None):
         out = []
