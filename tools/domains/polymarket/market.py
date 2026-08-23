@@ -287,19 +287,43 @@ class PolymarketAdapter:
                 "yes_ask": yes_book["best_ask"]}
         return quote, meta
 
+    # Impossible prices are clamped inside this band so a garbage feed can
+    # never reach the devig with a negative or zero-sum pair of offers.
+    _PRICE_FLOOR = 0.001
+
     @staticmethod
     def quote_from_book(yes_bid: float, yes_ask: float, *, m=None):
-        """MarketQuote from a two-sided YES book (pure; unit-testable)."""
+        """MarketQuote from a two-sided YES book (pure; unit-testable).
+
+        H1c/H4a (red team): a CROSSED book (bid > ask — data glitch or race)
+        used to pass straight through: yes_ask + no_ask then sums BELOW 1.0,
+        the devig sees negative overround, and reports a fair probability
+        ABOVE the ask — free money manufactured out of a broken book. A
+        crossed input is instead read as the only self-consistent wide book
+        (sorted), impossible prices are clamped into (0,1), and the repair
+        is flagged in the returned meta so callers can reject the feed.
+        """
         from tools.edge import MarketQuote
 
-        no_ask = round(1.0 - float(yes_bid), 6)
+        yb, ya = float(yes_bid), float(yes_ask)
+        meta = {"yes_bid": yes_bid, "yes_ask": yes_ask}
+        if yb > ya:
+            yb, ya = ya, yb
+            meta["crossed_input_repaired"] = True
+        floor = PolymarketAdapter._PRICE_FLOOR
+        if yb < floor or yb > 1 - floor or ya < floor or ya > 1 - floor:
+            yb = min(max(yb, floor), 1 - floor)
+            ya = min(max(ya, floor), 1 - floor)
+            meta["prices_clamped"] = True
+        no_ask = round(1.0 - yb, 6)
+        meta["no_ask"] = no_ask
         return MarketQuote(
-            price=float(yes_ask),
+            price=ya,
             counter_price=no_ask,
             kind="probability",
             source="polymarket",
             as_of=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        ), {"yes_bid": yes_bid, "yes_ask": yes_ask, "no_ask": no_ask}
+        ), meta
 
     # ── outcome scoring (tools/resolvers/base.py shape) ──────────────────
 
