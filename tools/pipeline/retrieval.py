@@ -427,7 +427,9 @@ class IterativeRetriever:
                     question.text, question_type, fetched)
                 fr = _mk_fetch(spec.name, getattr(source.last_record,
                                                   "url", ""),
-                               body, fetched, question.question_id, _sha)
+                               body, fetched, question.question_id, _sha,
+                               fetched_at=getattr(source.last_record,
+                                                  "fetched_at", None))
                 if not ok:
                     trace.rejected.append(RejectedItem(
                         source_name=spec.name,
@@ -478,11 +480,13 @@ class IterativeRetriever:
         return trace
 
 
-def _mk_fetch(source_name, url, body, parsed, question_id, sha_fn):
+def _mk_fetch(source_name, url, body, parsed, question_id, sha_fn,
+              fetched_at=None):
     from tools.pipeline.engine import FetchResult
     return FetchResult(source_name=source_name, url=url,
                        content_sha256=sha_fn(body), body=body,
-                       parsed=parsed, question_id=question_id)
+                       parsed=parsed, question_id=question_id,
+                       fetched_at=fetched_at)
 
 
 def _titles(parsed: Any) -> list[str]:

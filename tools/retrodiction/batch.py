@@ -133,6 +133,10 @@ class BatchResult:
     sealed: bool = False
     refusal_reason: str = ""
     n_fetches: int = 0
+    #: MEASUREMENT ONLY — {oldest_evidence_age_s, newest_evidence_age_s,
+    #: median_evidence_age_s, n_evidence_records, acquisition_window_s} at
+    #: seal time. Nothing downstream adjusts confidence on it.
+    evidence_age: dict = field(default_factory=dict)
     objections: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     error: str = ""
@@ -268,6 +272,25 @@ class RetrodictionBatch:
             result.sealed = bool(getattr(r, "sealed", False))
             result.refusal_reason = str(getattr(r, "refusal_reason", "") or "")
             result.n_fetches = len(getattr(r, "fetches", []) or [])
+            # Prefer the pipeline's own seal-time measurement; fall back to
+            # the harness-side computation over the run trace if present.
+            result.evidence_age = dict(getattr(r, "evidence_age", None) or {})
+            if not result.evidence_age:
+                from tools.retrodiction.evidence_age import compute_spread
+                stamps = []
+                for f in (getattr(r, "fetches", []) or []):
+                    raw = getattr(f, "fetched_at", None)
+                    if not raw:
+                        continue
+                    try:
+                        from datetime import datetime as _dt
+                        stamps.append(_dt.fromisoformat(
+                            str(raw).replace("Z", "+00:00")))
+                    except ValueError:
+                        continue
+                spread = compute_spread(stamps)
+                if spread is not None:
+                    result.evidence_age = spread.to_dict()
             result.objections = [getattr(o, "text", str(o))
                                  for o in (getattr(r, "objections", []) or [])]
             result.notes = list(getattr(r, "notes", []) or [])

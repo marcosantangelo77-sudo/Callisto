@@ -79,6 +79,10 @@ class RunResult:
     n_scored: int
     n_evidence_admitted: int = 0
     n_evidence_rejected: int = 0
+    # MEASUREMENT ONLY: age of the admitted evidence at run time (oldest /
+    # newest / median, seconds) + the acquisition window. No confidence path
+    # reads this. Absent when the arm ran with zero evidence.
+    evidence_age: dict = field(default_factory=dict)
     predictions: list = field(default_factory=list)
     # Paired permutation result vs the other arm (two-arm run_ab only).
     significance: dict = field(default_factory=dict)
@@ -91,6 +95,8 @@ class RunResult:
             "evidence": {"admitted": self.n_evidence_admitted,
                          "rejected": self.n_evidence_rejected},
         }
+        if self.evidence_age:
+            s["evidence_age"] = self.evidence_age
         if self.significance:
             s["significance"] = self.significance
         return s
@@ -112,10 +118,13 @@ def _run_arm(config: RunConfig, questions, evidence_records) -> RunResult:
     prompts = [q.prompt_for_researcher() for q in questions]
     predictions = researcher.answer(prompts, admitted, loops=config.loops)
     brier = score_brier(predictions, questions)
+    from tools.retrodiction.evidence_age import compute_spread
+    spread = compute_spread(r.fetched_at for r in admitted) or None
     return RunResult(
         config_label=config.label, axes=dict(config.axes), loops=config.loops,
         brier=brier, n_scored=len(predictions),
         n_evidence_admitted=len(admitted), n_evidence_rejected=len(rejected),
+        evidence_age=(spread.to_dict() if spread else {}),
         predictions=predictions)
 
 

@@ -86,6 +86,11 @@ class FetchResult:
     body: str
     parsed: Any
     question_id: str
+    #: When THIS fetch happened (UTC ISO string). Previously dropped here even
+    #: though RestSource recorded it — so no downstream conclusion could state
+    #: how old its evidence was at seal time. Measurement only; nothing in the
+    #: confidence path reads this.
+    fetched_at: Optional[str] = None
 
 
 @dataclass
@@ -131,6 +136,11 @@ class PipelineResult:
     #: present only when a checkpointer was injected — records which stages
     #: were resumed vs fresh, so stale evidence is visible to the caller.
     trace: Optional[ckpt.RunTrace] = None
+    #: MEASUREMENT ONLY — age of this run's evidence at seal time (oldest /
+    #: newest / median, seconds). No confidence, gate, or penalty reads it.
+    #: A conclusion must be able to state how old its evidence was; that is
+    #: all this is. None when the run had no fetches or was never sealed.
+    evidence_age: Optional[dict] = None
 
     def summary_dict(self) -> dict:
         return {
@@ -142,6 +152,7 @@ class PipelineResult:
             "tier": self.confidence_tier,
             "n_leaves": len(self.leaves),
             "n_fetches": len(self.fetches),
+            "evidence_age": self.evidence_age,
             "artifacts": [r.sha256[:12] for r in self.artifact_refs],
             "objections": [getattr(o, "text", str(o)) for o in self.objections],
         }
@@ -643,6 +654,23 @@ class ResearchPipeline:
         result.confidence_tier = tier
         result.artifact_refs = list(self.artifact_refs)
         result.trace = trace
+        # Record how old the evidence was AT SEAL — the run's first honest
+        # statement of evidence age. Purely a measurement: nothing downstream
+        # adjusts confidence on it.
+        from datetime import datetime as _dt
+        from tools.retrodiction.evidence_age import compute_spread
+        stamps = []
+        for f in result.fetches:
+            raw = getattr(f, "fetched_at", None)
+            if not raw:
+                continue
+            try:
+                stamps.append(_dt.fromisoformat(str(raw).replace("Z", "+00:00")))
+            except ValueError:
+                continue  # unparseable stamp: excluded, never assumed fresh
+        spread = compute_spread(stamps)
+        if spread is not None:
+            result.evidence_age = spread.to_dict()
         for ob in objections:
             self.adversary.ledger.record_overrule(
                 session.session_id, ob.text,
@@ -690,7 +718,8 @@ def _fetch_from_payload(rec: dict) -> FetchResult:
     return FetchResult(source_name=rec["source_name"], url=rec["url"],
                        content_sha256=rec["content_sha256"],
                        body=rec["body"], parsed=parsed,
-                       question_id=rec["question_id"])
+                       question_id=rec["question_id"],
+                       fetched_at=rec.get("fetched_at"))
 
 
 def _leaf_from_payload(d: dict) -> LeafOutcome:
