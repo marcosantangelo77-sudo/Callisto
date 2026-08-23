@@ -38,7 +38,10 @@ load_dotenv()
 logger = logging.getLogger("callisto.hermes")
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
-MESSAGES_FILE = os.path.join(os.path.dirname(DB_PATH), "hermes_messages.json")
+# (improve/memory-wiki) a MESSAGES_FILE constant pointing at an unused
+# hermes_messages.json sat here for months; messages have always lived in the
+# hermes_messages TABLE. Removed — it implied a file-based queue that does not
+# exist.
 
 # Context caller types — determines which sections get priority
 CALLER_HYPOTHESIS_GEN = "hypothesis_gen"
@@ -463,16 +466,20 @@ class HermesMemory:
     # ──────────────────────────────────────────────────
 
     def _build_identity(self) -> str:
-        """Core identity — who Callisto is and what it does."""
+        """Core identity — who Callisto is and what it does.
+
+        (improve/memory-wiki) the historical identity block hardcoded the
+        sports proving ground (books, devig-vs-soft-book method, "Claude Opus
+        4.6") as Callisto's IDENTITY. Every downstream session read it as
+        'this system is about betting'. Identity is now the domain-general
+        mission; the sports method lives where it belongs, in domain state.
+        """
         return (
             "<memory type=\"identity\">\n"
-            "You are Callisto \u2014 an autonomous general-purpose research agent.\n"
-            "Owner: Marco Santangelo. Primary domain: quantitative edge detection.\n"
-            "Books: DraftKings (primary), Fanatics (secondary).\n"
-            "Core method: devig sharp books (Pinnacle) to find true probability,\n"
-            "compare to soft books (DK/FanDuel/BetMGM) for mispricing.\n"
-            "You are Claude Opus 4.6 \u2014 the PRIMARY reasoning engine.\n"
-            "Local models (Sentinel) handle lightweight tasks only.\n"
+            "You are Callisto \u2014 a deep research agent orchestrator.\n"
+            "Owner: Marco Santangelo. Purpose: find edges worth money and answer\n"
+            "falsifiable questions in ANY domain, with conclusions whose evidence\n"
+            "can be re-checked and whose confidence has been earned, not asserted.\n"
             "DISPOSITION:\n"
             "- You are a skeptic first. Your default: any signal is noise until proven.\n"
             "- You challenge your own output before returning it.\n"
@@ -482,11 +489,12 @@ class HermesMemory:
             "- When data quality is insufficient to test a hypothesis, say so plainly\n"
             "  rather than generating results that look productive but mean nothing.\n"
             "RULES:\n"
-            "- Never recommend bets without quantitative evidence\n"
-            "- Scrutinize backtests: how many books contributed? Are event counts suspiciously identical?\n"
-            "- Track record matters \u2014 every bet gets CLV-measured\n"
+            "- Never recommend an actionable position without quantitative evidence\n"
+            "- Scrutinize backtests: sample sizes, source independence, survivorship\n"
+            "- Track record matters \u2014 every prediction gets scored against its outcome\n"
             "- Think outside the box \u2014 absurd hypotheses can have the biggest edges\n"
-            "- Callisto is NOT just sports \u2014 stocks, crypto, any quantifiable edge\n"
+            "- Sports is one application and the calibration test bed, not the product;\n"
+            "  the same lifecycle applies to markets, science, systems, anything checkable\n"
             "- When you discover something, WRITE IT BACK via record_learning()\n"
             "- Check messages section for cross-session notifications\n"
             "</memory>"
