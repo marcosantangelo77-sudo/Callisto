@@ -157,6 +157,23 @@ def public_endpoint(method: str, path: str) -> None:
     """
     _PUBLIC_WRITE_ENDPOINTS.add((method.upper(), path))
 
+
+def _cap_limit(raw: int, default: int = 50, cap: int = 500) -> int:
+    """Clamp a user-supplied ``limit`` query parameter to [1, cap].
+
+    SQLite treats ``LIMIT -1`` as unlimited and accepts arbitrarily large
+    positive limits, so an unclamped ``?limit=99999999`` (or the negative
+    form) turns any list endpoint into a full-table materialisation —
+    gigabytes on well-populated tables. Same defence /world/{domain} got in
+    the 2026-04-21 audit; applied at every endpoint that takes a limit.
+    Non-numeric input is coerced by FastAPI's int type; this only bounds it.
+    """
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(value, cap))
+
 # Shared state
 memory: Optional[MemoryStore] = None
 queue: Optional[TaskQueue] = None
@@ -1458,6 +1475,7 @@ async def wiki_stats():
 @app.get("/wiki/articles")
 async def wiki_articles(domain: Optional[str] = None, limit: int = 50):
     """List wiki articles, optionally filtered by domain."""
+    limit = _cap_limit(limit)
     from tools.knowledge_wiki import get_wiki
     wiki = get_wiki()
     async with aiosqlite.connect(memory.db_path) as db:
@@ -1482,6 +1500,7 @@ async def wiki_article(topic: str):
 @app.get("/wiki/search")
 async def wiki_search(q: str, limit: int = 10):
     """Search wiki articles by keyword."""
+    limit = _cap_limit(limit)
     from tools.knowledge_wiki import get_wiki
     wiki = get_wiki()
     async with aiosqlite.connect(memory.db_path) as db:
@@ -1506,6 +1525,7 @@ async def wiki_contradictions(unresolved_only: bool = True):
 @app.get("/odds/movements")
 async def get_movements(sport: Optional[str] = None, limit: int = 20):
     """Get recent line movements detected by the monitor."""
+    limit = _cap_limit(limit)
     movements = await line_monitor.get_recent_movements(sport=sport, limit=limit)
     return {"count": len(movements), "movements": movements}
 
@@ -1513,6 +1533,7 @@ async def get_movements(sport: Optional[str] = None, limit: int = 20):
 @app.get("/odds/opportunities")
 async def get_opportunities(status: str = "open", limit: int = 20):
     """Get current +EV betting opportunities."""
+    limit = _cap_limit(limit)
     opps = await line_monitor.get_ev_opportunities(status=status, limit=limit)
     return {"count": len(opps), "opportunities": opps}
 
@@ -1520,6 +1541,7 @@ async def get_opportunities(status: str = "open", limit: int = 20):
 @app.get("/odds/snapshots/{sport}")
 async def get_snapshots(sport: str, limit: int = 10):
     """Get snapshot history for a sport."""
+    limit = _cap_limit(limit)
     snaps = await line_monitor.get_snapshot_history(sport=sport, limit=limit)
     return {"sport": sport, "count": len(snaps), "snapshots": snaps}
 
@@ -1560,6 +1582,7 @@ async def get_live_edges(
     placement_book) — consensus fair, placement fair, raw edge, effective
     edge after penalties, and per-penalty breakdown for transparency.
     """
+    limit = _cap_limit(limit)
     import json as _json
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA busy_timeout = 30000")
@@ -1650,6 +1673,7 @@ async def get_kl_metrics(sport: Optional[str] = None, limit: int = 50):
     High KL = significant price discovery (sharp info flowing in).
     Low KL = stale/unchanged lines (thin market, no information flow).
     """
+    limit = _cap_limit(limit)
     import aiosqlite
     db_path = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
     async with aiosqlite.connect(db_path) as db:
@@ -1984,21 +2008,23 @@ async def resolve_bet(bet_id: int, resolution: BetResolution):
     return await clv_tracker.resolve_bet(bet_id, resolution.result, resolution.payout)
 
 
-@app.get("/bets/clv-report")
+@app.get("/bets/clv-report", dependencies=[Depends(require_admin_or_loopback)])
 async def clv_report(sport: Optional[str] = None):
     """Get CLV performance report — THE metric for edge measurement."""
     return await clv_tracker.get_clv_report(sport=sport)
 
 
-@app.get("/bets")
+@app.get("/bets", dependencies=[Depends(require_admin_or_loopback)])
 async def list_bets(result: Optional[str] = None, sport: Optional[str] = None, limit: int = 50):
     """Get bet history."""
+    limit = _cap_limit(limit)
     return await clv_tracker.get_all_bets(result=result, sport=sport, limit=limit)
 
 
-@app.get("/bets/bankroll")
+@app.get("/bets/bankroll", dependencies=[Depends(require_admin_or_loopback)])
 async def bankroll_history(limit: int = 50):
     """Get bankroll balance history."""
+    limit = _cap_limit(limit)
     return await clv_tracker.get_bankroll_history(limit=limit)
 
 
@@ -2356,7 +2382,7 @@ async def line_analysis_endpoint(sport: str):
     }
 
 
-@app.get("/bets/clv-forecast")
+@app.get("/bets/clv-forecast", dependencies=[Depends(require_admin_or_loopback)])
 async def clv_forecast(sport: Optional[str] = None):
     """Forecast pre-game CLV for all pending bets using closing line prediction.
 
@@ -3133,14 +3159,14 @@ async def create_hypothesis(req: HypothesisCreate):
     return {"hypothesis_id": hid}
 
 
-@app.get("/hypothesis")
+@app.get("/hypothesis", dependencies=[Depends(require_admin_or_loopback)])
 async def list_hypotheses(status: Optional[str] = None):
     """List all hypotheses, optionally filtered by status."""
     hypotheses = await hypothesis_manager.list_hypotheses(status=status)
     return {"count": len(hypotheses), "hypotheses": hypotheses}
 
 
-@app.get("/hypothesis/{hypothesis_id}")
+@app.get("/hypothesis/{hypothesis_id}", dependencies=[Depends(require_admin_or_loopback)])
 async def get_hypothesis(hypothesis_id: str):
     """Get hypothesis details."""
     h = await hypothesis_manager.get_hypothesis(hypothesis_id)
@@ -3149,13 +3175,13 @@ async def get_hypothesis(hypothesis_id: str):
     return h
 
 
-@app.get("/hypothesis/{hypothesis_id}/report")
+@app.get("/hypothesis/{hypothesis_id}/report", dependencies=[Depends(require_admin_or_loopback)])
 async def hypothesis_report(hypothesis_id: str):
     """Full statistical report across all stages."""
     return await hypothesis_manager.get_hypothesis_report(hypothesis_id)
 
 
-@app.get("/hypothesis/{hypothesis_id}/significance")
+@app.get("/hypothesis/{hypothesis_id}/significance", dependencies=[Depends(require_admin_or_loopback)])
 async def hypothesis_significance(hypothesis_id: str, stage: str = "backtest"):
     """Run significance tests on a hypothesis at a given stage."""
     return await hypothesis_manager.evaluate_significance(hypothesis_id, stage)
@@ -3300,7 +3326,7 @@ async def run_backtest(req: BacktestRequest):
     )
 
 
-@app.get("/backtest/run/{run_id}")
+@app.get("/backtest/run/{run_id}", dependencies=[Depends(require_admin_or_loopback)])
 async def get_backtest_results(run_id: str):
     """Get backtest results for a run."""
     return await backtest_engine.get_run_results(run_id)
@@ -3312,7 +3338,7 @@ async def resolve_backtest(run_id: str, sport: str = "basketball_nba"):
     return await backtest_engine.resolve_with_scores(run_id, sport)
 
 
-@app.get("/historical/cache")
+@app.get("/historical/cache", dependencies=[Depends(require_admin_or_loopback)])
 async def historical_cache_stats():
     """Get historical odds cache statistics."""
     return await historical_fetcher.get_cache_stats()
@@ -3336,7 +3362,7 @@ async def fetch_historical(
 
 # ── Research Loop Endpoints ──
 
-@app.get("/research/status")
+@app.get("/research/status", dependencies=[Depends(require_admin_or_loopback)])
 async def research_status():
     """Get research loop status."""
     if not research_loop:
@@ -3453,14 +3479,14 @@ async def batch_reject_hypotheses(request: Request):
         await db.close()
 
 
-@app.get("/research/sports")
+@app.get("/research/sports", dependencies=[Depends(require_admin_or_loopback)])
 async def get_research_sports():
     """Get all researched sports — all compete equally."""
     from tools.autonomous import RESEARCH_SPORTS
     return {"sports": RESEARCH_SPORTS}
 
 
-@app.get("/embeddings/stats")
+@app.get("/embeddings/stats", dependencies=[Depends(require_admin_or_loopback)])
 async def embedding_stats(collection: Optional[str] = None):
     """Get embedding store statistics."""
     if not vector_store:
@@ -3886,6 +3912,7 @@ async def health_deep():
 @app.get("/health/integrity/history")
 async def integrity_history(limit: int = 50):
     """Get recent pipeline integrity check history."""
+    limit = _cap_limit(limit)
     try:
         checker = get_integrity_checker()
         history = await checker.get_history(limit=limit)
@@ -3895,7 +3922,7 @@ async def integrity_history(limit: int = 50):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/claude/status")
+@app.get("/claude/status", dependencies=[Depends(require_admin_or_loopback)])
 async def claude_status():
     """Get Claude Code availability and usage stats."""
     from tools.claude_code import get_usage_stats
@@ -4217,6 +4244,7 @@ async def debug_memory(_auth: None = Depends(require_admin)):
 @app.get("/debug/memory/top-traces")
 async def debug_memory_traces(limit: int = 10, _auth: None = Depends(require_admin)):
     """Show full stack traces for the top memory consumers."""
+    limit = _cap_limit(limit)
     if not tracemalloc.is_tracing():
         raise HTTPException(
             status_code=409,
@@ -4454,7 +4482,7 @@ async def _get_executor():
     return _executor
 
 
-@app.get("/executor/status")
+@app.get("/executor/status", dependencies=[Depends(require_admin_or_loopback)])
 async def executor_status():
     """Get bet executor status."""
     ex = await _get_executor()
@@ -4503,6 +4531,7 @@ async def executor_disable():
 @app.get("/orders", dependencies=[Depends(require_admin_or_loopback)])
 async def orders_list(state: Optional[str] = None, limit: int = 50):
     """List orders, optionally filtered by state."""
+    limit = _cap_limit(limit)
     if order_manager_instance is None:
         raise HTTPException(503, "order_manager not initialised")
     rows = await order_manager_instance.list_orders(state=state, limit=limit)
