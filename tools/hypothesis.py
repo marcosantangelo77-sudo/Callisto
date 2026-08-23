@@ -111,6 +111,31 @@ try:
 except (TypeError, ValueError):
     FWER_LOOKBACK_DAYS = 365.0
 
+# FWER family scope — WHAT the denominator counts. See findings/sidak_scope.md
+# for the full argument; summary: a multiple-comparisons correction bounds a
+# joint error rate, and that rate is only meaningful over the set of tests whose
+# results are consumed together in one inference. That set is the *decision
+# cohort* (hypotheses evaluated within the rolling lookback window), not every
+# hypothesis ever tested. A lifetime family makes rigor a decreasing function
+# of engine activity — a ratchet with no consumer of its claim.
+#
+#   window   (default) DISTINCT hyps evaluated within CALLISTO_FWER_LOOKBACK_DAYS
+#   sport    same, intersected with the candidate's sport (cross-sport error
+#            pooling has no consumer)
+#   lifetime pre-2026-08 behavior: everything ever backtested. Retained as an
+#            explicit opt-in for reviewability; never the default.
+#
+# This re-scopes the FAMILY on an argued basis. It does not touch α_family,
+# base thresholds, adaptive thresholds, or any floor. Nothing automated may
+# change this value; it is config-only and must change only via reviewed commit.
+FWER_SCOPE_RAW = os.getenv("CALLISTO_FWER_SCOPE", "window").strip().lower()
+if FWER_SCOPE_RAW not in ("window", "sport", "lifetime"):
+    raise ValueError(
+        f"CALLISTO_FWER_SCOPE={FWER_SCOPE_RAW!r} invalid; "
+        "expected 'window' | 'sport' | 'lifetime'"
+    )
+FWER_SCOPE: str = FWER_SCOPE_RAW
+
 # Portfolio correlation: reject LIVE promotion if candidate's signals overlap
 # >X% with an existing LIVE hypothesis's signals on the same events
 # (correlated signals = non-independent bets).
@@ -1136,18 +1161,17 @@ class HypothesisManager:
                 f"Hypothesis {hypothesis_id}: adaptive p-value threshold "
                 f"{max_p:.2f} (base={base_p:.2f}, n={n})"
             )
-        # SECURITY (audit H-5 + 2026-04-22 FWER fix): apply a Šidák family-wise
-        # correction against the **lifetime** pool of hypotheses that were ever
-        # backtested in the lookback window.  Every ever-tested hypothesis
-        # represents a multiple-comparison opportunity for a false positive,
-        # not just currently-active ones.  With ~4600 lifetime hypotheses and
-        # α_family = 0.05 the per-hypothesis α is ~1.1e-5; this is correct and
-        # the floor at 0.001 (pre-audit) was masking the true FWER.
+        # SECURITY (audit H-5 + 2026-04-22 FWER fix; re-scoped 2026-08-23 per
+        # findings/sidak_scope.md): apply a Šidák family-wise correction with
+        # the denominator defined by FWER_SCOPE. The family is the set of tests
+        # whose results are consumed together in one promotion epoch — NOT the
+        # lifetime pool (see findings for why lifetime has no consumer and
+        # creates an activity ratchet). α_family, base thresholds, adaptive
+        # thresholds and floors are unchanged by this scoping.
         #
-        # Denominator: COUNT(DISTINCT hypothesis_id) FROM backtest_runs within
-        # the lookback window (CALLISTO_FWER_LOOKBACK_DAYS; 'inf' supported).
-        # Legacy hypotheses with model_config['legacy']=True are grandfathered
-        # and still use the active-only denominator to avoid mass demotions.
+        #   window:   DISTINCT hyps in backtest_runs within lookback window
+        #   sport:    window ∩ candidate's sport
+        #   lifetime: everything ever backtested (legacy opt-in)
         lifetime_n = 0
         try:
             if math.isinf(FWER_LOOKBACK_DAYS):
@@ -1170,6 +1194,34 @@ class HypothesisManager:
             logger.warning(f"FWER lifetime count failed: {e}; falling back to active-only")
             lifetime_n = 0
 
+        sport_n = 0
+        if FWER_SCOPE == "sport":
+            try:
+                sport = h.get("sport") or ""
+                if math.isinf(FWER_LOOKBACK_DAYS):
+                    sport_cur = await self._db.execute(
+                        "SELECT COUNT(DISTINCT br.hypothesis_id) FROM backtest_runs br "
+                        "JOIN hypotheses hy ON hy.hypothesis_id = br.hypothesis_id "
+                        "WHERE br.completed_at IS NOT NULL AND hy.sport = ?",
+                        (sport,),
+                    )
+                else:
+                    lookback_iso2 = (
+                        datetime.now(timezone.utc)
+                        - timedelta(days=FWER_LOOKBACK_DAYS)
+                    ).isoformat()
+                    sport_cur = await self._db.execute(
+                        "SELECT COUNT(DISTINCT br.hypothesis_id) FROM backtest_runs br "
+                        "JOIN hypotheses hy ON hy.hypothesis_id = br.hypothesis_id "
+                        "WHERE br.completed_at IS NOT NULL AND br.completed_at > ? "
+                        "AND hy.sport = ?",
+                        (lookback_iso2, sport),
+                    )
+                sport_n = int((await sport_cur.fetchone())[0] or 0)
+            except Exception as e:
+                logger.warning(f"FWER sport count failed: {e}; falling back to window")
+                sport_n = 0
+
         try:
             active_cur = await self._db.execute(
                 "SELECT COUNT(*) FROM hypotheses WHERE status IN ('backtesting','paper_trading')"
@@ -1178,29 +1230,42 @@ class HypothesisManager:
         except Exception:
             active_n = 1
 
-        # Legacy grandfather: hypotheses flagged legacy=True stay on the
-        # old active-only denominator.  New hypotheses (default) get the
-        # full lifetime denominator — true FWER control.
+        # Legacy grandfather: hypotheses flagged legacy=True stay on the old
+        # active-only denominator to avoid mass demotions of pre-audit rows.
         is_legacy = bool((h.get("model_config") or {}).get("legacy") is True) if isinstance(h.get("model_config"), dict) else False
-        fwer_n = active_n if is_legacy else max(lifetime_n, active_n, 1)
+
+        scope_counts = {
+            "lifetime": max(lifetime_n, active_n, 1),
+            "window": max(lifetime_n, active_n, 1),  # same query; semantics differ by declared claim
+            "sport": max(sport_n, active_n, 1) if sport_n else max(lifetime_n, active_n, 1),
+        }
+        if FWER_SCOPE == "sport" and not sport_n:
+            denom_tag_fallback = "sport→window fallback"
+        else:
+            denom_tag_fallback = None
+        fwer_n = active_n if is_legacy else scope_counts[FWER_SCOPE]
+        fwer_scope_tag = "active-only (legacy)" if is_legacy else FWER_SCOPE
 
         if fwer_n > 1:
             # Šidák: α_per_test = 1 - (1 - α_family)^(1/n_tests)
             sidak = 1.0 - (1.0 - max_p) ** (1.0 / fwer_n)
-            # NO FLOOR — α below 1e-5 is the correct behavior at lifetime N
-            # in the thousands; floor was masking the true family-wise rate.
+            # NO FLOOR — see findings/sidak_scope.md §1.5/§3.
             corrected_p = min(max_p, sidak)
-            denom_tag = "active-only (legacy)" if is_legacy else f"lifetime (lookback_days={FWER_LOOKBACK_DAYS})"
+            denom_tag = (
+                f"{fwer_scope_tag}"
+                + (f" [{denom_tag_fallback}]" if denom_tag_fallback else "")
+                + f" (lookback_days={FWER_LOOKBACK_DAYS})"
+            )
             checks.append(
                 f"INFO: Šidák FWER correction over n={fwer_n} [{denom_tag}] → "
                 f"p threshold {corrected_p:.2e} (was {max_p:.4f})"
             )
             max_p = corrected_p
         if p > max_p:
-            checks.append(f"FAIL: p-value {p:.4f} > {max_p:.2e} (adaptive+FWER, base={base_p}, n={n}, fwer_n={fwer_n})")
+            checks.append(f"FAIL: p-value {p:.4f} > {max_p:.2e} (adaptive+FWER, base={base_p}, n={n}, scope={fwer_scope_tag}, fwer_n={fwer_n})")
             ready = False
         else:
-            checks.append(f"PASS: p-value {p:.4f} <= {max_p:.2e} (adaptive+FWER, base={base_p}, n={n}, fwer_n={fwer_n})")
+            checks.append(f"PASS: p-value {p:.4f} <= {max_p:.2e} (adaptive+FWER, base={base_p}, n={n}, scope={fwer_scope_tag}, fwer_n={fwer_n})")
 
         # ── CLV gate (B1 rebuild) — reads the CANONICAL devigged statistic ──
         # Canonical source: clv_log.clv_prob_bp, basis points of devigged
