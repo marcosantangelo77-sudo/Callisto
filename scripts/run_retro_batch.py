@@ -42,6 +42,7 @@ def make_researcher_factory():
             routes={},   # no fixture routes — real transport via registry
             adversary_router=model,
         )
+    factory.model = model
     return factory
 
 
@@ -53,6 +54,10 @@ def main() -> int:
     ap.add_argument("--checkpoints", default=None)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--label", default="batch")
+    ap.add_argument("--fresh-scores", action="store_true",
+                    help="delete the routing score store first — the ONLY "
+                         "sanctioned way to correct a recorded value "
+                         "(write_routing_scores dedupes otherwise)")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO,
@@ -68,9 +73,10 @@ def main() -> int:
         if args.checkpoints else FileCheckpointer()
     results_path = Path(args.results)
 
+    researcher_factory = make_researcher_factory()
     batch = RetrodictionBatch(
         questions=questions,
-        researcher_factory=make_researcher_factory(),
+        researcher_factory=researcher_factory,
         checkpointer=cp,
         results_path=results_path,
         config=BatchConfig(label=args.label, limit=args.limit,
@@ -88,8 +94,21 @@ def main() -> int:
     report = build_report(results)
     Path(args.report).parent.mkdir(parents=True, exist_ok=True)
     Path(args.report).write_text(json.dumps(report, indent=2))
-    n = write_routing_scores(results, ModelScoreStore())
-    print(f"routing store: +{n} observations")
+
+    # Routing-store identity must match what the router routes on, or the
+    # measurements can never be looked up. The HermesCliModel path has no
+    # ProviderRouter, so the model identity is the researcher model's own
+    # declared name (HermesCliModel.name) rather than a bare literal; a
+    # RouterModel run reports "router:<endpoint-model>" via its .name.
+    store = ModelScoreStore()
+    if args.fresh_scores and store.path.exists():
+        store.path.unlink()
+        print(f"routing store cleared: {store.path}")
+    model_name = getattr(researcher_factory.model, "name", None) \
+        or HermesCliModel.name
+    n = write_routing_scores(results, store, model=model_name)
+    print(f"routing store: +{n} observations "
+          f"(model={model_name})")
     print(render_report(report))
     return 0
 

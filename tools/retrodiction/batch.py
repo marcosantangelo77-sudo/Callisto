@@ -526,10 +526,33 @@ def write_routing_scores(results: dict[str, BatchResult],
                          task_class: str = "research_synthesis") -> int:
     """Append every scored observation into ModelScoreStore so empirical
     routing has measurements. Nulls/errors are NOT written — absence of a
-    record is honest; a fabricated loss would be flattery either way."""
+    record is honest; a fabricated loss would be flattery either way.
+
+    W7 fix: question-level dedupe. A resumed or rerun batch replays
+    checkpoints and used to append duplicate rows — doubling n, weakening
+    shrinkage, and inflating the basis label ("sparse" → "provisional" on
+    identical evidence). A (role, model, task_class, question_id) that is
+    already in the store is skipped; correcting a value is an explicit
+    delete-and-rerun with --fresh-scores, never a silent double-count.
+
+    Loop-closure fix (routing pass 2026-08-23): `role`, `model` and
+    `task_class` here MUST be the identity the ProviderRouter actually
+    routes on. The router keys candidates by endpoint.model and decides
+    per (role, task_class); scores recorded under other names can never be
+    looked up — measurements that cannot influence routing are decoration.
+    scripts/run_retro_batch.py now derives all three from the researcher's
+    real router instead of hardcoding "pipeline"/"hermes-cli".
+    """
+    existing = {
+        (r.get("role"), r.get("model"), r.get("task_class"),
+         r.get("question_id"))
+        for r in score_store.load_all()}
     n = 0
     for r in results.values():
         if r.status != "scored" or r.brier is None:
+            continue
+        key = (role, model, task_class, r.question_id)
+        if key in existing:
             continue
         score_store.record(role=role, model=model, task_class=task_class,
                            question_id=r.question_id, brier=r.brier,

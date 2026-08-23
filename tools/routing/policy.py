@@ -102,6 +102,26 @@ class ThompsonRoutingPolicy:
 
     # ── posterior ──
 
+    def _records_for(self, role: str, task_class: str,
+                     model: str) -> tuple[list[dict], bool]:
+        """Records for (role, task_class, model), plus whether the slice is
+        measured.
+
+        W8 fix: routing used to pool every task_class under a role, so a
+        model measured only on classification could win synthesis draws it
+        was never measured on. When the task-class slice is empty the
+        candidate is treated as UNMEASURED for this call — it gets the wide
+        chance-centred draw (explored, never trusted) and inherits nothing
+        from measurements taken on other task classes. That is the honest
+        reading: "this model is great at classification" is simply not
+        evidence about how it does synthesis.
+        """
+        recs = [r for r in self.store.load_all()
+                if r.get("role") == role
+                and r.get("task_class") == task_class
+                and r.get("model") == model]
+        return recs, bool(recs)
+
     def _sample_loss(self, records: list[dict]) -> float:
         """One draw of the model's true mean loss from its posterior.
 
@@ -144,7 +164,8 @@ class ThompsonRoutingPolicy:
     # ── decision ──
 
     def decide(self, role: str,
-               candidates: list[CandidateModel]) -> RoutingDecision:
+               candidates: list[CandidateModel],
+               task_class: Optional[str] = None) -> RoutingDecision:
         """Pick a tier for this role's next call.
 
         No candidate has any measurement -> basis="configured", best-ranked
@@ -152,6 +173,11 @@ class ThompsonRoutingPolicy:
         candidate competes on its sampled effective loss; candidates with NO
         observations get a wide chance-centred Thompson draw — explored, never
         trusted, and inheriting nothing from any other model's record.
+
+        `task_class` (W8 fix): when given, each candidate is judged on its
+        (role, task_class) slice — falling back to the role-wide record only
+        when the slice is empty — so a classification specialist cannot win
+        synthesis calls it was never measured on.
         """
         summary = self.store.summary(role)
 
@@ -165,8 +191,13 @@ class ThompsonRoutingPolicy:
         details: dict[str, dict] = {}
         for c in candidates:
             agg = summary.get(c.name)
-            if agg is not None:
-                recs = self.store.records_for(role, c.name)
+            if task_class:
+                recs, measured = self._records_for(role, task_class, c.name)
+            elif agg is not None:
+                recs, measured = self.store.records_for(role, c.name), True
+            else:
+                recs, measured = [], False
+            if measured:
                 sampled = self._sample_loss(recs)
             else:
                 # Unmeasured model: Thompson draw from the wide uninformed

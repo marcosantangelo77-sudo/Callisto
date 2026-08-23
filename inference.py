@@ -1172,7 +1172,8 @@ class ProviderRouter:
             cands = self._candidates_as_models(candidate_names)
             if not cands:
                 return candidate_names, meta
-            decision = self._routing_policy.decide(role or task_class, cands)
+            decision = self._routing_policy.decide(
+                role or task_class, cands, task_class=task_class)
         except Exception as e:  # never let measurement break a live call
             logger.warning(f"Empirical routing failed ({e}) — using config order")
             return candidate_names, {**meta, "error": str(e)}
