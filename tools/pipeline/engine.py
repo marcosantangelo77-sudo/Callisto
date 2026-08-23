@@ -43,6 +43,7 @@ from agp import (
     SourceClass,
 )
 from agp.provenance import ProvenanceLedger
+from agp.adversary import AGPRole
 from agp.research_program import (
     EvidenceRequirement,
     Horizon,
@@ -543,7 +544,6 @@ class ResearchPipeline:
         # Checkpointed so a RESUME replays the sealed criteria byte-identical
         # instead of re-authoring them after evidence — re-authoring at that
         # point would let the fetched content shape its own acceptance test.
-        from agp.adversary import AGPRole
         from agp.preregistration import Preregistration as _Prereg
 
         async def _prereg_payload() -> dict:
