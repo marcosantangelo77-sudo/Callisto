@@ -433,65 +433,26 @@ class NullVerdict:
 def classify_null(trace: Any) -> NullVerdict:
     """Distinguish 'not addressed' from 'failed to retrieve'.
 
-    Uses the retrieval trace's own records: rejected items WITH reasons
-    from REACHABLE sources mean the sources were asked and answered
-    'nothing relevant' — an honest literature null. Source errors, no
-    routable source, or zero attempts mean retrieval failed, and the
-    explanation says which.
+    DELEGATES to tools.gaps.classify_null_kind — the membership rule exists
+    exactly once (tools/gaps.py is the canonical classifier; this module's
+    earlier private copy drifted). The NullVerdict vocabulary is kept as a
+    thin adapter for existing callers:
+
+      NULL_LITERATURE == gaps.NullKind.HONEST_NULL
+      NULL_RETRIEVAL  == gaps.NullKind.RETRIEVAL_FAILURE
+
+    A retrieval failure NEVER reads as an honest null: the explanation says
+    so in prose, and `status` carries the machine-checkable verdict.
     """
+    from tools.gaps import classify_null_kind, NullKind
+
+    kind, expl = classify_null_kind(trace)
+    status = (NULL_LITERATURE if kind == NullKind.HONEST_NULL.value
+              else NULL_RETRIEVAL)
     rejected = list(getattr(trace, "rejected", None) or [])
-    rounds = list(getattr(trace, "rounds", None) or [])
-    stop = str(getattr(trace, "stop_reason", "") or "")
-
-    errors, no_route = [], []
-    for r in rounds:
-        for s in r.get("sources", []):
-            if "error" in s:
-                errors.append(f"{s['name']}: {s['error']}")
-            elif s.get("skipped") == "no generic route":
-                no_route.append(s["name"])
-
-    attempted_anything = bool(rounds)
-    reachable_attempt = bool(rejected) or any(
-        s.get("admitted") or "rejected" in s
-        for r in rounds for s in r.get("sources", []))
-
-    if reachable_attempt and not errors:
-        det = "; ".join(f"[{r.source_name}] {r.reason}" for r in rejected) \
-            or "sources returned only irrelevant material"
-        return NullVerdict(
-            status=NULL_LITERATURE,
-            explanation=(
-                f"sources were queried and returned no relevant material "
-                f"({len(rejected)} rejected at the relevance gate): {det}"),
-            rejected=[{"source": r.source_name, "reason": r.reason,
-                       "relevance": r.relevance_score} for r in rejected])
-
-    if errors or no_route or not attempted_anything:
-        why = []
-        if errors:
-            why.append("source errors: " + "; ".join(errors[:5]))
-        if no_route:
-            why.append("no fetch route for: " + ", ".join(no_route))
-        if not attempted_anything:
-            why.append(f"no fetch was attempted ({stop or 'no rounds ran'})")
-        return NullVerdict(
-            status=NULL_RETRIEVAL,
-            explanation=(
-                "this is a RETRIEVAL FAILURE, not a finding — do not read "
-                "it as 'the literature does not address this': "
-                + " | ".join(why)))
-
-    # Sources were reachable but everything they returned was rejected AND
-    # some also errored — mixed; report the honest null but disclose errors.
-    det = "; ".join(f"[{r.source_name}] {r.reason}" for r in rejected) \
-        or "sources returned only irrelevant material"
     return NullVerdict(
-        status=NULL_LITERATURE,
-        explanation=(
-            f"sources were queried; no relevant material returned "
-            f"({len(rejected)} rejected): {det}. Note, some sources also "
-            f"errored — coverage may be partial"),
+        status=status,
+        explanation=expl,
         rejected=[{"source": r.source_name, "reason": r.reason,
                    "relevance": r.relevance_score} for r in rejected])
 
