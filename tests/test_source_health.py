@@ -56,11 +56,34 @@ def _make_registry(monkeypatch):
     spec = SourceSpec(name="fdic", base_url="https://banks.example/api",
                       description="t", answers=("bank financials",),
                       cannot_answer=(), tier=1, min_interval_s=0.0)
+
+    class FakeAdapter:
+        def institutions(self, filters="", fields=(), limit=50):
+            data, _rec = self.source.get_json(
+                self.source.build_url("/institutions",
+                                      {"filters": filters, "limit": limit}))
+            return data
+
     reg = SourceRegistry()
-    reg.register(SourceAdapter(spec=spec,
-                               make_adapter=lambda src: object.__new__(
-                                   type("A", (), {}))))
+    reg.register(SourceAdapter(spec=spec, make_adapter=_wire))
     return reg
+
+
+class _FakeAdapterForHealth:
+    def __init__(self) -> None:
+        self.source = None
+
+    def institutions(self, filters="", fields=(), limit=50):
+        data, _rec = self.source.get_json(
+            self.source.build_url("/institutions",
+                                  {"filters": filters, "limit": limit}))
+        return data
+
+
+def _wire(src):
+    ad = _FakeAdapterForHealth()
+    ad.source = src
+    return ad
 
 
 def _run(reg, transport):
@@ -110,7 +133,7 @@ def test_unreachable_is_broken(monkeypatch):
 
     r = _run(reg, dead_transport)[0]
     assert r.verdict == "BROKEN"
-    assert "OSError" in r.evidence
+    assert "name resolution failed" in r.evidence
 
 
 def test_http_error_is_broken(monkeypatch):
