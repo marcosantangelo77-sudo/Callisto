@@ -1126,18 +1126,18 @@ class ProviderRouter:
 
     def _shared_client(self) -> httpx.AsyncClient:
         """Process/router-wide pooled AsyncClient. Rebuilt if the running
-        event loop changed (asyncio transports are loop-bound)."""
+        event loop changed (asyncio transports are loop-bound). A client that
+        does not expose ``is_closed`` (test doubles) is treated as spent, so
+        opaque stand-ins keep the legacy fresh-client-per-call shape."""
         try:
             loop = _asyncio.get_running_loop()
         except RuntimeError:
             loop = None
-        if (self._http_client is None or self._http_client.is_closed
-                or getattr(self._http_client, "_bound_loop", None) is not loop):
-            if (self._http_client is not None
-                    and not self._http_client.is_closed):
-                # Old loop's client; closing from the wrong loop can hang, so
-                # just drop it — its connections die with the old loop.
-                pass
+        current = self._http_client
+        spent = (current is None
+                 or bool(getattr(current, "is_closed", True))
+                 or getattr(current, "_bound_loop", None) is not loop)
+        if spent:
             client = httpx.AsyncClient(
                 timeout=httpx.Timeout(300.0, connect=10.0),
                 limits=httpx.Limits(
@@ -1151,18 +1151,14 @@ class ProviderRouter:
         return self._http_client
 
     def _reset_shared_client(self) -> None:
-        if self._http_client is not None and not self._http_client.is_closed:
-            try:
-                _asyncio.get_event_loop_policy()
-            except Exception:
-                pass
         self._http_client = None
 
     async def aclose(self) -> None:
         """Close the shared pool (graceful shutdown / tests)."""
-        if self._http_client is not None and not self._http_client.is_closed:
-            await self._http_client.aclose()
+        client = self._http_client
         self._http_client = None
+        if client is not None and not getattr(client, "is_closed", True):
+            await client.aclose()
 
     @property
     def score_store(self):
