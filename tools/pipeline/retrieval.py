@@ -454,7 +454,16 @@ class IterativeRetriever:
                     return ("fail", str(e)[:120])
 
             from concurrent.futures import ThreadPoolExecutor
-            from tools.pipeline.engine import _FetchRecorder
+            try:  # engine's recorder when present (parallel-leaf engine)
+                from tools.pipeline.engine import _FetchRecorder
+            except ImportError:  # serial engine: local equivalent
+                class _FetchRecorder:
+                    """Same capture contract as engine._FetchRecorder."""
+                    def __init__(self): self.calls = []
+                    def record_tool_result(self, tool_name, content, *,
+                                           primary=False, urls=None):
+                        self.calls.append((tool_name, content,
+                                           bool(primary), list(urls or ())))
             max_workers = min(len(specs), 8) if len(specs) > 1 else 1
             recorders = [_FetchRecorder() for _ in specs]
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
