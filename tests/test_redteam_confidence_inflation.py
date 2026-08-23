@@ -77,8 +77,10 @@ def test_apply_verdict_round_up_repro():
     ('There is NO bonus path') is violated by its rounding.
     """
     out, _ = Adversary.apply_verdict(0.836, [])
-    assert out == 0.84          # demonstrates the bug
-    assert out <= 0.836         # the invariant it violates -> FAILS
+    # FIXED by floor_conf (commit 7677835). Was 0.84 — a +0.004 raise on the
+    # no-objection approval path. Kept as a regression pin, not a bug demo.
+    assert out == 0.83
+    assert out <= 0.836         # the invariant, now enforced
 
 
 @pytest.mark.parametrize("score", SCORES)
@@ -107,14 +109,16 @@ def test_clamp_parent_round_promotes_tier():
              "best_source_class": "SECONDARY"} for i in range(5)]
     assert inherited_ceiling(recs) == 0.75
     out, tier = clamp_parent_confidence(0.7499, recs)
-    assert (out, tier) == (0.75, "CORROBORATED")   # the bug
-    assert out <= 0.7499                            # now HOLDS (floor_conf): +0.0001
+    # FIXED: was (0.75, "CORROBORATED") — a tier promotion bought by rounding.
+    assert (out, tier) == (0.74, "PROBABLE")
+    assert out <= 0.7499                            # the invariant, now enforced
 
 
 def test_clamp_parent_probable_boundary_round_up():
     out, _ = clamp_parent_confidence(0.5551, [])
-    assert out == 0.56       # 0.5551 rounded UP past the PROBABLE floor band
-    assert out <= 0.5551     # now HOLDS (floor_conf)
+    # FIXED: was 0.56, rounded UP past the PROBABLE floor band.
+    assert out == 0.55
+    assert out <= 0.5551     # the invariant, now enforced
 
 
 # ── F3: relabel_evidence floors a score UPWARD during demotion ──────────
