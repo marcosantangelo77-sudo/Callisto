@@ -41,6 +41,72 @@ WIKI_COLLECTION = "wiki_articles"
 # without blocking (or failing) the write path. Bounded to prevent runaway.
 _EMBED_QUEUE_MAX = 500
 _pending_embeds: list[dict] = []
+_embed_queue_stats = {"queued": 0, "drained": 0, "dropped": 0}
+
+
+def get_embed_queue_depth() -> int:
+    """Current depth of the deferred-embedding retry queue."""
+    return len(_pending_embeds)
+
+
+async def flush_pending_embeds(max_items: Optional[int] = None) -> dict:
+    """Retry deferred article embeddings (queued while Ollama was down).
+
+    Without this the pending-embeds queue was write-only: articles whose
+    embedding was deferred were permanently invisible to semantic search —
+    they existed only in SQL and only via the LIKE fallback.
+
+    Called opportunistically before each wiki search; safe to call from any
+    task. Returns {attempted, drained, remaining}.
+    """
+    if not _pending_embeds:
+        return {"attempted": 0, "drained": 0, "remaining": 0}
+    try:
+        from tools.embeddings import (
+            VectorStore, embed_text, EMBED_MODEL, NEAR_DUP_THRESHOLD,
+        )
+    except Exception as e:  # noqa: BLE001 — embeddings module unavailable
+        logger.debug(f"flush_pending_embeds: embeddings unavailable: {e}")
+        return {"attempted": 0, "drained": 0, "remaining": len(_pending_embeds)}
+
+    items = list(_pending_embeds)
+    if max_items is not None:
+        items = items[:max_items]
+    attempted = drained = 0
+    store: Optional[VectorStore] = None
+    for item in items:
+        try:
+            embedding = await asyncio.wait_for(
+                embed_text(item["text"]), timeout=30.0)
+        except Exception:
+            break  # embed server still down — keep the queue intact
+        if store is None:
+            store = VectorStore(
+                os.getenv("CALLISTO_DB_PATH", "memory/callisto.db"))
+            await store.initialize()
+        try:
+            await store.store_or_merge(
+                WIKI_COLLECTION, item["text"], embedding, item["metadata"],
+                model_name=EMBED_MODEL,
+                near_dup_threshold=NEAR_DUP_THRESHOLD,
+            )
+            _pending_embeds.remove(item)
+            drained += 1
+            _embed_queue_stats["drained"] += 1
+        except Exception as e:  # noqa: BLE001 — one bad payload must not stop the drain
+            logger.warning(f"flush_pending_embeds: store failed for "
+                           f"'{item.get('topic')}': {e}")
+            _pending_embeds.remove(item)
+            _embed_queue_stats["dropped"] += 1
+        finally:
+            attempted += 1
+    if store is not None:
+        await store.close()
+    if drained:
+        logger.info(f"flush_pending_embeds: drained {drained}/{attempted} "
+                    f"deferred article embeddings; {len(_pending_embeds)} remain")
+    return {"attempted": attempted, "drained": drained,
+            "remaining": len(_pending_embeds)}
 
 # Wiki write telemetry — bumped on every direct-write (bypasses LLM compile).
 # Pre-2026-04-22 the demotion writer used the wrong schema and every call
@@ -160,12 +226,86 @@ def _merged_article_confidence(*, existing_confidence: float, compile_count: int
     return round(min(weighted, floor_of_inputs), 3)
 
 
+# Task classes this layer uses with the ProviderRouter (config/providers.yaml).
+# Model-per-purpose stays a CONFIG concern — never a hardcoded provider.
+TASK_CLASS_COMPILE = "knowledge_compile"   # article compilation   (synthesis-shaped)
+TASK_CLASS_LINT = "knowledge_lint"         # contradiction pairing (classification-shaped)
+
+# Structured-output schemas shared by the routed and legacy paths.
+_COMPILE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "summary": {"type": "string"},
+        "content": {"type": "string"},
+        "related_topics": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["title", "summary", "content"],
+}
+
+_LINT_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "contradictions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "pair": {"type": "integer"},
+                    "article_a": {"type": "string"},
+                    "article_b": {"type": "string"},
+                    "claim_a": {"type": "string"},
+                    "claim_b": {"type": "string"},
+                    "severity": {"type": "string"},
+                },
+            },
+        },
+    },
+    "required": ["contradictions"],
+}
+
+
 class KnowledgeWiki:
     """LLM-compiled persistent knowledge base."""
 
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._initialized = False
+
+    async def _routed_json(
+        self, task_class: str, prompt: str, schema: dict, temperature: float,
+        timeout: float = 180.0,
+    ) -> Optional[dict]:
+        """One structured completion via the ProviderRouter, parsed as JSON.
+
+        Returns None when the router is unavailable or every endpoint fails —
+        callers then fall back to the legacy direct-Ollama path, so behaviour
+        degrades instead of breaking where providers.yaml is absent.
+        """
+        try:
+            from inference import get_router
+            router = get_router()
+        except Exception as e:  # noqa: BLE001 — degrade, don't crash the loop
+            logger.info(f"Wiki: router unavailable for {task_class} ({e}); using legacy path")
+            return None
+        try:
+            resp = await asyncio.wait_for(
+                router.complete(
+                    task_class,
+                    [{"role": "user", "content": prompt}],
+                    schema=schema,
+                    temperature=temperature,
+                ),
+                timeout=timeout,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Wiki: routed {task_class} failed ({e}); trying legacy path")
+            return None
+        parsed = resp.get("parsed_json")
+        if isinstance(parsed, dict):
+            return parsed
+        from inference import _parse_json_response
+        return _parse_json_response(resp.get("content") or "")
 
     async def initialize(self, db: aiosqlite.Connection) -> None:
         """Create wiki tables if they don't exist."""
@@ -622,6 +762,7 @@ class KnowledgeWiki:
                     "topic": topic, "text": text, "metadata": metadata,
                     "queued_at": datetime.now(timezone.utc).isoformat(),
                 })
+                _embed_queue_stats["queued"] += 1
             logger.warning(
                 f"Wiki embed deferred for '{topic}': Ollama unavailable ({e}). "
                 f"Queue depth={len(_pending_embeds)}."
@@ -665,11 +806,14 @@ class KnowledgeWiki:
     async def _llm_compile(
         self, topic: str, sources: list[dict], existing_content: Optional[str]
     ) -> Optional[dict]:
-        """Use local LLM (Gemma 4) to compile sources into a wiki article.
+        """Compile sources into a wiki article via an LLM.
+
+        Primary: ProviderRouter (task class ``knowledge_compile`` — model is
+        whatever providers.yaml routes). Fallback when no router: direct
+        Ollama with a hardcoded local model. Final fallback: template.
 
         Returns {"title", "content", "summary", "related_topics"} or None on failure.
         """
-        from inference import OllamaInference, AgentConfig
 
         # Build source material summary
         source_text = []
@@ -690,7 +834,7 @@ class KnowledgeWiki:
             )
 
         prompt = (
-            f"You are a knowledge compiler for an autonomous sports betting research system.\n\n"
+            f"You are a knowledge compiler for an autonomous research system.\n\n"
             f"TOPIC: {topic}\n\n"
             f"NEW SOURCES:\n{sources_block}\n"
             f"{update_instruction}\n\n"
@@ -708,39 +852,42 @@ class KnowledgeWiki:
             f"- Keep content under {MAX_ARTICLE_LENGTH} characters"
         )
 
-        try:
-            config = AgentConfig(
-                model="gemma4",
-                default_options={"temperature": 0.3, "num_predict": 2048},
-                think=False,
-                supports_native_tools=False,
-            )
-            llm = OllamaInference(config)
-            response = await llm.achat(
-                messages=[{"role": "user", "content": prompt}],
-                format={
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string"},
-                        "summary": {"type": "string"},
-                        "content": {"type": "string"},
-                        "related_topics": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                    },
-                    "required": ["title", "summary", "content"],
-                },
-            )
-
-            text = response.get("content", "") or response.get("message", {}).get("content", "")
+        # Primary path: the ProviderRouter. Model-per-purpose is a config
+        # entry (providers.yaml task_classes) — never a hardcoded provider.
+        routed = await self._routed_json(
+            TASK_CLASS_COMPILE, prompt, _COMPILE_JSON_SCHEMA,
+            temperature=0.3,
+        )
+        if routed is not None:
+            parsed = routed
+        else:
+            # Legacy path: direct Ollama with a hardcoded model name.
+            # Kept only as fallback for when providers.yaml is absent.
+            try:
+                from inference import OllamaInference, AgentConfig
+                config = AgentConfig(
+                    model="gemma4",
+                    default_options={"temperature": 0.3, "num_predict": 2048},
+                    think=False,
+                    supports_native_tools=False,
+                )
+                llm = OllamaInference(config)
+                response = await llm.achat(
+                    messages=[{"role": "user", "content": prompt}],
+                    format=_COMPILE_JSON_SCHEMA,
+                )
+                text = response.get("content", "") or response.get("message", {}).get("content", "")
+            except Exception as e:
+                logger.warning(f"Wiki LLM compile failed for '{topic}': {e}")
+                # Fallback: template-based compilation (no LLM needed)
+                return self._template_compile(topic, sources, existing_content)
             if not text:
                 logger.warning(f"Wiki compile: empty LLM response for '{topic}'")
                 return None
-
-            # Parse JSON from response
             from inference import _parse_json_response
             parsed = _parse_json_response(text)
+
+        try:
             if not parsed or not isinstance(parsed, dict):
                 logger.warning(f"Wiki compile: failed to parse JSON for '{topic}'")
                 return None
@@ -961,66 +1108,57 @@ class KnowledgeWiki:
             "Only flag GENUINE contradictions, not merely different aspects of a topic."
         )
 
-        try:
-            config = AgentConfig(
-                model="qwen3.5:4b",  # Fast classifier — contradiction detection is classification
-                default_options={"temperature": 0.0, "num_predict": 1024},
-                think=False,
-            )
-            llm = OllamaInference(config)
-            response = await llm.achat(
-                messages=[{"role": "user", "content": prompt}],
-                format={
-                    "type": "object",
-                    "properties": {
-                        "contradictions": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "pair": {"type": "integer"},
-                                    "article_a": {"type": "string"},
-                                    "article_b": {"type": "string"},
-                                    "claim_a": {"type": "string"},
-                                    "claim_b": {"type": "string"},
-                                    "severity": {"type": "string"},
-                                },
-                            },
-                        },
-                    },
-                    "required": ["contradictions"],
-                },
-            )
+        # Primary path: ProviderRouter (task class ``knowledge_lint``).
+        parsed = await self._routed_json(
+            TASK_CLASS_LINT, prompt, _LINT_JSON_SCHEMA, temperature=0.0,
+        )
 
-            text = response.get("content", "") or response.get("message", {}).get("content", "")
-            parsed = _parse_json_response(text)
-            if not parsed:
+        # Legacy fallback: direct Ollama, hardcoded fast classifier.
+        if parsed is None:
+            try:
+                from inference import OllamaInference, AgentConfig
+                config = AgentConfig(
+                    model="qwen3.5:4b",  # Fast classifier — contradiction detection is classification
+                    default_options={"temperature": 0.0, "num_predict": 1024},
+                    think=False,
+                )
+                llm = OllamaInference(config)
+                response = await llm.achat(
+                    messages=[{"role": "user", "content": prompt}],
+                    format=_LINT_JSON_SCHEMA,
+                )
+                text = response.get("content", "") or response.get("message", {}).get("content", "")
+                if not text:
+                    return []
+                from inference import _parse_json_response
+                parsed = _parse_json_response(text)
+            except Exception as e:
+                logger.warning(f"Wiki contradiction detection failed: {e}")
                 return []
 
-            found = parsed.get("contradictions", [])
-            now = datetime.now(timezone.utc).isoformat()
-
-            # Store new contradictions
-            for c in found:
-                if not c.get("article_a") or not c.get("claim_a"):
-                    continue
-                try:
-                    await db.execute(
-                        "INSERT OR IGNORE INTO wiki_contradictions "
-                        "(article_a, article_b, claim_a, claim_b, severity, detected_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
-                        (c["article_a"], c.get("article_b", ""),
-                         c["claim_a"], c.get("claim_b", ""),
-                         c.get("severity", "low"), now),
-                    )
-                except Exception as e:
-                    logger.debug(f"Failed to store contradiction: {e}")
-            await db.commit()
-            return found
-
-        except Exception as e:
-            logger.warning(f"Wiki contradiction detection failed: {e}")
+        if not parsed:
             return []
+
+        found = parsed.get("contradictions", [])
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Store new contradictions
+        for c in found:
+            if not c.get("article_a") or not c.get("claim_a"):
+                continue
+            try:
+                await db.execute(
+                    "INSERT OR IGNORE INTO wiki_contradictions "
+                    "(article_a, article_b, claim_a, claim_b, severity, detected_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (c["article_a"], c.get("article_b", ""),
+                     c["claim_a"], c.get("claim_b", ""),
+                     c.get("severity", "low"), now),
+                )
+            except Exception as e:
+                logger.debug(f"Failed to store contradiction: {e}")
+        await db.commit()
+        return found
 
     # ──────────────────────────────────────────────────
     # WRITE: Direct schema-correct article upsert (no LLM compile)
@@ -1178,6 +1316,13 @@ class KnowledgeWiki:
         await self.initialize(db)
         if limit is not None:
             top_k = limit
+
+        # Opportunistic retry of embeddings deferred while Ollama was down —
+        # without this, deferred articles stay invisible to semantic search.
+        try:
+            await flush_pending_embeds(max_items=10)
+        except Exception as e:  # noqa: BLE001 — never block a search on the drain
+            logger.debug(f"flush_pending_embeds failed during search: {e}")
 
         # Primary path: semantic retrieval via VectorStore.
         try:
