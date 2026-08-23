@@ -84,6 +84,10 @@ class RejectedItem:
     reason: str
     relevance_score: float
     content_sha256: str = ""
+    #: False when the retriever will not spend another fetch on this
+    #: source (planner mode: the authored query cannot change, so a
+    #: retry returns byte-identical results and the same verdict).
+    will_retry: bool = True
 
 
 def extract_text(parsed: Any, depth: int = 0) -> str:
@@ -331,6 +335,12 @@ class IterativeRetriever:
             self.registry, question.text, question_type)
         excluded: set[str] = set()
         unplannable: set[str] = set()
+        #: independence families that have already had fan-out budget this
+        #: leaf. A family's second member waits until every unseen family
+        #: has had a turn — budget buys NEW independent voices before it
+        #: doubles up inside one corpus. This is what makes
+        #: min_independent_sources reachable instead of merely enforced.
+        families_tried: set[str] = set()
         query = build_query(question.text)
         relevant_titles: list[str] = []
         # Reuse loop_quality's terminator rather than inventing another
@@ -345,6 +355,18 @@ class IterativeRetriever:
         for rnd in range(1, self.max_rounds + 1):
             all_specs = self.registry.select(
                 translated, max_tier=3, exclude=excluded)
+            # CHOSEN FIRST. translate_question_type scored every adapter's
+            # answer clauses against the RAW question; its winners must lead
+            # the fan-out. Re-ranking everything against the translated
+            # bag-of-vocabulary lets an off-domain tier-1 source whose
+            # clauses happen to share process words outrank the sources the
+            # question actually named — measured: clinicaltrials led a
+            # semiconductor-literature question at 1.0/1.0 while openalex
+            # trailed. `chosen` was computed and then discarded; it isn't
+            # any more.
+            lead = [s for s in all_specs if s.name in chosen]
+            follow = [s for s in all_specs if s.name not in chosen]
+            all_specs = lead + follow
             # Fan out across routable sources. With the planner (default)
             # every source the registry selected is routable — build_plan
             # either authors real queries or reports honestly why it
@@ -374,7 +396,23 @@ class IterativeRetriever:
                 trace.stop_reason = (
                     "selected sources lack generic fetch routes")
                 break
+            # FAMILY SPREAD: stable-partition so unseen independence
+            # families precede families already tried this leaf (including
+            # earlier members of this same list — a family's second member
+            # defers behind the first unseen alternative). Deterministic;
+            # relative order preserved within each partition.
+            primary, deferred = [], []
+            for s in routable:
+                fam = independence_key(s.name, s.base_url)
+                if fam in families_tried:
+                    deferred.append(s)
+                else:
+                    primary.append(s)
+                    families_tried.add(fam)
+            routable = primary + deferred
             specs = routable[:self.max_sources_per_leaf]
+            families_tried.update(
+                independence_key(s.name, s.base_url) for s in specs)
             trace.queries.append(query)
             round_admitted = 0
             round_detail = {"round": rnd, "query": query,
@@ -429,11 +467,21 @@ class IterativeRetriever:
                                                   "url", ""),
                                body, fetched, question.question_id, _sha)
                 if not ok:
+                    # Planner-authored queries are a pure function of
+                    # question.text — identical every round — so a rejected
+                    # verdict is deterministic and a retry can only buy the
+                    # same bytes twice (measured: 3 of 9 fetches on the
+                    # flagship question). Exclude it; legacy tables refine
+                    # their query each round and keep their retries.
+                    will_retry = legacy_calls is not None
                     trace.rejected.append(RejectedItem(
                         source_name=spec.name,
                         url=fr.url, reason=reason,
                         relevance_score=round(cov, 3),
-                        content_sha256=fr.content_sha256))
+                        content_sha256=fr.content_sha256,
+                        will_retry=will_retry))
+                    if not will_retry:
+                        excluded.add(spec.name)
                     round_detail["sources"].append(
                         {"name": spec.name, "rejected": reason})
                     continue
