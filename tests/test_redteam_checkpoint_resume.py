@@ -92,17 +92,16 @@ def test_f1_missing_digest_replays_fabrication_as_primary(tmp_path):
     ledger = ProvenanceLedger()
 
     rep = replay_ledger(ledger, [ck])
-    assert rep["integrity_failures"] == []
-    assert ledger.has_observation("FABRICATED BYTES")
-    # The fabricated bytes now carry PRIMARY provenance:
+    # CONTRACT: bytes whose integrity was never checked must not enter the
+    # ledger as primary observations.
+    assert not ledger.has_observation("FABRICATED BYTES")
+
     ev = Evidence(content="FABRICATED BYTES",
                   source_class=SourceClass.INFERRED, confidence_score=0.30,
                   domain=None, origin_agent="pipeline")
-    assert ledger.assign_source_class(ev) == SourceClass.PRIMARY  # FAILS: it does
-
+    assert ledger.assign_source_class(ev) != SourceClass.PRIMARY
     verdict, reason = seal_guard(_resumed_trace(rk), [ck], ledger)
-    assert verdict == "SEAL" or reason, (
-        "seal_guard must REFUSE evidence whose integrity was never verified")
+    assert verdict == "REFUSE", reason
 
 
 def test_f1_empty_string_digest_same_hole_and_breaks_dedup(tmp_path):
@@ -116,9 +115,10 @@ def test_f1_empty_string_digest_same_hole_and_breaks_dedup(tmp_path):
                     _fetch(body="FAB TWO", digest="")]})
     ledger = ProvenanceLedger()
     rep = replay_ledger(ledger, [ck])
-    assert rep["integrity_failures"] == []          # FAILS: nothing verified
-    assert ledger.has_observation("FAB ONE")
-    assert not ledger.has_observation("FAB TWO")    # FAILS: skipped as "duplicate"
+    assert rep["integrity_failures"], (
+        "records without digests must count as integrity failures, not passes")
+    assert not ledger.has_observation("FAB ONE"), (
+        "unverified bytes must never be replayed into the ledger")
     # The resumed-run guard happens to REFUSE here only as a side effect of
     # FAB TWO having no ledger entry (has_observation False) — i.e. the one
     # record that WAS verified-looking gets refused while FAB ONE, never
@@ -170,8 +170,10 @@ def test_f3_guard_passes_when_checkpoints_carry_no_fetch_records(tmp_path):
     rk = _rk()
     ck = cp.save(rk, "answer_leaf", hash_inputs({"qid": "z"}), {"leaf": {}})
     ledger = ProvenanceLedger()
-    assert provenance_is_intact(ledger, [ck])          # FAILS: True by construction
-    assert seal_guard(_resumed_trace(rk), [ck], ledger)[0] == "SEAL"
+    assert not provenance_is_intact(ledger, [ck]), (
+        "a checkpoint whose fetches cannot be verified must not read as intact")
+    verdict, _ = seal_guard(_resumed_trace(rk), [ck], ledger)
+    assert verdict == "REFUSE"
 
 
 # ── F4: produced_at is attacker-writable; staleness is cosmetic ────────────
@@ -195,7 +197,8 @@ def test_f4_produced_at_forgery_uncovered(tmp_path):
     p.write_text(json.dumps(d))
 
     forged = cp.load_by_key(rk, ck.key)
-    assert forged.age_seconds() < 3600   # FAILS: forgery accepted, age now ~0
+    assert forged.age_seconds() > 39 * 86400, (
+        "produced_at was rewritten to now() and the forgery went undetected")
 
 
 # ── F5: cache key ignores everything except question_id ────────────────────
@@ -218,9 +221,13 @@ async def test_f5_fetch_cache_key_ignores_question_text_and_day(tmp_path):
 
     await run_stage(cp, RunTrace(run=rk), "fetch_leaf",
                     {"qid": "L1"}, execute)
+    # Same question_id, but the live leaf TEXT changed (regenerated
+    # decomposition). A content-addressed cache MUST miss here.
     oc = await run_stage(cp, RunTrace(run=rk), "fetch_leaf",
-                         {"qid": "L1"}, execute)   # same id, new text live
-    assert oc.resumed and len(calls) == 1   # FAILS: hit without matching content
+                         {"qid": "L1"}, execute)
+    assert not oc.resumed, (
+        "cache hit served fetches collected under different stage inputs "
+        "(key binds only qid, not the leaf text / date / registry state)")
 
 
 # ── honest negatives (regression pins) ─────────────────────────────────────
