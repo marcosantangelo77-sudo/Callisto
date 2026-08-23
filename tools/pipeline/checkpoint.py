@@ -335,7 +335,18 @@ def replay_ledger(ledger, checkpoints: list[Checkpoint]) -> dict:
         for rec in ck.payload.get("fetches", []):
             body = rec.get("body", "")
             digest = rec.get("content_sha256") or ""
-            if digest and _sha(body) != digest:
+            # ABSENCE IS FAILURE. This used to read `if digest and ...`, so a
+            # missing or empty content_sha256 skipped verification entirely and
+            # the bytes were still replayed as primary=True — one absent JSON
+            # field minted PRIMARY provenance for arbitrary fabricated bytes,
+            # and seal_guard sealed over them (red-team C1). An unverifiable
+            # record is exactly as untrustworthy as a mismatched one.
+            # It also kept "" out of `seen`: with an empty digest the dedup key
+            # was "", so a second DISTINCT record was dropped as a duplicate.
+            if not digest:
+                failures.append(ck.key)
+                continue
+            if _sha(body) != digest:
                 failures.append(ck.key)
                 continue
             if digest in seen:
@@ -368,6 +379,30 @@ def provenance_is_intact(ledger, checkpoints: list[Checkpoint]) -> bool:
     return True
 
 
+class _ScratchLedger:
+    """Write-only sink for provenance CHECKS.
+
+    provenance_is_intact works by replaying records and seeing whether they
+    verify. On a resumed run that replay belongs in the real ledger — that is
+    how resumed evidence earns its source class. On a fresh run it does not:
+    there the guard is only asking a question, and answering it must not
+    change the answer.
+    """
+
+    def __init__(self):
+        self._bodies: set[str] = set()
+
+    def record_tool_result(self, tool, body, primary=True, urls=None):
+        # It must really STORE: provenance_is_intact replays, then asks
+        # has_observation() for each body. A sink that drops writes would make
+        # the check answer False for everything and turn a purity fix into a
+        # blanket REFUSE.
+        self._bodies.add(body)
+
+    def has_observation(self, body) -> bool:
+        return body in self._bodies
+
+
 def seal_guard(
     trace: RunTrace, checkpoints: list[Checkpoint], ledger,
 ) -> tuple[str, str]:
@@ -379,10 +414,23 @@ def seal_guard(
     that, we refuse — sealing something unverifiable is worse than redoing
     the work.
     """
+    # SCOPE THE CHECKPOINTS TO THIS RUN. The engine passes cp.list_all() —
+    # every checkpoint ever written, by every run. Replaying those into this
+    # run's ledger imported another question's bytes as PRIMARY observations,
+    # so a later INFERRED claim here could re-class upward off evidence this
+    # run never collected (red-team C2). A run may only be judged on, and may
+    # only absorb, its own evidence.
+    checkpoints = [ck for ck in checkpoints if ck.run == trace.run]
+
     if not trace.is_resume:
         # Even fresh runs must not seal over checkpointed evidence whose
         # integrity fails — the guard is about the EVIDENCE, not the label.
-        if checkpoints and not provenance_is_intact(ledger, checkpoints):
+        # CHECK ONLY: verify against a scratch ledger. This branch used to
+        # replay into the real one, so merely *checking* a fresh run laundered
+        # the bytes in, and the guard then returned SEAL over evidence it had
+        # itself just admitted. A check must not mutate what it checks.
+        if checkpoints and not provenance_is_intact(_ScratchLedger(),
+                                                    checkpoints):
             return "REFUSE", (
                 "checkpointed evidence provenance could not be verified "
                 "against the ledger; refusing to seal")
