@@ -458,7 +458,86 @@ def classify_gap(registry, trace: Any, question, question_type: str = "",
     return gap
 
 
-# ── Report over a whole run ────────────────────────────────────────────────
+# ── The trace-level verdict (registry-free core rule) ──────────────────────
+
+#: Verdict vocabulary for the three-way split every conclusion must carry:
+#:   HONEST_NULL        searched competently, found nothing — the literature
+#:                      is genuinely silent in the sources we can reach.
+#:   RETRIEVAL_FAILURE  there is signal out there and we failed to FETCH it —
+#:                      never read this as "there is nothing there".
+#:   UNPROVABLE         evidence came back but cannot be PROVEN to our own
+#:                      declared standard (unmet evidence requirements) — a
+#:                      deliberate decision about the bar, not a fetch fault.
+class NullKind(str, Enum):
+    HONEST_NULL = "honest_null"
+    RETRIEVAL_FAILURE = "retrieval_failure"
+    UNPROVABLE = "unprovable"
+
+
+def classify_null_kind(trace: Any) -> tuple[str, str]:
+    """THE single membership rule: is this leaf's null honest or a retrieval
+    failure? Returns (kind_value, explanation).
+
+    Registry-free so both tools/gaps.classify_gap and
+    tools/pipeline/synthesis.classify_null delegate to it — the rule exists
+    exactly ONCE. Same predicate as classify_gap's failure signals 1/2/6,
+    restricted to what a bare RetrievalTrace records:
+
+      HONEST NULL        rejected items WITH reasons from sources that were
+                         actually reached — the gate judged real responses.
+      RETRIEVAL FAILURE  source errors, skipped/no-route sources, or zero
+                         rounds ran.
+    """
+    rejected = list(getattr(trace, "rejected", None) or [])
+    rounds = list(getattr(trace, "rounds", None) or [])
+    stop = str(getattr(trace, "stop_reason", "") or "")
+
+    errors, no_route = [], []
+    for r in rounds:
+        for s in r.get("sources", []):
+            if "error" in s:
+                errors.append(f"{s['name']}: {s['error']}")
+            elif s.get("skipped"):
+                no_route.append(s["name"])
+
+    reachable_attempt = bool(rejected) or any(
+        s.get("admitted") or "rejected" in s
+        for r in rounds for s in r.get("sources", []))
+
+    if reachable_attempt:
+        det = "; ".join(
+            f"[{getattr(r, 'source_name', '?')}] {getattr(r, 'reason', '')}"
+            for r in rejected) or "sources returned only irrelevant material"
+        expl = (f"sources were queried and returned no relevant material "
+                f"({len(rejected)} rejected at the relevance gate): {det}")
+        if errors:
+            # Mixed: some sources answered, some errored. Still an honest
+            # null on the evidence obtained, but coverage is disclosed —
+            # partial coverage is visible, never laundered into silence.
+            expl += (" | NOTE some sources also errored, coverage may be "
+                     "partial: " + "; ".join(errors[:5]))
+        return NullKind.HONEST_NULL.value, expl
+
+    if errors or no_route or not rounds:
+        why = []
+        if errors:
+            why.append("source errors: " + "; ".join(errors[:5]))
+        if no_route:
+            why.append("no fetch route for: " + ", ".join(no_route))
+        if not rounds:
+            why.append(f"no fetch was attempted ({stop or 'no rounds ran'})")
+        return NullKind.RETRIEVAL_FAILURE.value, (
+            "this is a RETRIEVAL FAILURE, not a finding — do not read "
+            "it as 'the literature does not address this': " + " | ".join(why))
+
+    # Rounds ran, nothing was rejected with reasons and nothing admitted:
+    # the sources were reached and simply held nothing relevant.
+    return NullKind.HONEST_NULL.value, (
+        f"sources were queried; no relevant material returned "
+        f"(0 rejected): stop reason '{stop or 'search exhausted'}'")
+
+
+# ── Report over a whole run ─────────────────────────────────────────────────
 
 @dataclass
 class GapReport:
