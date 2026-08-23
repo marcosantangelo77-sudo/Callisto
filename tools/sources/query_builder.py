@@ -1112,6 +1112,12 @@ _KEYWORD_PLANNERS = {
 #: other registered source now has a planner; the remaining entries below
 #: are the honest residue, each naming exactly what is missing.
 _HONEST_GAPS = {
+    "kalshi": "Kalshi's market list is filtered by series_ticker/event_ticker, "
+              "not free text — there is no keyword search endpoint. Listing "
+              "every open market and letting the relevance gate sort it out "
+              "would be a faked plan, not a real one. Becomes plannable once a "
+              "topic -> series_ticker resolver exists (see resolve_entity, "
+              "which already does this shape for FRED series and CIKs).",
     "sec_fulltext": "SEC full-text search requires a declared contact and "
                "this host is currently 403'd; query authoring deferred "
                "until access is restored (deliberate, not forgotten).",
