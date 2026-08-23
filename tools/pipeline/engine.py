@@ -740,14 +740,10 @@ class ResearchPipeline:
                         origin_agent=e_rec["origin_agent"],
                         source_name=e_rec["source_name"])
                     session.add_evidence(ev)
-                if cp is not None:
-                    saved = cp.save(
-                        trace.run, "answer_leaf",
-                        ckpt.hash_inputs({"qid": q.question_id}), payload,
-                        claim_ids=[session.session_id])
-                    trace.stages.append(ckpt.StageOutcome(
-                        stage="answer_leaf", resumed=False, payload=payload,
-                        produced_at=saved.produced_at))
+                if i in _answer_saved:
+                    # Already persisted inside _answer_fresh (R1 fix); just
+                    # record the outcome on the trace in leaf order.
+                    trace.stages.append(_answer_saved[i])
             result.leaves.append(outcome)
         self.artifact_refs.extend(self._pending_artifact_refs)
 
