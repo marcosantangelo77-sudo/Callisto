@@ -51,6 +51,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from tools.retrodiction.cutoff import harness_key as _harness_key
+import dataclasses
+import hmac
 import logging
 import os
 import tempfile
@@ -109,12 +112,17 @@ class Checkpoint:
     produced_at: str = ""
     #: ids of claims this checkpoint contributes evidence to (GC protection).
     claim_ids: list[str] = field(default_factory=list)
+    #: HMAC over the record under the harness key. produced_at was a plain
+    #: JSON field, so rewriting it to now() made 40-day-old evidence report
+    #: age ~0 AND kept it permanently immune to gc() (red-team C4).
+    sig: str = ""
 
     def to_dict(self) -> dict:
         return {
             "key": self.key, "run": self.run, "stage": self.stage,
             "input_hash": self.input_hash, "payload": self.payload,
             "produced_at": self.produced_at, "claim_ids": self.claim_ids,
+            "sig": self.sig,
         }
 
     @classmethod
@@ -123,7 +131,44 @@ class Checkpoint:
             key=d["key"], run=d["run"], stage=d["stage"],
             input_hash=d["input_hash"], payload=d.get("payload") or {},
             produced_at=d.get("produced_at", ""),
-            claim_ids=list(d.get("claim_ids") or []))
+            claim_ids=list(d.get("claim_ids") or []),
+            sig=d.get("sig", ""))
+
+    @property
+    def signing_payload(self) -> str:
+        """Canonical bytes the signature covers — INCLUDING produced_at."""
+        body = json.dumps(self.payload, sort_keys=True, default=str)
+        return "|".join([
+            self.key, self.run, self.stage, self.input_hash,
+            self.produced_at, ",".join(sorted(self.claim_ids)),
+            hashlib.sha256(body.encode()).hexdigest()])
+
+    def signed(self, key: str) -> "Checkpoint":
+        return dataclasses.replace(self, sig=hmac.new(
+            key.encode(), self.signing_payload.encode(),
+            hashlib.sha256).hexdigest())
+
+    def verify_signature(self, key: str) -> bool:
+        if not self.sig or not key:
+            return False
+        expected = hmac.new(key.encode(), self.signing_payload.encode(),
+                            hashlib.sha256).hexdigest()
+        return hmac.compare_digest(self.sig, expected)
+
+    def trusted_age_seconds(self, now: Optional[datetime] = None,
+                            key: Optional[str] = None) -> float:
+        """Age, but only when produced_at is AUTHENTIC.
+
+        Under a keyed regime an unsigned or re-dated record has untrusted age,
+        and untrusted age is treated as maximally old. Forged freshness must
+        buy neither trust nor gc immunity — the whole point of the attack was
+        that a rewritten produced_at did both. With no key configured this
+        falls back to the raw claim, which is all an unkeyed regime can offer.
+        """
+        k = key if key is not None else _harness_key()
+        if k and not self.verify_signature(k):
+            return float("inf")
+        return self.age_seconds(now)
 
     def age_seconds(self, now: Optional[datetime] = None) -> float:
         if not self.produced_at:
@@ -167,6 +212,9 @@ class FileCheckpointer:
             input_hash=input_hash, payload=payload,
             produced_at=(produced_at or _now()).isoformat(),
             claim_ids=list(claim_ids or []))
+        _k = _harness_key()
+        if _k:
+            ck = ck.signed(_k)
         path = self._path(ck)
         tmp = tempfile.NamedTemporaryFile(
             "w", dir=path.parent, delete=False, suffix=".tmp")
@@ -219,11 +267,13 @@ class FileCheckpointer:
         for ck in self.list_all():
             if any(self.is_claim_open(c) for c in ck.claim_ids):
                 continue
-            produced = ck.produced_at or ""
-            if not produced:
-                age_old = True
-            else:
-                age_old = datetime.fromisoformat(produced) < cutoff
+            # Use the AUTHENTICATED age. Reading produced_at raw meant a
+            # rewritten date reset the clock on every touch, so forged-fresh
+            # evidence was immune to collection forever (red-team C4).
+            # Untrusted age is infinite, so a forged record is collected, not
+            # protected — the failure mode points at deletion, not retention.
+            age_s = ck.trusted_age_seconds(now=(now or _now()))
+            age_old = age_s > (max_age_days * 86400.0)
             if age_old:
                 path = self._path(ck)
                 try:
@@ -362,6 +412,16 @@ def replay_ledger(ledger, checkpoints: list[Checkpoint]) -> dict:
             "integrity_failures": failures}
 
 
+def _is_fetch_stage(stage: str) -> bool:
+    """Stages whose checkpoints are REQUIRED to carry fetch records.
+
+    Kept as one predicate so the rule cannot drift between call sites — the
+    membership-rule bug in retrieval/why/base landed three separate times
+    because the same test was reimplemented instead of shared.
+    """
+    return "fetch" in (stage or "")
+
+
 def provenance_is_intact(ledger, checkpoints: list[Checkpoint]) -> bool:
     """True iff EVERY checkpointed fetch's bytes are provably in the ledger.
 
@@ -372,6 +432,14 @@ def provenance_is_intact(ledger, checkpoints: list[Checkpoint]) -> bool:
     if report["integrity_failures"]:
         return False
     for ck in checkpoints:
+        # "NOTHING TO VERIFY" IS NOT "VERIFIED". A fetch-stage checkpoint
+        # always writes a `fetches` key (see engine.py's fetch payload). Its
+        # ABSENCE means the payload was restructured — by tampering or by a
+        # schema change — and the guard used to read that as intact, so a
+        # resumed run could seal with zero verified provenance (red-team C3).
+        # Stages that never fetch (decompose, answer_leaf) are unaffected.
+        if _is_fetch_stage(ck.stage) and "fetches" not in ck.payload:
+            return False
         for rec in ck.payload.get("fetches", []):
             body = rec.get("body", "")
             if not ledger.has_observation(body):
