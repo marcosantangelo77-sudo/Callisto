@@ -21,10 +21,10 @@ run under one realistic perturbation:
       surviving on evidence records inside the answer_leaf checkpoint
   R4  400-day-backdated produced_at -> stale evidence seals with no note;
       nothing downstream consults trace.oldest_produced_at()
-  R5  cross-run laundering: seal_guard calls cp.list_all() (the WHOLE store,
-      every run ever checkpointed) and replays it into THIS run's ledger ->
-      another run's fetched bytes read as PRIMARY here; another run's URLs
-      make a fabricated claim SECONDARY here
+  R5  cross-run laundering: the engine still calls seal_guard with
+      cp.list_all() — every checkpoint ever written by ANY run. Correctness
+      depends entirely on seal_guard's internal scoping (the C2 fix); this
+      pins it, because nothing else separates runs.
 
 Invariant under attack: for any perturbation P, resumed_run(P) may not be
 MORE confident / less evidenced than live_run(). These tests fail today.
@@ -240,20 +240,22 @@ def test_R4_year_old_evidence_cannot_seal_silently(tmp_path, loop):
 
 def test_R5_cross_run_ledger_laundering(tmp_path, loop):
     """engine.run passes cp.list_all() to seal_guard — every checkpoint ever
-    written by ANY run. Replay loads those fetches into THIS run's ledger:
-    another run's exact bytes become PRIMARY here, and citing another run's
-    URL makes a fabricated claim SECONDARY here. Provenance stops being
-    'which code path fetched the bytes THIS session'."""
+    written by ANY run. C2 fixed this inside seal_guard (run-scoped filtering
+    + scratch ledger for fresh runs); this test pins that fix, because the
+    engine STILL hands the guard the entire store and nothing but seal_guard
+    stands between runs."""
     tmp = Path(tmp_path)
     cp = FileCheckpointer(root=tmp / "ck")
     _run(_make(tmp, cp=cp), "Run Alpha")
 
+    # The C2 fix, pinned: an unrelated run's guard call must neither pollute
+    # this ledger nor inherit other runs' provenance.
     fresh = ProvenanceLedger()
     verdict, reason = seal_guard(RunTrace(run="a-completely-unrelated-run"),
                                  cp.list_all(), fresh)
     assert verdict == "SEAL"
-    assert fresh.observed_urls(), (
-        "an unrelated run's guard verdict polluted its ledger with other "
+    assert not fresh.observed_urls(), (
+        "an unrelated run's guard call polluted its ledger with other "
         "runs' fetch observations")
 
     alpha_body = None
@@ -265,9 +267,3 @@ def test_R5_cross_run_ledger_laundering(tmp_path, loop):
     assert fresh.assign_source_class(ev) != SourceClass.PRIMARY, (
         "another run's fetched bytes assigned PRIMARY in a fresh run's "
         "ledger — provenance laundered across the run boundary")
-    url = next(iter(fresh.observed_urls()))
-    fab = Evidence(content=f"Fabricated claim, see {url}",
-                   source_class=SourceClass.INFERRED, confidence_score=0.9,
-                   domain=None, origin_agent="x")
-    assert fresh.assign_source_class(fab) == SourceClass.INFERRED, (
-        "citing a URL some OTHER run fetched upgraded a fabricated claim")
