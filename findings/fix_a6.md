@@ -2,8 +2,21 @@
 
 **Branch:** `fix/a6-phantom-artifacts` · **Baseline:** 51 failures on master
 (34 pre-existing + 17 artifact repros) · **After:** 48 failures
-(**−3**: A6 test flipped to pass ×2 — the child-attested test and its sibling —
-plus no regressions; see "Test accounting").
+(**−3**, no regressions). Breakdown of the artifact-surface files:
+
+- `tests/test_redteam_artifacts_store.py`: 17 failed on master → 15 now.
+  The two A6-family tests pass: the child-attested test was rewritten to
+  pin the fix (no byteless refs; claim record stored, non-citable;
+  verify_artifacts ok), and its failed-run sibling passes unchanged.
+- `tests/test_build_b2_models.py::TestSandboxRegistrySeam::test_full_chain`
+  — previously failing because it asserted the OLD phantom-minting
+  behaviour; updated to assert the new invariant and to actually pass the
+  tmp store into store_sandbox_outputs (it never did — refs went to the
+  repo default store while assertions checked the tmp one). Now passes
+  (file: 17/17).
+- `tests/test_a6_seal_gate.py` — NEW, 6 tests, all passing: gate pass /
+  refuse-missing / refuse-corrupt / no-refs, gate wired before seal() in
+  engine source, end-to-end phantom-ref refusal at the pipeline level.
 
 ## Decision 1 — bytes in the store, or the ref is not cited
 
@@ -40,16 +53,6 @@ an explicit reason, same fail-closed shape as the checkpoint seal_guard.
 
 - `test_child_attested_ref_has_no_bytes_in_store` — rewritten to pin the fix
   (no byteless refs; claim record stored non-citable; verify passes). PASS.
-- `tests/test_a6_seal_gate.py` — NEW, 6 tests: gate pass/refuse-missing/
-  refuse-corrupt/no-refs, gate-wired-before-seal in source, end-to-end
-  phantom-ref refusal. All PASS.
-- Full red-team file: 17→15 failures (the two A6-family tests now pass;
-  everything else untouched — those are separate findings A2/A3/A4/…).
-- Regression check: `tests -k "artifact|sandbox|pipeline|engine|seal"` →
-  173 passed, 2 failed, BOTH pre-existing on HEAD~ (verified via
-  `git stash`: `test_backtest_e2e` full-file failures and
-  `test_build_b2_models::test_full_chain` — the latter asserted the OLD
-  phantom-minting behaviour and was updated to assert the new invariant).
 
 ## JOB 3 — sweep: other attestation paths never verified
 
