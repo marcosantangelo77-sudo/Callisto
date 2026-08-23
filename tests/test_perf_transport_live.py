@@ -23,8 +23,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.pipeline.transport.agent_pool import WarmWorkerPool  # noqa: E402
 
-pool = WarmWorkerPool(pool_size=1)
-
 PROMPT = [{"role": "user",
            "content": "Reply with exactly: ok"}]
 
@@ -35,14 +33,26 @@ pytestmark = pytest.mark.skipif(
 
 def test_subprocess_vs_pool_ratio():
     from tools.pipeline.hermes_cli import hermes_complete
+    from tools.pipeline.transport.agent_pool import WarmWorkerPool
+
+    pool = WarmWorkerPool(pool_size=1)
 
     async def run():
-        # 1) subprocess baseline (fresh process per call)
+        # 1) subprocess baseline — measured OUTSIDE pytest's process so the
+        # Hermes auth seat belt (which fires on PYTEST_CURRENT_TEST) doesn't
+        # block the real `hermes -z` call. Same command, same env otherwise.
+        import subprocess as sp
+
+        clean_env = {k: v for k, v in os.environ.items()
+                     if not k.startswith("PYTEST")}
         t0 = time.monotonic()
-        res_sub = await hermes_complete(PROMPT, role="perf",
-                                        transport="subprocess")
+        proc = await asyncio.create_subprocess_exec(
+            os.path.expanduser("~/.hermes/bin/hermes"), "-z",
+            "Reply with exactly: ok",
+            stdout=sp.PIPE, stderr=sp.DEVNULL, env=clean_env)
+        out, _ = await proc.communicate()
         sub_s = time.monotonic() - t0
-        assert res_sub["content"].strip()
+        assert proc.returncode == 0 and out.decode().strip()
 
         # 2) warm pool: first call includes one-time worker spawn + build
         t0 = time.monotonic()
