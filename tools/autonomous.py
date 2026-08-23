@@ -1904,6 +1904,18 @@ class ResearchLoop:
         if db is None:
             return
 
+        # GATE POLICY: this un-rejects hypotheses (rejected -> backtesting),
+        # the same class of action as _requeue_threshold_rejections and
+        # _requeue_prop_rejections, which both require operator opt-in.
+        # This path was missed when those were gated. Same flag required.
+        if not os.getenv("CALLISTO_ALLOW_THRESHOLD_MIGRATION"):
+            logger.warning(
+                "Gate policy: _requeue_stale_signal_rejections SKIPPED "
+                "(un-rejects hypotheses). Set CALLISTO_ALLOW_THRESHOLD_MIGRATION=1 "
+                "to authorize."
+            )
+            return
+
         # Find hypotheses rejected for "0 signals" that actually have signals in events.
         # Two-step approach to avoid slow correlated subquery on 3000+ rejected hyps.
         cursor = await db.execute(
@@ -3193,11 +3205,42 @@ class ResearchLoop:
     async def _phase_refresh_signals(self) -> None:
         """Retroactively update signal_generated when thresholds change.
 
-        Claude deep work can lower edge_threshold on hypotheses AFTER backtests
-        have already run and stored signal_generated=0. This phase catches those
-        events and upgrades them to signal=1 so the pipeline sees them.
+        GATE POLICY: this REWRITES HISTORICAL EVIDENCE — it flips
+        signal_generated 0→1 on already-recorded backtest events to match
+        whatever the operative edge_threshold is now. That was mechanism #2
+        of the eight gate-weakening failures in the 2026-08 audit. Its old
+        justification ("Claude deep work lowered the threshold after
+        backtest") is dead: _phase_interpret_backtests and the deferred
+        drain both REFUSE threshold lowerings outright, so no legitimate
+        automated path can create the state this phase exists to paper over.
+        Requires explicit operator opt-in via CALLISTO_ALLOW_THRESHOLD_MIGRATION.
+        Without the flag it logs what it WOULD have upgraded and changes nothing.
         """
         import aiosqlite
+
+        if not os.getenv("CALLISTO_ALLOW_THRESHOLD_MIGRATION"):
+            db_path = self.backtest_engine.db_path
+            try:
+                async with aiosqlite.connect(db_path) as db:
+                    await db.execute("PRAGMA busy_timeout = 60000")
+                    cur = await db.execute(
+                        """SELECT COUNT(*) FROM backtest_events be
+                           JOIN hypotheses h ON be.hypothesis_id = h.hypothesis_id
+                           WHERE be.edge >= h.edge_threshold AND be.edge > 0
+                           AND be.signal_generated = 0"""
+                    )
+                    row = await cur.fetchone()
+                    would = row[0] if row else 0
+                if would:
+                    logger.warning(
+                        f"Gate policy: signal refresh SKIPPED — would rewrite "
+                        f"{would} historical backtest_events to signal=1 to "
+                        f"match current thresholds. Set "
+                        f"CALLISTO_ALLOW_THRESHOLD_MIGRATION=1 to authorize."
+                    )
+            except Exception as e:
+                logger.debug(f"Gate policy signal-refresh count failed: {e}")
+            return
 
         db_path = self.backtest_engine.db_path
         try:
