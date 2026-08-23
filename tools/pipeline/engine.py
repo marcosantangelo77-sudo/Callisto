@@ -94,6 +94,12 @@ class LeafOutcome:
     text: str
     answer: str = ""
     confidence: float = 0.0
+    #: ESTIMATE vs CEILING (agp.estimate). The model's raw belief and the
+    #: provenance entitlement, carried separately. DIAGNOSTIC ONLY: nothing
+    #: that bets, scores, or seals may read these — the authoritative number
+    #: is `confidence`, which equals min(estimate, ceiling) exactly as before.
+    confidence_estimate: float = 0.0
+    confidence_ceiling: float = 0.0
     tier: str = "UNVERIFIED"
     #: AFFIRMS / DENIES / UNDETERMINED, DECLARED by the model — never inferred
     #: from prose. The scorer used to keyword-scan the conclusion for six
@@ -398,9 +404,15 @@ class ResearchPipeline:
         out.stance = _st if _st in ("AFFIRMS", "DENIES") else "UNDETERMINED"
         proposed = float(proposal.get("proposed_confidence") or 0.0)
 
-        # Clamp to the provenance-assigned BEST class ceiling (only down).
-        clamped = min(proposed,
-                      MAX_CONFIDENCE_BY_SOURCE.get(best_class.value, 0.55))
+        # ESTIMATE vs CEILING (agp.estimate): the model's proposed_confidence
+        # is its BELIEF; provenance and the requirement gate are ENTITLEMENT.
+        # Carrying both keeps the belief visible for calibration while the
+        # sealed number stays exactly what min() produced before — sealable()
+        # IS the old collapsed value, by construction.
+        from agp.estimate import EstimateCeiling
+        ec = EstimateCeiling(
+            estimate=min(1.0, max(0.0, proposed)),
+            ceiling=MAX_CONFIDENCE_BY_SOURCE.get(best_class.value, 0.55))
 
         # Evidence-requirement gate (agp.research_program): unmet requirements
         # cap the leaf at SPECULATIVE floor band. Independent-source counting
@@ -419,9 +431,19 @@ class ResearchPipeline:
 
         out.requirement_reasons = reasons
         if reasons:
-            clamped = min(clamped, 0.54)
+            # A ceiling mechanism, applied through the type: only the ceiling
+            # falls; the estimate rides through untouched.
+            ec = ec.with_ceiling(min(ec.ceiling, 0.54))
 
-        out.confidence = round(max(0.0, clamped), 2)
+        out.confidence_estimate = ec.estimate          # diagnostic, not acted on
+        out.confidence_ceiling = ec.ceiling
+        # min(estimate, ceiling) is exactly what sealable() computes; the
+        # historical engine rounding (round-half) is preserved verbatim so the
+        # sealed/stored/reported number cannot move. sealable()'s floor_conf
+        # quantisation differs only on proposals that are not already 2dp —
+        # see tests/test_estimate_wiring.py for the pinned equivalence.
+        out.confidence = round(
+            max(0.0, min(ec.estimate, ec.ceiling)), 2)
         out.tier = ConfidenceTier.from_score(out.confidence).value
         return out
 
