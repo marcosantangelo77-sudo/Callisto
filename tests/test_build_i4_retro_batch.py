@@ -31,14 +31,13 @@ from tools.routing.scores import ModelScoreStore
 def _q(qid, answer=True, domain="FINANCIAL", market=None,
        claim=date(2024, 1, 1), resolve=date(2024, 3, 1),
        qtype=QuestionType.BEAT_OR_MISS) -> RetrodictionQuestion:
-    q = RetrodictionQuestion(
+    return RetrodictionQuestion(
         question_id=qid,
         text=f"question {qid} about {domain.lower()} things",
         domain=domain, question_type=qtype,
         claim_date=claim, resolution_date=resolve,
-        answer_binary=answer, answer_confidence=1.0)
-    q.market_implied = market  # type: ignore[attr-defined]
-    return q
+        answer_binary=answer, answer_confidence=1.0,
+        market_implied=market)
 
 
 class StubResearcher:

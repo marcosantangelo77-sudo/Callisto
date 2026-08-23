@@ -43,8 +43,24 @@ class RetrodictionQuestion:
     # Held out from the pipeline:
     answer_binary: bool = False        # e.g. True = beat / raised / happened
     answer_confidence: float = 1.0     # how certain history is about it
+    # Market-implied fair probability at claim time (devigged where the
+    # source allows). Optional: None means "no market existed for this
+    # claim" and magnitude scoring is skipped. NEXT.md RETRODICTION
+    # SCORING: continuous market-relative scoring carries far more power
+    # per observation than binary Brier — but only when the benchmark is
+    # actually carried on the question. Before this field existed the
+    # batch runner did getattr(q, 'market_implied', None) and every real
+    # question silently scored binary-only.
+    market_implied: Optional[float] = None
 
     def __post_init__(self):
+        if self.market_implied is not None:
+            if not isinstance(self.market_implied, (int, float)) or \
+                    isinstance(self.market_implied, bool) or \
+                    not (0.0 <= self.market_implied <= 1.0):
+                raise ValueError(
+                    f"market_implied must be a probability in [0,1], "
+                    f"got {self.market_implied!r}")
         if self.claim_date and self.resolution_date:
             if self.resolution_date <= self.claim_date:
                 raise ValueError("resolution_date must be after claim_date")
@@ -79,6 +95,10 @@ def generate_earnings_questions(earnings_history) -> list[RetrodictionQuestion]:
 
     `earnings_history`: iterable of dicts with keys
       ticker, report_date (date), eps_actual (float), eps_consensus (float).
+      Optional key `market_implied` — the devigged fair probability of a
+      beat implied by the options/prediction market at claim time. When
+      present it rides on the question so magnitude scoring has its
+      benchmark (NEXT.md RETRODICTION SCORING).
     For each report, a question asked as of 30 days before the report:
     'will X beat consensus EPS next report?' Answer: actual > consensus.
 
@@ -98,6 +118,8 @@ def generate_earnings_questions(earnings_history) -> list[RetrodictionQuestion]:
             resolution_date=report,
             answer_binary=beat,
             answer_confidence=1.0,
+            market_implied=(float(row["market_implied"])
+                            if row.get("market_implied") is not None else None),
         ))
     return out
 

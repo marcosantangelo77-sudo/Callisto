@@ -259,7 +259,7 @@ class RetrodictionBatch:
             brier=round((pred.probability -
                          (1.0 if q.answer_binary else 0.0)) ** 2, 6),
             magnitude=magnitude_score(pred.probability, q.answer_binary,
-                                      getattr(q, "market_implied", None)),
+                                      q.market_implied),
             elapsed_s=elapsed, **base)
         # enrich from the researcher's own run trace where available
         pr = getattr(researcher, "results", None)
