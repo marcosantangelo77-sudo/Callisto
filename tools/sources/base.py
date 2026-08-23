@@ -32,6 +32,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import ssl
 import threading
 import time
@@ -346,10 +347,25 @@ INDEPENDENCE_FAMILIES: dict[str, frozenset[str]] = {
 }
 
 
+def _norm_source_name(name: str) -> str:
+    """THE canonical source-name normalisation (same rule as
+    tools.pipeline.retrieval.in_family): strip non-alphanumerics and
+    lowercase, so 'semantic_scholar', 'semanticscholar' and
+    'Semantic-Scholar' are one source."""
+    return re.sub(r"[^a-z0-9]", "", str(name).lower())
+
+
 def independence_family(spec_name: str) -> str:
     """The family key a source counts as toward min_independent_sources:
-    its declared family name, or its own name when it stands alone."""
+    its declared family name, or its own name when it stands alone.
+
+    Membership uses the canonical normalisation — a raw `in members` test
+    here read 'Semantic-Scholar' as standing alone even though it is a
+    declared family member, i.e. two dependent sources read as two
+    INDEPENDENT voices (confidence-inflating direction).
+    """
+    n = _norm_source_name(spec_name)
     for family, members in INDEPENDENCE_FAMILIES.items():
-        if spec_name in members:
+        if any(_norm_source_name(m) == n for m in members):
             return family
     return spec_name
