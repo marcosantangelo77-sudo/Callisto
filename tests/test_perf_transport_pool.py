@@ -237,7 +237,7 @@ class TestSubprocessFallback:
 class TestModelContract:
     def test_complete_contract_preserved(self, monkeypatch):
         """complete(role, messages, schema=None) -> {'content': str}."""
-        model = hermes_cli.HermesCliModel()
+        model = hermes_cli.HermesCliModel(transport="subprocess")
 
         async def fake_run(binary, prompt, cwd, timeout_s):
             return (0, '{"stubbed": 1}', "")
