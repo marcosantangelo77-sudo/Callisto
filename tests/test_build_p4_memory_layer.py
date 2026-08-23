@@ -481,5 +481,107 @@ class TestMigration015(unittest.TestCase):
         self.assertEqual(snap1, snap2)
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# JOB 6: the write→read provenance seam actually carries (2026-08-23)
+# ────────────────────────────────────────────────────────────────────────────
+
+class TestProvenanceSeamCarries(unittest.TestCase):
+    """record_learning admits a class, _build_learnings re-reads it. The two
+    ends previously did not meet: the SELECT had no source_class column, so a
+    verified PRIMARY learning was stored at 1.0 and read back as INFERRED."""
+
+    def setUp(self):
+        import asyncio, os, tempfile
+        self._loop = asyncio.new_event_loop()
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self.db = HermesMemory(db_path=path)
+        # Keyed regime so seal verification can succeed.
+        import secrets
+        os.environ["CALLISTO_SEAL_KEY"] = secrets.token_hex(32)
+
+    def tearDown(self):
+        import os
+        self._loop.close()
+        os.environ.pop("CALLISTO_SEAL_KEY", None)
+        try:
+            os.unlink(self.db.db_path)
+        except OSError:
+            pass
+
+    def _seal(self, session: dict) -> str:
+        from tools.memory_epistemics import _canonical_payload, _seal_digest
+        return _seal_digest(_canonical_payload(session))
+
+    def test_sealed_class_survives_the_roundtrip(self):
+        async def run():
+            session = {"session_id": "s1", "conclusion": "c"}
+            await self.db.record_learning(
+                key="verified_edge", value="x", confidence=0.95,
+                source="claude", source_class="PRIMARY",
+                seal_session=session, seal_hash=self._seal(session))
+            ctx = await self.db.get_memory_context(force_refresh=True)
+            import re
+            m = re.search(r"provenance (\w+)", ctx)
+            self.assertIsNotNone(m, f"no provenance annotation in context:\n{ctx}")
+            self.assertEqual(m.group(1), "PRIMARY")
+        self._loop.run_until_complete(run())
+
+    def test_unsealed_write_reads_as_inferred(self):
+        async def run():
+            await self.db.record_learning(
+                key="guess", value="y", confidence=0.95,
+                source="claude", source_class="PRIMARY")  # no seal
+            ctx = await self.db.get_memory_context(force_refresh=True)
+            import re
+            m = re.search(r"provenance (\w+)", ctx)
+            self.assertIsNotNone(m)
+            self.assertEqual(m.group(1), "INFERRED")
+            # And the ceiling travelled with it.
+            self.assertIn("ceiling 55%", ctx)
+        self._loop.run_until_complete(run())
+
+    def test_legacy_row_without_columns_still_renders(self):
+        """A DB created before the new columns must not crash the read path."""
+        import sqlite3
+        conn = sqlite3.connect(self.db.db_path)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS hermes_learnings ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE,"
+            "value TEXT NOT NULL, learned_at TEXT NOT NULL,"
+            "confidence REAL DEFAULT 0.5, occurrences INTEGER DEFAULT 1,"
+            "source TEXT DEFAULT 'claude')")
+        conn.execute(
+            "INSERT INTO hermes_learnings (key, value, learned_at, confidence)"
+            " VALUES ('old_row', 'v', ?, 0.9)",
+            (datetime.now(timezone.utc).isoformat(),))
+        conn.commit()
+        conn.close()
+
+        async def run():
+            ctx = await self.db.get_memory_context(force_refresh=True)
+            self.assertIn("old_row", ctx)
+            self.assertIn("provenance INFERRED", ctx)  # fail closed
+        self._loop.run_until_complete(run())
+
+    def test_ensure_tables_upgrades_preexisting_table(self):
+        """_ensure_tables itself adds the missing columns to an old table."""
+        import sqlite3
+        conn = sqlite3.connect(self.db.db_path)
+        conn.execute("CREATE TABLE hermes_learnings (key TEXT UNIQUE)")
+        conn.commit()
+        conn.close()
+        self.db._db_initialized = False
+
+        async def run():
+            async with aiosqlite.connect(self.db.db_path) as db:
+                await self.db._ensure_tables(db)
+                cols = {r[1] for r in await db.execute_fetchall(
+                    "PRAGMA table_info(hermes_learnings)")}
+        self._loop.run_until_complete(run())
+        self.assertIn("source_class", cols)
+        self.assertIn("provenance_seal", cols)
+
+
 if __name__ == "__main__":
     unittest.main()

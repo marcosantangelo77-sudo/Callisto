@@ -73,7 +73,9 @@ class HermesMemory:
                 learned_at TEXT NOT NULL,
                 confidence REAL DEFAULT 0.5,
                 occurrences INTEGER DEFAULT 1,
-                source TEXT DEFAULT 'claude'
+                source TEXT DEFAULT 'claude',
+                source_class TEXT,
+                provenance_seal TEXT
             )""",
             """CREATE TABLE IF NOT EXISTS hermes_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,6 +86,15 @@ class HermesMemory:
             )""",
         ):
             await db.execute(stmt)
+        # Migration 015 adds source_class/provenance_seal to databases created
+        # before it existed; a DB freshly created above already has them. Guard
+        # so both shapes end up with the full column set.
+        existing = {r[1] for r in await db.execute_fetchall(
+            "PRAGMA table_info(hermes_learnings)")}
+        for col in ("source_class", "provenance_seal"):
+            if col not in existing:
+                await db.execute(
+                    f"ALTER TABLE hermes_learnings ADD COLUMN {col} TEXT")
         await db.commit()
         self._db_initialized = True
 
@@ -290,6 +301,16 @@ class HermesMemory:
             )
             confidence = admission.stored_confidence
             provenance_class = admission.source_class
+            # Persist the ADMITTED class and seal hash (P4 seam closure). The
+            # read path previously had no way to know a learning's class, so
+            # every sealed PRIMARY learning was re-read as INFERRED. The seal
+            # hash is stored for audit; re-verification happens on write, never
+            # on read (read-time verification of a forgeable digest would be
+            # security theatre).
+            import json as _json
+            provenance_seal = _json.dumps(
+                {"seal_session": seal_session, "seal_hash": seal_hash},
+                sort_keys=True) if (seal_session and seal_hash) else None
             # WriteCoordinator path (single-writer pattern). Skips opening yet
             # another connection just to write one row.
             try:
@@ -305,13 +326,17 @@ class HermesMemory:
                     async with aiosqlite.connect(self.db_path) as db:
                         await self._ensure_tables(db)
                 await coord.execute(
-                    "INSERT INTO hermes_learnings (key, value, learned_at, confidence, source) "
-                    "VALUES (?, ?, ?, ?, ?) "
+                    "INSERT INTO hermes_learnings (key, value, learned_at, "
+                    "confidence, source, source_class, provenance_seal) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(key) DO UPDATE SET "
                     "value=excluded.value, occurrences=occurrences+1, "
                     "confidence=excluded.confidence, "
-                    "learned_at=excluded.learned_at, source=excluded.source",
-                    (key, value, datetime.now(timezone.utc).isoformat(), confidence, source),
+                    "learned_at=excluded.learned_at, source=excluded.source, "
+                    "source_class=excluded.source_class, "
+                    "provenance_seal=excluded.provenance_seal",
+                    (key, value, datetime.now(timezone.utc).isoformat(),
+                     confidence, source, provenance_class, provenance_seal),
                 )
                 self._cache.clear()
                 self._cache_time.clear()
@@ -324,13 +349,17 @@ class HermesMemory:
                 await db.execute("PRAGMA busy_timeout = 60000")
                 await self._ensure_tables(db)
                 await db.execute(
-                    "INSERT INTO hermes_learnings (key, value, learned_at, confidence, source) "
-                    "VALUES (?, ?, ?, ?, ?) "
+                    "INSERT INTO hermes_learnings (key, value, learned_at, "
+                    "confidence, source, source_class, provenance_seal) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(key) DO UPDATE SET "
                     "value=excluded.value, occurrences=occurrences+1, "
                     "confidence=excluded.confidence, "
-                    "learned_at=excluded.learned_at, source=excluded.source",
-                    (key, value, datetime.now(timezone.utc).isoformat(), confidence, source),
+                    "learned_at=excluded.learned_at, source=excluded.source, "
+                    "source_class=excluded.source_class, "
+                    "provenance_seal=excluded.provenance_seal",
+                    (key, value, datetime.now(timezone.utc).isoformat(),
+                     confidence, source, provenance_class, provenance_seal),
                 )
                 await db.commit()
                 # Invalidate cache so next read picks up the new learning
@@ -730,8 +759,8 @@ class HermesMemory:
         """
         try:
             rows = await db.execute_fetchall(
-                "SELECT key, value, confidence, occurrences, learned_at, source "
-                "FROM hermes_learnings ORDER BY learned_at DESC LIMIT 60"
+                "SELECT key, value, confidence, occurrences, learned_at, source, "
+                "source_class FROM hermes_learnings ORDER BY learned_at DESC LIMIT 60"
             )
             if not rows:
                 return ""
@@ -742,7 +771,7 @@ class HermesMemory:
             now = datetime.now(timezone.utc)
             items = []
             for r in rows:
-                key, value, conf, occ, learned_at, source = r
+                key, value, conf, occ, learned_at, source, stored_class = r
                 eff = decay_confidence(conf, learned_at, now)
                 item = annotate_for_reinjection({
                     "id": key,
@@ -752,6 +781,10 @@ class HermesMemory:
                     "occurrences": occ,
                     "learned_at": learned_at,
                     "source": source,
+                    # The ADMITTED class from the write path. Rows predating
+                    # migration 015 have NULL here — normalize_source_class
+                    # maps that to INFERRED (fail closed for legacy data).
+                    "source_class": stored_class,
                     # Memory rows do not carry stance today; only explicitly
                     # marked disconfirmations count (conservative — see
                     # trim_learnings_for_context).
