@@ -703,7 +703,10 @@ def _plan_wikidata_concept(question: str) -> tuple[dict, dict]:
     low = question.lower()
     matched = [(c, h) for h, c in _WIKIDATA_HINTS.items() if h in low]
     if matched:
-        matched.sort(key=lambda p: -p[1])
+        # Longest matching hint wins ('companies' over 'company'); the
+        # original `-p[1]` negated the hint STRING itself and crashed with
+        # TypeError on any question matching more than one hint.
+        matched.sort(key=lambda p: -len(p[1]))
         best = matched[0][0]
         others = [c for c, _ in matched[1:] if c != best]
         if not others:
