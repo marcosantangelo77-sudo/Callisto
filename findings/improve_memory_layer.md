@@ -80,3 +80,15 @@ The rest of the layer is sound: decay-and-replace semantics are tested with
 random inputs, trimming is genuinely disconfirming-biased, and the R5
 fail-closed seal logic survives re-reading. One seam was open; it is now
 pinned shut by tests.
+
+## Suite status at landing (2026-08-23)
+
+Full tree: 11,105 passed, 9 skipped, 21 failed — all 21 are the F4–F7
+red-team constructions in `tests/test_redteam_confidence_laundering.py`
+(plus joblib-missing collection errors in test_ml_classifier/test_ml_drift,
+an environment gap). The laundering failures reproduce identically on
+origin/master and live in tools/pipeline/synthesis.py, agp/ensemble.py and
+tools/research_program.py — none is in the memory layer, and each belongs to
+another instance's area under exclusive file ownership. They are the
+already-documented open half of findings/redteam_confidence.md.
+
