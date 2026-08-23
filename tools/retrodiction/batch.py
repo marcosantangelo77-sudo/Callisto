@@ -357,12 +357,20 @@ def build_report(results: dict[str, BatchResult]) -> dict:
         width = 1.0 / n_bins
         for i in range(n_bins):
             lo, hi = i * width, (i + 1) * width
-            bucket = [(r.predicted_probability,
-                       _implied_outcome(r)) for r in items
+            bucket = [(r.predicted_probability, _y) for r in items
+                      if (lo <= r.predicted_probability < hi
+                          or (i == n_bins - 1
+                              and r.predicted_probability == 1.0))
+                      and (_y := _implied_outcome(r)) is not None]
+            # n_no_truth is DISCLOSED, not hidden: a bin whose rows mostly
+            # lack ground truth is not a measurement, and the reader has to be
+            # able to see that rather than infer it from a small n.
+            in_bin = [r for r in items
                       if lo <= r.predicted_probability < hi
                       or (i == n_bins - 1 and r.predicted_probability == 1.0)]
             entry = {"bin_low": round(lo, 2), "bin_high": round(hi, 2),
-                     "n": len(bucket), "mean_p": None, "realised": None}
+                     "n": len(bucket), "n_no_truth": len(in_bin) - len(bucket),
+                     "mean_p": None, "realised": None}
             if bucket:
                 entry["mean_p"] = round(sum(p for p, _ in bucket)
                                         / len(bucket), 4)
@@ -437,20 +445,31 @@ def build_report(results: dict[str, BatchResult]) -> dict:
     return report
 
 
-def _implied_outcome(r: BatchResult) -> float:
-    """The realised binary for this row. Stored answer_binary when present;
-    otherwise invert brier = (p − y)^2 → y ∈ {0,1}."""
-    p = r.predicted_probability or 0.5
+def _implied_outcome(r: BatchResult) -> Optional[float]:
+    """The realised binary for this row, or None when it is not KNOWN.
+
+    Only a stored answer_binary counts as ground truth.
+
+    This used to reconstruct the outcome from the recorded brier and, on any
+    ambiguity or a missing brier, fall back to `1.0 if p >= 0.5 else 0.0` —
+    the prediction's OWN DIRECTION. Rows without answer_binary are exactly
+    those rehydrated from checkpoints or read from older JSONL, so across the
+    resume boundary the calibration table scored the model against itself:
+    a random sweep agreed with the prediction in 2000/2000 cases, a forged
+    brier reported a wrong call as CORRECT, and ten truth-less rows rendered
+    a textbook-perfect table with the verdict "strongly better than chance"
+    (red-team K1).
+
+    The project's headline empirical claim — bin 0.2-0.4 "predicted 0.33,
+    realised 0.60" — was read off that table.
+
+    Imputing an outcome is never acceptable here: a measurement that can
+    manufacture its own ground truth measures nothing. Unknown means EXCLUDED,
+    and build_report discloses the count.
+    """
     if r.answer_binary is not None:
         return 1.0 if r.answer_binary else 0.0
-    if r.brier is None:
-        return 1.0 if p >= 0.5 else 0.0
-    root = max(0.0, min(1.0, r.brier)) ** 0.5
-    for y in (p - root, p + root):
-        cand = round(y)
-        if abs(p - cand) <= root + 1e-9 and cand in (0.0, 1.0):
-            return cand
-    return 1.0 if p >= 0.5 else 0.0
+    return None
 
 
 def _slice_table(rows: list["BatchResult"], key: str) -> dict:
