@@ -25,13 +25,34 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
+
+
+def _runs_dir() -> Path:
+    """Directory where ask() results are persisted as JSON records.
+
+    Uses the off-OneDrive state dir (tools.state_paths) so a run record
+    never freezes under a sync lock; overridable with CALLISTO_RUNS_DIR.
+    """
+    override = os.getenv("CALLISTO_RUNS_DIR", "").strip()
+    if override:
+        root = Path(override).expanduser()
+    else:
+        try:
+            from tools.state_paths import state_dir
+            root = state_dir() / "runs"
+        except Exception:
+            root = Path.home() / ".local" / "state" / "callisto" / "runs"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def _default_providers_path() -> str:
@@ -53,6 +74,53 @@ def _make_engine(router, self_review: bool):
     return ResearchPipeline(
         model=RouterModel(router),
         adversary_router=(None if self_review else router))
+
+
+def _result_record(result, question: str) -> dict:
+    """Serialise a PipelineResult into the persisted run record.
+
+    Everything needed to re-check the conclusion later: the conclusion
+    text itself, every artifact hash (resolvable against the artifact
+    store), and per-fetch source/URL provenance.
+    """
+    return {
+        "recorded_at": datetime.datetime.now(
+            datetime.timezone.utc).isoformat(timespec="seconds"),
+        "question": question,
+        "sealed": bool(getattr(result, "sealed", False)),
+        "refusal_reason": getattr(result, "refusal_reason", ""),
+        "conclusion": getattr(result, "conclusion", ""),
+        "confidence": {
+            "score": getattr(result, "confidence_score", 0.0),
+            "tier": getattr(result, "confidence_tier", "UNVERIFIED"),
+        },
+        "leaves": [
+            {"text": lf.text, "answer": lf.answer or "",
+             "tier": lf.tier, "confidence": lf.confidence}
+            for lf in getattr(result, "leaves", [])
+        ],
+        "artifacts": [r.to_dict() for r in getattr(result, "artifact_refs", [])],
+        "fetches": [
+            {"source": getattr(f, "source_name", "?"),
+             "url": getattr(f, "url", "")}
+            for f in getattr(result, "fetches", [])
+        ],
+        "objections": [getattr(o, "text", str(o))
+                       for o in getattr(result, "objections", [])],
+        "notes": list(getattr(result, "notes", [])),
+    }
+
+
+def _persist_run(record: dict) -> Path:
+    """Write the run record atomically; returns its path. The filename is
+    the timestamped run id — `callisto runs` / `callisto show` read it."""
+    stamp = record["recorded_at"].replace(":", "").replace("-", "")
+    run_id = f"{stamp}_{abs(hash(record['question'])) % 10000:04d}"
+    path = _runs_dir() / f"{run_id}.json"
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+    return path
 
 
 async def _cmd_ask(args: argparse.Namespace) -> int:
