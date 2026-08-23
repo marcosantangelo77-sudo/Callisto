@@ -1,0 +1,47 @@
+{
+  "artifacts": [
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  ],
+  "conclusion": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [CORROBORATED 0.75] leaf 0: what does the evidence say about apple earnings expectations and analyst consensus: mean computed as 2.0",
+  "confidence_score": 0.55,
+  "confidence_tier": "PROBABLE",
+  "evidence": [
+    "{\"results\": [{\"cited_by_count\": 12, \"id\": \"W1\", \"publication_year\": 2024, \"title\": \"Scholarly study on apple earnings expectations: analyst consensus and quarterly results\"}]}",
+    "sandbox code:\nresult = {'mean': sum([1.0, 2.0, 3.0]) / 3}\nstdout:\n"
+  ],
+  "fetches": [
+    {
+      "sha": "fa33f80e2e9dd0114fa0204ffbe46ce33c1713fe13ebfd7857100af99ade0386",
+      "source_name": "openalex",
+      "url": "https://api.openalex.org/works?search=leaf+apple+earnings+expectations+analyst+consensus&per-page=10"
+    }
+  ],
+  "leaves": [
+    {
+      "answer": "mean computed as 2.0",
+      "artifact_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "confidence": 0.75,
+      "n_sources": 2,
+      "requirement_reasons": [],
+      "sandbox_status": "ok",
+      "source_classes": [
+        "PRIMARY"
+      ],
+      "text": "leaf 0: what does the evidence say about apple earnings expectations and analyst consensus",
+      "tier": "CORROBORATED"
+    }
+  ],
+  "ledger_observations": 4,
+  "ledger_primary": [
+    "360b659ac0a1c81bd6d955797138168efe76855350661593e5b4db0aa7546534",
+    "d6b25d3001a8802bb40cbd6ba5e0cce9a6818d3942c7c96c19005ceec0318883",
+    "fa33f80e2e9dd0114fa0204ffbe46ce33c1713fe13ebfd7857100af99ade0386"
+  ],
+  "notes": [],
+  "objections": [],
+  "refusal_reason": "",
+  "seal_verifies": true,
+  "sealed": true
+}
