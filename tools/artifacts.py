@@ -70,18 +70,17 @@ class _IndexLock:
     def __enter__(self):
         with _locks_guard:
             e = _locks.setdefault(
-                self.key, {"lock": threading.Lock(), "owner": None, "depth": 0}
+                self.key, {"lock": threading.RLock(), "owner": None, "depth": 0}
             )
         me = threading.get_ident()
-        e["lock"].acquire()
+        e["lock"].acquire()   # RLock: reentrant per-thread, blocks cross-thread
+        self._recursed = e["owner"] == me
         try:
-            if e["owner"] == me:
-                e["depth"] += 1          # nested: inner lock already covers us
-                self._recursed = True
+            if self._recursed:
+                pass                     # outer acquisition holds the flock
             else:
                 e["owner"] = me
                 e["depth"] = 1
-                self._recursed = False
                 self.lock_path.parent.mkdir(parents=True, exist_ok=True)
                 self._fh = open(self.lock_path, "a+")
                 fcntl.flock(self._fh, fcntl.LOCK_EX)
