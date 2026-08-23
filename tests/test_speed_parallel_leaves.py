@@ -124,14 +124,18 @@ def _fingerprint(result, ledger) -> dict:
 
 
 def _run_scenario(tmp_path, *, n_leaves=5, adversary=None, manager=None,
-                  decompose=None, checkpointer=None, ledger=None):
+                  decompose=None, checkpointer=None, ledger=None,
+                  routes_override=None):
     model = ScriptedModel({"Architect": [decompose or _decompose(n_leaves)]})
     adversary = adversary if adversary is not None else _Adversary()
     store = ArtifactStore(root=tmp_path / "artifacts")
     led = ledger if ledger is not None else ProvenanceLedger()
+    routes = dict(ROUTES)
+    if routes_override:
+        routes.update(routes_override)
     pipeline = ResearchPipeline(
         model=model, adversary_router=adversary,
-        transport=fixture_transport(ROUTES), store=store, ledger=led,
+        transport=fixture_transport(routes), store=store, ledger=led,
         checkpointer=checkpointer)
     if manager:
         model.script("Manager", *manager)
@@ -143,28 +147,36 @@ def _run_scenario(tmp_path, *, n_leaves=5, adversary=None, manager=None,
 
 
 SCENARIOS = {
-    "leaves1_sealed": dict(n_leaves=1),
-    "leaves3_sealed": dict(n_leaves=3),
-    "leaves5_sealed": dict(n_leaves=5),
+    "leaves1_sealed": dict(n_leaves=1,
+                           manager=[_answer(0.8)] * 4),
+    "leaves3_sealed": dict(n_leaves=3,
+                           manager=[_answer(0.75)] * 8),
+    "leaves5_sealed": dict(n_leaves=5,
+                           manager=[_answer(0.7)] * 12),
     "leaves5_distinct_per_leaf": dict(
         n_leaves=3,
-        # Tagged per-question_id scripting is impossible pre-run (ids are
-        # uuid), so distinct responses ride the legacy FIFO; the fingerprint
-        # pins whatever pairing the serial run produced. Confidence values
-        # differ so a pairing change is visible.
+        # Distinct responses ride the legacy FIFO; the fingerprint pins
+        # whatever pairing the serial run produced, so a pairing change is
+        # visible as a fingerprint diff.
         manager=[_answer(0.8), _answer(0.6), _answer(0.7)]),
     "adversary_blocking_refuses": dict(
         n_leaves=2,
+        manager=[_answer(0.7)] * 6,
         adversary=_Adversary([{"kind": "refuting_evidence",
                                "severity": "BLOCKING",
                                "text": "fixture proves nothing"}])),
-    "adversary_penalizes": dict(
+    "adversary_penalizes_still_seals": dict(
         n_leaves=2,
+        manager=[_answer(0.9)] * 6,
         adversary=_Adversary([
-            {"kind": "selection_effect", "severity": "MAJOR",
-             "text": "only successes indexed"},
             {"kind": "scope", "severity": "MINOR",
              "text": "narrow window"}])),
+    "adversary_penalizes_below_floor_refuses": dict(
+        n_leaves=2,
+        manager=[_answer(0.4)] * 6,
+        adversary=_Adversary([
+            {"kind": "selection_effect", "severity": "MAJOR",
+             "text": "only successes indexed"}])),
     "compute_reask": dict(
         n_leaves=1,
         manager=[{"content": json.dumps(
@@ -184,13 +196,9 @@ SCENARIOS = {
                  _answer(0.65, answer="computed w")]),
     "all_unanswered_refuses": dict(
         n_leaves=2, manager=[_answer(0.7, answer=""), _answer(0.7, answer="")]),
-    "below_floor_refuses": dict(
-        n_leaves=2,
-        manager=[_answer(0.05), _answer(0.05)],
-        adversary=_Adversary([{"kind": "scope", "severity": "MAJOR",
-                               "text": "thin evidence"}])),
     "rejected_fetches_noted": dict(
-        n_leaves=2, routes_override={"/documents.json": "{\"documents\": []}"}),
+        n_leaves=2, manager=[_answer(0.7)] * 6,
+        routes_override={"/documents.json": "{\"documents\": []}"}),
 }
 
 
@@ -201,34 +209,10 @@ def test_parallel_matches_serial_golden(scenario, tmp_path):
     assert golden_path.exists(), (
         f"missing golden for {scenario}; regenerate from serial engine")
     golden = json.loads(golden_path.read_text())
-    spec = dict(SCENARIOS[scenario])
-    routes = spec.pop("routes_override", None)
-    if routes:
-        merged = dict(ROUTES)
-        merged.update(routes)
-        import tools.pipeline.engine as eng
-        result, ledger = _run_scenario_with_routes(tmp_path, merged, spec)
-    else:
-        result, ledger = _run_scenario(tmp_path, **spec)
+    result, ledger = _run_scenario(tmp_path, **dict(SCENARIOS[scenario]))
     fp = _fingerprint(result, ledger)
     assert fp == golden, (
         f"{scenario}: parallel engine diverged from serial golden")
-
-
-def _run_scenario_with_routes(tmp_path, routes, spec):
-    model = ScriptedModel({"Architect": [_decompose(spec.get("n_leaves", 5))]})
-    store = ArtifactStore(root=tmp_path / "artifacts")
-    ledger = ProvenanceLedger()
-    pipeline = ResearchPipeline(
-        model=model, adversary_router=spec.get("adversary") or _Adversary(),
-        transport=fixture_transport(routes), store=store, ledger=ledger)
-    if spec.get("manager"):
-        model.script("Manager", *spec["manager"])
-    result = asyncio.run(pipeline.run(
-        "Will Apple report quarterly results above Wall Street consensus "
-        "expectations in its next earnings report?",
-        domain=Domain.FINANCIAL, today=date(2026, 8, 22)))
-    return result, ledger
 
 
 def test_five_leaf_wall_clock_is_sublinear(tmp_path):
@@ -255,11 +239,9 @@ def test_five_leaf_wall_clock_is_sublinear(tmp_path):
             return self.inner(url, headers)
 
     def _timed(n_leaves):
-        model = SlowModel(0.03, {"Architect": [_decompose(n_leaves)],
-                                 "Manager": []})
-        model.script("Manager", *[dict(_answer(0.7)) and
-                                   {"content": _answer(0.7)}
-                                   for _ in range(n_leaves)])
+        model = SlowModel(0.03, {"Architect": [_decompose(n_leaves)]})
+        model.script("Manager", *[{"content": _answer(0.7)}
+                                  for _ in range(n_leaves + 2)])
         transport = SlowTransport(fixture_transport(ROUTES), 0.02)
         pipeline = ResearchPipeline(
             model=model, adversary_router=_Adversary(),
@@ -335,9 +317,9 @@ def test_checkpoint_resume_roundtrip_identical(tmp_path):
     assert s1 == s2, "resumed run diverged from fresh run"
 
 
-def test_brier_regression_five_retro_questions(tmp_path):
-    """The five scored questions in data/retro_batch/: predictions through
-    PipelineResearcher offline must match the serial-engine golden Brier."""
+def _five_question_brier():
+    """Predictions for the five scored data/retro_batch questions through
+    PipelineResearcher offline (scripted model, fixture transport)."""
     import sys as _sys
 
     repo = Path(__file__).resolve().parents[1]
@@ -351,7 +333,6 @@ def test_brier_regression_five_retro_questions(tmp_path):
     assert len(questions) == 5
 
     from tools.pipeline.retro import PipelineResearcher
-    from tools.retrodiction.scoring import score_brier
 
     model = ScriptedModel({})
     decompose = _decompose(3)
@@ -367,9 +348,21 @@ def test_brier_regression_five_retro_questions(tmp_path):
     researcher = OfflineResearcher()
     prompts = [q.prompt_for_researcher() for q in questions]
     preds = asyncio.run(researcher.answer_async(prompts, [], loops=1))
+
+    from tools.retrodiction.scoring import score_brier
     brier = score_brier(preds, questions)
+    return brier, [{"question_id": p.question_id,
+                    "probability": p.probability} for p in preds]
+
+
+def test_brier_regression_five_retro_questions(tmp_path):
+    """The five scored questions in data/retro_batch/: predictions through
+    PipelineResearcher offline must match the serial-engine golden Brier."""
+    brier, preds = _five_question_brier()
 
     golden_path = GOLDEN_DIR / "five_question_brier.json"
     golden = json.loads(golden_path.read_text())
     assert round(brier, 9) == golden["brier"], (
         f"Brier moved: {brier} vs serial golden {golden['brier']}")
+    assert preds == golden["predictions"], (
+        "per-question probabilities moved vs serial golden")
