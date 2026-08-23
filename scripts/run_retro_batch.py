@@ -37,9 +37,11 @@ def make_researcher_factory():
     model = HermesCliModel(timeout_s=300.0)
 
     def factory():
+        # routes=None → real HTTP transport through the source registry;
+        # the Wayback adapter is the intended cutoff-proof path.
         return PipelineResearcher(
             model=model,
-            routes={},   # no fixture routes — real transport via registry
+            routes=None,
             adversary_router=model,
         )
     return factory
