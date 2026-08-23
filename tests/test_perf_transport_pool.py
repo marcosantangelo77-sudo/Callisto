@@ -305,5 +305,5 @@ class TestWorkerProtocol:
                 raise RuntimeError("spawn refused")
 
         w = _DeadWorker("m", timeout_s=1)
-        with pytest.raises(RuntimeError):
-            w.healthy()
+        assert w.healthy() is False, (
+            "unspawnable worker must fail its health-check, never hang")
