@@ -98,34 +98,74 @@ class _Worker:
             start_new_session=True,      # own process group: killable as a tree
         )
 
+    def _readline_deadline(self, deadline: float) -> str:
+        """Read one stdout line, enforcing the deadline via select()."""
+        import selectors
+
+        proc = self.proc
+        assert proc is not None and proc.stdout
+        fd = proc.stdout.fileno() if hasattr(proc.stdout, "fileno") else None
+        buf = ""
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("worker frame deadline exceeded")
+            if fd is None:
+                # TextIO without a real fd — fall back to a thread+join read.
+                import concurrent.futures as _cf
+                with _cf.ThreadPoolExecutor(1) as ex:
+                    fut = ex.submit(proc.stdout.readline)
+                    try:
+                        return fut.result(timeout=max(remaining, 0.1))
+                    except _cf.TimeoutError:
+                        continue
+            sel = selectors.DefaultSelector()
+            sel.register(fd, selectors.EVENT_READ)
+            ready = sel.select(timeout=min(remaining, 1.0))
+            sel.close()
+            if not ready:
+                # Poll for child death while waiting.
+                if proc.poll() is not None:
+                    raise RuntimeError(
+                        f"worker exited (rc={proc.returncode}) before replying")
+                continue
+            chunk = proc.stdout.readline()
+            if not chunk:
+                raise RuntimeError("worker closed stdout (EOF)")
+            buf += chunk
+            if buf.endswith("\n"):
+                return buf
+
     def _send(self, req: dict, timeout_s: float) -> dict:
         if self.proc is None or self.proc.poll() is not None:
             self._spawn()
         assert self.proc is not None and self.proc.stdin and self.proc.stdout
-        self.proc.stdin.write(json.dumps(req) + "\n")
-        self.proc.stdin.flush()
+        try:
+            self.proc.stdin.write(json.dumps(req) + "\n")
+            self.proc.stdin.flush()
+        except (BrokenPipeError, ValueError):
+            self.kill()
+            raise RuntimeError("worker stdin closed; respawn needed")
         deadline = time.monotonic() + timeout_s
-
-        def _readline():
-            # run in executor by caller when async; here blocking is fine —
-            # we're always called from a worker thread.
-            return self.proc.stdout.readline()
-
-        line = _readline()
-        while line and time.monotonic() < deadline:
-            line = line.strip()
-            if line:
-                try:
-                    resp = json.loads(line)
-                    if "id" in resp or "pong" in resp:
-                        return resp
-                except json.JSONDecodeError:
-                    pass
-            if time.monotonic() >= deadline:
-                break
-            line = self.proc.stdout.readline()
-        self.kill()
-        raise RuntimeError(f"worker timeout/no frame after {timeout_s}s")
+        while True:
+            try:
+                raw = self._readline_deadline(deadline)
+            except TimeoutError:
+                self.kill()
+                raise RuntimeError(
+                    f"worker timeout/no frame after {timeout_s}s")
+            except RuntimeError:
+                self.kill()
+                raise
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                resp = json.loads(line)
+            except json.JSONDecodeError:
+                continue    # stray non-JSON chatter; keep waiting
+            if "id" in resp or "pong" in resp:
+                return resp
 
     def kill(self) -> None:
         p, self.proc = self.proc, None
