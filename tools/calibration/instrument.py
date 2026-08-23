@@ -10,7 +10,7 @@ The engine's chain (tools/pipeline/engine.py, run()) is, in order:
   6. floor                below DB_CONFIDENCE_FLOOR the run refuses
   7. BRIDGE (tools/pipeline/retro.py) maps the sealed score to a
      probability: p = 0.5 +/- conf/2, sign from a keyword scan of the
-     conclusion text (_leans_yes).
+     the model's DECLARED stance (was: a keyword scan over prose).
 
 Three further mechanisms are DECLARED in agp/ but are not wired into this
 path: SELF_REVIEW_CEILING (agp/ensemble.py applies it only through
@@ -51,7 +51,7 @@ MECHANISMS = [
     "synthesis_agreement",     # built (tools/pipeline/synthesis.py) — not consumed by run()
     "floor_refusal",
     "bridge_half_scale",       # retro.py: p = 0.5 +/- conf/2
-    "bridge_sign_keyword",     # retro.py: sign from _leans_yes keyword scan
+    "bridge_sign_declared",    # retro.py: sign from the model's declared stance
 ]
 
 _ABSENT = {
@@ -181,22 +181,44 @@ NEGATION_WORDS = ("no evidence", "does not", "not supported", "unlikely",
                   "falsified", "refused")
 
 
-def sign_of_prediction(conclusion: str) -> tuple[int, str]:
-    """Mirror tools/pipeline/retro._leans_yes and NAME the token that fired.
+def sign_of_prediction(result) -> tuple[int, str]:
+    """Report the DECLARED stance, and flag when prose would have disagreed.
 
-    The side itself is read from the production function so this module
-    cannot drift from what actually scored; the keyword scan only explains
-    WHICH word put the prediction on that side."""
-    leans = retro_bridge.PipelineResearcher._leans_yes(conclusion or "")
-    t = (conclusion or "").lower()
-    fired = next((n for n in NEGATION_WORDS if n in t), None)
-    if not leans:
-        why = (f"leans NO: keyword '{fired}' found in conclusion text"
-               if fired else "leans NO (heuristic returned False)")
+    This used to mirror retro._leans_yes, a keyword scan over the conclusion
+    that defaulted to YES — the sign of every forecast came from incidental
+    wording. That function is gone; the model now declares AFFIRMS / DENIES /
+    UNDETERMINED and the scorer reads it.
+
+    The old keyword scan is kept here for ATTRIBUTION ONLY: when the declared
+    stance and the phrase-scan disagree, that is a prediction the previous
+    scorer got backwards, and quantifying those is how we size the damage the
+    defect did to the historical numbers.
+
+    Accepts a PipelineResult; a bare string is treated as UNDETERMINED, since
+    a stance can no longer be recovered from text.
+    """
+    if isinstance(result, str):
+        return 0, "no stance declared (string passed; direction is not in prose)"
+    stance = getattr(result, "stance", "UNDETERMINED")
+    conclusion = getattr(result, "conclusion", "") or ""
+    fired = next((n for n in NEGATION_WORDS if n in conclusion.lower()), None)
+    would_have_leaned_no = fired is not None
+
+    if stance == "AFFIRMS":
+        why = "declared AFFIRMS"
+        if would_have_leaned_no:
+            why += (f" — the old keyword scan would have said NO on "
+                    f"'{fired}': a sign the previous scorer got backwards")
+        return +1, why
+    if stance == "DENIES":
+        why = "declared DENIES"
+        if not would_have_leaned_no:
+            why += (" — the old keyword scan would have said YES by default: "
+                    "a sign the previous scorer got backwards")
         return -1, why
-    return +1, ("leans YES: no negation keyword in conclusion text"
-                if fired is None else
-                f"leans YES despite keyword '{fired}'?? heuristic drifted")
+    return 0, ("declared UNDETERMINED — evidence does not settle it; p=0.5, "
+               "no lean" + (f" (old scan would have fired on '{fired}')"
+                            if would_have_leaned_no else ""))
 
 
 def replay_leaf_chain(*, raw_estimate: float, best_class: str,
@@ -333,7 +355,7 @@ async def instrumented_run(*, question_text: str, model: PipelineModel,
     pt.verified = (pt.replayed_final == pt.observed_final)
     # Bridge: exactly what tools/pipeline/retro.PipelineResearcher does.
     conf = result.confidence_score if result.sealed else 0.0
-    side, why = sign_of_prediction(result.conclusion)
+    side, why = sign_of_prediction(result)
     pt.probability = 0.5 + side * conf / 2.0
     pt.sign_source = why + ("" if result.sealed
                             else " | UNSEALED: conf forced to 0 -> p=0.50")

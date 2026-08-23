@@ -87,18 +87,25 @@ class PipelineResearcher(Researcher):
                                         today=self.claim_date)
             self.results.append(result)
             conf = result.confidence_score if result.sealed else 0.0
-            leans_yes = self._leans_yes(result.conclusion)
-            prob = (0.5 + conf / 2.0) if leans_yes else (0.5 - conf / 2.0)
+            # DECLARED stance, not a keyword scan. _leans_yes searched the
+            # conclusion for six English phrases and defaulted to YES, so
+            # "The merger completed on schedule ... no evidence of regulatory
+            # objection" scored NO, and "The trial missed its primary
+            # endpoint" scored YES. The sign of every forecast was set by
+            # incidental wording, which is the shape of the only live batch we
+            # have: predicted 0.33 against a realised 0.60.
+            stance = getattr(result, "stance", "UNDETERMINED")
+            if stance == "AFFIRMS":
+                prob = 0.5 + conf / 2.0
+            elif stance == "DENIES":
+                prob = 0.5 - conf / 2.0
+            else:
+                # UNDETERMINED means "the evidence does not settle it", which
+                # is p=0.5 — no lean in either direction. A scorer that cannot
+                # tell must say so, not guess.
+                prob = 0.5
             out.append(Prediction(
                 question_id=p["question_id"], probability=max(0.0, min(1.0, prob)),
                 config_label=f"{self.name}@{loops}", loops=loops))
         return out
 
-    @staticmethod
-    def _leans_yes(conclusion: str) -> bool:
-        text = conclusion.lower()
-        negations = ("no evidence", "does not", "not supported", "unlikely",
-                     "falsified", "refused")
-        if any(n in text for n in negations):
-            return False
-        return True

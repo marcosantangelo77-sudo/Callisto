@@ -150,7 +150,13 @@ ANSWER_SYSTEM = (
     "evidence you were given. If the evidence requires arithmetic, say "
     "COMPUTE and give python code instead of asserting numbers. Return "
     "JSON: {\"answer\": str, \"proposed_confidence\": float, "
+    "\"stance\": \"AFFIRMS\" | \"DENIES\" | \"UNDETERMINED\", "
     "\"compute\": null | {\"code\": str, \"inputs\": {}}} "
+    "stance is whether the EVIDENCE supports the claim in the question: "
+    "AFFIRMS = yes it happened/is true, DENIES = no it did not, "
+    "UNDETERMINED = the evidence does not settle it. Say UNDETERMINED "
+    "whenever you are not answering the question asked — it is a real "
+    "answer, not a failure. "
     "or {\"compute\": {\"code\":..., \"inputs\":...}, \"answer\": null} when "
     "computation must run before an answer exists."
 )

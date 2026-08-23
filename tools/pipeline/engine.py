@@ -95,6 +95,11 @@ class LeafOutcome:
     answer: str = ""
     confidence: float = 0.0
     tier: str = "UNVERIFIED"
+    #: AFFIRMS / DENIES / UNDETERMINED, DECLARED by the model — never inferred
+    #: from prose. The scorer used to keyword-scan the conclusion for six
+    #: English phrases and default to YES, so the SIGN of every forecast was
+    #: decided by incidental wording (see test_redteam_direction_from_prose).
+    stance: str = "UNDETERMINED"
     source_classes: list[str] = field(default_factory=list)
     n_sources: int = 0
     requirement_reasons: list[str] = field(default_factory=list)
@@ -113,6 +118,9 @@ class PipelineResult:
     conclusion: str = ""
     confidence_score: float = 0.0
     confidence_tier: str = "UNVERIFIED"
+    #: Parent stance, taken from the leaf that set the parent's confidence.
+    #: UNDETERMINED is a real, reachable value and must map to p=0.5.
+    stance: str = "UNDETERMINED"
     artifact_refs: list[ArtifactRef] = field(default_factory=list)
     objections: list = field(default_factory=list)
     fetches: list[FetchResult] = field(default_factory=list)
@@ -383,6 +391,11 @@ class ResearchPipeline:
             proposal = parse_model_json(resp) or {}
 
         out.answer = str(proposal.get("answer", "")).strip()
+        _st = str(proposal.get("stance", "")).strip().upper()
+        # Unknown/absent stance is UNDETERMINED, never a lean. An unparseable
+        # answer must not silently become a confident YES, which is exactly
+        # what the old default-yes keyword scan did.
+        out.stance = _st if _st in ("AFFIRMS", "DENIES") else "UNDETERMINED"
         proposed = float(proposal.get("proposed_confidence") or 0.0)
 
         # Clamp to the provenance-assigned BEST class ceiling (only down).
@@ -561,6 +574,8 @@ class ResearchPipeline:
             for l in answered)
         best_leaf = max(answered, key=lambda l: l.confidence)
         proposed = best_leaf.confidence
+        # The parent's DIRECTION comes from the same leaf as its magnitude.
+        parent_stance = best_leaf.stance
 
         # Inheritance rule: zero/weak resolved descendants cap at SPECULATIVE.
         clamped, tier = clamp_parent_confidence(
@@ -623,6 +638,7 @@ class ResearchPipeline:
         result.sealed = True
         result.session = session
         result.conclusion = conclusion
+        result.stance = parent_stance
         result.confidence_score = session.summary.confidence_score
         result.confidence_tier = tier
         result.artifact_refs = list(self.artifact_refs)
