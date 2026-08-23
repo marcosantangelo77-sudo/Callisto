@@ -109,6 +109,14 @@ class LeafOutcome:
     source_classes: list[str] = field(default_factory=list)
     n_sources: int = 0
     requirement_reasons: list[str] = field(default_factory=list)
+    #: The THREE-WAY verdict every conclusion carries (tools.gaps.NullKind):
+    #:   honest_null       searched competently, nothing found
+    #:   retrieval_failure we failed to FETCH — never read as "nothing there"
+    #:   unprovable        evidence obtained but cannot meet our declared bar
+    #:   "" (empty) for a leaf with a normal answered conclusion.
+    #: Classification ONLY: this field must never move a confidence score.
+    gap_kind: str = ""
+    gap_explanation: str = ""
     sandbox_status: Optional[str] = None
     artifact_sha256s: list[str] = field(default_factory=list)
 
@@ -137,6 +145,10 @@ class PipelineResult:
     #: present only when a checkpointer was injected — records which stages
     #: were resumed vs fresh, so stale evidence is visible to the caller.
     trace: Optional[ckpt.RunTrace] = None
+    #: Per-leaf three-way verdicts (see LeafOutcome.gap_kind), surfaced at
+    #: the top level so a sealed result states WHICH kind of null each thin
+    #: leaf is. Classification only — never read by scoring.
+    gap_kinds: dict = field(default_factory=dict)   # qid -> kind value
 
     def summary_dict(self) -> dict:
         return {
@@ -148,6 +160,7 @@ class PipelineResult:
             "tier": self.confidence_tier,
             "n_leaves": len(self.leaves),
             "n_fetches": len(self.fetches),
+            "gap_kinds": dict(self.gap_kinds),
             "artifacts": [r.sha256[:12] for r in self.artifact_refs],
             "objections": [getattr(o, "text", str(o)) for o in self.objections],
         }
@@ -445,6 +458,24 @@ class ResearchPipeline:
         out.confidence = round(
             max(0.0, min(ec.estimate, ec.ceiling)), 2)
         out.tier = ConfidenceTier.from_score(out.confidence).value
+
+        # Three-way gap classification (tools.gaps.NullKind). CLASSIFICATION
+        # ONLY — this reads nothing that scores and moves no number.
+        #   no fetches at all -> honest_null or retrieval_failure per THE
+        #     single membership rule; an answer written on top of a
+        #     retrieval failure still carries the retrieval_failure verdict,
+        #     so "we could not look" can never read as "there is nothing".
+        #   evidence obtained but requirements unmet -> unprovable: a
+        #     deliberate decision about OUR OWN bar, not a fetch fault.
+        from tools.gaps import NullKind, classify_null_kind
+        if not fetches:
+            kind, expl = classify_null_kind(trace)
+            out.gap_kind, out.gap_explanation = kind, expl
+        elif reasons and out.answer:
+            out.gap_kind = NullKind.UNPROVABLE.value
+            out.gap_explanation = (
+                "evidence was obtained but does not meet this question's "
+                "declared standard: " + "; ".join(reasons))
         return out
 
     # ── The whole chain ───────────────────────────────────────────────────
@@ -597,10 +628,18 @@ class ResearchPipeline:
             return result
 
         # 6. Assemble parent conclusion; confidence derived from provenance.
+        # Every thin leaf's verdict is IN the conclusion text — a user
+        # reading the sealed output can tell an honest null from a
+        # retrieval failure from an unprovable claim without opening a
+        # debug field.
         answered = [l for l in result.leaves if l.answer]
         conclusion = f"{question}\n\n" + "\n".join(
             f"- [{l.tier} {l.confidence:.2f}] {l.text}: {l.answer}"
+            + (f"  [GAP: {l.gap_kind}]" if l.gap_kind else "")
             for l in answered)
+        for l in result.leaves:
+            if l.gap_kind:
+                result.gap_kinds[l.question_id] = l.gap_kind
         best_leaf = max(answered, key=lambda l: l.confidence)
         proposed = best_leaf.confidence
         # The parent's DIRECTION comes from the same leaf as its magnitude.
