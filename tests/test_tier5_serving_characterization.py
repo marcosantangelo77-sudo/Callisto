@@ -112,7 +112,7 @@ routing:
             def __init__(self, **kw): pass
             async def __aenter__(self): return self
             async def __aexit__(self, *a): return False
-            async def post(self, url, json=None, headers=None):
+            async def post(self, url, json=None, headers=None, timeout=None):
                 if ":9901" in url:
                     raise _httpx.ConnectError("refused")
                 captured["url"] = url
@@ -196,7 +196,7 @@ routing:
             def __init__(self, **kw): pass
             async def __aenter__(self): return self
             async def __aexit__(self, *a): return False
-            async def post(self, url, json=None, headers=None):
+            async def post(self, url, json=None, headers=None, timeout=None):
                 captured.update(url=url, headers=headers, json=json)
                 return FakeResp()
 
