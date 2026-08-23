@@ -30,6 +30,7 @@ import tempfile
 import fcntl
 import threading
 import time
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -43,8 +44,9 @@ _locks_guard = threading.Lock()
 _locks: dict[str, "threading.Lock"] = {}
 
 
-class ArtifactIndexCorrupt(RuntimeError):
-    """Raised by destructive operations (gc) when the index is unreadable."""
+class ArtifactIndexCorrupt(RuntimeWarning):
+    """gc() refused to run: the index is unreadable and it will not delete
+    on the strength of a file that may be corrupt."""
 
 
 _locks_guard = threading.Lock()
@@ -267,14 +269,20 @@ class ArtifactStore:
         """
         idx = self._load_index(strict=True)
         if idx is None:
-            if not allow_rebuild:
-                raise ArtifactIndexCorrupt(
-                    f"index at {self.index_path} is corrupt or unreadable; "
-                    "gc() refused to delete anything. Repair the index "
-                    "(rebuild_index()) and retry."
+            if allow_rebuild:
+                self.rebuild_index()
+                idx = self._load_index(strict=True) or {}
+            else:
+                # Refuse: an unreadable index proves nothing about which
+                # objects are orphans. Say so loudly, delete nothing.
+                warnings.warn(
+                    f"gc() refused: index at {self.index_path} is corrupt or "
+                    "unreadable; nothing was deleted. Repair the index "
+                    "(rebuild_index()) and retry.",
+                    ArtifactIndexCorrupt,
+                    stacklevel=2,
                 )
-            self.rebuild_index()
-            idx = self._load_index(strict=True) or {}
+                return []
         removed = []
         for obj in self.objects.rglob("*"):
             if obj.is_file() and obj.name not in idx:
