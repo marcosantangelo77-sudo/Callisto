@@ -673,11 +673,15 @@ class HermesMemory:
             status_counts = {r[0]: r[1] for r in status_rows}
 
             top_hypos = await db.execute_fetchall(
-                """SELECT h.name, h.sport, h.market_type, h.thesis,
+                """SELECT h.name,
+                          e.sport AS sport,
+                          e.market_type AS market_type,
+                          h.thesis,
                           COUNT(DISTINCT be.event_id) as events,
                           SUM(CASE WHEN be.signal_generated=1 THEN 1 ELSE 0 END) as signals,
                           AVG(be.edge) as avg_edge
                    FROM hypotheses h
+                   JOIN hypothesis_sports_ext e ON e.hypothesis_id = h.hypothesis_id
                    LEFT JOIN backtest_events be ON h.hypothesis_id = be.hypothesis_id
                    WHERE h.status IN ('backtesting', 'paper_trading', 'live', 'draft')
                    GROUP BY h.hypothesis_id

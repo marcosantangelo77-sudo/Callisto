@@ -369,12 +369,32 @@ class SelfRepairEngine:
                 for r in rows:
                     sports_with_data.add(r[0])
 
-                # Rejected hypotheses with 0 events in sports that HAVE data
-                premature = await (await db.execute(
-                    "SELECT h.hypothesis_id, h.name, h.sport FROM hypotheses h "
-                    "WHERE h.status = 'rejected' "
-                    "AND NOT EXISTS (SELECT 1 FROM backtest_events be WHERE be.hypothesis_id = h.hypothesis_id)"
-                )).fetchall()
+                # Rejected hypotheses with 0 events in sports that HAVE data.
+                # Post-migration-013 the sport column lives in
+                # hypothesis_sports_ext; on the seam shape the ext value IS
+                # the only sport (SQLite would reject a COALESCE fallback to
+                # h.sport — that column does not exist there). The ext-table
+                # existence check below keeps this working on pre-013 DBs,
+                # where the plain column query is used instead.
+                ext_cur = await db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name='hypothesis_sports_ext'"
+                )
+                if await ext_cur.fetchone():
+                    premature = await (await db.execute(
+                        "SELECT h.hypothesis_id, h.name, e.sport AS sport "
+                        "FROM hypotheses h "
+                        "JOIN hypothesis_sports_ext e "
+                        "  ON e.hypothesis_id = h.hypothesis_id "
+                        "WHERE h.status = 'rejected' "
+                        "AND NOT EXISTS (SELECT 1 FROM backtest_events be WHERE be.hypothesis_id = h.hypothesis_id)"
+                    )).fetchall()
+                else:
+                    premature = await (await db.execute(
+                        "SELECT h.hypothesis_id, h.name, h.sport FROM hypotheses h "
+                        "WHERE h.status = 'rejected' "
+                        "AND NOT EXISTS (SELECT 1 FROM backtest_events be WHERE be.hypothesis_id = h.hypothesis_id)"
+                    )).fetchall()
 
                 requeue_candidates = [
                     {"id": r[0], "name": r[1], "sport": r[2]}

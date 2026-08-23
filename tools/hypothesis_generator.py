@@ -1405,10 +1405,29 @@ class HypothesisGenerator:
         if self._db is None:
             await self.initialize()
         try:
-            cur = await self._db.execute(
-                "SELECT thesis FROM hypotheses WHERE sport = ? ORDER BY created_at DESC LIMIT ?",
-                (sport, limit),
+            # Post-013 the sport column lives in hypothesis_sports_ext and
+            # is the ONLY sport (h.sport does not exist on that shape, so a
+            # COALESCE fallback would be rejected by SQLite). The ext-table
+            # existence check keeps pre-013 welded DBs working.
+            ext_cur = await self._db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='hypothesis_sports_ext'"
             )
+            if await ext_cur.fetchone():
+                cur = await self._db.execute(
+                    "SELECT h.thesis FROM hypotheses h "
+                    "JOIN hypothesis_sports_ext e "
+                    "  ON e.hypothesis_id = h.hypothesis_id "
+                    "WHERE e.sport = ? "
+                    "ORDER BY h.created_at DESC LIMIT ?",
+                    (sport, limit),
+                )
+            else:
+                cur = await self._db.execute(
+                    "SELECT thesis FROM hypotheses WHERE sport = ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (sport, limit),
+                )
             return [r[0] or "" for r in await cur.fetchall()]
         except Exception:
             return []

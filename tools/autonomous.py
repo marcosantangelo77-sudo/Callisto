@@ -5171,7 +5171,15 @@ class ResearchLoop:
         try:
             active_sports = set()
             cursor = await self.backtest_engine._db.execute(
-                "SELECT DISTINCT sport FROM hypotheses WHERE status IN ('backtesting', 'paper_trading')"
+                # Post-013 the sport column lives in hypothesis_sports_ext;
+                # on that shape the ext value IS the only sport (every seam
+                # row gets an ext row), so no fallback term is needed — and
+                # SQLite rejects COALESCE(e.sport, h.sport) outright because
+                # h.sport does not exist on the seam shape at all.
+                "SELECT DISTINCT e.sport AS sport "
+                "FROM hypotheses h "
+                "JOIN hypothesis_sports_ext e ON e.hypothesis_id = h.hypothesis_id "
+                "WHERE h.status IN ('backtesting', 'paper_trading')"
             )
             for row in await cursor.fetchall():
                 active_sports.add(row[0])
@@ -5598,13 +5606,15 @@ class ResearchLoop:
         try:
             db = self.hypothesis_manager._db
             cursor = await db.execute(
-                "SELECT h.hypothesis_id, h.name, h.market_type, "
+                "SELECT h.hypothesis_id, h.name, "
+                "e.market_type AS market_type, "
                 "COUNT(DISTINCT be.event_id) as events, "
                 "COALESCE(AVG(CASE WHEN be.signal_generated = 1 THEN be.edge END), 0) as signal_avg_edge, "
                 "COUNT(DISTINCT CASE WHEN be.signal_generated = 1 THEN be.event_id END) as signals, "
                 "SUM(CASE WHEN be.signal_generated = 1 AND be.actual_result = 'won' THEN 1 ELSE 0 END) as wins, "
                 "SUM(CASE WHEN be.signal_generated = 1 AND be.actual_result = 'lost' THEN 1 ELSE 0 END) as losses "
                 "FROM hypotheses h "
+                "JOIN hypothesis_sports_ext e ON e.hypothesis_id = h.hypothesis_id "
                 "JOIN backtest_events be ON h.hypothesis_id = be.hypothesis_id "
                 "WHERE h.status IN ('draft', 'backtesting') "
                 "GROUP BY h.hypothesis_id "
@@ -6113,8 +6123,10 @@ class ResearchLoop:
 
         # Get top 10 hypotheses by signal count with stats
         try:
-            cursor = await db.execute("""
-                SELECT h.hypothesis_id, h.name, h.thesis, h.sport, h.market_type,
+            cursor = await db.execute(f"""
+                SELECT h.hypothesis_id, h.name, h.thesis,
+                       e.sport AS sport,
+                       e.market_type AS market_type,
                        h.edge_threshold, h.status,
                        COUNT(CASE WHEN be.signal_generated=1 THEN 1 END) as sigs,
                        COUNT(*) as events,
@@ -6124,6 +6136,7 @@ class ResearchLoop:
                        AVG(CASE WHEN be.signal_generated=1 THEN be.edge END) as avg_edge,
                        AVG(CASE WHEN be.signal_generated=1 THEN be.ev_pct END) as avg_ev
                 FROM hypotheses h
+                JOIN hypothesis_sports_ext e ON e.hypothesis_id = h.hypothesis_id
                 LEFT JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id
                 WHERE h.status IN ('backtesting', 'paper_trading')
                 GROUP BY h.hypothesis_id
@@ -6945,13 +6958,15 @@ class ResearchLoop:
         # best-edge row per event — raw row counts inflate signal/event totals)
         top_hypos = []
         try:
-            cursor = await db.execute("""
-                SELECT h.hypothesis_id, h.name, h.thesis, h.sport, h.status,
+            cursor = await db.execute(f"""
+                SELECT h.hypothesis_id, h.name, h.thesis,
+                       e.sport AS sport, h.status,
                        COUNT(DISTINCT CASE WHEN be.signal_generated=1 THEN be.event_id END) as sigs,
                        COUNT(DISTINCT be.event_id) as events,
                        AVG(CASE WHEN be.signal_generated=1 THEN be.edge END) as avg_edge,
                        br.actual_win, br.actual_loss, br.p_value_binomial
                 FROM hypotheses h
+                JOIN hypothesis_sports_ext e ON e.hypothesis_id = h.hypothesis_id
                 LEFT JOIN backtest_events be ON be.hypothesis_id = h.hypothesis_id
                 LEFT JOIN backtest_runs br ON br.hypothesis_id = h.hypothesis_id
                 WHERE h.status IN ('backtesting', 'paper_trading')

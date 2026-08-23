@@ -3437,7 +3437,14 @@ async def batch_reject_hypotheses(request: Request):
     db = await open_db()
     try:
         cursor = await db.execute(
-            "SELECT hypothesis_id, name, thesis, sport FROM hypotheses WHERE status = 'draft'"
+            # Post-013 the sport column lives in hypothesis_sports_ext and is
+            # the ONLY sport (h.sport does not exist on that shape, so a
+            # COALESCE fallback would be rejected by SQLite). The ext-table
+            # existence check keeps pre-013 welded DBs working.
+            "SELECT h.hypothesis_id, h.name, h.thesis, e.sport AS sport "
+            "FROM hypotheses h "
+            "JOIN hypothesis_sports_ext e ON e.hypothesis_id = h.hypothesis_id "
+            "WHERE h.status = 'draft'"
         )
         rows = await cursor.fetchall()
 
