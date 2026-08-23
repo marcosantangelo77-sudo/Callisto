@@ -115,6 +115,33 @@ MAX_SOURCES_PER_COMPILE = 30    # Don't overwhelm the local model
 MAX_ARTICLE_LENGTH = 4000       # Characters — keep articles focused
 STALE_THRESHOLD_HOURS = 72      # Flag articles not updated in 3 days
 
+# Domain-general topic taxonomy (improve/memory-wiki). The historical topic
+# extractor knew only sports vocabulary, so every non-sports source in the
+# system — clinical trials, macro series, supply chains, patents — compiled
+# into a single "<domain>_misc" bucket per domain. That made the wiki's core
+# promise ("knowledge compounds") structurally sports-only: a Bitcoin question
+# and a semiconductor question landed in the same article.
+#
+# Each entry: topic slug -> keywords that indicate it. Matched by keyword
+# count (specificity), tie-broken by earliest position. Deliberately small
+# and boring: this is routing vocabulary for article filing, not an ontology.
+TOPIC_TAXONOMY: dict[str, tuple[str, ...]] = {
+    "macro_employment":   ("unemployment", "nonfarm", "payrolls", "labor market", "jobless"),
+    "macro_inflation":    ("inflation", "cpi", "pce price", "deflator"),
+    "macro_rates":        ("interest rate", "federal funds", "yield curve", "treasury yield", "central bank"),
+    "clinical_trials":    ("clinical trial", "randomized", "phase 3", "phase iii", "endpoint", "trial nct"),
+    "pharma":             ("drug approval", "fda approval", "pipeline drug", "biologic"),
+    "semiconductors":     ("semiconductor", "foundry", "chip fab", "wafer", "taiwanese", "node shrink", "photolithography"),
+    "supply_chain":       ("supply chain", "chokepoint", "logistics cost", "shipping rates", "container throughput"),
+    "energy":             ("crude oil", "natural gas", "opec", "rig count", "electricity grid", "solar capacity"),
+    "crypto":             ("bitcoin", "ethereum", "crypto", "stablecoin", "on-chain", "halving"),
+    "equities_valuation": ("earnings", "price-to-earnings", "free cash flow", "market cap", "buyback", "dcf"),
+    "real_estate":        ("cap rate", "mortgage rate", "housing starts", "home price", "reit", "noi "),
+    "geopolitics":        ("sanctions", "tariff", "export control", "trade war", "conflict escalation"),
+    "ai_compute":         ("gpu shortage", "datacenter", "training compute", "model release", "inference cost"),
+    "regulatory":         ("antitrust", "regulator", "compliance fine", "legislation", "rulemaking"),
+}
+
 
 # ── Article confidence: min-of-sources, never the mean ───────────────────
 #
@@ -357,11 +384,24 @@ class KnowledgeWiki:
     def _extract_topic(self, source: dict) -> str:
         """Extract a topic slug from a source entry.
 
-        Strategy:
+        Strategy (improve/memory-wiki: domain-general):
           - Hypothesis names → use directly (e.g., "mlb_early_home_fav")
           - Session queries → extract sport + market type
-          - Evidence → extract domain + key terms
+          - Evidence → keyphrase overlap with a domain-general TOPIC_TAXONOMY,
+            then legacy sport/market keywords
           - Learnings → use the key directly
+          - Fallback → <domain>_misc
+
+        The historical version only knew sports vocabulary, so every
+        non-sports source in the system collapsed to "<domain>_misc" — one
+        giant undifferentiated bucket per domain. Measured on real phrasings:
+
+            "clinical trial NCT123 phase 3 efficacy"  -> technical_misc
+            "US unemployment rate rose to 4.2%"       -> technical_misc
+
+        The taxonomy below gives ordinary non-sports questions their own
+        articles. Sports behaviour is unchanged (sports keys are checked
+        FIRST, so existing sports slugs are byte-identical).
         """
         content = (source.get("query", "") + " " + source.get("content", "")).lower()
 
@@ -372,7 +412,23 @@ class KnowledgeWiki:
         if hyp_match:
             return hyp_match.group(1)
 
-        # Sport + market type
+        # Domain-general taxonomy first by KEYWORD COUNT (most specific wins),
+        # then by first position (earliest mention). Counting beats ordering:
+        # "supply chain" appearing twice in a passage is a stronger signal
+        # than an incidental early "market".
+        best_topic, best_key = None, (-1, -1)
+        for topic, keywords in TOPIC_TAXONOMY.items():
+            count = sum(1 for kw in keywords if kw in content)
+            if count == 0:
+                continue
+            pos = min(content.find(kw) for kw in keywords if kw in content)
+            if (count, -pos) > best_key:
+                best_topic, best_key = topic, (count, -pos)
+        if best_topic is not None:
+            return best_topic
+
+        # Sport + market type (legacy sports vocabulary — checked after the
+        # taxonomy so e.g. "moneyline" still wins over a generic keyword).
         sports = {"mlb": "mlb", "nba": "nba", "nfl": "nfl", "nhl": "nhl",
                   "baseball": "mlb", "basketball": "nba", "football": "nfl", "hockey": "nhl",
                   "ncaab": "ncaab", "ncaaw": "ncaaw", "soccer": "soccer"}
