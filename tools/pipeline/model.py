@@ -97,7 +97,14 @@ class RouterModel(PipelineModel):
 class ScriptedModel(PipelineModel):
     """Deterministic offline fake. Responses are consumed FIFO per role;
     when a queue is empty, `default` is returned (so tests script only the
-    turns they care about). Every call is recorded for assertions."""
+    turns they care about). Every call is recorded for assertions.
+
+    TAGGED QUEUES (speed run 2026-08-23): the parallel pipeline issues
+    concurrent per-leaf calls, so arrival order no longer identifies the
+    leaf. A test that needs DIFFERENT responses per leaf registers them
+    with script_for(tag, role, ...) and the engine passes _call_tag;
+    untagged calls keep the exact legacy FIFO behaviour.
+    """
 
     name = "scripted"
 
@@ -107,17 +114,30 @@ class ScriptedModel(PipelineModel):
                                            (responses or {}).items()}
         self.default = default or {"content": "{}"}
         self.calls: list[tuple[str, str]] = []
+        self.tagged_responses: dict[tuple[str, str], list] = {}
 
     def script(self, role: str, *responses) -> "ScriptedModel":
         self.responses.setdefault(role, []).extend(responses)
         return self
 
+    def script_for(self, tag: str, role: str, *responses) -> "ScriptedModel":
+        """Responses consumed FIFO by (tag, role) before the legacy queue."""
+        self.tagged_responses.setdefault((tag, role), []).extend(responses)
+        return self
+
     async def complete(self, role: str, messages: list[dict],
+                       *, _call_tag: Optional[str] = None,
                        **_ignored) -> dict:
         prompt = "\n".join(m.get("content", "") for m in messages)
         self.calls.append((role, prompt[:200]))
-        queue = self.responses.get(role)
-        resp = queue.pop(0) if queue else self.default
+        resp = None
+        if _call_tag is not None:
+            tq = self.tagged_responses.get((_call_tag, role))
+            if tq:
+                resp = tq.pop(0)
+        if resp is None:
+            queue = self.responses.get(role)
+            resp = queue.pop(0) if queue else self.default
         if isinstance(resp, str):
             resp = {"content": resp}
         return dict(resp)

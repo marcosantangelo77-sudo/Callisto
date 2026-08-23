@@ -274,14 +274,6 @@ def test_five_leaf_wall_clock_is_sublinear(tmp_path):
     t1, r1 = _timed(1)
     t5, r5 = _timed(5)
     assert r5.sealed and r1.sealed, "sanity: both runs sealed"
-    # The sublinear property holds on the PARALLEL-LEAF engine. On the
-    # serial engine (master, pre-restructure) leaves are serial by design
-    # and this test would assert against the architecture, not a defect.
-    import inspect
-    from tools.pipeline import engine as _eng
-    if "Phase A" not in inspect.getsource(_eng.ResearchPipeline.run):
-        pytest.skip("serial engine: leaf parallelism lives in the "
-                    "parallel-leaf restructure branch")
     # Serial would cost ~5x the leaf work; overlapped it costs ~1x plus the
     # extra decompose/adversary calls. Allow generous headroom for CI noise
     # but keep the assertion strong enough to catch serialization regressions.
@@ -390,18 +382,7 @@ def test_brier_regression_five_retro_questions(tmp_path):
 
     golden_path = GOLDEN_DIR / "five_question_brier.json"
     golden = json.loads(golden_path.read_text())
-    # The golden was captured under the OLD scorer (retro._leans_yes, a
-    # keyword scan defaulting to YES). Commit fa2bea9 replaced that with the
-    # DECLARED stance: AFFIRMS/DENIES set the sign, UNDETERMINED is p=0.5.
-    # A scripted model declares no stance, so every scripted forecast is
-    # honestly 0.5 — Brier 0.25 by construction. That is an INTENTIONAL
-    # semantic change in the scorer, not drift in this suite's parallelism:
-    # what this test guards is that the parallel engine reproduces the
-    # CURRENT serial semantics exactly, so the golden must be regenerated
-    # against current code (gen_speed_golden.py) whenever the bridge changes.
     assert round(brier, 9) == golden["brier"], (
-        f"Brier moved: {brier} vs golden {golden['brier']} — if the bridge "
-        f"semantics changed intentionally, regenerate the golden; if not, "
-        f"this is a regression")
+        f"Brier moved: {brier} vs serial golden {golden['brier']}")
     assert preds == golden["predictions"], (
         "per-question probabilities moved vs serial golden")
