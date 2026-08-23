@@ -39,11 +39,9 @@ _MODEL = "stealth/ox-alpha"     # hosted model behind Nous Portal
 
 def _ensure_hermes_on_path() -> bool:
     """Make run_agent importable from the local Hermes install."""
-    if _HERMES_HOME not in sys.path:
-        if not os.path.isdir(_HERMES_HOME):
-            return False
+    if os.path.isdir(_HERMES_HOME) and _HERMES_HOME not in sys.path:
         sys.path.insert(0, _HERMES_HOME)
-    return True
+    return _HERMES_HOME in sys.path
 
 
 def resolve_runtime_credentials() -> Optional[dict]:
@@ -53,6 +51,20 @@ def resolve_runtime_credentials() -> Optional[dict]:
     beyond this module's pool construction.
     """
     try:
+        if not _ensure_hermes_on_path():
+            raise RuntimeError(f"Hermes install not found at {_HERMES_HOME}")
+        # The Hermes venv's site-packages are needed for its own imports
+        # (openai SDK etc.). When running under Callisto's interpreter the
+        # venv is not active — append it so hermes_cli resolves. Import
+        # failures after this are genuine install problems.
+        import importlib.util as _ilu
+        if _ilu.find_spec("hermes_cli") is None:
+            venv_site = os.path.join(_HERMES_HOME, "venv", "lib")
+            if os.path.isdir(venv_site):
+                for d in sorted(os.listdir(venv_site)):
+                    sp = os.path.join(venv_site, d, "site-packages")
+                    if os.path.isdir(sp) and sp not in sys.path:
+                        sys.path.append(sp)
         from hermes_cli.runtime_provider import resolve_runtime_provider
 
         rt = resolve_runtime_provider()
