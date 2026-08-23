@@ -243,6 +243,8 @@ async def test_generic_sqlite_resolver_reads_predictions_outcomes():
         await db.execute(
             "CREATE TABLE predictions (id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "claim_id TEXT, event_id TEXT, predicted_prob REAL, "
+            "book_implied_prob REAL, odds_american INTEGER, "
+            "model_fair_prob REAL, clv_prob_bp REAL, "
             "context_key TEXT, created_at DATETIME)"
         )
         await db.execute(

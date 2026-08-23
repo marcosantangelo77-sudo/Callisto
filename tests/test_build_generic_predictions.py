@@ -30,7 +30,7 @@ async def _migrated_db(tmpdir: str):
     await ensure_schema(db_path)
     apply_pending_migrations(db_path)
 
-    from tools.db_utils import open_db
+    from tools.schema.engine import open_db
     return await open_db(db_path)
 
 

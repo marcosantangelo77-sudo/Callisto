@@ -169,8 +169,15 @@ class SqlitePredictionResolver(OutcomeResolver):
                 "WHERE p.claim_id = ?",
                 (hypothesis_id,),
             )
-        except Exception:
-            return
+        except Exception as e:
+            # Tolerate ONLY a database that predates the core tables — the
+            # claim is simply not-yet-tested there. Any other schema error
+            # raises: this resolver once reported zero evidence forever
+            # because its SELECT failed silently against tables nobody had
+            # created, and silence is exactly how that stayed invisible.
+            if "no such table" in str(e).lower():
+                return
+            raise
         cols = [d[0] for d in cur.description]
         for row in await cur.fetchall():
             d = dict(zip(cols, row))

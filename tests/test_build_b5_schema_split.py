@@ -152,7 +152,16 @@ def test_core_plus_plugins_equals_legacy_statement_set():
     legacy = Counter(_stmts(m.group(1)))
     new = Counter(_stmts(SCHEMA_SQL))
     assert not legacy - new, f"lost statements: {list(legacy - new)[:3]}"
-    assert not new - legacy, f"unexpected statements: {list(new - legacy)[:3]}"
+    extra = new - legacy
+    if extra:
+        # Core may legitimately GROW after the split — domain-general tables
+        # for the claim lifecycle belong in core (predictions/outcomes, the
+        # resolution record). What must never happen is a plugin adding
+        # statements nobody accounted for: every added statement has to come
+        # from CORE_SCHEMA_SQL itself.
+        core = Counter(_stmts(CORE_SCHEMA_SQL))
+        rogue = [s for s, n in extra.items() if core.get(s, 0) < n]
+        assert not rogue, f"unexpected non-core statements: {rogue[:3]}"
 
 
 def test_scHEMA_sql_is_executable_and_creates_every_table():
