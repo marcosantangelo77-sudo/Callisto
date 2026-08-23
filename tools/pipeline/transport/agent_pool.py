@@ -237,16 +237,30 @@ class WarmWorkerPool:
                 if isinstance(m, dict) and m.get("role") in
                 ("system", "user", "assistant")]
 
+    def _discard(self, w: _Worker) -> None:
+        """Remove a dead/poisoned worker so acquire can grow a replacement."""
+        w.kill()
+        with self._lock:
+            try:
+                self._workers.remove(w)
+            except ValueError:
+                pass
+
     def _run_once(self, prompt: str, history: list[dict]) -> tuple[str, float]:
         w = self._acquire_blocking()
         try:
             if not w.healthy():
+                self._discard(w)
                 raise RuntimeError("worker failed health-check")
             return w.complete(prompt, history, rid=f"c{time.monotonic_ns()}")
-        except RuntimeError:
+        except RuntimeError as exc:
+            # complete() marks agent-dead workers; anything that raised is
+            # suspect — discard rather than hand it out again poisoned.
+            if getattr(w, "proc", None) is None or exc.args and "died" in str(exc):
+                self._discard(w)
             raise
         except Exception as exc:
-            w.kill()      # poisoned or dead — next acquire respawns fresh
+            self._discard(w)   # poisoned — next acquire respawns fresh
             raise RuntimeError(f"worker died mid-call: {exc}") from exc
         finally:
             try:
