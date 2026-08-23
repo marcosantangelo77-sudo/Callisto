@@ -72,12 +72,18 @@ def _clean_selection():
 
 
 def _patch_workers(monkeypatch, factory):
-    """Make WarmWorkerPool._acquire_blocking hand out fake workers."""
+    """Make WarmWorkerPool hand out fake workers, reusing free ones."""
     def acquire(self):
-        w = factory()
-        w.lock.acquire()
-        self._workers.append(w)
-        return w
+        while True:
+            for w in list(self._workers):
+                if w.alive and w.lock.acquire(blocking=False):
+                    return w
+            if len(self._workers) < self.pool_size:
+                w = factory()
+                w.lock.acquire()
+                self._workers.append(w)
+                return w
+            time.sleep(0.01)
     monkeypatch.setattr(WarmWorkerPool, "_acquire_blocking", acquire)
 
 
