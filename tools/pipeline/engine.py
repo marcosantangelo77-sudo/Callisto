@@ -465,6 +465,7 @@ class ResearchPipeline:
                   today: Optional[date] = None) -> PipelineResult:
         today = today or date.today()
         self.artifact_refs = []
+        self._pending_artifact_refs = []
         result = PipelineResult(root_query=question, sealed=False)
         cp = self.checkpointer
         trace: Optional[ckpt.RunTrace] = None
@@ -506,6 +507,19 @@ class ResearchPipeline:
         result.program = program
 
         # 2..5. Per leaf: select sources, fetch, compute, answer.
+        #
+        # PARALLEL-LEAF RESTRUCTURE (speed run 2026-08-23). The leaves of a
+        # decomposition are independent: leaf k's retrieval and answer depend
+        # on leaf k only. The old loop paid Σ(leaf work) serially — sync
+        # fetches that blocked the event loop plus an awaited model call per
+        # leaf. This costs a month on questions that need an answer this
+        # week. The restructure keeps byte-identical outputs:
+        #   Phase A — all retrievals concurrently off-loop; each writes a
+        #             scratch recorder replayed into the ledger in leaf order.
+        #   Phase B — all answers concurrently on-loop; evidence is returned
+        #             per leaf and appended to the session in leaf order, so
+        #             the conclusion and adversary see exactly what the serial
+        #             run saw.
         session = AGPSession(question)
         session.scope = question
         session.domain = domain
@@ -513,72 +527,151 @@ class ResearchPipeline:
         session.advance_to(SessionStep.SOURCE_ENUMERATION)
         session.sources = [s["name"] for s in self._get_registry().specs()]
 
-        for q in program.leaves:
-            async def _fetch_payload(q=q) -> dict:
-                fetches_q, trace_q = await self._fetch_for_question(
-                    q, self._question_types.get(q.question_id) or "")
-                # Store the relevance gate's VERDICTS, not just its admits.
-                # A resume that replays only stored fetches silently skips
-                # the gate — evidence the live run rejected would enter the
-                # resumed run, and zero reported rejections would make the
-                # resumed run look cleaner than it was. Restoring the whole
-                # trace (rejects included) keeps rejection itself auditable.
-                return {"fetches": [dataclasses.asdict(f)
-                                    for f in fetches_q],
-                        "rejections": [dataclasses.asdict(r)
-                                       for r in trace_q.rejected],
-                        "independent_keys": sorted(trace_q.independent_keys),
-                        "queries": list(trace_q.queries),
-                        "stop_reason": trace_q.stop_reason}
-            if cp is not None:
-                f_oc = await ckpt.run_stage(
-                    cp, trace, "fetch_leaf", {"qid": q.question_id},
-                    _fetch_payload,
-                    claim_ids=[session.session_id])
+        leaves = list(program.leaves)
+        n_leaves = len(leaves)
+
+        def _fetch_payload_dict(fetches_q: list[FetchResult],
+                                trace_q: Any) -> dict:
+            # Store the relevance gate's VERDICTS, not just its admits.
+            # A resume that replays only stored fetches silently skips
+            # the gate — evidence the live run rejected would enter the
+            # resumed run, and zero reported rejections would make the
+            # resumed run look cleaner than it was. Restoring the whole
+            # trace (rejects included) keeps rejection itself auditable.
+            return {"fetches": [dataclasses.asdict(f) for f in fetches_q],
+                    "rejections": [dataclasses.asdict(r)
+                                   for r in trace_q.rejected],
+                    "independent_keys": sorted(trace_q.independent_keys),
+                    "queries": list(trace_q.queries),
+                    "stop_reason": trace_q.stop_reason}
+
+        def _fetch_inputs(q: ResearchQuestion) -> dict:
+            return {"qid": q.question_id}
+
+        # ── Phase A: retrieval for every leaf ──────────────────────────────
+        # Checkpoint hits are detected up front; only misses retrieve.
+        fetch_hits: dict[int, ckpt.Checkpoint] = {}
+        if cp is not None:
+            for i, q in enumerate(leaves):
+                hit = cp.load(trace.run, "fetch_leaf",
+                              ckpt.hash_inputs(_fetch_inputs(q)))
+                if hit is not None:
+                    fetch_hits[i] = hit
+
+        fresh = [i for i in range(n_leaves) if i not in fetch_hits]
+
+        async def _retrieve(i: int):
+            q = leaves[i]
+            rec = _FetchRecorder()
+            fetches_i, trace_i = await asyncio.to_thread(
+                self._fetch_leaf_sync, q,
+                self._question_types.get(q.question_id) or "", rec)
+            return i, fetches_i, trace_i, rec
+
+        retrieved: dict[int, tuple] = {}
+        if fresh:
+            outcomes = await asyncio.gather(
+                *[_retrieve(i) for i in fresh], return_exceptions=True)
+            # Fail in LEAF ORDER — identical error selection to the serial
+            # loop (first failing leaf decides the exception).
+            for i, oc in zip(fresh, outcomes):
+                if isinstance(oc, BaseException):
+                    raise oc
+            for oc in outcomes:
+                retrieved[oc[0]] = oc[1:]
+            # Replay each leaf's provenance records into the real ledger in
+            # leaf order → same keys, same per-key order, same first-wins
+            # url mapping as the serial run produced.
+            for i in fresh:
+                for tool, body, primary, urls in retrieved[i][2].calls:
+                    self.ledger.record_tool_result(tool, body, primary=primary,
+                                                   urls=urls or None)
+
+        fetches_by_leaf: list[list[FetchResult]] = []
+        traces_by_leaf: list[Any] = []
+        for i, q in enumerate(leaves):
+            if i in fetch_hits:
+                ck = fetch_hits[i]
                 # Restore the fetched bytes into this run's ledger so
                 # source-class assignment works identically on a resume.
-                ck = cp.load_by_key(
-                    trace.run,
-                    ckpt.step_key(trace.run, "fetch_leaf",
-                                  ckpt.hash_inputs({"qid": q.question_id})))
-                if ck is not None:
-                    ckpt.replay_ledger(self.ledger, [ck])
-                fetches = [_fetch_from_payload(r)
-                           for r in f_oc.payload["fetches"]]
+                ckpt.replay_ledger(self.ledger, [ck])
+                trace.stages.append(ckpt.StageOutcome(
+                    stage="fetch_leaf", resumed=True, payload=ck.payload,
+                    produced_at=ck.produced_at))
+                fetches_i = [_fetch_from_payload(r)
+                             for r in ck.payload["fetches"]]
                 # Restore the FULL retrieval trace — admitted AND rejected —
                 # whether this stage was fresh or served from the checkpoint.
                 # The gate has already been applied to produce this payload;
                 # restoring it verbatim is how a resumed run scores exactly
                 # what the equivalent live run scored.
-                trace_q = _trace_from_payload(q.question_id, f_oc.payload)
-                rejected = trace_q.rejected
+                trace_q = _trace_from_payload(q.question_id, ck.payload)
             else:
-                fetches, trace_q = await self._fetch_for_question(
-                    q, self._question_types.get(q.question_id) or "")
-                rejected = trace_q.rejected
-            result.fetches.extend(fetches)
+                fetches_i, trace_q, _rec = retrieved[i]
+                if cp is not None:
+                    saved = cp.save(
+                        trace.run, "fetch_leaf",
+                        ckpt.hash_inputs(_fetch_inputs(q)),
+                        _fetch_payload_dict(fetches_i, trace_q),
+                        claim_ids=[session.session_id])
+                    trace.stages.append(ckpt.StageOutcome(
+                        stage="fetch_leaf", resumed=False,
+                        payload=_fetch_payload_dict(fetches_i, trace_q),
+                        produced_at=saved.produced_at))
+            fetches_by_leaf.append(fetches_i)
+            traces_by_leaf.append(trace_q)
+            result.fetches.extend(fetches_i)
+            rejected = trace_q.rejected
             if rejected:
                 result.notes.append(
                     f"leaf '{q.text[:60]}': {len(rejected)} fetch(s) "
                     "rejected at ingestion: " + "; ".join(
                         f"[{r.source_name}] {r.reason}" for r in rejected))
 
-            async def _answer() -> dict:
-                before = len(session.evidence)
-                outcome = await self._answer_leaf(q, fetches, session,
-                                                  trace=trace_q)
-                # Persist what this leaf contributed to the session so a
-                # resume can rehydrate session.evidence without re-running
-                # the model — otherwise AGP would rightly refuse to seal a
-                # zero-evidence session.
-                return {"leaf": dataclasses.asdict(outcome),
-                        "evidence": [dataclasses.asdict(e)
-                                     for e in session.evidence[before:]]}
-            if cp is not None:
-                a_oc = await ckpt.run_stage(
-                    cp, trace, "answer_leaf", {"qid": q.question_id}, _answer)
-                outcome = _leaf_from_payload(a_oc.payload["leaf"])
-                for e_rec in a_oc.payload.get("evidence") or []:
+        # ── Phase B: answers for every leaf ────────────────────────────────
+        # Answer-stage checkpoint hits skip the model exactly as before;
+        # misses run concurrently and are assembled in leaf order below.
+        answer_hits: dict[int, ckpt.Checkpoint] = {}
+        if cp is not None:
+            for i, q in enumerate(leaves):
+                hit = cp.load(trace.run, "answer_leaf",
+                              ckpt.hash_inputs({"qid": q.question_id}))
+                if hit is not None:
+                    answer_hits[i] = hit
+
+        async def _answer_fresh(i: int) -> dict:
+            outcome_i, ev_items = await self._answer_leaf(
+                leaves[i], fetches_by_leaf[i], session,
+                trace=traces_by_leaf[i])
+            return {"i": i,
+                    "leaf": dataclasses.asdict(outcome_i),
+                    "evidence": [dataclasses.asdict(e) for e in ev_items]}
+
+        to_run = [i for i in range(n_leaves) if i not in answer_hits]
+        payloads: dict[int, dict] = {}
+        resumed_answer: dict[int, dict] = {}
+        if to_run:
+            ans_outcomes = await asyncio.gather(
+                *[_answer_fresh(i) for i in to_run], return_exceptions=True)
+            for i, oc in zip(to_run, ans_outcomes):
+                if isinstance(oc, BaseException):
+                    raise oc
+            for oc in ans_outcomes:
+                payloads[oc.pop("i")] = oc
+        for i in range(n_leaves):
+            if i in answer_hits:
+                ck = answer_hits[i]
+                resumed_answer[i] = ck.payload
+                trace.stages.append(ckpt.StageOutcome(
+                    stage="answer_leaf", resumed=True, payload=ck.payload,
+                    produced_at=ck.produced_at))
+
+        # ── Ordered assembly: identical observable state to the serial run ──
+        for i, q in enumerate(leaves):
+            if i in resumed_answer:
+                payload = resumed_answer[i]
+                outcome = _leaf_from_payload(payload["leaf"])
+                for e_rec in payload.get("evidence") or []:
                     ev = Evidence(
                         content=e_rec["content"],
                         source_class=SourceClass(e_rec["source_class"]),
@@ -588,9 +681,27 @@ class ResearchPipeline:
                         source_name=e_rec["source_name"])
                     session.add_evidence(ev)
             else:
-                outcome = await self._answer_leaf(q, fetches, session,
-                                                  trace=trace_q)
+                payload = payloads[i]
+                outcome = _leaf_from_payload(payload["leaf"])
+                for e_rec in payload["evidence"]:
+                    ev = Evidence(
+                        content=e_rec["content"],
+                        source_class=SourceClass(e_rec["source_class"]),
+                        confidence_score=e_rec["confidence_score"],
+                        domain=domain,
+                        origin_agent=e_rec["origin_agent"],
+                        source_name=e_rec["source_name"])
+                    session.add_evidence(ev)
+                if cp is not None:
+                    saved = cp.save(
+                        trace.run, "answer_leaf",
+                        ckpt.hash_inputs({"qid": q.question_id}), payload,
+                        claim_ids=[session.session_id])
+                    trace.stages.append(ckpt.StageOutcome(
+                        stage="answer_leaf", resumed=False, payload=payload,
+                        produced_at=saved.produced_at))
             result.leaves.append(outcome)
+        self.artifact_refs.extend(self._pending_artifact_refs)
 
 
         session.advance_to(SessionStep.PRIMARY_COLLECTION)
