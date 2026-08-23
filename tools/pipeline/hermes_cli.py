@@ -12,9 +12,16 @@ Two consumers:
                        path: adversary panel, empirical routing and the
                        retrodiction batch all go through it.
 
+TRANSPORT (2026-08-23): complete() no longer shells out per call by default.
+It routes through tools/pipeline/transport — a pool of warm in-process Hermes
+agents (same library, same keychain auth, zero per-call startup). The
+subprocess path remains as an automatic fallback when the pool cannot be
+built (no importable Hermes install, no runtime credentials), and the active
+transport is logged LOUDLY on the first call either way. A silent fallback
+that quietly costs ~10s per call is worse than a loud one.
+
 Real constraints, declared honestly:
-  * ~14s process startup per call — one fresh CLI session per completion.
-    Timeouts must budget for this; this is not a hot-path backend.
+  * subprocess fallback still pays ~7-10s process startup per call.
   * no streaming — the answer arrives whole or not at all.
   * JSON-in-text, not schema-enforced — structured_output capability is
     FALSE in providers.yaml. Callers extract JSON from prose and must
@@ -24,9 +31,13 @@ Real constraints, declared honestly:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
-from typing import Optional
+import threading
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 _HERMES = os.path.expanduser("~/.hermes/bin/hermes")
 
@@ -116,21 +127,88 @@ async def hermes_run(binary: str, prompt: str, cwd: str,
 
 async def hermes_complete(messages: list[dict], *, role: str = "",
                           binary: Optional[str] = None, cwd: str = "/tmp",
-                          timeout_s: float = 240.0) -> dict:
+                          timeout_s: float = 240.0,
+                          transport: Optional[str] = None) -> dict:
     """Bounded, awaited CLI completion. Returns {'content', 'rc', 'stderr'}.
 
-    Raises RuntimeError when the CLI failed AND produced nothing — partial
+    Transport selection (override with CALLISTO_HERMES_TRANSPORT =
+    "agent_pool" | "subprocess", or the `transport` kwarg):
+      * agent_pool — warm in-process Hermes agents; per-call cost is
+        inference time only (~2-10s depending on prompt).
+      * subprocess — one fresh `hermes -z` per call; ~7-10s startup paid
+        every call. Automatic fallback when the pool can't be built.
+
+    The active transport is logged once, loudly, at selection time.
+
+    Raises RuntimeError when the call failed AND produced nothing — partial
     stdout on a nonzero rc is returned, since the JSON may be intact.
     """
-    bin_path = resolve_binary(binary)
-    prompt = flatten_messages(role, messages)
-    sem = proc_semaphore()
-    async with sem:
-        rc, out, err = await hermes_run(bin_path, prompt, cwd, timeout_s)
-    if rc != 0 and not out:
-        raise RuntimeError(
-            f"hermes failed (rc={rc}): {err[:300]}")
-    return {"content": out, "rc": rc, "stderr": err[-200:]}
+    selected = _select_transport(transport)
+    if isinstance(selected, SubprocessTransport):
+        return await selected.complete(messages, role=role, binary=binary,
+                                       cwd=cwd, timeout_s=timeout_s)
+    return await selected.complete(messages, role=role, timeout_s=timeout_s)
+
+
+_transport_lock = threading.Lock()
+_transport_instance: Optional[Any] = None
+_transport_kind: Optional[str] = None
+_transport_announced = False
+
+
+def _announce(kind: str) -> None:
+    global _transport_announced
+    if not _transport_announced:
+        _transport_announced = True
+        if kind == "hermes-agent-pool":
+            logger.info(
+                "hermes_cli transport = AGENT POOL (warm in-process agents, "
+                "no per-call process startup)")
+        else:
+            logger.warning(
+                "hermes_cli transport = SUBPROCESS fallback (~7-10s process "
+                "startup per call). Pool unavailable — see preceding log "
+                "lines for the build failure.")
+
+
+def _select_transport(force: Optional[str] = None) -> Any:
+    """Resolve the transport once per process; reuse thereafter."""
+    global _transport_instance, _transport_kind
+    forced = force or os.getenv("CALLISTO_HERMES_TRANSPORT", "").strip() or None
+    with _transport_lock:
+        if (_transport_instance is not None and _transport_kind == forced):
+            _announce(_transport_instance.name)
+            return _transport_instance
+        if forced == "subprocess":
+            _transport_instance = SubprocessTransport()
+            _transport_kind = "subprocess"
+        else:
+            try:
+                pool = get_shared_pool()
+                if not pool.available():
+                    raise RuntimeError("Hermes runtime credentials unavailable")
+                _transport_instance = pool
+                _transport_kind = "agent_pool"
+            except Exception as exc:
+                logger.warning(
+                    "hermes_cli: agent-pool transport unavailable (%s) — "
+                    "falling back to subprocess path", exc)
+                if forced == "agent_pool":
+                    raise
+                _transport_instance = SubprocessTransport()
+                _transport_kind = "subprocess"
+        _announce(_transport_instance.name)
+        return _transport_instance
+
+
+def reset_transport_selection() -> None:
+    """Test hook: forget the chosen transport (and shared pool)."""
+    global _transport_instance, _transport_kind, _transport_announced
+    with _transport_lock:
+        _transport_instance = None
+        _transport_kind = None
+        _transport_announced = False
+    reset_shared_pool()
 
 
 class HermesCliModel:
@@ -138,15 +216,18 @@ class HermesCliModel:
 
     Kept as a distinct class so existing pipeline call sites are untouched;
     new code should prefer ProviderRouter with backend: hermes_cli.
+    Contract unchanged: complete(role, messages, schema=None, **kw)
+    -> {"content": str}.
     """
 
     name = "hermes-cli"
 
     def __init__(self, binary: Optional[str] = None, timeout_s: float = 240.0,
-                 cwd: Optional[str] = None):
+                 cwd: Optional[str] = None, transport: Optional[str] = None):
         self.binary = resolve_binary(binary)
         self.timeout_s = timeout_s
         self.cwd = cwd or "/tmp"
+        self._transport_pref = transport
         self.calls: list[dict] = []
 
     async def complete(self, role: str, messages: list[dict],
@@ -155,7 +236,10 @@ class HermesCliModel:
         # Adversary caller; the backend cannot enforce schemas (see module
         # docstring) and pretending otherwise broke the adversary once.
         res = await hermes_complete(messages, role=role, binary=self.binary,
-                                    cwd=self.cwd, timeout_s=self.timeout_s)
-        self.calls.append({"role": role, "stderr": res["stderr"],
-                           "chars_out": len(res["content"])})
+                                    cwd=self.cwd, timeout_s=self.timeout_s,
+                                    transport=self._transport_pref)
+        self.calls.append({"role": role,
+                           "stderr": res.get("stderr", ""),
+                           "chars_out": len(res["content"]),
+                           "transport": res.get("transport", "?")})
         return {"content": res["content"]}
