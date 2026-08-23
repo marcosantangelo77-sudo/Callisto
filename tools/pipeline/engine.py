@@ -503,12 +503,19 @@ class ResearchPipeline:
                     claim_ids=[session.session_id])
                 # Restore the fetched bytes into this run's ledger so
                 # source-class assignment works identically on a resume.
+                # The replay consumes the SAME admissible set seal_guard
+                # will judge (run-scope + verified signature, one shared
+                # predicate) — a record the guard cannot see must never
+                # enter this ledger either (red-team D3). A signature that
+                # fails is not replayed AT ALL.
                 ck = cp.load_by_key(
                     trace.run,
                     ckpt.step_key(trace.run, "fetch_leaf",
                                   ckpt.hash_inputs({"qid": q.question_id})))
                 if ck is not None:
-                    ckpt.replay_ledger(self.ledger, [ck])
+                    admissible = ckpt.admissible_checkpoints(trace.run, [ck])
+                    if admissible:
+                        ckpt.replay_ledger(self.ledger, admissible)
                 fetches = [_fetch_from_payload(r)
                            for r in f_oc.payload["fetches"]]
                 # Restore the FULL retrieval trace — admitted AND rejected —
