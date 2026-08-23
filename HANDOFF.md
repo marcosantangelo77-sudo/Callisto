@@ -163,3 +163,25 @@ survived once was four months of building without running.
                        build/preregistration    sealed falsifiers + long-lived claims
                        build/sources-2          more adapters incl. Wayback-as-proof
                        build/loop-quality       information-gain termination
+
+## MERGE GUARD — run it, do not eyeball merges
+
+    ~/callisto-wt/verify-merge.sh [PREV_REF]     # default HEAD~1
+
+Catches what a human reviewer misses by eye, because it happened repeatedly:
+  - a merge that DELETED a public function another branch added
+    (tools/why.py lost independence_from_fetches this way; engine.py lost the
+     checkpoint re-gate fix the same way an hour later)
+  - test files that vanished
+  - a source file that shrank >25% (a stale branch overwriting newer work —
+    one merge would have deleted 526 lines of another agent's query builder)
+  - first-party imports that no longer resolve
+
+RUN IT AFTER EVERY MERGE, BEFORE PUSHING. Exit 1 means do not push.
+
+**Conflict rule, learned the hard way:** OWNERSHIP decides, not recency, and
+never blanket `--theirs`. When two branches both edit a file, the instance that
+OWNS it wins. When both legitimately changed it (engine.py: one added
+parallelism, one added checkpoint re-gating), neither side wins — do a real
+three-way merge with `git merge-base`, or re-queue the smaller change as work
+against the merged file. Picking a side silently discards a fix.
