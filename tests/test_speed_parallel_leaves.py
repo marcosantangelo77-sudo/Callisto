@@ -382,7 +382,15 @@ def test_brier_regression_five_retro_questions(tmp_path):
 
     golden_path = GOLDEN_DIR / "five_question_brier.json"
     golden = json.loads(golden_path.read_text())
+    # The golden must reflect CURRENT bridge semantics. Commit fa2bea9
+    # replaced the keyword-sign scan with the DECLARED stance; a scripted
+    # model declares no stance, so every scripted forecast is honestly 0.5
+    # (Brier 0.25 by construction). Regenerate via scripts/gen_speed_golden.py
+    # whenever the bridge changes intentionally; a mismatch without such a
+    # change IS a regression.
     assert round(brier, 9) == golden["brier"], (
-        f"Brier moved: {brier} vs serial golden {golden['brier']}")
+        f"Brier moved: {brier} vs golden {golden['brier']} — if the bridge "
+        f"semantics changed intentionally, regenerate the golden; if not, "
+        f"this is a regression")
     assert preds == golden["predictions"], (
         "per-question probabilities moved vs serial golden")
