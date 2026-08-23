@@ -34,6 +34,7 @@ Domain-general throughout: nothing here knows what a bet, a coin, or a
 protein is. The attack prompt speaks of claims, evidence, mechanisms.
 """
 
+from agp.thresholds import floor_conf
 import json
 import os
 import threading
@@ -486,11 +487,11 @@ class Adversary:
         objs = list(objections)
         for ob in objs:
             if ob.is_blocking:
-                return round(max(0.0, float(confidence_score)), 2), ob.text
+                return floor_conf(max(0.0, float(confidence_score))), ob.text
         penalty = sum(o.penalty for o in objs)
-        clamped = round(max(0.0, float(confidence_score) - penalty), 2)
+        clamped = floor_conf(max(0.0, float(confidence_score) - penalty))
         reason = ""
-        if objs and clamped < round(float(confidence_score), 2):
+        if objs and clamped < floor_conf(float(confidence_score)):
             reason = f"adversary: {len(objs)} objection(s), -{penalty:.2f} confidence"
         return clamped, reason
 

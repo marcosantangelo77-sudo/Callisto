@@ -52,3 +52,19 @@ CONTRADICTION_PENALTY = {
     "MAJOR": 0.05,
     "MINOR": 0.0,
 }
+
+
+def floor_conf(x: float, places: int = 2) -> float:
+    """Quantise a confidence DOWNWARD. Never round.
+
+    round(0.269183, 2) == 0.27 — an increase. That is small, and it is still an
+    automated actor raising a confidence score, which is the one thing this
+    architecture exists to make impossible. It also COMPOUNDS: a score passing
+    through several clamp/penalty round-trips can creep upward with no evidence
+    behind it. A red-team pass found it in apply_verdict, in the provenance
+    clamp, and in the panel path after an earlier fix landed in only one of
+    them — which is why this lives in ONE place that every caller uses.
+    """
+    import math
+    f = 10 ** places
+    return math.floor(float(x) * f) / f

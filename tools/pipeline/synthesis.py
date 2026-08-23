@@ -46,6 +46,8 @@ requirement-floor used by engine._answer_leaf.
 """
 from __future__ import annotations
 
+
+from agp.thresholds import floor_conf
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
@@ -311,7 +313,7 @@ def confidence_from_agreement(group: ClaimGroup,
     n_indep = group.independent_sources
     frac = min(1.0, _SINGLE_VOICE_FRACTION
                + _PER_EXTRA_VOICE * max(0, n_indep - 1))
-    score = round(ceiling * frac, 2)
+    score = floor_conf(ceiling * frac)
     reasons.append(
         f"{n_indep} independent source(s) agree -> "
         f"{frac:.0%} of ceiling")
@@ -327,7 +329,7 @@ def confidence_from_agreement(group: ClaimGroup,
         reasons.append(
             f"live contradiction ({contradictions[0].kind}) caps at "
             f"SPECULATIVE {cap}: disagreement is surfaced, not averaged")
-    return round(min(score, ceiling), 2), reasons
+    return floor_conf(min(score, ceiling)), reasons
 
 
 # ── 4. Structured extraction table ───────────────────────────────────────
@@ -526,5 +528,5 @@ def synthesize(question: str,
         rep.notes.append(
             f"{len(rep.contradictions)} live contradiction(s): overall "
             f"confidence capped at SPECULATIVE {_SPECULATIVE_CAP}")
-    rep.confidence = round(max(rep.confidence, 0.0), 2)
+    rep.confidence = floor_conf(max(rep.confidence, 0.0))
     return rep

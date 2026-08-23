@@ -23,6 +23,8 @@ refusal and the refusal itself is explained.
 """
 from __future__ import annotations
 
+
+from agp.thresholds import floor_conf
 import re
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
@@ -523,7 +525,7 @@ def explain_result(result, ledger=None,
         refusal_reason=result.refusal_reason,
         score=float(result.confidence_score),
         tier=str(result.confidence_tier),
-        proposed=round(proposed, 2),
+        proposed=floor_conf(proposed),
         evidence=evidence_whys,
         ceilings=ceilings,
         objections=objection_whys,
