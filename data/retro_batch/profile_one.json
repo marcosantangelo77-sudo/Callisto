@@ -1,0 +1,44 @@
+{
+  "question_id": "c1672ca2fb5444c9",
+  "total_s": 36.8,
+  "n_model_calls": 6,
+  "model_wall_s": 36.7,
+  "calls": [
+    {
+      "task_class": "Architect",
+      "s": 11.0,
+      "prompt_chars": 115,
+      "resp_chars": 1239
+    },
+    {
+      "task_class": "Manager",
+      "s": 3.32,
+      "prompt_chars": 139,
+      "resp_chars": 351
+    },
+    {
+      "task_class": "Manager",
+      "s": 3.35,
+      "prompt_chars": 160,
+      "resp_chars": 308
+    },
+    {
+      "task_class": "Manager",
+      "s": 2.37,
+      "prompt_chars": 130,
+      "resp_chars": 220
+    },
+    {
+      "task_class": "Manager",
+      "s": 2.37,
+      "prompt_chars": 159,
+      "resp_chars": 254
+    },
+    {
+      "task_class": "adversarial_review",
+      "s": 14.26,
+      "prompt_chars": 1750,
+      "resp_chars": 1785
+    }
+  ]
+}
