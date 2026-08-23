@@ -51,12 +51,12 @@ def _routes() -> dict[str, str]:
     return {"/works": OPENALEX_BODY, "/graph/v1/paper/search": SS_BODY}
 
 
-def _decompose() -> str:
+def _decompose(min_indep=2) -> str:
     return json.dumps({"sub_questions": [
         {"text": "what does scholarly research say about supply chain "
                  "resilience", "kind": "descriptive",
          "question_type": "scholarly work search about semiconductors",
-         "min_source_tier": 2, "min_independent_sources": 2},
+         "min_source_tier": 2, "min_independent_sources": min_indep},
     ]})
 
 
@@ -66,7 +66,7 @@ def _answer(conf=0.8) -> str:
 
 
 def _criteria(confirm=("literature supports",),
-             refute=(),
+             refute=("zebra unicorn stampede",),
              ambiguous=(),
              **overrides) -> str:
     body = {
@@ -190,15 +190,18 @@ def test_ambiguous_verdict_caps_confidence_at_055(tmp_path):
                                  outcome="hit", best_source_class="SECONDARY")
                 for i in range(5)]
 
+    # min_independent_sources=1 so the leaf is not capped at the
+    # SPECULATIVE band by source diversity — otherwise the 0.55 cap could
+    # never be exercised from above.
     amb_model = ScriptedModel({
-        "Architect": [{"content": _decompose()}],
+        "Architect": [{"content": _decompose(min_indep=1)}],
         "Preregister": [{"content": _criteria(
             confirm=("totally absent phrase",),
             refute=("equally absent phrase",))}],
         "Manager": [{"content": _answer(0.9)}],
     })
     conf_model = ScriptedModel({
-        "Architect": [{"content": _decompose()}],
+        "Architect": [{"content": _decompose(min_indep=1)}],
         "Preregister": [{"content": _criteria(
             confirm=("literature supports",), refute=("equally absent",))}],
         "Manager": [{"content": _answer(0.9)}],
