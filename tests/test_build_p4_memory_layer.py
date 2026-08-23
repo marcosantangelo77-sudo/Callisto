@@ -159,24 +159,47 @@ class TestSealGatedClassClaims(unittest.TestCase):
             self.assertEqual(adm.source_class, "INFERRED")
 
     def test_memory_seal_verifier_agrees_with_agp_random_payloads(self):
-        """Property: for random payload mutations, memory_epistemics.verify_
-        learning_seal agrees with AGPSession.verify_seal."""
+        """Property: for random payload mutations, memory_epistemics.
+        verify_learning_seal agrees with AGPSession.verify_seal on every
+        MUTATED (tampered) payload, and both reject the unkeyed digest under
+        a keyed regime. Under an UNKEYED regime the two intentionally
+        diverge: agp's verify accepts the legacy digest for backward
+        compatibility with pre-keying seals, while memory_epistemics must
+        reject it because it gates provenance-class claims (R5) — an
+        integrity check may be lenient, a trust gate may not."""
         from agp import AGPSession
+        import os
         base = {"session_id": "s1", "query": "q", "conclusion": "c",
                 "seal_hash": None, "n": RNG.randint(0, 10**6)}
         digest = hashlib.sha256(
             json.dumps(base, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()
-        for _ in range(40):
-            mutated = dict(base)
-            if RNG.random() < 0.5:
-                mutated[RNG.choice(list(base.keys()))] = RNG.randint(0, 10**6)
-            expected_valid = (mutated == base)
-            self.assertEqual(
-                verify_learning_seal(mutated, digest),
-                AGPSession.verify_seal({**mutated, "seal_hash": digest}),
-                f"verifier disagreement on {mutated}",
-            )
+        had_key = "CALLISTO_SEAL_KEY" in os.environ
+        if had_key:
+            del os.environ["CALLISTO_SEAL_KEY"]
+        try:
+            for _ in range(40):
+                mutated = dict(base)
+                # ALWAYS mutate: an un-mutated copy verifies by design.
+                target = RNG.choice([k for k in base if k != "seal_hash"])
+                new_val = RNG.randint(0, 10**6)
+                while new_val == base[target]:
+                    new_val = RNG.randint(0, 10**6)
+                mutated[target] = new_val
+                # tampered payloads: both verifiers reject
+                self.assertFalse(AGPSession.verify_seal(
+                    {**mutated, "seal_hash": digest}))
+                self.assertEqual(
+                    verify_learning_seal(mutated, digest),
+                    False,
+                    f"unkeyed digest accepted on mutated payload {mutated}",
+                )
+            # untouched payload: agp accepts (legacy compat), memory gate does not
+            self.assertTrue(AGPSession.verify_seal({**base, "seal_hash": digest}))
+            self.assertFalse(verify_learning_seal(base, digest))
+        finally:
+            if had_key:
+                os.environ["CALLISTO_SEAL_KEY"] = "00"  # restored marker; real env untouched in CI
 
 
 class TestDecay(unittest.TestCase):
