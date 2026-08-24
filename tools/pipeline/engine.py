@@ -392,9 +392,35 @@ class ResearchPipeline:
         out = LeafOutcome(question_id=q.question_id, text=q.text)
         evidence_items: list[Evidence] = []
         best_class = SourceClass.INFERRED
+
+        def _evidence_text(f) -> str:
+            """SPEED run 13 (2026-08-24): what the author/adversary models SEE.
+
+            The old window was ``f.body[:4000]`` on the sorted-keys JSON
+            dump. sort_keys puts ``meta`` first — on a real 244KB OpenAlex
+            works response, 10 of 10 result titles fell OUTSIDE the window
+            and the model reasoned over API boilerplate. Flatten the parsed
+            body to its strings (retrieval.extract_text — the SAME rule the
+            relevance gate uses, no second flattening notion) and take the
+            head of that; fall back to the raw-body window when parsed is
+            unavailable. Provenance is unchanged: sha256 still covers the
+            FULL canonical body and the ledger still stores full bytes —
+            only the shown text changes, from boilerplate toward content.
+            """
+            try:
+                from tools.pipeline.retrieval import extract_text
+                parsed = getattr(f, "parsed", None)
+                if parsed is not None:
+                    txt = " ".join(extract_text(parsed).split())
+                    if txt:
+                        return txt[:4000]
+            except Exception:  # noqa: BLE001 — digest must never fail a fetch
+                pass
+            return f.body[:4000]
+
         for f in fetches:
             ev = Evidence(
-                content=f.body[:4000], source_class=SourceClass.INFERRED,
+                content=_evidence_text(f), source_class=SourceClass.INFERRED,
                 confidence_score=0.30, domain=session.domain or Domain.GENERAL,
                 origin_agent="pipeline", source_name=f.source_name)
             assigned = self.ledger.assign_source_class(ev)
