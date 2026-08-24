@@ -270,6 +270,28 @@ def _cmd_status(args: argparse.Namespace) -> int:
     total, sigs = row[0], row[1] or 0
     print(f"  events={total} signals={sigs}"
           + (f" rate={sigs/total*100:.1f}%" if total else ""))
+
+    # Domain-general claims (registered via `callisto predict`) — the same
+    # lifecycle, sport='general'. Shown separately so they are visible
+    # rather than buried in sports counts.
+    if "predictions" in tables:
+        print("\n=== GENERAL CLAIMS ===")
+        rows = list(c.execute(
+            "SELECT status, COUNT(*) AS n FROM hypotheses "
+            "WHERE sport='general' GROUP BY status"))
+        open_row = c.execute(
+            "SELECT COUNT(*) FROM predictions p WHERE NOT EXISTS "
+            "(SELECT 1 FROM outcomes o WHERE o.prediction_id = p.id)"
+        ).fetchone()
+        resolved_row = c.execute("SELECT COUNT(*) FROM outcomes").fetchone()
+        if not rows and not (open_row[0] or resolved_row[0]):
+            print("  (none — `callisto predict` registers a recurring claim)")
+        else:
+            for r in rows:
+                print(f"  {r['status']:<14} {r['n']}")
+            print(f"  open predictions: {open_row[0]}, "
+                  f"resolved: {resolved_row[0]}"
+                  "  (see `callisto predictions` / `callisto resolve`)")
     conn.close()
     return 0
 
@@ -549,6 +571,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("run_id", help="run id (or unique prefix) from `runs`")
     p_doc = sub.add_parser(
         "doctor", help="can this machine answer a live question today?")
+
+    p_pred = sub.add_parser(
+        "predict", help="register a recurring claim and commit a "
+                        "probability BEFORE ground truth")
+    p_pred.add_argument("event", help="the specific event to predict "
+                                      "(e.g. \"btc hashrate new ATH by 2026-12-31\")")
+    p_pred.add_argument("--claim", required=True,
+                        help="recurring claim name this prediction belongs to")
+    p_pred.add_argument("--prob", type=float, required=True,
+                        help="predicted probability, 0..1 — committed now, "
+                             "scored later")
+    p_pred.add_argument("--by", required=True,
+                        help="deadline YYYY-MM-DD; overdue-unresolved scores "
+                             "stale against the claim")
+    p_preds = sub.add_parser(
+        "predictions", help="open predictions awaiting ground truth")
+    p_preds.add_argument("--claim", help="filter to one claim id")
+    p_res = sub.add_parser(
+        "resolve", help="record ground truth for one prediction and show "
+                        "the track record it earned")
+    p_res.add_argument("prediction_id", type=int)
+    p_res.add_argument("outcome",
+                       help="yes/no/push (won/lost/true/false/hit/miss/"
+                            "retracted also accepted)")
+    p_res.add_argument("--payoff", type=float, default=None,
+                       help="optional per-unit payoff of the outcome")
+
     for p in (p_status, p_doc):
         p.add_argument("--providers", default=_default_providers_path())
     return ap
@@ -566,6 +615,12 @@ def main(argv=None) -> int:
         return _cmd_show(args)
     if args.command == "doctor":
         return _cmd_doctor(args)
+    if args.command == "predict":
+        return _cmd_predict(args)
+    if args.command == "predictions":
+        return _cmd_predictions(args)
+    if args.command == "resolve":
+        return _cmd_resolve(args)
     return 2
 
 

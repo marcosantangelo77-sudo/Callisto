@@ -73,7 +73,11 @@ CREATE TABLE IF NOT EXISTS wiki_articles (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     compile_count INTEGER NOT NULL DEFAULT 1,
-    content_hash TEXT NOT NULL DEFAULT ''
+    content_hash TEXT NOT NULL DEFAULT '',
+    -- added 2026-08-23 (schema-engine parity): ensure_schema's migration adds
+    -- this column to pre-existing DBs; fresh DBs must get it from the owner's
+    -- CREATE so file_task_result can always trace its source task.
+    source_task_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS wiki_contradictions (

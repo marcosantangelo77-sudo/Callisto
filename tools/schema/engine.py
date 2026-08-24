@@ -84,10 +84,22 @@ async def _safe_add_column(
     being swallowed as `except: pass` — that pattern silently leaves the
     schema incomplete and downstream writers fail with "no such column"
     hours later, far from the root cause.
+
+    A table that does not exist AT ALL is not an error either: some tables
+    are owned by their feature modules (knowledge_wiki, line_monitor), whose
+    CREATE TABLE carries the full current schema. On a fresh DB those owners
+    have not run yet; warning here would cry wolf on every first boot.
     """
     from tools.db_utils import safe_ident
     tbl = safe_ident(table)
     col = safe_ident(column)
+    cur = await db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+    if not await cur.fetchone():
+        logger.debug(
+            f"Skipping migration add {column} to {table}: table does not "
+            "exist yet (its owner module creates it with the column included)")
+        return
     try:
         await db.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {coltype}")
         await db.commit()
