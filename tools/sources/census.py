@@ -1,8 +1,10 @@
 """Census Data API — construction, housing, retail, demographics. Tier 1.
 
 api.census.gov/data/{year}/{dataset}?get=VARS&for=GEO:*[&in=...].
-Key optional for light use but REQUIRED above ~500 queries/day
-(api.census.gov/data/key_signup.html); set CALLISTO_CENSUS_API_KEY.
+Key REQUIRED as of 2026-08 (was 'optional for light use'): any data query
+without a valid key gets HTTP 302 -> data/missing_key.html, which parses
+as non-JSON (live-verified across acs1/acs5/eits). Set
+CALLISTO_CENSUS_API_KEY (api.census.gov/data/key_signup.html).
 No stated per-second ceiling; we self-limit to ~2 req/s. Responses are
 a flat JSON array: first row = column names, subsequent rows = values
 (all strings; 'N'/'-' etc. mean suppressed — preserved verbatim).

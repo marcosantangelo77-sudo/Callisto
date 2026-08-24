@@ -322,8 +322,10 @@ def _bea() -> ProbeResult:
                 count, shape)
 
 
-@probe("census")
+@probe("census", "CALLISTO_CENSUS_API_KEY")
 def _census() -> ProbeResult:
+    # 2026-08: the API 302s keyless queries to missing_key.html, so the
+    # probe needs a configured key for its verdict to mean anything.
     r = ProbeResult("census")
     src, ad = _build("census")
     r.url = src.build_url("/2023/acs/acs1",

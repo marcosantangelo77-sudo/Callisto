@@ -184,6 +184,48 @@ class TestAdaptersOnFixtures:
         with pytest.raises(SourceError, match="history"):
             bls.timeseries(["LNS14000000"], 2000, 2023)
 
+    def test_bls_quota_rejection_is_an_error_not_silence(self):
+        # Live capture 2026-08-24: the shared anonymous daily pool was
+        # exhausted. The API answers HTTP 200 with REQUEST_NOT_PROCESSED;
+        # returning that verbatim parsed as ZERO series downstream — a
+        # quota rejection masquerading as 'no data exists'.
+        bls, t = build("bls", "BlsAdapter", {
+            "https://api.bls.gov/publicAPI/v2/timeseries/data":
+                '{"status":"REQUEST_NOT_PROCESSED","responseTime":0,'
+                '"message":["Request could not be serviced, as the daily '
+                'threshold for total number of requests allocated to the '
+                'user with registration key  has been reached."],'
+                '"Results":{}}',
+        })
+        with pytest.raises(SourceError, match="REQUEST_NOT_PROCESSED"):
+            bls.timeseries(["LNS14000000"], 2023, 2024)
+        assert len(t.calls) == 1       # exactly one POST attempted
+
+    def test_bls_success_with_zero_series_is_an_error(self):
+        bls, _t = build("bls", "BlsAdapter", {
+            "https://api.bls.gov/publicAPI/v2/timeseries/data":
+                '{"status":"REQUEST_SUCCEEDED","responseTime":88,'
+                '"message":["No data available for specific series."],'
+                '"Results":{}}',
+        })
+        with pytest.raises(SourceError, match="no series data"):
+            bls.timeseries(["LNS14000000"], 2023, 2024)
+
+    def test_bls_success_shape_still_parses(self):
+        bls, _t = build("bls", "BlsAdapter", {
+            "https://api.bls.gov/publicAPI/v2/timeseries/data":
+                '{"status":"REQUEST_SUCCEEDED","responseTime":123,'
+                '"message":["Ok"],'
+                '"Results":{"series":[{"seriesID":"LNS14000000",'
+                '"data":[{"year":"2024","period":"M01",'
+                '"periodName":"January","value":"3.7","footnotes":[{}]}]}]}}',
+        })
+        out = bls.timeseries(["LNS14000000"], 2023, 2024)
+        s = out["Results"]["series"][0]
+        assert s["seriesID"] == "LNS14000000"
+        assert s["data"][0]["value"] == "3.7"
+        assert out["_fetch"]["sha256"]
+
     def test_wikidata_sparql(self):
         wd, t = build("wikidata", "WikidataAdapter", {})
         q = "SELECT ?w WHERE { ?w wdt:P31 wd:Q5 } LIMIT 1"
