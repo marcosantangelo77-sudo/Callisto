@@ -381,5 +381,139 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q11",
+    "question": "Did Silicon Valley Bank fail in March 2023?",
+    "category": "yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "SILICON VALLEY BANK, FAILDATE 3/10/2023.",
+    "verified_by": "FDIC failures FAILDATE 3/10/2023",
+    "elapsed_s": 287.3,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "Did Silicon Valley Bank fail in March 2023?\n\n- [SPECULATIVE 0.54] Did Silicon Valley Bank's depositors and operations come under the control of a regulator (FDIC receivership) in March 2023?: Yes. The FDIC institutions record for Silicon Valley Bank (CERT 24735, Santa Clara, CA) shows the institution became inactive with an effective/ending date of 2023-03-10 (EFFDATE, ENDEFYMD, CFPBENDDTE all '2023-03-10'), INACTIVE=1 / ACTIVE=0, and a successor certificate NEWCERT 59331 \u2014 consistent with the bank being placed into FDIC receivership on March 10, 2023. The record does not itself use the phrase 'receivership,' but its termination-by-FDIC data supports the claim.  [GAP: unprovable]\n- [UNVERIFIED 0.00] What was the timeline of SVB's failure, including the run on deposits and the closure date?: No evidence was provided, so the timeline of SVB's failure cannot be established from given citations.  [GAP: honest_null]\n\n[evidence age at seal: oldest 261s, newest 261s, median 261s across 1 timestamped fetches]",
+    "stance": "AFFIRMS",
+    "confidence_score": 0.39,
+    "confidence_tier": "SPECULATIVE",
+    "n_fetches": 1,
+    "sources": [
+      "fdic"
+    ],
+    "leaves": [
+      {
+        "text": "Did Silicon Valley Bank's depositors and operations come under the control of a regulator (FDIC receivership) in March 2023?",
+        "answer": "Yes. The FDIC institutions record for Silicon Valley Bank (CERT 24735, Santa Clara, CA) shows the institution became inactive with an effective/ending date of 2023-03-10 (EFFDATE, ENDEFYMD, CFPBENDDTE all '2023-03-10'), INACTIVE=1 / ACTIVE=0, and a successor certificate NEWCERT 59331 \u2014 consistent with the bank being placed into FDIC receivership on March 10, 2023. The record does not itself use the phrase 'receivership,' but its termination-by-FDIC data supports the claim.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "AFFIRMS",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "What was the timeline of SVB's failure, including the run on deposits and the closure date?",
+        "answer": "No evidence was provided, so the timeline of SVB's failure cannot be established from given citations.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Did SVB's collapse trigger regulatory intervention such as the FDIC's systemic risk exception for depositor protection?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "The FDIC institutions record alone cannot distinguish receivership/failure from an involuntary-but-non-failure termination such as a supervisory closure followed by purchase-and-assumption, or even certain charter changes. INACTIVE=1 with ENDEFYMD 2023-03-10 and NEWCERT 59331 establishes only that CERT 24735 ceased to exist as an active insured institution on that date and was succeeded by another",
+      "Fields within the very same record are mildly anomalous against a catastrophic failure narrative and are unaddressed: CONSERVE='N', DOCKET='0', and SPECGRP=9 ('All Other Over 1 Billion') rather than a failed-bank group, plus financials reported as of REPDTE 12/31/2022 showing positive equity (EQ 15.456B) and ROA 0.96. None of these refutes the March 2023 event, but they show the record's own class",
+      "The retrieval itself is contaminated: meta.parameters.filters reads 'NAME:Did Silicon Valley Bank' \u2014 the entire interrogative question fragment was passed as the name filter, and it matched only by luck of token overlap ('Silicon Valley Bank'). The single returned record was accepted at score 0 with no independent verification that CERT 24735 corresponds to the entity the question means, no cross-"
+    ],
+    "notes": [
+      "leaf 'Did Silicon Valley Bank's depositors and operations come und': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, come, control, depositors, fdic, march, official), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, come, control, depositors, fdic, march, official), fred (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, come, control, depositors, fdic, march, official), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, come, control, depositors, fdic, march, official), fred (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, come, control, depositors, fdic, march, official), openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['fdic']",
+      "leaf 'Did Silicon Valley Bank's depositors and operations come und': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, come, control, depositors, fdic, march, official; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, come, control, depositors, fdic, march, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, come, control, depositors, fdic, march, official; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, come, control, depositors, fdic, march, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, come, control, depositors, fdic, march, official",
+      "leaf 'What was the timeline of SVB's failure, including the run on': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: archives, closure, contemporaneous, date, deposits, failure, financial, including), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: archives, closure, contemporaneous, date, deposits, failure, financial, including), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 17% of the question's topical words (need 25%); missing: archives, closure, contemporaneous, deposits, failure, financial, including, news); answer rests on NO sources",
+      "leaf 'What was the timeline of SVB's failure, including the run on': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: archives, closure, contemporaneous, date, deposits, failure, financial, including; [fred] content covers 0% of the question's topical words (need 25%); missing: archives, closure, contemporaneous, date, deposits, failure, financial, including; [wikidata] content covers 17% of the question's topical words (need 25%); missing: archives, closure, contemporaneous, deposits, failure, financial, including, news",
+      "leaf 'Did SVB's collapse trigger regulatory intervention such as t': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: collapse, depositor, exception, fdic, government, intervention, mortem, post), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 6% of the question's topical words (need 25%); missing: collapse, depositor, exception, fdic, government, intervention, mortem, post); answer rests on NO sources",
+      "leaf 'Did SVB's collapse trigger regulatory intervention such as t': 2 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: collapse, depositor, exception, fdic, government, intervention, mortem, post; [wikidata] content covers 6% of the question's topical words (need 25%); missing: collapse, depositor, exception, fdic, government, intervention, mortem, post"
+    ],
+    "gap_kinds": {
+      "5755752f553441d4": "unprovable",
+      "a5670b9a60f94462": "honest_null",
+      "b2207ce6f05a4d85": "honest_null"
+    },
+    "verdict": "correct"
+  },
+  {
+    "id": "Q12",
+    "question": "Did exactly four FDIC-insured banks fail during 2023?",
+    "category": "negation (answer: no, five)",
+    "expected_stance": "DENIES",
+    "gt": "Five failures: SVB, Signature, First Republic, Heartland Tri-State, Citizens Bank (11/3).",
+    "verified_by": "FDIC failures FAILYR=2023 \u2192 5 rows",
+    "elapsed_s": 19.1,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q13",
+    "question": "What will the U.S. unemployment rate be in January 2027?",
+    "category": "unknowable-future",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Unknowable; correct output is refusal or UNDETERMINED.",
+    "verified_by": "definitionally unobservable",
+    "elapsed_s": 19.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "correct"
+  },
+  {
+    "id": "Q14",
+    "question": "How many U.S. households owned a pet hamster in July 2019?",
+    "category": "unknowable-source-gap",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Not available from fred/treasury/fdic/courtlistener/gdelt/kalshi/openalex/wayback/wikidata/worldbank/census.",
+    "verified_by": "not collected by any working source adapter",
+    "elapsed_s": 34.0,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "correct"
   }
 ]
