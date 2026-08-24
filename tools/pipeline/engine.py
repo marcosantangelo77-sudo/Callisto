@@ -29,11 +29,8 @@ import hashlib
 import json
 import logging
 import re
-<<<<<<< HEAD
-from pathlib import Path
-=======
 import threading
->>>>>>> origin/build/dd-decomposition-diversity
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Callable, Optional
@@ -261,12 +258,10 @@ class ResearchPipeline:
                  registry=None,
                  descendant_resolutions: Optional[list] = None,
                  checkpointer: Optional[ckpt.FileCheckpointer] = None,
-<<<<<<< HEAD
-                 crossrun_store=None):
-=======
+                 checkpointer: Optional[ckpt.FileCheckpointer] = None,
+                 crossrun_store=None,
                  max_concurrent_leaves: int = 8,
                  max_concurrent_fetches: int = 8):
->>>>>>> origin/build/dd-decomposition-diversity
         self.model = model
         self.transport = transport
         self.store = store or ArtifactStore()
@@ -400,12 +395,8 @@ class ResearchPipeline:
         # kept independence at 1 in the second live run.
         retriever = IterativeRetriever(
             registry=reg, ledger=self.ledger, transport=self.transport,
-<<<<<<< HEAD
             source_order=(self._crossrun_view.order_specs
-                          if self._crossrun_view is not None else None))
-        trace = retriever.retrieve(
-            q, qt, min_independent=q.evidence_requirements.min_independent_sources)
-=======
+                          if self._crossrun_view is not None else None),
             max_concurrent_fetches=self.max_concurrent_fetches)
         # The retriever is synchronous and CPU/IO-bound per fetch; run it on
         # a worker thread so concurrent leaves do not serialize behind one
@@ -415,7 +406,6 @@ class ResearchPipeline:
             None, lambda: retriever.retrieve(
                 q, qt, min_independent=q.evidence_requirements
                 .min_independent_sources))
->>>>>>> origin/build/dd-decomposition-diversity
         return list(trace.admitted), trace
 
 
@@ -546,7 +536,6 @@ class ResearchPipeline:
         out.confidence = round(
             max(0.0, min(ec.estimate, ec.ceiling)), 2)
         out.tier = ConfidenceTier.from_score(out.confidence).value
-<<<<<<< HEAD
 
         # Three-way gap classification (tools.gaps.NullKind). CLASSIFICATION
         # ONLY — this reads nothing that scores and moves no number.
@@ -565,10 +554,7 @@ class ResearchPipeline:
             out.gap_explanation = (
                 "evidence was obtained but does not meet this question's "
                 "declared standard: " + "; ".join(reasons))
-        return out
-=======
         return out, evidence_items, leaf_artifact_refs
->>>>>>> origin/build/dd-decomposition-diversity
 
     # ── The whole chain ───────────────────────────────────────────────────
     # ── One leaf, with its own error boundary ─────────────────────────────
@@ -590,8 +576,19 @@ class ResearchPipeline:
             async def _fetch_payload() -> dict:
                 fetches_q, trace_q = await self._fetch_for_question(
                     q, self._question_types.get(q.question_id) or "")
+                # Store the relevance gate's VERDICTS, not just its admits.
+                # A resume that replays only stored fetches silently skips
+                # the gate — evidence the live run rejected would enter the
+                # resumed run, and zero reported rejections would make the
+                # resumed run look cleaner than it was. Restoring the whole
+                # trace (rejects included) keeps rejection itself auditable.
                 return {"fetches": [dataclasses.asdict(f)
-                                    for f in fetches_q]}
+                                    for f in fetches_q],
+                        "rejections": [dataclasses.asdict(r)
+                                       for r in trace_q.rejected],
+                        "independent_keys": sorted(trace_q.independent_keys),
+                        "queries": list(trace_q.queries),
+                        "stop_reason": trace_q.stop_reason}
 
             if cp is not None:
                 f_oc = await ckpt.run_stage(
@@ -603,11 +600,25 @@ class ResearchPipeline:
                     ckpt.step_key(trace.run, "fetch_leaf",
                                   ckpt.hash_inputs({"qid": q.question_id})))
                 if ck is not None:
-                    ckpt.replay_ledger(self.ledger.unwrapped, [ck])
+                    # Restore the fetched bytes into this run's ledger so
+                    # source-class assignment works identically on a resume.
+                    # The replay consumes the SAME admissible set seal_guard
+                    # will judge (run-scope + verified signature, one shared
+                    # predicate) — a record the guard cannot see must never
+                    # enter this ledger either (red-team D3). A signature that
+                    # fails is not replayed AT ALL.
+                    admissible = ckpt.admissible_checkpoints(trace.run, [ck])
+                    if admissible:
+                        ckpt.replay_ledger(self.ledger.unwrapped, admissible)
                 fetches = [_fetch_from_payload(r)
                            for r in f_oc.payload["fetches"]]
-                rejected = []
-                trace_q = None
+                # Restore the FULL retrieval trace — admitted AND rejected —
+                # whether this stage was fresh or served from the checkpoint.
+                # The gate has already been applied to produce this payload;
+                # restoring it verbatim is how a resumed run scores exactly
+                # what the equivalent live run scored.
+                trace_q = _trace_from_payload(q.question_id, f_oc.payload)
+                rejected = trace_q.rejected
             else:
                 fetches, trace_q = await self._fetch_for_question(
                     q, self._question_types.get(q.question_id) or "")
@@ -739,70 +750,15 @@ class ResearchPipeline:
         session.advance_to(SessionStep.SOURCE_ENUMERATION)
         session.sources = [s["name"] for s in self._get_registry().specs()]
 
-<<<<<<< HEAD
-        for q in program.leaves:
-            async def _fetch_payload(q=q) -> dict:
-                fetches_q, trace_q = await self._fetch_for_question(
-                    q, self._question_types.get(q.question_id) or "")
-                # Store the relevance gate's VERDICTS, not just its admits.
-                # A resume that replays only stored fetches silently skips
-                # the gate — evidence the live run rejected would enter the
-                # resumed run, and zero reported rejections would make the
-                # resumed run look cleaner than it was. Restoring the whole
-                # trace (rejects included) keeps rejection itself auditable.
-                return {"fetches": [dataclasses.asdict(f)
-                                    for f in fetches_q],
-                        "rejections": [dataclasses.asdict(r)
-                                       for r in trace_q.rejected],
-                        "independent_keys": sorted(trace_q.independent_keys),
-                        "queries": list(trace_q.queries),
-                        "stop_reason": trace_q.stop_reason}
-            if cp is not None:
-                f_oc = await ckpt.run_stage(
-                    cp, trace, "fetch_leaf", {"qid": q.question_id},
-                    _fetch_payload,
-                    claim_ids=[session.session_id])
-                # Restore the fetched bytes into this run's ledger so
-                # source-class assignment works identically on a resume.
-                # The replay consumes the SAME admissible set seal_guard
-                # will judge (run-scope + verified signature, one shared
-                # predicate) — a record the guard cannot see must never
-                # enter this ledger either (red-team D3). A signature that
-                # fails is not replayed AT ALL.
-                ck = cp.load_by_key(
-                    trace.run,
-                    ckpt.step_key(trace.run, "fetch_leaf",
-                                  ckpt.hash_inputs({"qid": q.question_id})))
-                if ck is not None:
-                    admissible = ckpt.admissible_checkpoints(trace.run, [ck])
-                    if admissible:
-                        ckpt.replay_ledger(self.ledger, admissible)
-                fetches = [_fetch_from_payload(r)
-                           for r in f_oc.payload["fetches"]]
-                # Restore the FULL retrieval trace — admitted AND rejected —
-                # whether this stage was fresh or served from the checkpoint.
-                # The gate has already been applied to produce this payload;
-                # restoring it verbatim is how a resumed run scores exactly
-                # what the equivalent live run scored.
-                trace_q = _trace_from_payload(q.question_id, f_oc.payload)
-                rejected = trace_q.rejected
-            else:
-                fetches, trace_q = await self._fetch_for_question(
-                    q, self._question_types.get(q.question_id) or "")
-                rejected = trace_q.rejected
-            # Cross-run memory: keep what this leaf's retrieval actually
-            # did (admitted/rejected/errored/skipped per source). Counts
-            # only — the record builder never sees bodies or verdicts'
-            # contents beyond tools.gaps' own classification.
-            self._crossrun_traces[q.question_id] = trace_q
-=======
-        # 2..5. Per leaf — CONCURRENTLY. Sub-questions are independent by
-        # construction, so a question costs MAX(leaf latencies), not SUM.
-        # Bounded by max_concurrent_leaves (provider 429s past ~8-10
-        # sessions; this machine has 8 GB). Determinism: results are
-        # gathered into per-index slots and merged in QUESTION order, so
-        # the session's ordered evidence list — and therefore the seal
-        # hash — is identical to (and independent of) completion order.
+        # 2..5. Per leaf — CONCURRENTLY (branch) with crossrun memory +
+        # full-gate-verdict checkpoints + seal-guard-admissible replay
+        # (master). Sub-questions are independent by construction, so a
+        # question costs MAX(leaf latencies), not SUM. Bounded by
+        # max_concurrent_leaves (provider 429s past ~8-10 sessions; this
+        # machine has 8 GB). Determinism: results are gathered into per-index
+        # slots and merged in QUESTION order, so the session's ordered
+        # evidence list — and therefore the seal hash — is identical to
+        # (and independent of) completion order.
         sem = asyncio.Semaphore(self.max_concurrent_leaves)
 
         async def _run_leaf(idx: int, q: ResearchQuestion) -> dict:
@@ -818,7 +774,6 @@ class ResearchPipeline:
         # ── Merge phase: strictly question-ordered, single-threaded. ──
         # All shared-state mutation happens here, once, in program order:
         # result.fetches/leaves/notes/artifact_refs, session.evidence.
-        # This is what makes repeated runs byte-identical.
         for lr in sorted(leaf_runs, key=lambda r: r["idx"]):
             q = program.leaves[lr["idx"]]
             if lr.get("error"):
@@ -831,8 +786,11 @@ class ResearchPipeline:
             fetches = lr["fetches"]
             trace_q = lr.get("trace")
             outcome, new_evidence, new_refs = lr["outcome"]
->>>>>>> origin/build/dd-decomposition-diversity
-            result.fetches.extend(fetches)
+            # Cross-run memory: keep what this leaf's retrieval actually
+            # did (admitted/rejected/errored/skipped per source). Counts
+            # only — the record builder never sees bodies or verdicts'
+            # contents beyond tools.gaps' own classification.
+            self._crossrun_traces[q.question_id] = trace_q
             rejected = lr.get("rejected") or []
             if rejected:
                 result.notes.append(
@@ -957,6 +915,31 @@ class ResearchPipeline:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
+
+def _trace_from_payload(question_id: str, payload: dict):
+    """Rebuild a RetrievalTrace from a checkpointed fetch_leaf payload.
+
+    Restores the relevance gate's full verdict set — admitted fetches,
+    rejected items with reasons, and the independence keys the live run
+    computed — so a resumed run scores on exactly the evidence (and only
+    the evidence) the live run admitted. Missing legacy fields degrade to
+    empty, never to 'everything was admitted'.
+    """
+    from tools.pipeline.retrieval import RejectedItem, RetrievalTrace
+
+    trace = RetrievalTrace(question_id=question_id)
+    for r in payload.get("rejections") or []:
+        trace.rejected.append(RejectedItem(
+            source_name=r.get("source_name", ""),
+            url=r.get("url", ""),
+            reason=r.get("reason", ""),
+            relevance_score=float(r.get("relevance_score") or 0.0),
+            content_sha256=r.get("content_sha256", "")))
+    trace.independent_keys = set(payload.get("independent_keys") or [])
+    trace.queries = list(payload.get("queries") or [])
+    trace.stop_reason = payload.get("stop_reason", "")
+    return trace
+
 
 def _fetch_from_payload(rec: dict) -> FetchResult:
     """Rebuild a FetchResult from its checkpointed asdict form."""

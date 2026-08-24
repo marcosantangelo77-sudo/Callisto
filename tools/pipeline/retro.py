@@ -60,30 +60,29 @@ class PipelineResearcher(Researcher):
     def answer(self, prompts: list[dict],
                evidence: list[RetroEvidenceRecord],
                loops: int = 1) -> list[Prediction]:
-<<<<<<< HEAD
-        # The batch runner executes sync researchers on a worker thread, where
-        # no current event loop exists (get_event_loop() would raise). Create
-        # and close our own — this method owns its loop lifetime completely.
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(
-                self.answer_async(prompts, evidence, loops))
-        finally:
-            loop.close()
-=======
-        # Batch callers (tools/retrodiction/batch.py) invoke this from inside
-        # a running loop; standalone harness callers do not. Support both.
+        # Sync entry point called both from a running event loop (batch
+        # runner on tools/retrodiction/batch.py's worker) and with no loop
+        # at all (standalone harness). Handle all three cases:
+        #   running loop  -> hop to a worker thread and own a fresh loop
+        #                    there (asyncio.run forbids a nested loop);
+        #   no loop       -> own one directly (new_event_loop + close: this
+        #                    method owns its loop lifetime completely);
+        # the branch's get_running_loop probe distinguishes the first two.
+        import concurrent.futures
         try:
             asyncio.get_running_loop()
-            import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(1) as ex:
                 return ex.submit(
                     lambda: asyncio.run(
                         self.answer_async(prompts, evidence, loops))
                 ).result()
         except RuntimeError:
-            return asyncio.run(self.answer_async(prompts, evidence, loops))
->>>>>>> origin/build/dd-decomposition-diversity
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(
+                    self.answer_async(prompts, evidence, loops))
+            finally:
+                loop.close()
 
     async def answer_async(self, prompts, evidence, loops=1) -> list[Prediction]:
         # Cutoff enforcement already happened in the harness (CutoffEnforcer);

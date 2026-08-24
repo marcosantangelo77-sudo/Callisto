@@ -405,12 +405,9 @@ class IterativeRetriever:
                  max_fetches_per_round: int = 4,
                  generic_calls: Optional[dict] = None,
                  use_planner: bool = True,
-<<<<<<< HEAD
                  adaptive_gain: bool = True,
-                 source_order: Optional[Callable[[list], list]] = None):
-=======
+                 source_order: Optional[Callable[[list], list]] = None,
                  max_concurrent_fetches: int = 8):
->>>>>>> origin/build/dd-decomposition-diversity
         self.registry = registry
         self.ledger = ledger
         self.transport = transport
