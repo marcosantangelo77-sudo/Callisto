@@ -216,5 +216,69 @@
     ],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q08",
+    "question": "Is Paris the capital of France according to Wikidata?",
+    "category": "checkable-yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "Wikidata Q142 P36 = Q90 = Paris.",
+    "verified_by": "wikidata wbgetclaims Q142 P36 \u2192 Q90 (Paris)",
+    "elapsed_s": 207.3,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What does the Wikidata entity for France (Q142) list as its value for the 'capital' property (P36)?",
+        "answer": "No evidence items were provided, so the Wikidata Q142 'capital' (P36) value cannot be determined from given citations. (For reference, Wikidata lists Paris as France's capital, but this is not supported by supplied evidence.)",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Is Paris (Q90) the entity referenced by that capital statement, and is the statement currently non-deprecated?",
+        "answer": "No evidence items were provided, so it cannot be determined whether the capital statement references Paris (Q90) or whether the statement is non-deprecated.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Do independent authoritative sources (e.g., official French government or constitutional text) corroborate Paris as the capital of France, consistent with Wikidata?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "The answer text itself states 'Wikidata lists Paris as France's capital' while claiming zero evidence items were provided \u2014 the evidence needed to affirm the conclusion is present in the record and was underweighted to 0.00 on both sub-questions, making the honest_null self-contradictory rather than honest.",
+      "The 'no evidence items' condition rests on a single concrete gap: no fetch of the Wikidata API endpoint https://www.wikidata.org/wiki/Special:EntityData/Q142.json (or wbgetentities P36 claim) appears in the evidence list. The most likely artifact is a retrieval/pipeline failure (empty tool output or dropped citations), not genuine unverifiability \u2014 Q142's P36 value is a stable, machine-readable fa",
+      "The same facts (two UNVERIFIED 0.00 entries with GAP: honest_null) are equally explained by an evidence-plumbing defect \u2014 e.g., the citation collector returning an empty array on success, or rank/deprecation checks failing silently and being misreported as 'no evidence' \u2014 rather than by the claimed mechanism of an appropriately withheld verdict.",
+      "Scoring both sub-questions exactly 0.00 with identical boilerplate suggests a uniform default path taken whenever the evidence store is empty, so these two entries may be survivors of a template that stamps honest_null regardless of question type \u2014 the pattern reflects the harness's empty-evidence handling, not any property of the Paris/France claim."
+    ],
+    "notes": [
+      "leaf 'What does the Wikidata entity for France (Q142) list as its ': sources asked but NOT contributing evidence: bls (content covers 0% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142), cftc_cot (content covers 0% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142), clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142), fdic (content covers 9% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (error: HTTP 400 for https://api.stlouisfed.org/fred/series/observations?series_id=Q142&, treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/Q14, worldbank (content covers 18% of the question's topical words (need 25%); missing: capital, entity, fact, list, p36, property, structured, value), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re; answer rests on NO sources",
+      "leaf 'What does the Wikidata entity for France (Q142) list as its ': 5 fetch(s) rejected at ingestion: [bls] content covers 0% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142; [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142; [fdic] content covers 9% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142; [worldbank] content covers 18% of the question's topical words (need 25%); missing: capital, entity, fact, list, p36, property, structured, value",
+      "leaf 'Is Paris (Q90) the entity referenced by that capital stateme': sources asked but NOT contributing evidence: bls (content covers 0% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris), cftc_cot (content covers 0% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris), clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris), eia (error: HTTP 404 for https://api.eia.gov/v2/seriesid/Q90?frequency=annual, fdic (content covers 8% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, q90), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (error: HTTP 400 for https://api.stlouisfed.org/fred/series/observations?series_id=Q90&l, treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/Q90, worldbank (content covers 8% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris); answer rests on NO sources",
+      "leaf 'Is Paris (Q90) the entity referenced by that capital stateme': 5 fetch(s) rejected at ingestion: [bls] content covers 0% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris; [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris; [fdic] content covers 8% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, q90; [worldbank] content covers 8% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris",
+      "leaf 'Do independent authoritative sources (e.g., official French ': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=in, fdic (content covers 7% of the question's topical words (need 25%); missing: authoritative, capital, consistent, constitutional, corroborate, france, french, government), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: authoritative, capital, consistent, constitutional, corroborate, france, french, government), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 20% of the question's topical words (need 25%); missing: authoritative, capital, consistent, constitutional, corroborate, france, french, legal); answer rests on NO sources",
+      "leaf 'Do independent authoritative sources (e.g., official French ': 3 fetch(s) rejected at ingestion: [fdic] content covers 7% of the question's topical words (need 25%); missing: authoritative, capital, consistent, constitutional, corroborate, france, french, government; [fred] content covers 0% of the question's topical words (need 25%); missing: authoritative, capital, consistent, constitutional, corroborate, france, french, government; [wikidata] content covers 20% of the question's topical words (need 25%); missing: authoritative, capital, consistent, constitutional, corroborate, france, french, legal"
+    ],
+    "gap_kinds": {
+      "5405a4a68c834c0d": "honest_null",
+      "6c8fef549f4c4007": "honest_null",
+      "5c930d107abc4b90": "honest_null"
+    },
+    "verdict": "refused"
   }
 ]
