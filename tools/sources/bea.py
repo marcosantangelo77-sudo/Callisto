@@ -59,8 +59,8 @@ class BeaAdapter:
                  linecode: str = "", frequency: str = "",
                  years: str = "", **extra) -> dict:
         """GetData for NIPA ('NIPA', 'T10101', linecode), regional
-        ('Regional', TableName like 'SAINC1'), etc. Returns BEA's
-        {BEAAPIs:{Results:{Data:[...]}}} payload with '_fetch' attached."""
+        ('Regional', TableName like 'SAINC1'), etc. Returns BEA's payload
+        with '_fetch' attached."""
         params: dict[str, str] = {"method": "GetData", "DataSetName": dataset}
         if tablename:
             params["TableName"] = tablename
@@ -73,6 +73,16 @@ class BeaAdapter:
         params.update({k: str(v) for k, v in extra.items()})
         url = self._url(params)
         data, rec = self.source.get_json(url)
+        # BEA signals failure with HTTP 200 + Results.Error, and has moved
+        # its envelope key before ('BEAAPIs' -> 'BEAAPI'); an unrecognized
+        # envelope made an error payload parse as ZERO rows downstream —
+        # a rejected request masquerading as 'no data exists'.
+        env = data.get("BEAAPIs") or data.get("BEAAPI") or {}
+        err = (env.get("Results") or {}).get("Error")
+        if err:
+            code = err.get("APIErrorCode", "?")
+            desc = err.get("APIErrorDescription", "unknown BEA error")
+            raise SourceError(f"BEA API error {code}: {desc}")
         data["_fetch"] = {"url": rec.url, "sha256": rec.content_sha256,
                           "fetched_at": rec.fetched_at}
         return data

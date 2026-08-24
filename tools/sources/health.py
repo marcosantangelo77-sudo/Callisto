@@ -316,17 +316,21 @@ def _uspto() -> ProbeResult:
 def _bea() -> ProbeResult:
     r = ProbeResult("bea")
     src, ad = _build("bea")
-    r.url = src.spec.base_url + "?DataSetName=NIPA&method=GetData..."
+    r.url = src.build_url("", {"DataSetName": "NIPA", "method": "GetData"})
+    def env_of(d):
+        # envelope key moved before: 'BEAAPIs' -> 'BEAAPI' (live-verified)
+        return d.get("BEAAPIs") or d.get("BEAAPI") or {}
     def shape(d):
-        bea = d.get("BEAAPIs") or {}
-        data = ((bea.get("Results") or {}).get("Data")) or []
-        err = bea.get("Error")
+        bea = env_of(d)
+        results = bea.get("Results") or {}
+        data = results.get("Data") or []
+        err = results.get("Error")
         if err:
             return f"BEA error payload: {err}"
-        return "" if data else "BEAAPIs.Results.Data empty"
+        return "" if data else \
+            f"Results.Data empty; envelope keys={sorted(d)[:10]}"
     def count(d):
-        bea = d.get("BEAAPIs") or {}
-        return len(((bea.get("Results") or {}).get("Data")) or [])
+        return len((env_of(d).get("Results") or {}).get("Data") or [])
     return _run(lambda: ad.get_data("NIPA", "T10101", linecode="1",
                                     frequency="A", years="2023"), r,
                 count, shape)

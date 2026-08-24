@@ -230,3 +230,53 @@ def test_build_raises_keyerror_for_genuinely_unknown_names():
 
     with pytest.raises(KeyError):
         _build("no_such_source_anywhere")
+
+
+# ── R5: BEA error payloads are errors, not empty data ─────────────────────
+# LIVE CAPTURE 2026-08-24 (key configured but inactive on BEA's side):
+# HTTP 200 {"BEAAPI":{"Results":{"Error":{"APIErrorCode":"4",
+# "APIErrorDescription":"This UserId is not active. Please activate it and
+# try again."}}}} — the envelope key also moved 'BEAAPIs' -> 'BEAAPI'.
+
+def _bea_adapter(payload):
+    from tools.sources.bea import BeaAdapter
+    t = UrlRecordingTransport(payload)
+    ad = BeaAdapter(make_source(
+        __import__("tools.sources.bea", fromlist=["SPEC"]).SPEC, t))
+    ad.source.api_key = lambda: "k"
+    return ad, t
+
+
+def test_bea_error_payload_raises_instead_of_reading_as_zero_rows():
+    ad, _t = _bea_adapter({
+        "BEAAPI": {"Request": {},
+                   "Results": {"Error": {
+                       "APIErrorCode": "4",
+                       "APIErrorDescription": (
+                           "This UserId is not active. Please activate it "
+                           "and try again.")}}},
+    })
+    with pytest.raises(Exception, match="not active"):
+        ad.get_data("NIPA", "T10101", linecode="1", frequency="A",
+                    years="2023")
+
+
+def test_bea_new_envelope_key_beaaapi_still_yields_data():
+    ad, _t = _bea_adapter({
+        "BEAAPI": {"Results": {"Data": [
+            {"DataValue": "22671.0", "TimePeriod": "2023"}]}},
+    })
+    out = ad.get_data("NIPA", "T10101", linecode="1", frequency="A",
+                      years="2023")
+    data = out["BEAAPI"]["Results"]["Data"]
+    assert data[0]["DataValue"] == "22671.0"
+    assert "_fetch" in out
+
+
+def test_bea_legacy_envelope_key_beaaapis_still_accepted():
+    ad, _t = _bea_adapter({
+        "BEAAPIs": {"Results": {"Data": [
+            {"DataValue": "1.0", "TimePeriod": "2022"}]}},
+    })
+    out = ad.get_data("NIPA", tablename="T10101")
+    assert out["BEAAPIs"]["Results"]["Data"][0]["TimePeriod"] == "2022"
