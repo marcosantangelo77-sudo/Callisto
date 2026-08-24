@@ -47,14 +47,14 @@
       "tier": "PROBABLE"
     }
   ],
-  "ledger_observations": 4,
+  "ledger_observations": 3,
   "ledger_primary": [
-    "1bf2399115d2492c18e511f4522cd9e159c1817a82145c518209084cd9d27f0b",
     "360b659ac0a1c81bd6d955797138168efe76855350661593e5b4db0aa7546534",
     "d6b25d3001a8802bb40cbd6ba5e0cce9a6818d3942c7c96c19005ceec0318883",
     "fa33f80e2e9dd0114fa0204ffbe46ce33c1713fe13ebfd7857100af99ade0386"
   ],
   "notes": [
+    "leaf 'leaf 0: what does the evidence say about apple earnings expe': 1 fetch(s) rejected at ingestion: [federalregister] content covers 0% of the question's topical words (need 25%); missing: analyst, apple, consensus, earnings, evidence, expectations, leaf, work",
     "leaf 'leaf 1: what does the evidence say about apple earnings expe': 1 fetch(s) rejected at ingestion: [federalregister] content covers 0% of the question's topical words (need 25%); missing: agency, analyst, apple, consensus, dates, docket, earnings, evidence"
   ],
   "objections": [],

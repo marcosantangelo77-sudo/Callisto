@@ -4,37 +4,37 @@
   "confidence_score": 0.55,
   "confidence_tier": "PROBABLE",
   "evidence": [
-    "{\"results\": [{\"cited_by_count\": 12, \"id\": \"W1\", \"publication_year\": 2024, \"title\": \"Scholarly study on apple earnings expectations: analyst consensus and quarterly results\"}]}",
     "{\"documents\": [{\"agency\": \"government agency\", \"document_number\": \"2024-12345\", \"published_at\": \"2024-01-15\", \"title\": \"Final agency rule published by the government: proposed and final rules on apple earnings disclosure\"}]}",
-    "{\"results\": [{\"cited_by_count\": 12, \"id\": \"W1\", \"publication_year\": 2024, \"title\": \"Scholarly study on apple earnings expectations: analyst consensus and quarterly results\"}]}",
     "{\"documents\": [{\"agency\": \"government agency\", \"document_number\": \"2024-12345\", \"published_at\": \"2024-01-15\", \"title\": \"Final agency rule published by the government: proposed and final rules on apple earnings disclosure\"}]}",
-    "{\"results\": [{\"cited_by_count\": 12, \"id\": \"W1\", \"publication_year\": 2024, \"title\": \"Scholarly study on apple earnings expectations: analyst consensus and quarterly results\"}]}"
+    "{\"documents\": [{\"agency\": \"government agency\", \"document_number\": \"2024-12345\", \"published_at\": \"2024-01-15\", \"title\": \"Final agency rule published by the government: proposed and final rules on apple earnings disclosure\"}]}",
+    "{\"documents\": [{\"agency\": \"government agency\", \"document_number\": \"2024-12345\", \"published_at\": \"2024-01-15\", \"title\": \"Final agency rule published by the government: proposed and final rules on apple earnings disclosure\"}]}",
+    "{\"documents\": [{\"agency\": \"government agency\", \"document_number\": \"2024-12345\", \"published_at\": \"2024-01-15\", \"title\": \"Final agency rule published by the government: proposed and final rules on apple earnings disclosure\"}]}"
   ],
   "fetches": [
     {
-      "sha": "fa33f80e2e9dd0114fa0204ffbe46ce33c1713fe13ebfd7857100af99ade0386",
-      "source_name": "openalex",
-      "url": "https://api.openalex.org/works?search=leaf+apple+earnings+expectations+analyst+consensus&per-page=10"
+      "sha": "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8",
+      "source_name": "federalregister",
+      "url": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields%5B%5D=title&fields%5B%5D=type&fields%5B%5D=abstract&fields%5B%5D=action&fields%5B%5D=publication_date&fields%5B%5D=effective_on&fields%5B%5D=docket_ids&fields%5B%5D=citation&fields%5B%5D=document_number&fields%5B%5D=html_url&fields%5B%5D=agencies&conditions=leaf+apple+earnings+expectations+analyst+consensus"
     },
     {
       "sha": "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8",
       "source_name": "federalregister",
-      "url": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields%5B%5D=title%2Ctype%2Cabstract%2Caction%2Cpublished_at%2Ceffective_on%2Cdocket_ids%2Ccitation%2Cdocument_number%2Chtml_url%2Cagencies&conditions=leaf+apple+earnings+expectations+analyst+consensus"
-    },
-    {
-      "sha": "fa33f80e2e9dd0114fa0204ffbe46ce33c1713fe13ebfd7857100af99ade0386",
-      "source_name": "openalex",
-      "url": "https://api.openalex.org/works?search=leaf+apple+earnings+expectations+analyst+consensus&per-page=10"
+      "url": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields%5B%5D=title&fields%5B%5D=type&fields%5B%5D=abstract&fields%5B%5D=action&fields%5B%5D=publication_date&fields%5B%5D=effective_on&fields%5B%5D=docket_ids&fields%5B%5D=citation&fields%5B%5D=document_number&fields%5B%5D=html_url&fields%5B%5D=agencies&conditions=leaf+apple+earnings+expectations+analyst+consensus"
     },
     {
       "sha": "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8",
       "source_name": "federalregister",
-      "url": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields%5B%5D=title%2Ctype%2Cabstract%2Caction%2Cpublished_at%2Ceffective_on%2Cdocket_ids%2Ccitation%2Cdocument_number%2Chtml_url%2Cagencies&conditions=leaf+apple+earnings+expectations+analyst+consensus"
+      "url": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields%5B%5D=title&fields%5B%5D=type&fields%5B%5D=abstract&fields%5B%5D=action&fields%5B%5D=publication_date&fields%5B%5D=effective_on&fields%5B%5D=docket_ids&fields%5B%5D=citation&fields%5B%5D=document_number&fields%5B%5D=html_url&fields%5B%5D=agencies&conditions=leaf+apple+earnings+expectations+analyst+consensus"
     },
     {
-      "sha": "fa33f80e2e9dd0114fa0204ffbe46ce33c1713fe13ebfd7857100af99ade0386",
-      "source_name": "openalex",
-      "url": "https://api.openalex.org/works?search=leaf+apple+earnings+expectations+analyst+consensus&per-page=10"
+      "sha": "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8",
+      "source_name": "federalregister",
+      "url": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields%5B%5D=title&fields%5B%5D=type&fields%5B%5D=abstract&fields%5B%5D=action&fields%5B%5D=publication_date&fields%5B%5D=effective_on&fields%5B%5D=docket_ids&fields%5B%5D=citation&fields%5B%5D=document_number&fields%5B%5D=html_url&fields%5B%5D=agencies&conditions=leaf+apple+earnings+expectations+analyst+consensus"
+    },
+    {
+      "sha": "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8",
+      "source_name": "federalregister",
+      "url": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields%5B%5D=title&fields%5B%5D=type&fields%5B%5D=abstract&fields%5B%5D=action&fields%5B%5D=publication_date&fields%5B%5D=effective_on&fields%5B%5D=docket_ids&fields%5B%5D=citation&fields%5B%5D=document_number&fields%5B%5D=html_url&fields%5B%5D=agencies&conditions=leaf+apple+earnings+expectations+analyst+consensus"
     }
   ],
   "leaves": [
@@ -104,13 +104,11 @@
       "tier": "PROBABLE"
     }
   ],
-  "ledger_observations": 5,
+  "ledger_observations": 3,
   "ledger_primary": [
-    "360b659ac0a1c81bd6d955797138168efe76855350661593e5b4db0aa7546534",
     "a1c42f409a87f2efef68b93dfa0f65d8eb1670f60388dc17c43150ecd68b0b24",
     "d6b25d3001a8802bb40cbd6ba5e0cce9a6818d3942c7c96c19005ceec0318883",
-    "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8",
-    "fa33f80e2e9dd0114fa0204ffbe46ce33c1713fe13ebfd7857100af99ade0386"
+    "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8"
   ],
   "notes": [],
   "objections": [],
