@@ -367,7 +367,7 @@ def kelly_portfolio(bets: list[dict]) -> list[dict]:
 
         individual_kellys.append({
             "raw_fraction": round(base_frac, 6),
-            "confidence_adjusted": round(adj_frac, 7),
+            "confidence_adjusted": round(adj_frac, 6),
             "tier": tier,
         })
 
@@ -433,7 +433,7 @@ def kelly_portfolio(bets: list[dict]) -> list[dict]:
     portfolio_summary = {
         "bet_count": n,
         "avg_correlation": round(avg_correlation, 4),
-        "diversification_ratio": round(diversification_ratio, 4),
+        "diversification_ratio": round(diversification_ratio, 5),
         "correlation_penalty": round(correlation_penalty, 4),
         "raw_total_allocation": round(raw_total, 6),
         "final_total_allocation": round(total_allocated, 6),
