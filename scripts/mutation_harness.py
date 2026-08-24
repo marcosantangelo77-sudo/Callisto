@@ -51,9 +51,14 @@ TEST_MAP = {
         "tests/test_bankroll_race.py",
         "tests/test_portfolio_sizing.py",
         "tests/test_clv_paper_trades.py",
+        "tests/test_mutation_gaps.py",
+        "tests/test_mutation_gaps_boundary.py",
+        "tests/test_mutation_gaps_r2.py",
     ],
     "tools/edge_confidence.py": [
         "tests/test_edge_confidence.py",
+        "tests/test_mutation_gaps_boundary.py",
+        "tests/test_mutation_gaps_r2.py",
         "tests/test_full_system_audit.py::TestEdgeConfidence" if False else "tests/test_edge_confidence.py",
     ],
 }
