@@ -315,6 +315,12 @@ class IterativeRetriever:
         #: keeps the legacy W1 behaviour byte-for-byte.
         self.generic_calls = generic_calls
         self.use_planner = use_planner
+        #: MEASUREMENT ONLY (JOB 1, stopping-rule study). Optional callback
+        #: invoked after each retrieval round with the CUMULATIVE
+        #: conclusion-relevant state: {"round", "indep_keys", "admitted",
+        #: "rejected_n"}. Reads nothing the conclusion does not depend on;
+        #: default None means exactly the pre-instrumentation behaviour.
+        self.round_observer = None
 
     def retrieve(self, question, question_type: str,
                  min_independent: int) -> RetrievalTrace:
@@ -453,6 +459,24 @@ class IterativeRetriever:
                      "relevance": round(cov, 3)})
             round_detail["admitted"] = round_admitted
             trace.rounds.append(round_detail)
+
+            if self.round_observer is not None:
+                # JOB 1 instrumentation: cumulative conclusion-relevant state.
+                # The leaf's sealed (tier, confidence) depends exactly on the
+                # best source class and count of these fetches plus the
+                # independent-key set; stance depends on the same bodies.
+                try:
+                    self.round_observer({
+                        "qid": question.question_id,
+                        "round": rnd,
+                        "indep_keys": sorted(trace.independent_keys),
+                        "admitted": [
+                            (f.source_name, f.content_sha256)
+                            for f in trace.admitted],
+                        "rejected_n": len(trace.rejected),
+                    })
+                except Exception as e:  # noqa: BLE001 — observation never
+                    logger.warning("round_observer failed: %s", e)  # alters run
 
             sufficient = len(trace.independent_keys) >= min_independent
             dec = term.record(min(1.0, len(trace.independent_keys) /

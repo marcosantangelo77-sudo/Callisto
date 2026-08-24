@@ -278,6 +278,10 @@ async def _execute(name: str, arguments: dict) -> dict:
         if name == "edgar_get_statements":
             return _statements_payload(
                 args.get("ticker", ""), int(args.get("n_periods", 4)))
+        if name == "edgar_anomalies":
+            return _anomalies_payload(
+                args.get("ticker", ""), int(args.get("n_periods", 4)),
+                bool(args.get("emit", False)))
         if name == "edgar_build_model":
             return _model_payload(
                 args.get("template", ""),
@@ -312,7 +316,7 @@ def build_finance_plugin() -> DomainPlugin:
         name="finance",
         domains={"FINANCIAL"},
         keywords=_KEYWORDS,
-        tool_schemas=[GET_STATEMENTS_TOOL, BUILD_MODEL_TOOL],
+        tool_schemas=[GET_STATEMENTS_TOOL, BUILD_MODEL_TOOL, ANOMALIES_TOOL],
         freshness=[],  # filings are historical by nature; no window forcing
         execute=_execute,
     )
