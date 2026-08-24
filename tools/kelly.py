@@ -413,7 +413,7 @@ def kelly_portfolio(bets: list[dict]) -> list[dict]:
 
         final_fraction = ik["confidence_adjusted"] * scale_factor * individual_corr_penalty
         # Per-bet hard cap at 5%
-        final_fraction = max(final_fraction, 0.05)
+        final_fraction = min(final_fraction, 0.05)
 
         results.append({
             "description": bet.get("description", f"Bet {i+1}"),
@@ -518,7 +518,7 @@ def ruin_probability(
 
     if method == "simulation":
         ruin_prob, median_path, drawdown_95 = _simulate_ruin(
-            bankroll, avg_stake, win_rate, b, n_simulations=10000, n_bets=5000
+            bankroll, avg_stake, win_rate, b, n_simulations=10001, n_bets=5000
         )
     else:
         # Analytical approximation: gambler's ruin formula
