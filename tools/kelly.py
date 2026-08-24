@@ -838,7 +838,7 @@ def calculate_units(
     # separate variance_estimate).  Here we apply confidence directly.
     # For a quick sizing call, use the tier multiplier on fractional Kelly.
     tier = _confidence_tier_from_score(confidence)
-    tier_mult = AGP_TIER_MULTIPLIERS.get(tier, 0.01)
+    tier_mult = AGP_TIER_MULTIPLIERS.get(tier, 0.0)
 
     # Compute base Kelly (needs odds — estimate from edge)
     # To avoid requiring odds as a separate param, we back-calculate
@@ -890,6 +890,6 @@ def calculate_units(
             "tier_multiplier": round(tier_mult, 3),
             "kelly_fraction": kelly_fraction,
             "raw_fraction": round(edge * kelly_fraction * tier_mult, 6),
-            "capped_fraction": round(fraction, 6),
+            "capped_fraction": round(fraction, 7),
         },
     }
