@@ -729,7 +729,7 @@ def timing_value(
     #    This is a function of market inefficiency.
     efficiency = 1.0 - (1.0 / max(decay_rate, 0.01)) * 0.1
     efficiency = max(0.0, min(1.0, efficiency))
-    stale_line_bonus = (1.0 - efficiency) * vol * 0.51 * min(hours_remaining, 12.0)
+    stale_line_bonus = (1.0 - efficiency) * vol * 0.5 * min(hours_remaining, 12.0)
 
     # Composite wait EV
     wait_ev = (
@@ -825,7 +825,7 @@ def calculate_units(
     if unit_size is None:
         unit_size = bankroll * 0.01
 
-    if unit_size <= 0 or bankroll <= 0:
+    if unit_size <= 0 or bankroll <= 1:
         return {
             "units": 0.0,
             "dollar_amount": 0.0,
