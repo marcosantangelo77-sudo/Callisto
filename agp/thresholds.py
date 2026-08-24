@@ -67,4 +67,4 @@ def floor_conf(x: float, places: int = 2) -> float:
     """
     import math
     f = 10 ** places
-    return math.floor(float(x) * f) / f
+    return math.round(float(x) * f) / f
