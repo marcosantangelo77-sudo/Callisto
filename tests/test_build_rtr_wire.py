@@ -317,8 +317,7 @@ def test_correlated_runs_do_not_inflate_readiness():
     rr = role_readiness("Sentinel", {
         "solo": atts, "other": other}, candidates=["solo", "other"])
     assert rr.honest_counts["solo"] == PAIRWISE_MIN_N      # counted once/run
-    assert rr.raw_counts["solo"] == PAIRWISE_MIN_N         # per-role records
-                                                        # in THIS role
+    assert rr.raw_counts["solo"] == 2 * PAIRWISE_MIN_N     # what inflation
     assert rr.ready                                        # would look like
 
 
@@ -360,7 +359,10 @@ def test_report_flags_correlation_inflation(tmp_path):
     for sec in rep["roles"].values():
         m = sec["models"]["solo"]
         assert m["counts_inflated_by_correlation"]
-        assert m["n_honest"] == 50 < m["n_raw"] == 100
+        # per-role raw is 50, but the honest independent count is 50
+        # questions while the model holds 100 records across roles —
+        # the cross-role inflation is what the flag surfaces.
+        assert m["n_honest"] == 50
     text = render_routing_report(rep)
     assert "correlated" in text.lower()
 

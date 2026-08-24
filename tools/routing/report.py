@@ -83,12 +83,22 @@ def build_routing_report(score_store, *,
             honest_counts = {m: effective_observation_count(a, m)
                              for m, a in attrs.items()}
 
+        # Cross-role totals: how many records exist for this model across
+        # EVERY role (the number an inflation-prone reader might sum).
+        cross_role_totals: dict[str, int] = {}
+        for rec in all_records:
+            m = rec.get("model", "?")
+            cross_role_totals[m] = cross_role_totals.get(m, 0) + 1
+
         models_section = {}
         for model, recs in sorted(by_model.items()):
             agg = score_store.aggregate(recs)
             raw_n = agg.pop("n")
             honest_n = (honest_counts or {}).get(model, raw_n)
-            inflated = honest_n < raw_n
+            # Inflation flag: the model has more records across roles than
+            # its honest independent-observation count — i.e. it played
+            # several correlated roles on shared runs.
+            inflated = honest_n < cross_role_totals.get(model, raw_n)
             models_section[model] = {
                 "n_raw": raw_n,
                 "n_honest": honest_n,

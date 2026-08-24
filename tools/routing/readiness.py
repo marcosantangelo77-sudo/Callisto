@@ -148,8 +148,10 @@ def role_readiness(role: str,
             effective_observation_count
         honest = {m: effective_observation_count(attrs, m)
                   for m, attrs in attributions_by_model.items()}
-    # Raw store records for contrast (what an dishonest count would claim).
-    raw = {m: sum(len(a.role_models) for a in attrs if m in a.role_models)
+    # Raw store records for contrast (what a dishonest count would claim):
+    # every role this model played, across all runs.
+    raw = {m: sum(1 for a in attrs
+                  for mdl in a.role_models.values() if mdl == m)
            for m, attrs in attributions_by_model.items()}
 
     measured = {m: c for m, c in honest.items() if c > 0}
