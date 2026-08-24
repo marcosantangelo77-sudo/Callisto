@@ -71,6 +71,20 @@ def _prefix_hit(a: str, b: str) -> bool:
     return a == b or a.startswith(b) or b.startswith(a)
 
 
+def _norm_word(w: str) -> str:
+    """Collapse trivial inflection so 'semiconductors' meets 'semiconductor'
+    WITHOUT the open-ended prefix rule. Prefix matching was the red-team R2
+    hole: a document of 3-letter stems of the question words scored ~88%
+    coverage because 'cat'.startswith('sem')-style stem hits counted as
+    topical matches. Direction of error: this can only REJECT more, never
+    admit more (PATTERNS #6)."""
+    if len(w) > 4 and w.endswith("es"):
+        w = w[:-2]
+    elif len(w) > 3 and w.endswith("s"):
+        w = w[:-1]
+    return w
+
+
 def _tokens(text: str) -> list[str]:
     return [w for w in _WORD_RE.findall(text.lower())
             if len(w) >= 3 and w not in _QUERY_STOPWORDS]
@@ -123,20 +137,33 @@ class RelevanceGate:
 
     def judge(self, question_text: str, question_type: str,
               parsed: Any) -> tuple[bool, float, str]:
-        """(admitted, coverage 0..1, reason)."""
+        """(admitted, coverage 0..1, reason).
+
+        Matching is NORMALIZED-EXACT (trivial plural collapse only), not
+        prefix-based: a prefix rule let 15 characters of engineered junk —
+        the first three letters of each question token — reach 88% coverage
+        and admission (red team R2), and made a one-word overlap enough to
+        admit on a short question (R2b). Coverage counts whole words the
+        content actually shares with the question.
+        """
         q_tokens = set(_tokens(question_text)) | set(_tokens(question_type))
         if not q_tokens:
             return False, 0.0, "question has no judgeable topical words"
-        hay = set()
-        for w in _WORD_RE.findall(extract_text(parsed).lower()):
-            if len(w) >= 3:
-                hay.add(w)
-        matched = [t for t in q_tokens
-                   if any(h == t or h.startswith(t) or t.startswith(h)
-                          for h in hay)]
-        coverage = len(matched) / len(q_tokens)
+        # Red team R2b: question-TYPE words ('empirical', 'scholarly work
+        # search') are search-shape vocabulary, not subject matter. Folding
+        # them into the DENOMINATOR let one shared word read as 25%
+        # coverage on a three-word question — a structural property
+        # standing in for topical agreement. Type words may still ADD a
+        # match (a hit on 'scholarly' is signal), they just cannot dilute
+        # what the question itself demands.
+        main = set(_tokens(question_text))
+        hay = {_norm_word(w) for w in _WORD_RE.findall(
+            extract_text(parsed).lower()) if len(w) >= 3}
+        matched = [t for t in q_tokens if _norm_word(t) in hay]
+        denom = len(main) if main else len(q_tokens)
+        coverage = len(matched) / denom
         if coverage < self.min_coverage:
-            missed = sorted(q_tokens - set(matched))
+            missed = sorted(set(_tokens(question_text)) - set(matched))
             return False, coverage, (
                 f"content covers {coverage:.0%} of the question's topical "
                 f"words (need {self.min_coverage:.0%}); missing: "

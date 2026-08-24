@@ -105,7 +105,6 @@ class EvidenceItem:
     def __post_init__(self):
         if not self.indep_key:
             self.indep_key = independence_key(self.source_name, self.base_url)
-
     @classmethod
     def from_fetch(cls, fetch: Any, claim: str, source_class: str,
                    base_url: str = "", values: Optional[Iterable[float]] = None,
@@ -186,7 +185,26 @@ class ClaimGroup:
 
     @property
     def indep_keys(self) -> set[str]:
-        return {i.indep_key for i in self.items}
+        """Independence units in this group.
+
+        Red team S2b: the declared source NAME/host is mirror-controlled —
+        ten name-swapped copies of one document are not ten voices. When
+        every item carries the SAME content hash, they ARE one document and
+        collapse to a single unit regardless of how many hosts serve it.
+        Distinct content from distinct declared units still counts
+        separately; identical content from one host was already collapsed.
+        """
+        by_hash: set[str] = set()
+        keys: set[str] = set()
+        hashes = {i.content_sha256 for i in self.items if i.content_sha256}
+        for it in self.items:
+            if len(hashes) == 1:
+                # one shared document (or unhashable items alongside a
+                # single hash) — the whole group is ONE voice
+                by_hash.add("content:" + next(iter(hashes)))
+            else:
+                keys.add(it.indep_key)
+        return by_hash | keys
 
     @property
     def best_class(self) -> str:
