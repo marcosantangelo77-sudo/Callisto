@@ -586,6 +586,13 @@ class IterativeRetriever:
                                                   "url", ""),
                                body, fetched, question.question_id, _sha)
                 if not ok:
+                    # BIND THE VERDICT TO THE LEDGER (red team R4/R4b):
+                    # RestSource already recorded these bytes as PRIMARY and
+                    # the URL as fetched. Without superseding, a model echoing
+                    # rejected bytes re-classed PRIMARY and any text citing
+                    # the rejected URL re-classed SECONDARY — the gate said
+                    # 'irrelevant' while provenance said 'primary document'.
+                    self.ledger.record_gate_rejection(body, [fr.url])
                     trace.rejected.append(RejectedItem(
                         source_name=spec.name,
                         url=fr.url, reason=reason,

@@ -78,6 +78,16 @@ class ProvenanceLedger:
     def __init__(self) -> None:
         self._by_hash: dict[str, list[ToolObservation]] = {}
         self._urls: dict[str, ToolObservation] = {}
+        # Content hashes and URLs the relevance gate REJECTED before
+        # ingestion. A rejected fetch is a real tool return, so without this
+        # record its bytes would sit in _by_hash as PRIMARY observations and
+        # any later model text echoing those bytes — or merely citing the URL
+        # — would be promoted by assign_source_class (red team R4/R4b): the
+        # gate said 'irrelevant', provenance said 'primary document'.
+        # Superseding flips the failure direction: rejected material can only
+        # LOWER what provenance grants, never raise it.
+        self._rejected_hashes: set[str] = set()
+        self._rejected_urls: set[str] = set()
 
     def record_tool_result(
         self, tool_name: str, content: str, *, primary: bool = False,
@@ -90,11 +100,38 @@ class ProvenanceLedger:
             urls=frozenset(urls or ()),
             primary=primary,
         )
+        if obs.content_hash in self._rejected_hashes:
+            # Bytes the gate already rejected are being re-recorded (a retry
+            # or a replay); keep them superseded rather than re-minting.
+            return obs
         self._by_hash.setdefault(obs.content_hash, []).append(obs)
         for u in obs.urls:
-            # First fetch wins; later observations don't erase provenance.
-            self._urls.setdefault(u, obs)
+            if u not in self._rejected_urls:
+                # First fetch wins; later observations don't erase provenance.
+                self._urls.setdefault(u, obs)
         return obs
+
+    def record_gate_rejection(self, content: str,
+                              urls: Optional[Iterable[str]] = None) -> None:
+        """Bind the relevance gate's REJECT verdict to these bytes/URLs.
+
+        Call when the ingestion gate refuses a fetch. Afterwards the content
+        cannot mint PRIMARY/SECONDARY via exact-hash match, and the URL can
+        no longer verify a citation as SECONDARY. This is the only direction
+        a post-fetch judgment may move provenance: down.
+        """
+        h = _content_hash(content or "")
+        self._rejected_hashes.add(h)
+        self._by_hash.pop(h, None)
+        for u in urls or ():
+            self._rejected_urls.add(u)
+            self._urls.pop(u, None)
+
+    def superseded(self, content: str = "", url: str = "") -> bool:
+        """True iff these bytes/URL were fetched but then gate-rejected."""
+        if content and _content_hash(content) in self._rejected_hashes:
+            return True
+        return bool(url) and url in self._rejected_urls
 
     # ── queries ──
 

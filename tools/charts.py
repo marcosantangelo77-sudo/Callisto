@@ -51,6 +51,48 @@ def chart_spec(
         )
     if len(lengths) > 1:
         raise ValueError(f"series lengths differ: {sorted(lengths)}")
+    # A11: non-finite values are upstream numeric bugs, not plottable data.
+    # Rendering them emits literal nan/inf into SVG geometry/labels. Policy:
+    # drop the affected POINTS (pairwise across x and every series, so
+    # alignment is preserved) and record the drop in notes — the chart must
+    # stay renderable AND honest about what was cut.
+    import math as _math
+
+    labels = list(series.keys())
+    n_pts = len(next(iter(series.values()))) if series else 0
+    if n_pts:
+        def _ok(*vs):
+            return all(_math.isfinite(v) for v in vs)
+        if x is not None:
+            mask = [
+                _ok(x[i], *(series[l][i] for l in labels))
+                for i in range(len(x))
+            ]
+            dropped = len(mask) - sum(mask)
+            xs_f = [v for v, m in zip(x, mask) if m]
+            clean = {
+                l: [v for v, m in zip(series[l], mask) if m]
+                for l in labels
+            }
+        else:
+            mask = [
+                _ok(*(series[l][i] for l in labels)) for i in range(n_pts)
+            ]
+            dropped = len(mask) - sum(mask)
+            xs_f = None
+            clean = {
+                l: [v for v, m in zip(series[l], mask) if m] for l in labels
+            }
+        empty = [l for l in labels if not clean[l]]
+        if empty:
+            raise ValueError(
+                f"series {empty[0]!r} contains only non-finite values"
+            )
+        series = clean
+        x = xs_f
+    notes = notes + (
+        f"[dropped {dropped} non-finite point(s)]" if dropped else ""
+    )
     return {
         "title": title,
         "x": x,
@@ -65,6 +107,8 @@ def chart_spec(
 
 def render_svg(spec: dict, width: int = 720, height: int = 420) -> str:
     """Dependency-free line chart. Deterministic: same spec, same bytes."""
+    import math as _math
+
     series = spec["series"]
     x = spec.get("x")
     n = len(next(iter(series.values()))) if series else 0
@@ -75,6 +119,13 @@ def render_svg(spec: dict, width: int = 720, height: int = 420) -> str:
     plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
 
     xs = x if x is not None else list(range(n))
+    # A11: reject non-finite input here too — render_svg can be called with
+    # a hand-built spec that never passed chart_spec's own validation.
+    for label, vals in series.items():
+        if any(not _math.isfinite(v) for v in vals):
+            raise ValueError(f"series {label!r} contains non-finite values")
+    if any(not _math.isfinite(v) for v in xs):
+        raise ValueError("x axis contains non-finite values")
     all_y = [v for vals in series.values() for v in vals]
     x_min, x_max = min(xs), max(xs)
     y_min, y_max = min(all_y), max(all_y)
@@ -320,7 +371,21 @@ def build_workbook(spec: dict) -> bytes:
         for row in table.get("rows", []):
             ws.append([_guarded_text(v) for v in row])
         for p in table.get("provenance", []):
-            col_idx = cols.index(p["column"]) + 1 if p["column"] in cols else 1
+            # B3: a provenance record naming a nonexistent column must never
+            # attach to whatever column happens to be first (FRED attribution
+            # landing on unrelated data). The workbook is still built — but
+            # the unattachable record is dropped LOUDLY, not misattached.
+            if p["column"] not in cols:
+                import warnings as _w
+
+                _w.warn(
+                    f"provenance for unknown column {p['column']!r} in "
+                    f"sheet {sheet_name!r} dropped (columns are {cols}); "
+                    "attribution was NOT applied",
+                    stacklevel=2,
+                )
+                continue
+            col_idx = cols.index(p["column"]) + 1
             note = f"source: {p.get('source', '')} fetched: {p.get('fetched_at', '')}"
             ws.cell(row=1, column=col_idx).comment = _mk_comment(note)
         ws.freeze_panes = "A2"
@@ -338,8 +403,20 @@ def build_workbook(spec: dict) -> bytes:
         # from fetched bytes — so they intentionally bypass _guarded_text.
         ws.cell(row=r, column=3, value="=" + m["formula"].lstrip("="))
     ws_live = wb.create_sheet("ModelLive")
+    # A13: duplicate target cells previously went last-write-wins, so the
+    # Model listing documented a formula the live sheet overwrites. Policy:
+    # first-seen formula owns the cell (same first-wins rule as artifact
+    # provenance); later duplicates are recorded in the listing but flagged
+    # so the contradiction is visible, never silent.
+    ws_live._duplicate_model_cells = []
+    seen_cells: set = set()
     for m in spec.get("model", []):
         if _valid_cell(m["cell"]):
+            key = m["cell"].upper()
+            if key in seen_cells:
+                ws_live._duplicate_model_cells.append(key)
+                continue
+            seen_cells.add(key)
             ws_live[m["cell"]] = "=" + m["formula"].lstrip("=")
             header = ws_live.cell(row=1, column=_col_index(m["cell"]))
             if not header.value:
