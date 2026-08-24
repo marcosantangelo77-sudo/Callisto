@@ -21,6 +21,7 @@ All models run locally. All inference stays on device. Models are swappable — 
 
 The Aluft Gianne Protocol
 Every inference Callisto makes is governed by the Aluft Gianne Protocol — a structured research methodology that enforces disciplined, trustworthy analysis at every step.
+
 The Protocol is named after Aluft Gianne Sr. — a gnome master baker who follows his recipes with exactness, never mixing flavours carelessly, always working clean. So too does Callisto govern the preparation of knowledge.
 The Four Pillars:
 I. Domain Separation
@@ -41,6 +42,17 @@ Contradiction Check — actively search for contradictions. Absence is a flag no
 Synthesis — conclusion must match the confidence of the evidence
 Session Close — write the summary, seal the session, archive permanently
 
+What a Seal Means — read before trusting a SEALED answer
+
+A seal certifies process, not truth. "SEALED, PROBABLE, 0.55" means: this
+exact text, with this evidence, was produced through the declared
+retrieval-and-review process and has not been altered since (tamper-evident,
+keyed-HMAC record; provenance-assigned source classes; an adversary pass that
+found no blocking internal contradiction). It does NOT mean anyone checked
+that the answer is true. Confidence tiers are process scores, not calibrated
+probabilities. On raw correctness Callisto is not yet meaningfully better
+than chatbot deep research; what it adds today is auditability, honesty about
+gaps, and an immutable record. Full contract: SEAL_CONTRACT.md.
 
 Compartmentalized Memory
 Callisto's memory system is a provenance catalogue with segregated domain worlds, backed by a single SQLite database in WAL mode.
