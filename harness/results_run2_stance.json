@@ -542,5 +542,74 @@
       "3070208a59fa4c25": "honest_null"
     },
     "verdict": "correct"
+  },
+  {
+    "id": "Q14",
+    "question": "How many U.S. households owned a pet hamster in July 2019?",
+    "category": "unknowable-source-gap",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Not available from fred/treasury/fdic/courtlistener/gdelt/kalshi/openalex/wayback/wikidata/worldbank/census.",
+    "verified_by": "not collected by any working source adapter",
+    "elapsed_s": 387.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 5,
+    "sources": [
+      "fdic",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What percentage or count of U.S. households owned a hamster as a pet in 2019, per industry surveys (e.g., APPA National Pet Owners Survey)?",
+        "answer": "None",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "How many total U.S. households existed in July 2019, per Census Bureau estimates?",
+        "answer": "The provided evidence does not contain U.S. household counts for July 2019; the World Bank indicator search returned only unrelated agricultural indicators, so no Census Bureau estimate can be cited from this evidence.",
+        "tier": "VERIFIED",
+        "confidence": 0.95,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "How many pet hamsters were owned in the U.S. around 2019 and what is the average number of hamsters per owning household?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Do independent estimates (APPA, Statista, AVMA) agree on the 2019 hamster-owning household figure within a reasonable margin?",
+        "answer": "The evidence provided is irrelevant: it is a World Bank indicator search result (agricultural land/fertilizer indicators) containing no figures from APPA, Statista, or AVMA about 2019 hamster-owning households. No comparison can be made.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.05,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What percentage or count of U.S. households owned a hamster ': 1 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, appa, count, hamster, households, industry, national, owned",
+      "leaf 'How many total U.S. households existed in July 2019, per Cen': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2019, bureau, census, data, estimates, existed, government, households; [fdic] content covers 17% of the question's topical words (need 25%); missing: 2019, data, estimates, existed, government, households, july, many; [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, bureau, census, data, estimates, existed, government, households",
+      "leaf 'How many pet hamsters were owned in the U.S. around 2019 and': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2019, around, average, hamsters, household, many, market, number; [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, around, average, hamsters, household, many, market, number; [wikidata] content covers 7% of the question's topical words (need 25%); missing: 2019, around, average, hamsters, household, many, market, number",
+      "leaf 'Do independent estimates (APPA, Statista, AVMA) agree on the': 3 fetch(s) rejected at ingestion: [fdic] content covers 6% of the question's topical words (need 25%); missing: 2019, agree, appa, avma, comparison, cross, estimates, figure; [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, agree, appa, avma, comparison, cross, estimates, figure; [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, agree, appa, avma, comparison, cross, estimates, figure"
+    ],
+    "gap_kinds": {
+      "b50ef94dfff74c8b": "unprovable",
+      "a5c6faa34ff7474a": "unprovable"
+    },
+    "verdict": "correct"
   }
 ]
