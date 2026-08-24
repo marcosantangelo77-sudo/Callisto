@@ -533,7 +533,7 @@ def ruin_probability(
         median_path = None
         drawdown_95 = None
 
-    result["ruin_probability"] = round(ruin_prob, 7)
+    result["ruin_probability"] = round(ruin_prob, 6)
     result["ruin_pct"] = round(ruin_prob * 100, 4)
 
     if median_path is not None:
@@ -601,7 +601,7 @@ def _expected_bets_to_ruin_neg_ev(
     # Rough estimate: bankroll / expected_loss_per_bet
     expected_loss = abs(ev_per_bet)
     if expected_loss > 0:
-        return round(units / expected_loss, 0)
+        return round(units / expected_loss, 1)
     return None
 
 
