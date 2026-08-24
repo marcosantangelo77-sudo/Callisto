@@ -211,21 +211,53 @@ class TestSecFullText:
 
 class TestBea:
     def test_get_data_requires_key_and_builds_params(self, monkeypatch):
+        # Live-verified 2026-08: BEA's envelope key is "BEAAPI" (singular);
+        # the old fixture used a plural key no live response ever carries.
         bea, t = build("bea", "BeaAdapter", {
             "https://apps.bea.gov/api/data/?UserID=k&ResultFormat=JSON"
             "&method=GetData&DataSetName=NIPA&TableName=T10101"
             "&LineCode=1&Frequency=A&Year=2023": {
-                "BEAAPIs": {"Results": {"Data": [
+                "BEAAPI": {"Results": {"Data": [
                     {"DataValue": "22671.0", "TimePeriod": "2023"}]}}},
         })
         monkeypatch.setenv("CALLISTO_BEA_API_KEY", "k")
         out = bea.get_data("NIPA", tablename="T10101", linecode=1,
                            frequency="A", years="2023")
-        data = out["BEAAPIs"]["Results"]["Data"]
+        data = out["BEAAPI"]["Results"]["Data"]
         assert data[0]["TimePeriod"] == "2023"
         assert "_fetch" in out
 
-    def test_missing_key_no_fetch(self):
+    def test_embedded_error_payload_raises(self, monkeypatch):
+        # BEA answers HTTP 200 with Results.Error for an inactive/invalid
+        # key — the adapter must raise, not return an empty success.
+        bea, t = build("bea", "BeaAdapter", {
+            "https://apps.bea.gov/api/data/?UserID=k&ResultFormat=JSON"
+            "&method=GetData&DataSetName=NIPA&TableName=T10101"
+            "&LineCode=1&Frequency=A&Year=2023": {
+                "BEAAPI": {"Results": {"Error": {
+                    "APIErrorCode": "4",
+                    "APIErrorDescription":
+                        "This UserId is not active."}}}},
+        })
+        monkeypatch.setenv("CALLISTO_BEA_API_KEY", "k")
+        with pytest.raises(SourceError, match="not active"):
+            bea.get_data("NIPA", tablename="T10101", linecode=1,
+                         frequency="A", years="2023")
+
+    def test_zero_rows_raises(self, monkeypatch):
+        bea, t = build("bea", "BeaAdapter", {
+            "https://apps.bea.gov/api/data/?UserID=k&ResultFormat=JSON"
+            "&method=GetData&DataSetName=NIPA&TableName=T10101"
+            "&LineCode=1&Frequency=A&Year=2023": {
+                "BEAAPI": {"Results": {"Data": []}}},
+        })
+        monkeypatch.setenv("CALLISTO_BEA_API_KEY", "k")
+        with pytest.raises(SourceError, match="ZERO"):
+            bea.get_data("NIPA", tablename="T10101", linecode=1,
+                         frequency="A", years="2023")
+
+    def test_missing_key_no_fetch(self, monkeypatch):
+        monkeypatch.delenv("CALLISTO_BEA_API_KEY", raising=False)
         bea, t = build("bea", "BeaAdapter", {})
         with pytest.raises(SourceError, match="CALLISTO_BEA_API_KEY"):
             bea.get_data("NIPA", tablename="T10101", linecode=1)
