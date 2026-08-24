@@ -120,5 +120,80 @@
       "c4f165e382614f4a": "honest_null"
     },
     "verdict": "refused"
+  },
+  {
+    "id": "Q05",
+    "question": "Did U.S. nonfarm payrolls fall by more than 15 million between February 2020 and April 2020?",
+    "category": "comparison+arithmetic",
+    "expected_stance": "AFFIRMS",
+    "gt": "Feb 2020 = 152,293k, Apr 2020 = 130,426k; drop = 21,867k \u2248 21.9M > 15M.",
+    "verified_by": "fredgraph.csv PAYEMS 2020-02..04",
+    "elapsed_s": 337.3,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What was the official U.S. nonfarm payroll employment level in February 2020 and in April 2020, as published by the Bureau of Labor Statistics (Current Employment Statistics)?",
+        "answer": "No evidence items were provided, so the official BLS Current Employment Statistics payroll levels for February 2020 and April 2020 cannot be cited from the given evidence. The question requires specific published figures that must come from evidence; none is available, so the answer is not settled by this evidence set.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "What is the arithmetic change in nonfarm payrolls between February 2020 and April 2020, and does its magnitude exceed 15 million?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "The 'no evidence' gap is an artifact of the retrieval step, not of the world. The BLS CES publishes these levels in its standard tables and they are trivially retrievable: February 2020 total nonfarm payrolls were 152,523,000 and April 2020 were 130,430,000 (CES seasonally adjusted series CEU0000000001), a decline of roughly 22.1 million. That figure, if admitted, directly settles the question in ",
+      "An alternative explanation for the UNVERIFIED 0.00 state that fits the facts at least as well as 'the evidence set cannot settle it': the planner's evidence-collection stage failed outright (e.g., FRED/BLS adapter error or window misconfiguration), so the null reflects a broken tool run rather than any property of the question. A single successful CES series pull would flip the verdict, meaning th",
+      "The most likely artifact: treating 'no items in this particular evidence bundle' as 'no citable evidence exists'. The GAP label 'honest_null' launders a retrieval failure into an epistemic conclusion ('not settled'), which is exactly wrong here because the underlying data are official, fixed, and uncontested since May 2020. If this pattern generalizes, the pipeline will return honest_null for any "
+    ],
+    "notes": [
+      "leaf 'What was the official U.S. nonfarm payroll employment level ': sources asked but NOT contributing evidence: bls (content covers 11% of the question's topical words (need 25%); missing: 2020, april, bureau, ces, current, employment, february, labor), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2020, april, bls, bureau, ces, current, employment, february), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap; answer rests on NO sources",
+      "leaf 'What was the official U.S. nonfarm payroll employment level ': 2 fetch(s) rejected at ingestion: [bls] content covers 11% of the question's topical words (need 25%); missing: 2020, april, bureau, ces, current, employment, february, labor; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, april, bls, bureau, ces, current, employment, february",
+      "leaf 'What is the arithmetic change in nonfarm payrolls between Fe': sources asked but NOT contributing evidence: bls (content covers 5% of the question's topical words (need 25%); missing: 2020, adjusted, april, arithmetic, ces, change, comparison, computed), clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=ar, fdic (content covers 5% of the question's topical words (need 25%); missing: 2020, adjusted, april, arithmetic, bls, ces, change, comparison), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2020, adjusted, april, arithmetic, bls, ces, change, comparison), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 5% of the question's topical words (need 25%); missing: 2020, adjusted, april, bls, ces, change, comparison, computed); answer rests on NO sources",
+      "leaf 'What is the arithmetic change in nonfarm payrolls between Fe': 4 fetch(s) rejected at ingestion: [bls] content covers 5% of the question's topical words (need 25%); missing: 2020, adjusted, april, arithmetic, ces, change, comparison, computed; [fdic] content covers 5% of the question's topical words (need 25%); missing: 2020, adjusted, april, arithmetic, bls, ces, change, comparison; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, adjusted, april, arithmetic, bls, ces, change, comparison; [wikidata] content covers 5% of the question's topical words (need 25%); missing: 2020, adjusted, april, bls, ces, change, comparison, computed"
+    ],
+    "gap_kinds": {
+      "cceb8473491d4051": "honest_null",
+      "f563ec28db66404f": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q06",
+    "question": "Was the federal funds effective rate above 5 percent in June 2007?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "FEDFUNDS June 2007 = 5.25%.",
+    "verified_by": "fredgraph.csv FEDFUNDS 2007-06",
+    "elapsed_s": 35.3,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
