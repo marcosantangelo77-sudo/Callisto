@@ -255,5 +255,55 @@
       "a85d12c697d04934": "unprovable"
     },
     "verdict": "undetermined-sealed"
+  },
+  {
+    "id": "Q08",
+    "question": "Is Paris the capital of France according to Wikidata?",
+    "category": "checkable-yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "Wikidata Q142 P36 = Q90 = Paris.",
+    "verified_by": "wikidata wbgetclaims Q142 P36 \u2192 Q90 (Paris)",
+    "elapsed_s": 228.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary transport failure: critic response was UNPARSEABLE after 3 attempt(s), not a verdict \u2014 retryable infrastructure noise, refusing closed (raw head: 'API call failed after 3 retries: HTTP 429: The requested model is temporarily at capacity upstream. This is not your API')",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What entity in Wikidata corresponds to Paris, and does it carry a 'capital of' (P1376) statement naming France?",
+        "answer": "No evidence items were provided, so the Wikidata entity for Paris (Q90) and whether it carries a P1376 'capital of' statement naming France cannot be verified from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.1,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Does the France entity (Q142) in Wikidata carry a 'capital' (P36) statement naming Paris, and is that statement currently valid (not superseded or deprecated)?",
+        "answer": "No evidence was provided, so the presence and rank status of a P36 'capital' statement naming Paris on Wikidata entity Q142 cannot be established from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "adversary transport failure: critic response was UNPARSEABLE after 3 attempt(s), not a verdict \u2014 retryable infrastructure noise, refusing closed (raw head: 'API call failed after 3 retries: HTTP 429: The requested model is temporarily at capacity upstream. This is not your API')"
+    ],
+    "notes": [
+      "leaf 'What entity in Wikidata corresponds to Paris, and does it ca': sources asked but NOT contributing evidence: bls (content covers 0% of the question's topical words (need 25%); missing: base, capital, carry, corresponds, entity, france, knowledge, naming), cftc_cot (content covers 0% of the question's topical words (need 25%); missing: base, capital, carry, corresponds, entity, france, knowledge, naming), clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: base, capital, carry, corresponds, entity, france, knowledge, naming), fdic (content covers 7% of the question's topical words (need 25%); missing: base, capital, carry, corresponds, entity, france, knowledge, naming), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (error: HTTP 400 for https://api.stlouisfed.org/fred/series/observations?series_id=P1376, treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/P13, worldbank (content covers 14% of the question's topical words (need 25%); missing: base, capital, carry, corresponds, entity, knowledge, naming, paris), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re; answer rests on NO sources",
+      "leaf 'What entity in Wikidata corresponds to Paris, and does it ca': 5 fetch(s) rejected at ingestion: [bls] content covers 0% of the question's topical words (need 25%); missing: base, capital, carry, corresponds, entity, france, knowledge, naming; [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: base, capital, carry, corresponds, entity, france, knowledge, naming; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: base, capital, carry, corresponds, entity, france, knowledge, naming; [fdic] content covers 7% of the question's topical words (need 25%); missing: base, capital, carry, corresponds, entity, france, knowledge, naming; [worldbank] content covers 14% of the question's topical words (need 25%); missing: base, capital, carry, corresponds, entity, knowledge, naming, paris",
+      "leaf 'Does the France entity (Q142) in Wikidata carry a 'capital' ': sources asked but NOT contributing evidence: bls (content covers 5% of the question's topical words (need 25%); missing: base, capital, carry, currently, deprecated, entity, france, knowledge), cftc_cot (content covers 0% of the question's topical words (need 25%); missing: base, capital, carry, currently, deprecated, entity, france, knowledge), clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=Fr, fdic (content covers 5% of the question's topical words (need 25%); missing: base, capital, carry, currently, deprecated, entity, france, knowledge), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (error: HTTP 400 for https://api.stlouisfed.org/fred/series/observations?series_id=Q142&, treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/Q14, worldbank (content covers 11% of the question's topical words (need 25%); missing: base, capital, carry, currently, deprecated, entity, knowledge, naming), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re; answer rests on NO sources",
+      "leaf 'Does the France entity (Q142) in Wikidata carry a 'capital' ': 4 fetch(s) rejected at ingestion: [bls] content covers 5% of the question's topical words (need 25%); missing: base, capital, carry, currently, deprecated, entity, france, knowledge; [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: base, capital, carry, currently, deprecated, entity, france, knowledge; [fdic] content covers 5% of the question's topical words (need 25%); missing: base, capital, carry, currently, deprecated, entity, france, knowledge; [worldbank] content covers 11% of the question's topical words (need 25%); missing: base, capital, carry, currently, deprecated, entity, knowledge, naming"
+    ],
+    "gap_kinds": {
+      "a8c4bcb0a9c54469": "honest_null",
+      "75d580b9980f4e56": "honest_null"
+    },
+    "verdict": "refused"
   }
 ]
