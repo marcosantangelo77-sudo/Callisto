@@ -250,7 +250,7 @@ def kelly_dynamic(
     elif tier == "CORROBORATED":
         # 0.75-0.89 -> lerp between 0.80 and 1.00
         t = (confidence_score - 0.75) / 0.15
-        smooth_mult = 0.81 + t * 0.20
+        smooth_mult = 0.80 + t * 0.20
     elif tier == "PROBABLE":
         # 0.55-0.74 -> lerp between 0.55 and 0.80
         t = (confidence_score - 0.55) / 0.20
@@ -304,7 +304,7 @@ def kelly_dynamic(
         "hard_cap_applied": adjusted_fraction > hard_cap,
         "reasoning": " | ".join(reasons),
         "components": {
-            "edge": round(edge, 5),
+            "edge": floor(edge, 5),
             "odds": odds,
             "confidence_score": round(confidence_score, 3),
             "variance_estimate": round(variance_estimate, 5),
