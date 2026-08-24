@@ -75,16 +75,15 @@ def run_case(case, replan_enabled: bool) -> dict:
             if role == "Architect":
                 if "RE-PLAN" in prompt or "Re-plan" in prompt:
                     self.n_replans += 1
-                    # Re-aim the sub-question at evidence this fixture HAS.
-                    target = next(iter(routes), "")
-                    qt = ("news coverage of events" if "/doc" in target
-                          else "scholarly work search")
-                    text = case["qtext"]
+                    # Re-aim at evidence this fixture HAS: agency rules.
                     return {"content": json.dumps({"sub_questions": [{
-                        "text": text + " (re-aimed)",
-                        "kind": "descriptive", "question_type": qt,
+                        "text": case["qtext"] + " (re-aimed)",
+                        "kind": "descriptive",
+                        "question_type": "final/proposed agency rules with "
+                                         "dates and docket refs",
                         "min_source_tier": 2,
-                        "min_independent_sources": 2}]})}
+                        "min_independent_sources":
+                            case.get("min_ind", 2)}]})}
                 from tools.pipeline.model import decompose_messages
                 base = decompose_messages(case["qtext"])
                 spec = {"text": case["qtext"], "kind": "descriptive",
@@ -142,6 +141,25 @@ def run_case(case, replan_enabled: bool) -> dict:
 
 def main() -> int:
     cases = build_cases()
+    # Add one conversion case: the decomposed leaf's question text is
+    # deliberately source-ambiguous (no topical core any planner can route),
+    # so round 1 reaches nothing and classifies as an actionable retrieval
+    # failure; the re-plan re-aims at agency rules, which /documents serves.
+    cases.append(dict(
+        name="R1 replan-converts-failure",
+        # Question text with a real topical core (routes the planner) but
+        # a qtype whose selected sources this fixture does NOT serve, so
+        # round 1 reaches nothing actionable; the re-plan re-aims at
+        # agency rules, which /documents serves.
+        qtext="CPIAUCSL annual inflation trend",
+        qtype="scholarly work search",
+        min_ind=1,
+        routes={"/documents.json": json.dumps({"documents": [
+            {"title": "Consumer Price Index observations series data with "
+                      "final agency rule published by the government",
+             "document_number": "2024-99999",
+             "published_at": "2024-12-18"}]})},
+    ))
     out = []
     print(f"{'case':44s} {'OFF f/a':>9s} {'ON f/a':>9s} "
           f"{'sealed':>13s} {'replans':>7s}")
