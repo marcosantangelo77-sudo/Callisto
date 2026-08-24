@@ -355,10 +355,31 @@ def confidence_from_agreement(group: ClaimGroup,
                      "nothing is not evidence — score held at 0"]
     frac = min(1.0, _SINGLE_VOICE_FRACTION
                + _PER_EXTRA_VOICE * max(0, n_indep - 1))
-    score = floor_conf(ceiling * frac)
+    # F5/F4c: corroboration is counted per PROVENANCE CLASS, never pooled.
+    # Under the previous formula every voice borrowed the group MAX class's
+    # ceiling, so one PRIMARY item let INFERRED gossip lift a mixed group to
+    # VERIFIED (1.0). Each class earns credit only within its own ceiling:
+    #   score = max over classes of ceiling(class) * frac(class_voices).
+    # Weak voices still corroborate each other (within INFERRED's 0.55), but
+    # they cannot spend a strong member's headroom, and a strong member alone
+    # cannot spend the voices of the weak.
+    by_class: dict[str, set[str]] = {}
+    for it in group.items:
+        by_class.setdefault(it.source_class if it.source_class in _CLASS_RANK
+                            else "INFERRED", set()).add(it.indep_key)
+    score = 0.0
+    for cls, ikeys in by_class.items():
+        cls_voices = len(ikeys)
+        cls_frac = min(1.0, _SINGLE_VOICE_FRACTION
+                       + _PER_EXTRA_VOICE * max(0, cls_voices - 1))
+        cls_ceiling = MAX_CONFIDENCE_BY_SOURCE.get(cls, 0.55)
+        score = max(score, floor_conf(cls_ceiling * cls_frac))
+        reasons.append(
+            f"class {cls}: {cls_voices} independent voice(s) -> "
+            f"{cls_frac:.0%} of its {cls_ceiling:.2f} ceiling")
     reasons.append(
-        f"{n_indep} independent source(s) agree -> "
-        f"{frac:.0%} of ceiling")
+        f"{n_indep} independent source(s) agree overall -> "
+        f"{frac:.0%} of best-class ceiling (per-class accounting governs)")
     if n_indep == 1 and len(group.items) > 1:
         reasons.append(
             f"{len(group.items)} items but ONE independence unit "
