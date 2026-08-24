@@ -35,7 +35,12 @@ SPEC = SourceSpec(
         "sentiment beyond GDELT's coarse tone score",
     ),
     tier=4,
-    min_interval_s=5.0,
+    # Live-verified 2026-08: GDELT 2.0 DOC 429s aggressively — a single
+    # request right after another client's can fail, then succeed 45s
+    # later with the identical URL (reproduced). 5s spacing is not
+    # enough; the documented guidance is ~1 call per 5s per IP but the
+    # shared pool is unforgiving, so space calls at 30s.
+    min_interval_s=30.0,
     terms_url="https://www.gdeltproject.org/about.html#terms",
 )
 
