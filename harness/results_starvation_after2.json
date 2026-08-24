@@ -1,0 +1,821 @@
+[
+  {
+    "id": "Q01",
+    "question": "Was the U.S. unemployment rate lower in January 2026 than in January 2023?",
+    "category": "comparison",
+    "expected_stance": "DENIES",
+    "gt": "Jan 2023 = 3.5%, Jan 2026 = 4.3% \u2014 unemployment was HIGHER in Jan 2026.",
+    "verified_by": "fredgraph.csv UNRATE 2023-01 and 2026-01",
+    "elapsed_s": 21.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q02",
+    "question": "Did the U.S. unemployment rate exceed 4.0 percent at any point in the first half of 2026?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "Jan\u2013Jun 2026 monthly rates were 4.3/4.4/4.3/4.3/4.3/4.2.",
+    "verified_by": "fredgraph.csv UNRATE 2026-01..06",
+    "elapsed_s": 21.3,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q03",
+    "question": "Was the U.S. national debt on March 31, 2020 higher than $23 trillion?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "$23,686,870,812,640.08 on 2020-03-31.",
+    "verified_by": "fiscaldata.treasury.gov debt_to_penny record_date=2020-03-31",
+    "elapsed_s": 27.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q04",
+    "question": "Was the U.S. total public debt lower on January 31, 2023 than $30 trillion?",
+    "category": "negation",
+    "expected_stance": "DENIES",
+    "gt": "$31,454,982,227,739.16 \u2014 higher than $30T.",
+    "verified_by": "debt_to_penny record_date=2023-01-31",
+    "elapsed_s": 240.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What was the U.S. total public debt outstanding as of January 31, 2023, according to the U.S. Treasury (Debt to the Penny / Monthly Statement of the Public Debt)?",
+        "answer": "No evidence was provided, so the debt figure as of January 31, 2023 cannot be established from the given items.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "The record contains zero retrieved items, yet the fact in question is trivially checkable: the U.S. Treasury's Debt to the Penny dataset publishes a daily Total Public Debt Outstanding figure for 01/31/2023 (approximately $31.4-31.5 trillion, above the $30 trillion threshold). A single API call to TreasuryDirect would settle it; treating this as 'no evidence was provided' when the authoritative pr",
+      "The same facts (empty evidence set, UNVERIFIED 0.00) are equally explained by planner/adapter failure \u2014 e.g., the Treasury fiscal-data endpoint returning an error or the planner failing to bind the date parameter \u2014 rather than by the question being genuinely unanswerable from available sources. Attributing the null to the epistemics of the question instead of to tooling malfunction is a mechanism ",
+      "An honest_null scored 0.00 with a GAP tag can be produced by any pipeline run whose fetch step fails, regardless of ground truth. Observing one such run tells us nothing about the underlying claim; selecting this instance as 'the conclusion under attack' guarantees the appearance of unsupportedness without any process having checked whether the claim is true.",
+      "If the pipeline's downstream consumer reads '[UNVERIFIED 0.00]' as evidence AGAINST the claim, the artifact manufactures a false negative: the actual value on 2023-01-31 exceeded $30T (debt crossed $31T in early January 2023), so the correct answer to the question is 'No, it was higher' \u2014 a determinate, well-sourced answer that the empty-evidence framing conceals entirely."
+    ],
+    "notes": [
+      "leaf 'What was the U.S. total public debt outstanding as of Januar': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=to, fdic (content covers 14% of the question's topical words (need 25%); missing: 2023, according, debt, government, january, official, outstanding, penny), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, according, debt, government, january, monthly, official, outstanding), treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/, courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 7% of the question's topical words (need 25%); missing: 2023, according, debt, government, january, monthly, official, outstanding); answer rests on NO sources",
+      "leaf 'What was the U.S. total public debt outstanding as of Januar': 3 fetch(s) rejected at ingestion: [fdic] content covers 14% of the question's topical words (need 25%); missing: 2023, according, debt, government, january, official, outstanding, penny; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, according, debt, government, january, monthly, official, outstanding; [wikidata] content covers 7% of the question's topical words (need 25%); missing: 2023, according, debt, government, january, monthly, official, outstanding"
+    ],
+    "gap_kinds": {
+      "9152060095214f09": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q05",
+    "question": "Did U.S. nonfarm payrolls fall by more than 15 million between February 2020 and April 2020?",
+    "category": "comparison+arithmetic",
+    "expected_stance": "AFFIRMS",
+    "gt": "Feb 2020 = 152,293k, Apr 2020 = 130,426k; drop = 21,867k \u2248 21.9M > 15M.",
+    "verified_by": "fredgraph.csv PAYEMS 2020-02..04",
+    "elapsed_s": 20.8,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q06",
+    "question": "Was the federal funds effective rate above 5 percent in June 2007?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "FEDFUNDS June 2007 = 5.25%.",
+    "verified_by": "fredgraph.csv FEDFUNDS 2007-06",
+    "elapsed_s": 153.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "fred"
+    ],
+    "leaves": [
+      {
+        "text": "What was the federal funds effective rate in June 2007?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'What was the federal funds effective rate in June 2007?': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2007, bank, central, dff, effective, federal, fred, funds), fdic (content covers 7% of the question's topical words (need 25%); missing: 2007, bank, central, dff, effective, federal, fred, funds), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 21% of the question's topical words (need 25%); missing: 2007, bank, dff, effective, fred, funds, june, rate); answer rests on ['fred']",
+      "leaf 'What was the federal funds effective rate in June 2007?': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2007, bank, central, dff, effective, federal, fred, funds; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2007, bank, central, dff, effective, federal, fred, funds; [wikidata] content covers 21% of the question's topical words (need 25%); missing: 2007, bank, dff, effective, fred, funds, june, rate"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q07",
+    "question": "Did any FDIC-insured banks fail during calendar year 2021?",
+    "category": "no-answer (answer is NO)",
+    "expected_stance": "DENIES",
+    "gt": "FDIC recorded ZERO bank failures in 2021.",
+    "verified_by": "banks.data.fdic.gov failures FAILYR=2021 \u2192 0 rows",
+    "elapsed_s": 239.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "fdic"
+    ],
+    "leaves": [
+      {
+        "text": "Which FDIC-insured banks were declared failed by the FDIC during calendar year 2021 (per the FDIC's official failed bank list)?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "What was the total count of FDIC-insured institution failures in 2021 as reported by FDIC Quarterly Banking Profile data?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'Which FDIC-insured banks were declared failed by the FDIC du': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=FD, fdic (content covers 20% of the question's topical words (need 25%); missing: 2021, calendar, declared, during, failed, insured, list, official), federalregister (error: exhausted retries; last error: HTTP 503 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic); answer rests on NO sources",
+      "leaf 'Which FDIC-insured banks were declared failed by the FDIC du': 3 fetch(s) rejected at ingestion: [fdic] content covers 20% of the question's topical words (need 25%); missing: 2021, calendar, declared, during, failed, insured, list, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic; [wikidata] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic",
+      "leaf 'What was the total count of FDIC-insured institution failure': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured), fred (content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured), fred (content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured), openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['fdic']",
+      "leaf 'What was the total count of FDIC-insured institution failure': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q08",
+    "question": "Is Paris the capital of France according to Wikidata?",
+    "category": "checkable-yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "Wikidata Q142 P36 = Q90 = Paris.",
+    "verified_by": "wikidata wbgetclaims Q142 P36 \u2192 Q90 (Paris)",
+    "elapsed_s": 207.3,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What does the Wikidata entity for France (Q142) list as its value for the 'capital' property (P36)?",
+        "answer": "No evidence items were provided, so the Wikidata Q142 'capital' (P36) value cannot be determined from given citations. (For reference, Wikidata lists Paris as France's capital, but this is not supported by supplied evidence.)",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Is Paris (Q90) the entity referenced by that capital statement, and is the statement currently non-deprecated?",
+        "answer": "No evidence items were provided, so it cannot be determined whether the capital statement references Paris (Q90) or whether the statement is non-deprecated.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Do independent authoritative sources (e.g., official French government or constitutional text) corroborate Paris as the capital of France, consistent with Wikidata?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "The answer text itself states 'Wikidata lists Paris as France's capital' while claiming zero evidence items were provided \u2014 the evidence needed to affirm the conclusion is present in the record and was underweighted to 0.00 on both sub-questions, making the honest_null self-contradictory rather than honest.",
+      "The 'no evidence items' condition rests on a single concrete gap: no fetch of the Wikidata API endpoint https://www.wikidata.org/wiki/Special:EntityData/Q142.json (or wbgetentities P36 claim) appears in the evidence list. The most likely artifact is a retrieval/pipeline failure (empty tool output or dropped citations), not genuine unverifiability \u2014 Q142's P36 value is a stable, machine-readable fa",
+      "The same facts (two UNVERIFIED 0.00 entries with GAP: honest_null) are equally explained by an evidence-plumbing defect \u2014 e.g., the citation collector returning an empty array on success, or rank/deprecation checks failing silently and being misreported as 'no evidence' \u2014 rather than by the claimed mechanism of an appropriately withheld verdict.",
+      "Scoring both sub-questions exactly 0.00 with identical boilerplate suggests a uniform default path taken whenever the evidence store is empty, so these two entries may be survivors of a template that stamps honest_null regardless of question type \u2014 the pattern reflects the harness's empty-evidence handling, not any property of the Paris/France claim."
+    ],
+    "notes": [
+      "leaf 'What does the Wikidata entity for France (Q142) list as its ': sources asked but NOT contributing evidence: bls (content covers 0% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142), cftc_cot (content covers 0% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142), clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142), fdic (content covers 9% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (error: HTTP 400 for https://api.stlouisfed.org/fred/series/observations?series_id=Q142&, treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/Q14, worldbank (content covers 18% of the question's topical words (need 25%); missing: capital, entity, fact, list, p36, property, structured, value), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re; answer rests on NO sources",
+      "leaf 'What does the Wikidata entity for France (Q142) list as its ': 5 fetch(s) rejected at ingestion: [bls] content covers 0% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142; [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142; [fdic] content covers 9% of the question's topical words (need 25%); missing: capital, entity, fact, france, list, p36, property, q142; [worldbank] content covers 18% of the question's topical words (need 25%); missing: capital, entity, fact, list, p36, property, structured, value",
+      "leaf 'Is Paris (Q90) the entity referenced by that capital stateme': sources asked but NOT contributing evidence: bls (content covers 0% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris), cftc_cot (content covers 0% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris), clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris), eia (error: HTTP 404 for https://api.eia.gov/v2/seriesid/Q90?frequency=annual, fdic (content covers 8% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, q90), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (error: HTTP 400 for https://api.stlouisfed.org/fred/series/observations?series_id=Q90&l, treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/Q90, worldbank (content covers 8% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris); answer rests on NO sources",
+      "leaf 'Is Paris (Q90) the entity referenced by that capital stateme': 5 fetch(s) rejected at ingestion: [bls] content covers 0% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris; [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris; [fdic] content covers 8% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, q90; [worldbank] content covers 8% of the question's topical words (need 25%); missing: capital, claim, currently, deprecated, entity, metadata, non, paris",
+      "leaf 'Do independent authoritative sources (e.g., official French ': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=in, fdic (content covers 7% of the question's topical words (need 25%); missing: authoritative, capital, consistent, constitutional, corroborate, france, french, government), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: authoritative, capital, consistent, constitutional, corroborate, france, french, government), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 20% of the question's topical words (need 25%); missing: authoritative, capital, consistent, constitutional, corroborate, france, french, legal); answer rests on NO sources",
+      "leaf 'Do independent authoritative sources (e.g., official French ': 3 fetch(s) rejected at ingestion: [fdic] content covers 7% of the question's topical words (need 25%); missing: authoritative, capital, consistent, constitutional, corroborate, france, french, government; [fred] content covers 0% of the question's topical words (need 25%); missing: authoritative, capital, consistent, constitutional, corroborate, france, french, government; [wikidata] content covers 20% of the question's topical words (need 25%); missing: authoritative, capital, consistent, constitutional, corroborate, france, french, legal"
+    ],
+    "gap_kinds": {
+      "5405a4a68c834c0d": "honest_null",
+      "6c8fef549f4c4007": "honest_null",
+      "5c930d107abc4b90": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q09",
+    "question": "Did the Supreme Court decide Loper Bright Enterprises v. Raimondo before 2024?",
+    "category": "multi-hop/negation",
+    "expected_stance": "DENIES",
+    "gt": "dateFiled = 2024-06-28 \u2014 not before 2024.",
+    "verified_by": "courtlistener search API caseName/dateFiled",
+    "elapsed_s": 217.2,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "fdic"
+    ],
+    "leaves": [
+      {
+        "text": "On what date did the Supreme Court issue its decision in Loper Bright Enterprises v. Raimondo?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'On what date did the Supreme Court issue its decision in Lop': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official), fred (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official), fred (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official), openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['fdic']",
+      "leaf 'On what date did the Supreme Court issue its decision in Lop': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official; [fred] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official; [fred] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q10",
+    "question": "Was the World Bank estimate of U.S. population in 2020 greater than 330 million?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "331,578,104.",
+    "verified_by": "api.worldbank.org SP.POP.TOTL USA 2020",
+    "elapsed_s": 244.0,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What is the World Bank's estimate of the U.S. population in 2020 (indicator SP.POP.TOTL, year 2020)?",
+        "answer": "The provided evidence is truncated and contains only rows for 'Africa Eastern and Southern' (and other countries are cut off); no United States SP.POP.TOTL value for 2020 appears in the evidence given, so the World Bank's 2020 U.S. population cannot be read from it.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "Does that World Bank 2020 U.S. population figure exceed 330,000,000?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What is the World Bank's estimate of the U.S. population in ': sources asked but NOT contributing evidence: census (error: HTTP 404 for https://api.census.gov/data/timeseries/timeseries/international/pop, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2020, api, bank, data, development, estimate, indicator, indicators), fdic (content covers 20% of the question's topical words (need 25%); missing: 2020, api, data, development, estimate, indicator, indicators, pop), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2020, api, bank, data, development, estimate, indicator, indicators); answer rests on ['worldbank']",
+      "leaf 'What is the World Bank's estimate of the U.S. population in ': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, api, bank, data, development, estimate, indicator, indicators; [fdic] content covers 20% of the question's topical words (need 25%); missing: 2020, api, data, development, estimate, indicator, indicators, pop; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, api, bank, data, development, estimate, indicator, indicators",
+      "leaf 'Does that World Bank 2020 U.S. population figure exceed 330,': sources asked but NOT contributing evidence: census (error: HTTP 404 for https://api.census.gov/data/timeseries/timeseries/international/pop, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, bank, comparison, exceed), fdic (content covers 20% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, exceed, figure, million), fred (content covers 0% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, bank, comparison, exceed), worldbank (content covers 20% of the question's topical words (need 25%); missing: 000, 330, against, arithmetic, bank, comparison, exceed, figure), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 13% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, comparison, exceed, figure); answer rests on NO sources",
+      "leaf 'Does that World Bank 2020 U.S. population figure exceed 330,': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, bank, comparison, exceed; [fdic] content covers 20% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, exceed, figure, million; [fred] content covers 0% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, bank, comparison, exceed; [worldbank] content covers 20% of the question's topical words (need 25%); missing: 000, 330, against, arithmetic, bank, comparison, exceed, figure; [wikidata] content covers 13% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, comparison, exceed, figure"
+    ],
+    "gap_kinds": {
+      "16a6af9611e643cc": "unprovable",
+      "248731c8721f4869": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q11",
+    "question": "Did Silicon Valley Bank fail in March 2023?",
+    "category": "yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "SILICON VALLEY BANK, FAILDATE 3/10/2023.",
+    "verified_by": "FDIC failures FAILDATE 3/10/2023",
+    "elapsed_s": 308.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "fdic"
+    ],
+    "leaves": [
+      {
+        "text": "Was Silicon Valley Bank placed into receivership by the FDIC in March 2023?",
+        "answer": "The FDIC institutions record for Silicon Valley Bank (CERT 24735) shows ACTIVE: 0 / INACTIVE: 1 with an end date of 03/10/2023 (EFFDATE/ENDEFYMD '03/10/2023', CFPBENDDTE '2023-03-10', DATEUPDT '03/13/2023') and a NEWCERT 59331, consistent with the bank ceasing to exist as an active institution on March 10, 2023 under FDIC records. However, this record does not explicitly state that the bank was 'placed into receivership' \u2014 it only evidences deactivation/termination effective 2023-03-10, which is",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "What was the exact date and legal mechanism of Silicon Valley Bank's failure (closure by regulators, deposit insurance invocation)?",
+        "answer": "No evidence items were provided, so the exact date and legal mechanism of Silicon Valley Bank's failure cannot be determined from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Do contemporaneous financial news reports from March 2023 corroborate SVB's collapse as a bank failure rather than mere distress?",
+        "answer": "No evidence items were provided, so the claim cannot be assessed from cited sources.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'Was Silicon Valley Bank placed into receivership by the FDIC': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press), fred (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press), fred (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press), openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['fdic']",
+      "leaf 'Was Silicon Valley Bank placed into receivership by the FDIC': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press",
+      "leaf 'What was the exact date and legal mechanism of Silicon Valle': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=ex, fdic (content covers 17% of the question's topical words (need 25%); missing: announcements, closure, date, deposit, exact, failure, filings, insurance), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: announcements, bank, closure, date, deposit, exact, failure, filings), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, wikidata (content covers 6% of the question's topical words (need 25%); missing: announcements, bank, closure, date, deposit, failure, filings, insurance); answer rests on NO sources",
+      "leaf 'What was the exact date and legal mechanism of Silicon Valle': 3 fetch(s) rejected at ingestion: [fdic] content covers 17% of the question's topical words (need 25%); missing: announcements, closure, date, deposit, exact, failure, filings, insurance; [fred] content covers 0% of the question's topical words (need 25%); missing: announcements, bank, closure, date, deposit, exact, failure, filings; [wikidata] content covers 6% of the question's topical words (need 25%); missing: announcements, bank, closure, date, deposit, failure, filings, insurance",
+      "leaf 'Do contemporaneous financial news reports from March 2023 co': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=co, fdic (content covers 20% of the question's topical words (need 25%); missing: 2023, archived, collapse, contemporaneous, coverage, distress, financial, march), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, archived, bank, collapse, contemporaneous, corroborate, coverage, distress), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, wikidata (content covers 5% of the question's topical words (need 25%); missing: 2023, archived, bank, collapse, corroborate, coverage, distress, failure); answer rests on NO sources",
+      "leaf 'Do contemporaneous financial news reports from March 2023 co': 3 fetch(s) rejected at ingestion: [fdic] content covers 20% of the question's topical words (need 25%); missing: 2023, archived, collapse, contemporaneous, coverage, distress, financial, march; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, bank, collapse, contemporaneous, corroborate, coverage, distress; [wikidata] content covers 5% of the question's topical words (need 25%); missing: 2023, archived, bank, collapse, corroborate, coverage, distress, failure"
+    ],
+    "gap_kinds": {
+      "105cfaa48c7d4a9b": "unprovable",
+      "474dab4312a54cd9": "honest_null",
+      "98aed94c837c41ed": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q12",
+    "question": "Did exactly four FDIC-insured banks fail during 2023?",
+    "category": "negation (answer: no, five)",
+    "expected_stance": "DENIES",
+    "gt": "Five failures: SVB, Signature, First Republic, Heartland Tri-State, Citizens Bank (11/3).",
+    "verified_by": "FDIC failures FAILYR=2023 \u2192 5 rows",
+    "elapsed_s": 227.0,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "How many FDIC-insured banks failed during calendar year 2023 according to the FDIC's official failed bank list?",
+        "answer": "None",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Which individual FDIC-insured institutions were closed by regulators in 2023, and on what dates?",
+        "answer": "No evidence was provided, so the specific institutions and closure dates cannot be determined from the given materials.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Does the count of 2023 failures change under different inclusion criteria (e.g., assisted acquisitions like Signature and First Republic, credit union acquisitions, or failures announced in early 2024 for 2023 activity)?",
+        "answer": "No evidence was provided, so the question cannot be settled: whether the count of 2023 bank failures changes under different inclusion criteria (assisted acquisitions such as Signature and First Republic, credit union acquisitions, or early-2024 announcements for 2023 activity) cannot be determined from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Do independent compilations of bank failures (industry trackers, financial media) corroborate the same total for 2023?",
+        "answer": "No evidence items were provided, so independent compilations of 2023 bank-failure totals cannot be corroborated from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "Refuting evidence is not hypothetical \u2014 it is public and trivially retrievable. The FDIC's own Failed Bank List for 2023 names five failures: Silicon Valley Bank (2023-03-10), Signature Bank (2023-03-12), First Republic Bank (2023-05-01), Heartland Tri-State Bank (2023-07-28), and Citizens Bank of Sac City, Iowa (2023-11-03). Any downstream reading of 'exactly four' from these honest_nulls is dire",
+      "The single most likely artifact is an evidence-plumbing failure being laundered into an epistemic virtue: all four sub-answers carry [UNVERIFIED 0.00] with GAP honest_null, i.e., the retrieval step returned zero items, and the pipeline then reported calibrated-sounding nulls instead of flagging retrieval failure. A count derived by treating these nulls as support (or by dropping one bank to force ",
+      "A 'four' answer almost certainly arises from counting criteria chosen post hoc: excluding Heartland Tri-State or Citizens Bank of Sac City (small, non-headline failures) while including SVB/Signature/First Republic plus one more yields four. The observed pattern (a specific small count) can be produced by headline-driven selection \u2014 media coverage concentrates on the three large March\u2013May failures",
+      "'Exactly four' is equally explained by conflating distinct populations: e.g., counting only banks placed into FDIC receivership with purchase-and-assumption loss-share deals, or only failures handled via systemic-risk exceptions (SVB, Signature = 2) plus First Republic = 3 plus one miscategorized entry. The same facts (five receiverships, several resolved via assisted acquisitions) are fully consi"
+    ],
+    "notes": [
+      "leaf 'How many FDIC-insured banks failed during calendar year 2023': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=FD, fdic (content covers 20% of the question's topical words (need 25%); missing: 2023, according, agency, calendar, during, failed, insured, list), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, according, agency, bank, banks, calendar, during, failed), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 0% of the question's topical words (need 25%); missing: 2023, according, agency, bank, banks, calendar, during, failed); answer rests on NO sources",
+      "leaf 'How many FDIC-insured banks failed during calendar year 2023': 3 fetch(s) rejected at ingestion: [fdic] content covers 20% of the question's topical words (need 25%); missing: 2023, according, agency, calendar, during, failed, insured, list; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, according, agency, bank, banks, calendar, during, failed; [wikidata] content covers 0% of the question's topical words (need 25%); missing: 2023, according, agency, bank, banks, calendar, during, failed",
+      "leaf 'Which individual FDIC-insured institutions were closed by re': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, banking, closed, closure, dates, fdic, individual, institutions), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, banking, closed, closure, dates, fdic, individual, institutions), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 18% of the question's topical words (need 25%); missing: 2023, banking, closed, closure, dates, fdic, institutions, insured); answer rests on NO sources",
+      "leaf 'Which individual FDIC-insured institutions were closed by re': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, banking, closed, closure, dates, fdic, individual, institutions; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, banking, closed, closure, dates, fdic, individual, institutions; [wikidata] content covers 18% of the question's topical words (need 25%); missing: 2023, banking, closed, closure, dates, fdic, institutions, insured",
+      "leaf 'Does the count of 2023 failures change under different inclu': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=co, fdic (content covers 15% of the question's topical words (need 25%); missing: 2023, 2024, acquisitions, activity, alternative, analysis, announced, assisted), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, 2024, acquisitions, activity, alternative, analysis, announced, assisted), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap; answer rests on NO sources",
+      "leaf 'Does the count of 2023 failures change under different inclu': 2 fetch(s) rejected at ingestion: [fdic] content covers 15% of the question's topical words (need 25%); missing: 2023, 2024, acquisitions, activity, alternative, analysis, announced, assisted; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, 2024, acquisitions, activity, alternative, analysis, announced, assisted"
+    ],
+    "gap_kinds": {
+      "e9087e369a73486f": "honest_null",
+      "f10aceed44824121": "honest_null",
+      "be5c723354814ec0": "honest_null",
+      "137883fbcba0497e": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q13",
+    "question": "What will the U.S. unemployment rate be in January 2027?",
+    "category": "unknowable-future",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Unknowable; correct output is refusal or UNDETERMINED.",
+    "verified_by": "definitionally unobservable",
+    "elapsed_s": 20.1,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "correct"
+  },
+  {
+    "id": "Q14",
+    "question": "How many U.S. households owned a pet hamster in July 2019?",
+    "category": "unknowable-source-gap",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Not available from fred/treasury/fdic/courtlistener/gdelt/kalshi/openalex/wayback/wikidata/worldbank/census.",
+    "verified_by": "not collected by any working source adapter",
+    "elapsed_s": 200.3,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "fdic"
+    ],
+    "leaves": [
+      {
+        "text": "What percentage of U.S. households owned a hamster in 2019-2020 according to national pet ownership surveys (e.g., APPA National Pet Owners Survey, AVMA Pet Ownership and Demographics Sourcebook)?",
+        "answer": "The provided evidence contains no data \u2014 the search returned zero results \u2014 so the percentage of U.S. households owning a hamster in 2019-2020 cannot be determined from the evidence given.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "How many total U.S. households existed in July 2019 according to Census Bureau estimates?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "retrieval_failure"
+      },
+      {
+        "text": "Do independent survey sources agree on the hamster-owning household share for 2019 within a narrow range, allowing a point estimate with uncertainty?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What percentage of U.S. households owned a hamster in 2019-2': sources asked but NOT contributing evidence: federalregister (error: exhausted retries; last error: HTTP 503 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2019, 2020, according, appa, association, avma, demographics, hamster), fred (content covers 0% of the question's topical words (need 25%); missing: 2019, 2020, according, appa, association, avma, demographics, hamster), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, fred (content covers 0% of the question's topical words (need 25%); missing: 2019, 2020, according, appa, association, avma, demographics, hamster), wikidata (content covers 5% of the question's topical words (need 25%); missing: 2019, 2020, according, appa, association, avma, demographics, hamster); answer rests on ['fdic']",
+      "leaf 'What percentage of U.S. households owned a hamster in 2019-2': 4 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, 2020, according, appa, association, avma, demographics, hamster; [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, 2020, according, appa, association, avma, demographics, hamster; [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, 2020, according, appa, association, avma, demographics, hamster; [wikidata] content covers 5% of the question's topical words (need 25%); missing: 2019, 2020, according, appa, association, avma, demographics, hamster",
+      "leaf 'Do independent survey sources agree on the hamster-owning ho': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=in, federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2019, agree, allowing, cross, estimate, estimates, hamster, household), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 5% of the question's topical words (need 25%); missing: 2019, agree, allowing, cross, estimate, estimates, hamster, household); answer rests on NO sources",
+      "leaf 'Do independent survey sources agree on the hamster-owning ho': 2 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, agree, allowing, cross, estimate, estimates, hamster, household; [wikidata] content covers 5% of the question's topical words (need 25%); missing: 2019, agree, allowing, cross, estimate, estimates, hamster, household"
+    ],
+    "gap_kinds": {
+      "63a15ca9e10a4634": "unprovable",
+      "8d2abe3700dd4c30": "retrieval_failure",
+      "daa7e61db59c4e5f": "honest_null"
+    },
+    "verdict": "correct"
+  },
+  {
+    "id": "Q15",
+    "question": "What did the Kalshi market price for the 2032 U.S. presidential election winner close at yesterday?",
+    "category": "unknowable-market",
+    "expected_stance": "UNDETERMINED",
+    "gt": "No 2032 presidential market exists; correct output is refusal/UNDETERMINED.",
+    "verified_by": "no such market exists yet",
+    "elapsed_s": 290.7,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What was the closing price on Kalshi's 2032 U.S. presidential election winner market yesterday (the most recent completed trading day)?",
+        "answer": "No evidence was provided, so the closing price cannot be determined.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Which specific Kalshi contract(s) cover the 2032 U.S. presidential election winner, and what are their ticker identifiers and last-trade/close conventions?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'What was the closing price on Kalshi's 2032 U.S. presidentia': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2032, closing, completed, data, day, election, exchange, historical), fdic (content covers 6% of the question's topical words (need 25%); missing: 2032, closing, completed, data, day, election, exchange, historical), federalregister (error: HTTP 400 for https://www.federalregister.gov/api/v1/documents.json?per_page=20&o, fred (content covers 0% of the question's topical words (need 25%); missing: 2032, closing, completed, data, day, election, exchange, historical), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap; answer rests on NO sources",
+      "leaf 'What was the closing price on Kalshi's 2032 U.S. presidentia': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2032, closing, completed, data, day, election, exchange, historical; [fdic] content covers 6% of the question's topical words (need 25%); missing: 2032, closing, completed, data, day, election, exchange, historical; [fred] content covers 0% of the question's topical words (need 25%); missing: 2032, closing, completed, data, day, election, exchange, historical",
+      "leaf 'Which specific Kalshi contract(s) cover the 2032 U.S. presid': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=sp, fdic (content covers 6% of the question's topical words (need 25%); missing: 2032, close, contract, conventions, cover, documentation, election, exchange), federalregister (error: HTTP 400 for https://www.federalregister.gov/api/v1/documents.json?per_page=20&o, fred (content covers 0% of the question's topical words (need 25%); missing: 2032, close, contract, conventions, cover, documentation, election, exchange), worldbank (content covers 0% of the question's topical words (need 25%); missing: 2032, close, contract, conventions, cover, documentation, election, exchange), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 17% of the question's topical words (need 25%); missing: 2032, close, contract, conventions, cover, documentation, election, exchange); answer rests on NO sources",
+      "leaf 'Which specific Kalshi contract(s) cover the 2032 U.S. presid': 4 fetch(s) rejected at ingestion: [fdic] content covers 6% of the question's topical words (need 25%); missing: 2032, close, contract, conventions, cover, documentation, election, exchange; [fred] content covers 0% of the question's topical words (need 25%); missing: 2032, close, contract, conventions, cover, documentation, election, exchange; [worldbank] content covers 0% of the question's topical words (need 25%); missing: 2032, close, contract, conventions, cover, documentation, election, exchange; [wikidata] content covers 17% of the question's topical words (need 25%); missing: 2032, close, contract, conventions, cover, documentation, election, exchange"
+    ],
+    "gap_kinds": {
+      "387e433a4f8e432a": "honest_null",
+      "aae475e9fe1547e1": "honest_null"
+    },
+    "verdict": "correct"
+  },
+  {
+    "id": "Q16",
+    "question": "Did the U.S. total public debt reach $30 trillion before the unemployment rate fell to its January 2023 level?",
+    "category": "multi-hop",
+    "expected_stance": "AFFIRMS",
+    "gt": "Debt first exceeded $30T around 31 Jan 2022 ($30.01T), before Jan 2023.",
+    "verified_by": "debt_to_penny series + UNRATE series",
+    "elapsed_s": 19.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q17",
+    "question": "Were there more FDIC-listed bank failures in 2023 than in 2020?",
+    "category": "multi-hop/comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "2023 = 5 failures; 2020 = 4 failures.",
+    "verified_by": "FDIC failures by FAILYR",
+    "elapsed_s": 32.5,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q18",
+    "question": "Is the average of the U.S. unemployment rates for January through June 2026 greater than 4.25 percent?",
+    "category": "arithmetic-comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "Mean = 4.283\u2026 > 4.25.",
+    "verified_by": "fredgraph.csv UNRATE + arithmetic",
+    "elapsed_s": 242.7,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 8,
+    "sources": [
+      "bls",
+      "fdic",
+      "fred"
+    ],
+    "leaves": [
+      {
+        "text": "What was the official U.S. unemployment rate (BLS Current Population Survey, seasonally adjusted) for each month from January 2026 through June 2026?",
+        "answer": "The official U.S. unemployment rate (CPS, seasonally adjusted, via FRED UNRATE as of 2026-08-24): Jan 2026 = 4.3%, Feb = 4.4%, Mar = 4.3%, Apr = 4.3%, May = 4.3%, Jun = 4.2%. Note: the direct BLS API request failed on quota; these values come from the FRED mirror of BLS series UNRATE.",
+        "tier": "VERIFIED",
+        "confidence": 0.9,
+        "stance": "AFFIRMS",
+        "gap_kind": ""
+      },
+      {
+        "text": "Has BLS released the June 2026 Employment Situation report containing the final published unemployment rate for all six months January-June 2026, and are any of those figures still preliminary or subject to benchmark revision?",
+        "answer": "The evidence does not settle this. The BLS API request failed (daily threshold reached, no data returned), and the second source (a Federal Register-style institutions index filtered on 'Employment Situation') returned zero results. There is therefore no evidence of the June 2026 Employment Situation release or of any unemployment rate figures for January-June 2026; whether any figures are preliminary or subject to benchmark revision cannot be assessed.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.05,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Does the arithmetic average of the six monthly unemployment rates for January-June 2026 exceed 4.25 percent?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Do independent forecasts (e.g., CBO, Fed SEP, consensus surveys) made before full 2026 data availability predict a January-June 2026 average above or below 4.25 percent, as a cross-check if some months are unreleased?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What was the official U.S. unemployment rate (BLS Current Po': sources asked but NOT contributing evidence: census (error: HTTP 404 for https://api.census.gov/data/timeseries/timeseries/international/pop, clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=of, federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/; answer rests on ['bls', 'fdic', 'fred']",
+      "leaf 'Has BLS released the June 2026 Employment Situation report c': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=BL; answer rests on ['bls', 'fdic']",
+      "leaf 'Does the arithmetic average of the six monthly unemployment ': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2026, arithmetic, average, bls, computation, direct, exceed, january), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2026, arithmetic, average, bls, computation, direct, exceed, january), worldbank (content covers 12% of the question's topical words (need 25%); missing: arithmetic, average, bls, computation, direct, exceed, january, june); answer rests on ['bls', 'fred']",
+      "leaf 'Does the arithmetic average of the six monthly unemployment ': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2026, arithmetic, average, bls, computation, direct, exceed, january; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2026, arithmetic, average, bls, computation, direct, exceed, january; [worldbank] content covers 12% of the question's topical words (need 25%); missing: arithmetic, average, bls, computation, direct, exceed, january, june",
+      "leaf 'Do independent forecasts (e.g., CBO, Fed SEP, consensus surv': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=in, federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 3% of the question's topical words (need 25%); missing: above, availability, average, before, below, cbo, check, consensus), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, fred (content covers 3% of the question's topical words (need 25%); missing: above, availability, average, before, below, cbo, check, consensus), semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 13% of the question's topical words (need 25%); missing: 2026, above, availability, average, before, below, cbo, check); answer rests on ['fdic']",
+      "leaf 'Do independent forecasts (e.g., CBO, Fed SEP, consensus surv': 3 fetch(s) rejected at ingestion: [fred] content covers 3% of the question's topical words (need 25%); missing: above, availability, average, before, below, cbo, check, consensus; [fred] content covers 3% of the question's topical words (need 25%); missing: above, availability, average, before, below, cbo, check, consensus; [wikidata] content covers 13% of the question's topical words (need 25%); missing: 2026, above, availability, average, before, below, cbo, check"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q19",
+    "question": "According to Wikidata, was Albert Einstein born in Ulm, Germany?",
+    "category": "yes-checkable",
+    "expected_stance": "AFFIRMS",
+    "gt": "P19 birthplace = Q3012 = Ulm.",
+    "verified_by": "wikidata Q937 P19 \u2192 Q3012 (Ulm)",
+    "elapsed_s": 205.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What does Wikidata record as Albert Einstein's place of birth?",
+        "answer": "No evidence was provided, so the answer cannot be determined from the given items.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "The evidence list is empty and the sole pipeline item is [UNVERIFIED 0.00] with an explicit honest_null GAP. There is no Wikidata item, QID, or P19 (place of birth) statement anywhere in this record, so nothing in the evidence can support 'according to Wikidata, Einstein was born in Ulm' \u2014 the conclusion asserts what a source says while citing a source-reading that returned null.",
+      "The most likely artifact is answer contamination from world knowledge rather than the named source: 'Einstein born in Ulm' is common-knowledge trivia, so a null retrieval (API timeout, rate limit, malformed SPARQL response) could be papered over with background knowledge and reported as if it came 'from Wikidata'. The 0.00-confidence honest_null marker shows the pipeline itself found nothing; any ",
+      "Even granting the underlying fact, a null result here has mundane non-substantive explanations that leave the question genuinely undetermined by this run: network failure to wikidata.org, an expired or missing User-Agent header rejected by the Wikidata API, a query keyed on the wrong entity ID (e.g., a disambiguation page instead of Q937), or a parser that failed on the P19 qualifier structure \u2014 e",
+      "If this conclusion is being promoted despite the null, the selection mechanism is obvious: questions whose true answers are famous trivia get affirmed from prior knowledge when retrieval fails, while obscure questions correctly return 'cannot be determined' \u2014 producing a spuriously high accuracy rate for well-known facts and zero evidential difference between 'Wikidata confirms' and 'I already kne"
+    ],
+    "notes": [
+      "leaf 'What does Wikidata record as Albert Einstein's place of birt': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: albert, birth, data, einstein, p19, place, q937, record), fdic (content covers 20% of the question's topical words (need 25%); missing: birth, data, p19, place, q937, record, structured, wikidata), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: albert, birth, data, einstein, p19, place, q937, record), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 10% of the question's topical words (need 25%); missing: albert, birth, data, einstein, p19, place, q937, record); answer rests on NO sources",
+      "leaf 'What does Wikidata record as Albert Einstein's place of birt': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: albert, birth, data, einstein, p19, place, q937, record; [fdic] content covers 20% of the question's topical words (need 25%); missing: birth, data, p19, place, q937, record, structured, wikidata; [fred] content covers 0% of the question's topical words (need 25%); missing: albert, birth, data, einstein, p19, place, q937, record; [wikidata] content covers 10% of the question's topical words (need 25%); missing: albert, birth, data, einstein, p19, place, q937, record"
+    ],
+    "gap_kinds": {
+      "fe057373b6194c24": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q20",
+    "question": "Did Napoleon die before the United States Civil War began?",
+    "category": "multi-hop/temporal",
+    "expected_stance": "AFFIRMS",
+    "gt": "Napoleon died 1821-05-05, before April 1861.",
+    "verified_by": "wikidata Q517 P570 = 1821-05-05; civil war start 1861 (common knowledge anchor)",
+    "elapsed_s": 17.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  }
+]
