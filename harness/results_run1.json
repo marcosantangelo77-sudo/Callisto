@@ -1,0 +1,102 @@
+[
+  {
+    "id": "Q01",
+    "question": "Was the U.S. unemployment rate lower in January 2026 than in January 2023?",
+    "category": "comparison",
+    "expected_stance": "DENIES",
+    "gt": "Jan 2023 = 3.5%, Jan 2026 = 4.3% \u2014 unemployment was HIGHER in Jan 2026.",
+    "verified_by": "fredgraph.csv UNRATE 2023-01 and 2026-01",
+    "elapsed_s": 248.1,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "Was the U.S. unemployment rate lower in January 2026 than in January 2023?\n\n- [UNVERIFIED 0.00] What was the U.S. unemployment rate in January 2026 as published by the BLS?: None  [GAP: unprovable]\n- [CORROBORATED 0.85] Are the two reported rates directly comparable (i.e., no major benchmark revision or methodological change altering the series between the two observations)?: The evidence provided does not identify which two reported rates are in question, nor does it contain any documentation of benchmark revisions or methodological changes for any specific statistical series. The evidence items are generic keyword-search results (World Bank indicator listing, court opinion search, OpenAlex works search) that do not address the comparability of any two observations. Without evidence about the specific series, its source, and any documented revisions or methodology changes between the two observation dates, comparability cannot be established.",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.4,
+    "confidence_tier": "PROBABLE",
+    "n_fetches": 6,
+    "sources": [
+      "courtlistener",
+      "openalex",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What was the U.S. unemployment rate in January 2023 as published by the BLS?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "What was the U.S. unemployment rate in January 2026 as published by the BLS?",
+        "answer": "None",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "Are the two reported rates directly comparable (i.e., no major benchmark revision or methodological change altering the series between the two observations)?",
+        "answer": "The evidence provided does not identify which two reported rates are in question, nor does it contain any documentation of benchmark revisions or methodological changes for any specific statistical series. The evidence items are generic keyword-search results (World Bank indicator listing, court opinion search, OpenAlex works search) that do not address the comparability of any two observations. Without evidence about the specific series, its source, and any documented revisions or methodology c",
+        "tier": "CORROBORATED",
+        "confidence": 0.85,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "The January 2026 leaf is UNVERIFIED 0.00 with value None \u2014 no BLS rate for either month was ever retrieved. The World Bank API calls returned fertilizer and land indicators (source=2 is WDI, not BLS monthly labor data), so there is zero direct measurement of the unemployment rate in either period. Any answer to the comparative question is unsupported by the evidence; the correct conclusion is UNDE",
+      "The three World Bank 'search' responses are byte-identical (same sha256 bd377215...) despite different query strings \u2014 the API ignored the search terms entirely and returned a generic indicator listing. The pipeline appears to treat these irrelevant fetches as if they addressed the question; the entire evidence base for this claim is an API parameter failure plus court-opinion and OpenAlex full-te",
+      "The corroborated 0.85 comparability leaf's justification explicitly states it cannot identify which two rates are in question and that the evidence does not address comparability \u2014 yet it is scored CORROBORATED. A plausible mechanism for the observed scores: the scorer graded the absence of contradicting documentation as corroboration of the null ('no known revision'), which would explain high con"
+    ],
+    "notes": [
+      "leaf 'What was the U.S. unemployment rate in January 2023 as publi': 5 fetch(s) rejected at ingestion: [bls] content covers 14% of the question's topical words (need 25%); missing: 2023, current, january, labor, official, population, published, rate; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bls, current, government, january, labor, official, population; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2023, bls, current, government, labor, official, population, published; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bls, current, government, january, labor, official, population; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bls, current, government, january, labor, official, population",
+      "leaf 'What was the U.S. unemployment rate in January 2026 as publi': 6 fetch(s) rejected at ingestion: [bls] content covers 21% of the question's topical words (need 25%); missing: current, january, labor, official, population, published, rate, release; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2026, bls, current, government, january, labor, official, population; [fdic] content covers 14% of the question's topical words (need 25%); missing: bls, current, government, labor, official, population, published, rate; [fred] content covers 7% of the question's topical words (need 25%); missing: bls, current, government, january, labor, official, population, published; [fred] content covers 7% of the question's topical words (need 25%); missing: bls, current, government, january, labor, official, population, published; [courtlistener] content covers 21% of the question's topical words (need 25%); missing: bls, current, january, labor, official, population, rate, release",
+      "leaf 'Are the two reported rates directly comparable (i.e., no maj': 1 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: adjustments, agency, altering, annual, benchmark, bls, change, comparable"
+    ],
+    "gap_kinds": {
+      "f066f0c9407149cd": "unprovable"
+    },
+    "verdict": "undetermined-sealed"
+  },
+  {
+    "id": "Q08",
+    "question": "Is Paris the capital of France according to Wikidata?",
+    "category": "checkable-yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "Wikidata Q142 P36 = Q90 = Paris.",
+    "verified_by": "wikidata wbgetclaims Q142 P36 \u2192 Q90 (Paris)",
+    "elapsed_s": 108.1,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "Is Paris the capital of France according to Wikidata?\n\n- [SPECULATIVE 0.54] Does the Wikidata entity for Paris (Q90) assert it is the capital of France, and does the France (Q142) entity list Paris as its capital?: The provided evidence does not address the question: the only evidence item is a full-text search result from OpenAlex returning a paper about LexO, a terminological-ontological lexicon editor, with no content about Wikidata entities Q90 (Paris) or Q142 (France) or capital-of claims. Therefore whether Q90 asserts it is the capital of France and whether Q142 lists Paris as its capital cannot be determined from the given evidence.  [GAP: unprovable]",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.54,
+    "confidence_tier": "SPECULATIVE",
+    "n_fetches": 1,
+    "sources": [
+      "openalex"
+    ],
+    "leaves": [
+      {
+        "text": "Does the Wikidata entity for Paris (Q90) assert it is the capital of France, and does the France (Q142) entity list Paris as its capital?",
+        "answer": "The provided evidence does not address the question: the only evidence item is a full-text search result from OpenAlex returning a paper about LexO, a terminological-ontological lexicon editor, with no content about Wikidata entities Q90 (Paris) or Q142 (France) or capital-of claims. Therefore whether Q90 asserts it is the capital of France and whether Q142 lists Paris as its capital cannot be determined from the given evidence.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'Does the Wikidata entity for Paris (Q90) assert it is the ca': 4 fetch(s) rejected at ingestion: [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: assert, capital, data, entity, france, list, p1376, p31; [fdic] content covers 7% of the question's topical words (need 25%); missing: assert, capital, data, entity, france, list, p1376, p31; [worldbank] content covers 13% of the question's topical words (need 25%); missing: assert, capital, data, entity, list, p1376, p31, p36; [courtlistener] content covers 0% of the question's topical words (need 25%); missing: assert, capital, data, entity, france, list, p1376, p31"
+    ],
+    "gap_kinds": {
+      "3f4f7406441f44df": "unprovable"
+    },
+    "verdict": "undetermined-sealed"
+  }
+]
