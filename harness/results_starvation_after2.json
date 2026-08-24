@@ -317,5 +317,57 @@
     ],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q10",
+    "question": "Was the World Bank estimate of U.S. population in 2020 greater than 330 million?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "331,578,104.",
+    "verified_by": "api.worldbank.org SP.POP.TOTL USA 2020",
+    "elapsed_s": 244.0,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What is the World Bank's estimate of the U.S. population in 2020 (indicator SP.POP.TOTL, year 2020)?",
+        "answer": "The provided evidence is truncated and contains only rows for 'Africa Eastern and Southern' (and other countries are cut off); no United States SP.POP.TOTL value for 2020 appears in the evidence given, so the World Bank's 2020 U.S. population cannot be read from it.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "Does that World Bank 2020 U.S. population figure exceed 330,000,000?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What is the World Bank's estimate of the U.S. population in ': sources asked but NOT contributing evidence: census (error: HTTP 404 for https://api.census.gov/data/timeseries/timeseries/international/pop, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2020, api, bank, data, development, estimate, indicator, indicators), fdic (content covers 20% of the question's topical words (need 25%); missing: 2020, api, data, development, estimate, indicator, indicators, pop), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2020, api, bank, data, development, estimate, indicator, indicators); answer rests on ['worldbank']",
+      "leaf 'What is the World Bank's estimate of the U.S. population in ': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, api, bank, data, development, estimate, indicator, indicators; [fdic] content covers 20% of the question's topical words (need 25%); missing: 2020, api, data, development, estimate, indicator, indicators, pop; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, api, bank, data, development, estimate, indicator, indicators",
+      "leaf 'Does that World Bank 2020 U.S. population figure exceed 330,': sources asked but NOT contributing evidence: census (error: HTTP 404 for https://api.census.gov/data/timeseries/timeseries/international/pop, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, bank, comparison, exceed), fdic (content covers 20% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, exceed, figure, million), fred (content covers 0% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, bank, comparison, exceed), worldbank (content covers 20% of the question's topical words (need 25%); missing: 000, 330, against, arithmetic, bank, comparison, exceed, figure), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 13% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, comparison, exceed, figure); answer rests on NO sources",
+      "leaf 'Does that World Bank 2020 U.S. population figure exceed 330,': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, bank, comparison, exceed; [fdic] content covers 20% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, exceed, figure, million; [fred] content covers 0% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, bank, comparison, exceed; [worldbank] content covers 20% of the question's topical words (need 25%); missing: 000, 330, against, arithmetic, bank, comparison, exceed, figure; [wikidata] content covers 13% of the question's topical words (need 25%); missing: 000, 2020, 330, against, arithmetic, comparison, exceed, figure"
+    ],
+    "gap_kinds": {
+      "16a6af9611e643cc": "unprovable",
+      "248731c8721f4869": "honest_null"
+    },
+    "verdict": "refused"
   }
 ]
