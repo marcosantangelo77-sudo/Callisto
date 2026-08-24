@@ -505,5 +505,55 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q19",
+    "question": "According to Wikidata, was Albert Einstein born in Ulm, Germany?",
+    "category": "yes-checkable",
+    "expected_stance": "AFFIRMS",
+    "gt": "P19 birthplace = Q3012 = Ulm.",
+    "verified_by": "wikidata Q937 P19 \u2192 Q3012 (Ulm)",
+    "elapsed_s": 253.7,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What does Wikidata's entry for Albert Einstein (Q937) state as his place of birth?",
+        "answer": "No evidence was provided; the Wikidata entry for Albert Einstein (Q937) cannot be cited from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Does the Wikidata place-of-birth value for Albert Einstein resolve to the city of Ulm in Germany?",
+        "answer": "No evidence was provided, so the Wikidata place-of-birth value for Albert Einstein cannot be verified from the given items.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What does Wikidata's entry for Albert Einstein (Q937) state ': sources asked but NOT contributing evidence: bls (content covers 0% of the question's topical words (need 25%); missing: albert, base, birth, einstein, entity, entry, his, knowledge), cftc_cot (content covers 0% of the question's topical words (need 25%); missing: albert, base, birth, einstein, entity, entry, his, knowledge), clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: albert, base, birth, einstein, entity, entry, his, knowledge), eia (error: HTTP 404 for https://api.eia.gov/v2/seriesid/Q937?frequency=annual, fdic (content covers 14% of the question's topical words (need 25%); missing: base, birth, entity, entry, his, knowledge, place, q937), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (error: HTTP 400 for https://api.stlouisfed.org/fred/series/observations?series_id=Q937&, treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/Q93, worldbank (content covers 7% of the question's topical words (need 25%); missing: albert, base, birth, einstein, entity, entry, his, knowledge); answer rests on NO sources",
+      "leaf 'What does Wikidata's entry for Albert Einstein (Q937) state ': 5 fetch(s) rejected at ingestion: [bls] content covers 0% of the question's topical words (need 25%); missing: albert, base, birth, einstein, entity, entry, his, knowledge; [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: albert, base, birth, einstein, entity, entry, his, knowledge; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: albert, base, birth, einstein, entity, entry, his, knowledge; [fdic] content covers 14% of the question's topical words (need 25%); missing: base, birth, entity, entry, his, knowledge, place, q937; [worldbank] content covers 7% of the question's topical words (need 25%); missing: albert, base, birth, einstein, entity, entry, his, knowledge",
+      "leaf 'Does the Wikidata place-of-birth value for Albert Einstein r': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: albert, birth, city, cross, einstein, germany, item, items), fdic (content covers 11% of the question's topical words (need 25%); missing: birth, city, cross, germany, item, items, linked, location), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: albert, birth, city, cross, einstein, germany, item, items), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 22% of the question's topical words (need 25%); missing: albert, birth, city, cross, einstein, germany, linked, location); answer rests on NO sources",
+      "leaf 'Does the Wikidata place-of-birth value for Albert Einstein r': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: albert, birth, city, cross, einstein, germany, item, items; [fdic] content covers 11% of the question's topical words (need 25%); missing: birth, city, cross, germany, item, items, linked, location; [fred] content covers 0% of the question's topical words (need 25%); missing: albert, birth, city, cross, einstein, germany, item, items; [wikidata] content covers 22% of the question's topical words (need 25%); missing: albert, birth, city, cross, einstein, germany, linked, location"
+    ],
+    "gap_kinds": {
+      "bfa30b99109e4ef1": "honest_null",
+      "b2c6159848b0452c": "honest_null"
+    },
+    "verdict": "refused"
   }
 ]
