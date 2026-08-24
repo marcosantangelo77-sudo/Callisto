@@ -96,7 +96,8 @@ class TestCourtListener:
         _, headers = t.calls[0]
         assert headers["Authorization"] == "Token tok123"
 
-    def test_missing_token_raises_before_fetch(self):
+    def test_missing_token_raises_before_fetch(self, monkeypatch):
+        monkeypatch.delenv("CALLISTO_COURTLISTENER_TOKEN", raising=False)
         cl, t = build("courtlistener", "CourtListenerAdapter", {})
         with pytest.raises(SourceError, match="CALLISTO_COURTLISTENER_TOKEN"):
             cl.search("test")

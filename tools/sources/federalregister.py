@@ -62,10 +62,12 @@ class FederalRegisterAdapter:
             "order": order,
             "fields[]": self.FIELDS,
         }
+        # Live-verified 2026-08: a bare `conditions=<term>` now returns
+        # HTTP 500; the term filter must go through conditions[term].
         if conditions:
             params["conditions[term]"] = conditions
         if query_term:
-            params["conditions"] = query_term
+            params["conditions[term]"] = query_term
         params.update(extra_params or {})
         url = self.source.build_url("/documents.json", params)
         return self._rename(self.source.get_json(url)[0])
