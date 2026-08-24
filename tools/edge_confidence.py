@@ -520,7 +520,7 @@ def score_edge(
             "Market moved more than model impact suggests — value on injured team."
         )
     injury_adj = max(-0.10, min(0.10, injury_adj))
-    factors["injury_model"] = floor(injury_adj, 3)
+    factors["injury_model"] = round(injury_adj, 3)
 
     # Compute raw score
     line_analysis_adj = rlm_adj + steam_adj + dead_num_adj + contrarian_adj
