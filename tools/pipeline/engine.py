@@ -31,7 +31,7 @@ import logging
 import re
 from pathlib import Path
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Callable, Optional
 
 from agp import (
@@ -78,6 +78,10 @@ def _sha(text: str) -> str:
 
 # ── Result types ──────────────────────────────────────────────────────────
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 @dataclass
 class FetchResult:
     """One successful source call, fully traceable."""
@@ -87,6 +91,45 @@ class FetchResult:
     body: str
     parsed: Any
     question_id: str
+    #: ISO-8601 UTC timestamp of when the bytes were actually fetched.
+    #: MEASUREMENT ONLY — nothing scores, clamps, or adjusts confidence on
+    #: this; it exists so a sealed conclusion can state how old its
+    #: evidence was when the conclusion was drawn. Checkpoint-resumed
+    #: runs restore the ORIGINAL fetch time (not the resume time): the
+    #: age reported is the true age of the evidence, not the run's.
+    fetched_at: str = ""
+
+
+def evidence_age_summary(fetches, *, now: Optional[datetime] = None,
+                         ) -> dict:
+    """Age (seconds) of each fetch relative to *now* (default: seal time).
+
+    Returns {"n": N, "oldest_s": ..., "newest_s": ..., "median_s": ...}
+    with None values when no fetch recorded a timestamp (legacy payloads),
+    so an unknown age is reported as unknown, never as zero.
+    """
+    ref = now or datetime.now(timezone.utc)
+    ages: list[float] = []
+    for f in fetches:
+        ts = getattr(f, "fetched_at", "") or ""
+        if not ts:
+            continue
+        try:
+            t = datetime.fromisoformat(ts)
+        except ValueError:
+            continue
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        ages.append(max(0.0, (ref - t).total_seconds()))
+    if not ages:
+        return {"n": len(list(fetches)), "oldest_s": None,
+                "newest_s": None, "median_s": None}
+    ages.sort()
+    n = len(ages)
+    mid = ages[n // 2] if n % 2 else (ages[n // 2 - 1] + ages[n // 2]) / 2
+    return {"n": len(list(fetches)), "n_timestamped": n,
+            "oldest_s": ages[-1], "newest_s": ages[0],
+            "median_s": mid}
 
 
 @dataclass
@@ -150,6 +193,11 @@ class PipelineResult:
     #: the top level so a sealed result states WHICH kind of null each thin
     #: leaf is. Classification only — never read by scoring.
     gap_kinds: dict = field(default_factory=dict)   # qid -> kind value
+    #: Evidence age at seal time (seconds): oldest, newest, median, and the
+    #: number of timestamped fetches the summary covers. None values mean
+    #: "no timestamped evidence" — unknown is reported as unknown. Pure
+    #: measurement: nothing scores or adjusts confidence on this.
+    evidence_age: dict = field(default_factory=dict)
 
     def summary_dict(self) -> dict:
         return {
@@ -162,6 +210,7 @@ class PipelineResult:
             "n_leaves": len(self.leaves),
             "n_fetches": len(self.fetches),
             "gap_kinds": dict(self.gap_kinds),
+            "evidence_age": dict(self.evidence_age),
             # A20: full sha256 ids — a truncated 12-hex id cannot be
             # resolved back to the stored object, so citing it vouches for
             # nothing a human (or verifier) can check.
@@ -983,9 +1032,25 @@ class ResearchPipeline:
             result.refusal_reason = f"seal refused: {e}"
             return result
 
+        # Evidence age at seal time — MEASUREMENT ONLY. Recorded after the
+        # seal succeeds; nothing here moves confidence in either direction.
+        result.evidence_age = evidence_age_summary(result.fetches)
+
         result.sealed = True
-        result.session = session
+        # State the age of the evidence IN the sealed conclusion text, so a
+        # reader never has to open a debug field to learn how stale the
+        # basis was. Unknown ages (legacy fetches) are stated as unknown.
+        ea = result.evidence_age
+        if ea.get("oldest_s") is None:
+            conclusion += ("\n\n[evidence age: unknown — no timestamped "
+                           "fetches]")
+        else:
+            conclusion += (
+                f"\n\n[evidence age at seal: oldest {ea['oldest_s']:.0f}s, "
+                f"newest {ea['newest_s']:.0f}s, median {ea['median_s']:.0f}s "
+                f"across {ea['n']} timestamped fetches]")
         result.conclusion = conclusion
+        result.session = session
         result.stance = parent_stance
         result.confidence_score = session.summary.confidence_score
         result.confidence_tier = tier
@@ -1038,7 +1103,12 @@ def _fetch_from_payload(rec: dict) -> FetchResult:
     return FetchResult(source_name=rec["source_name"], url=rec["url"],
                        content_sha256=rec["content_sha256"],
                        body=rec["body"], parsed=parsed,
-                       question_id=rec["question_id"])
+                       question_id=rec["question_id"],
+                       # Restore the ORIGINAL fetch time: a resumed run's
+                       # reported evidence age must reflect when the bytes
+                       # were actually fetched, not when they were replayed
+                       # from the checkpoint.
+                       fetched_at=rec.get("fetched_at", ""))
 
 
 def _leaf_from_payload(d: dict) -> LeafOutcome:

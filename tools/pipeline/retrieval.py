@@ -31,7 +31,12 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 from tools.loop_quality import InformationGainTerminator
 
@@ -761,7 +766,8 @@ def _mk_fetch(source_name, url, body, parsed, question_id, sha_fn):
     from tools.pipeline.engine import FetchResult
     return FetchResult(source_name=source_name, url=url,
                        content_sha256=sha_fn(body), body=body,
-                       parsed=parsed, question_id=question_id)
+                       parsed=parsed, question_id=question_id,
+                       fetched_at=_utc_now_iso())
 
 
 def _titles(parsed: Any) -> list[str]:

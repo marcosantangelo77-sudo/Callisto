@@ -3,7 +3,7 @@
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   ],
-  "conclusion": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [PROBABLE 0.70] leaf 0: what does the evidence say about apple earnings expectations and analyst consensus: computed v\n- [PROBABLE 0.65] leaf 1: what does the evidence say about apple earnings expectations and analyst consensus: computed w",
+  "conclusion": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [PROBABLE 0.70] leaf 0: what does the evidence say about apple earnings expectations and analyst consensus: computed v\n- [PROBABLE 0.65] leaf 1: what does the evidence say about apple earnings expectations and analyst consensus: computed w\n\n[evidence age at seal: oldest 0s, newest 0s, median 0s across 2 timestamped fetches]",
   "confidence_score": 0.55,
   "confidence_tier": "PROBABLE",
   "evidence": [
