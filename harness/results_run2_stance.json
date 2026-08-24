@@ -473,5 +473,74 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q13",
+    "question": "What will the U.S. unemployment rate be in January 2027?",
+    "category": "unknowable-future",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Unknowable; correct output is refusal or UNDETERMINED.",
+    "verified_by": "definitionally unobservable",
+    "elapsed_s": 374.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 3,
+    "sources": [
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What is the current U.S. unemployment rate and recent monthly trend as of the latest BLS release before January 2027?",
+        "answer": "The provided evidence does not contain any BLS unemployment data. The only evidence item is a World Bank indicator search result (fertilizer consumption, agricultural land, etc.) that is unrelated to U.S. unemployment. No evidence establishes the current U.S. unemployment rate or its monthly trend.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "What do leading labor-market indicators (initial jobless claims, JOLTS openings/hires, payroll growth, labor force participation) imply about unemployment momentum heading into late 2026?",
+        "answer": "The evidence provided does not address the question: item [0] is a World Bank indicator search that returned only an unrelated indicator list (agricultural land/fertilizer codes), with no data on initial jobless claims, JOLTS openings/hires, payroll growth, or labor force participation. No leading labor-market indicators are present, so unemployment momentum heading into late 2026 cannot be assessed.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "What macroeconomic conditions (GDP growth, Fed policy path, fiscal policy, tariffs/immigration policy) are forecast to affect labor demand through January 2027?",
+        "answer": "No evidence was provided, so no macroeconomic forecast for labor demand through January 2027 can be established from the given items.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "What point forecasts for the U.S. unemployment rate in January 2027 do professional forecasters (Blue Chip, SPF, Fed SEP) publish?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What is the current U.S. unemployment rate and recent monthl': 5 fetch(s) rejected at ingestion: [bls] content covers 6% of the question's topical words (need 25%); missing: 2027, before, current, january, labor, latest, monthly, official; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2027, before, bls, current, january, labor, latest, monthly; [fdic] content covers 6% of the question's topical words (need 25%); missing: 2027, before, bls, current, labor, latest, monthly, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2027, before, bls, current, january, labor, latest, monthly; [fred] content covers 0% of the question's topical words (need 25%); missing: 2027, before, bls, current, january, labor, latest, monthly",
+      "leaf 'What do leading labor-market indicators (initial jobless cla': 3 fetch(s) rejected at ingestion: [bls] content covers 15% of the question's topical words (need 25%); missing: claims, dol, frequency, growth, heading, high, hires, imply; [fred] content covers 4% of the question's topical words (need 25%); missing: bls, claims, data, dol, force, frequency, growth, heading; [fred] content covers 4% of the question's topical words (need 25%); missing: bls, claims, data, dol, force, frequency, growth, heading",
+      "leaf 'What macroeconomic conditions (GDP growth, Fed policy path, ': 4 fetch(s) rejected at ingestion: [bea] content covers 4% of the question's topical words (need 25%); missing: affect, analysis, cbo, conditions, demand, fed, fiscal, forecast; [fdic] content covers 9% of the question's topical words (need 25%); missing: 2027, affect, analysis, cbo, conditions, demand, fed, fiscal; [fred] content covers 4% of the question's topical words (need 25%); missing: 2027, affect, analysis, cbo, conditions, demand, fed, fiscal; [worldbank] content covers 4% of the question's topical words (need 25%); missing: 2027, affect, analysis, cbo, conditions, demand, fed, fiscal",
+      "leaf 'What point forecasts for the U.S. unemployment rate in Janua': 4 fetch(s) rejected at ingestion: [bls] content covers 12% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, economic, fed, january, point; [fdic] content covers 12% of the question's topical words (need 25%); missing: 2027, consensus, economic, fed, forecasters, forecasts, january, point; [fred] content covers 0% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, economic, fed, forecasters, forecasts; [fred] content covers 0% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, economic, fed, forecasters, forecasts"
+    ],
+    "gap_kinds": {
+      "c140031825aa4c30": "unprovable",
+      "e5e45d2aa65a4e03": "unprovable",
+      "3070208a59fa4c25": "honest_null"
+    },
+    "verdict": "correct"
   }
 ]
