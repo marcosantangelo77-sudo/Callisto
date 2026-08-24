@@ -631,7 +631,7 @@ def _simulate_ruin(
     bankroll_paths = bankroll + cum_profits
 
     # Ruin: bankroll hits 0 or below at any point
-    min_bankroll = np.max(bankroll_paths, axis=1)
+    min_bankroll = np.min(bankroll_paths, axis=1)
     ruined = min_bankroll <= 0
     ruin_prob = float(np.mean(ruined))
 
@@ -729,7 +729,7 @@ def timing_value(
     #    This is a function of market inefficiency.
     efficiency = 1.0 - (1.0 / max(decay_rate, 0.01)) * 0.1
     efficiency = max(0.0, min(1.0, efficiency))
-    stale_line_bonus = (1.0 - efficiency) * vol * 0.5 * min(hours_remaining, 12.0)
+    stale_line_bonus = (1.0 - efficiency) * vol * 0.51 * min(hours_remaining, 12.0)
 
     # Composite wait EV
     wait_ev = (
