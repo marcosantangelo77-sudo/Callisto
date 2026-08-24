@@ -29,6 +29,7 @@ raises the bar for calling a leaf satisfied.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -451,6 +452,31 @@ class IterativeRetriever:
 
     def retrieve(self, question, question_type: str,
                  min_independent: int) -> RetrievalTrace:
+        # SINGLE-SOURCE VISIBILITY (defect 3, one-real-question run): before
+        # spending anything, probe which of the leaf's natural corroborating
+        # sources are currently unhealthy. A run whose only independent voice
+        # is the one that happened to answer must be ABLE to say so. Opt-in
+        # live probes only (CALLISTO_SOURCE_HEALTH_NET=1) — never inside the
+        # test suite; on any error the note degrades to silence, never a
+        # failure.
+        self.health_notes: list[str] = []
+        if os.environ.get("CALLISTO_SOURCE_HEALTH_NET", "") in (
+                "1", "true", "yes"):
+            try:
+                from tools.sources.health import OK, run_all
+                translated0, _sel = translate_question_type(
+                    self.registry, question.text, question_type)
+                candidates = {s.name for s in
+                              self.registry.select(translated0, max_tier=3)}
+                for pr in run_all(sorted(candidates)):
+                    if pr.verdict != OK:
+                        self.health_notes.append(
+                            f"{pr.source} health={pr.verdict}: "
+                            + "; ".join(pr.evidence)[:120])
+                        logger.warning("source-health: %s", self.health_notes[-1])
+            except Exception as e:  # noqa: BLE001 — visibility must not
+                logger.warning("source-health check failed: %s", e)  # break
+
         from tools.pipeline.engine import _make_adapter, _sha
         from tools.sources.base import RestSource, SourceError
 

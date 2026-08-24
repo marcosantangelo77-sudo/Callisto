@@ -56,6 +56,7 @@
   "notes": [
     "leaf 'leaf 0: what does the evidence say about apple earnings expe': 1 fetch(s) rejected at ingestion: [federalregister] content covers 0% of the question's topical words (need 25%); missing: analyst, apple, consensus, earnings, evidence, expectations, leaf, work",
     "leaf 'leaf 1: what does the evidence say about apple earnings expe': 1 fetch(s) rejected at ingestion: [federalregister] content covers 0% of the question's topical words (need 25%); missing: agency, analyst, apple, consensus, dates, docket, earnings, evidence",
+    "single-source answer: only 1 independent host(s) contributed admissible evidence",
     "parent stance UNDETERMINED: no leaf bearing directly on the parent's claim reached the confidence bar with a declared direction; lookup leaves contribute evidence, never direction"
   ],
   "objections": [],

@@ -909,6 +909,22 @@ class ResearchPipeline:
         for l in result.leaves:
             if l.gap_kind:
                 result.gap_kinds[l.question_id] = l.gap_kind
+        # SINGLE-SOURCE VISIBILITY (defect 3): a sealed answer that rests on
+        # one independent voice must SAY it is single-source, and name any
+        # corroborating source that was known-unhealthy at fetch time. The
+        # live run fetched courtlistener+worldbank junk while BLS — the
+        # natural independent check — was WAF-403 broken, and nothing in the
+        # sealed output mentioned either fact.
+        for tr_i in traces_by_leaf:
+            for note in getattr(tr_i, "health_notes", ()) or ():
+                if note not in result.notes:
+                    result.notes.append(note)
+        n_hosts = len({f.url.split("/")[2] for f in result.fetches if "://" in f.url}) \
+            if result.fetches else 0
+        if n_hosts <= 1 and any(l.answer for l in result.leaves):
+            result.notes.append(
+                f"single-source answer: only {n_hosts} independent "
+                "host(s) contributed admissible evidence")
         best_leaf = max(answered, key=lambda l: l.confidence)
         proposed = best_leaf.confidence
         # ── STANCE PROPAGATION (defect found by the one-real-question run,
