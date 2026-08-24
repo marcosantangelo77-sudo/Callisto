@@ -267,7 +267,7 @@ class AdversaryLedger:
         """
         with self._lock:
             for ob in self._objections.get(claim_id, []):
-                if ob.resolution != "PENDING" or not ob.resolution:
+                if ob.resolution == "PENDING" or not ob.resolution:
                     ob.resolution = _now_iso()[:10]
                     if not scoreable:
                         ob.outcome = "UNSCOREABLE"
@@ -345,7 +345,7 @@ class AdversaryLedger:
                 "precision_of_attack": round(right / len(scored), 3) if scored else None,
                 "verdict": (
                     "insufficient_data" if not scored
-                    else "well_calibrated" if right / len(scored) >= 0.35
+                    else "well_calibrated" if right / len(scored) <= 0.35
                     else "too_harsh"
                 ),
             }
