@@ -40,8 +40,13 @@ class FederalRegisterAdapter:
     def __init__(self, source: RestSource):
         self.source = source
 
-    FIELDS = ("title,type,abstract,action,published_at,effective_on,"
-              "docket_ids,citation,document_number,html_url,agencies")
+    # tuple, not a comma-joined string: build_url() urlencodes with
+    # doseq=True so each field becomes its own repeated fields[] param.
+    # The FR API 400s on a single comma-joined fields[] value (the defect
+    # documented in the Task-61 health run and never fixed until now).
+    FIELDS = ("title", "type", "abstract", "action", "published_at",
+              "effective_on", "docket_ids", "citation", "document_number",
+              "html_url", "agencies")
 
     def search(self, conditions: str = "", query_term: str = "",
                order: str = "newest", limit: int = 20,
