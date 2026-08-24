@@ -515,5 +515,64 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "correct"
+  },
+  {
+    "id": "Q15",
+    "question": "What did the Kalshi market price for the 2032 U.S. presidential election winner close at yesterday?",
+    "category": "unknowable-market",
+    "expected_stance": "UNDETERMINED",
+    "gt": "No 2032 presidential market exists; correct output is refusal/UNDETERMINED.",
+    "verified_by": "no such market exists yet",
+    "elapsed_s": 200.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "Which Kalshi contract covers the winner of the 2032 U.S. presidential election (ticker and terms)?",
+        "answer": "No evidence was provided, so no Kalshi contract for the 2032 U.S. presidential election winner can be identified (ticker or terms).",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "What was the last traded/settlement price of that 2032 election winner contract on Kalshi at market close yesterday?",
+        "answer": "No evidence was provided, so the last traded or settlement price of that 2032 election winner contract on Kalshi at yesterday's market close cannot be determined from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Do secondary sources (market data aggregators, news reports) corroborate the closing price from the primary exchange feed?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'Which Kalshi contract covers the winner of the 2032 U.S. pre': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2032, contract, covers, election, exchange, kalshi, listing, presidential), fdic (content covers 9% of the question's topical words (need 25%); missing: 2032, contract, covers, election, exchange, listing, presidential, terms), federalregister (error: HTTP 400 for https://www.federalregister.gov/api/v1/documents.json?per_page=20&o, fred (content covers 0% of the question's topical words (need 25%); missing: 2032, contract, covers, election, exchange, kalshi, listing, presidential), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap; answer rests on NO sources",
+      "leaf 'Which Kalshi contract covers the winner of the 2032 U.S. pre': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2032, contract, covers, election, exchange, kalshi, listing, presidential; [fdic] content covers 9% of the question's topical words (need 25%); missing: 2032, contract, covers, election, exchange, listing, presidential, terms; [fred] content covers 0% of the question's topical words (need 25%); missing: 2032, contract, covers, election, exchange, kalshi, listing, presidential",
+      "leaf 'What was the last traded/settlement price of that 2032 elect': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2032, close, contract, data, election, exchange, kalshi, last), fdic (content covers 7% of the question's topical words (need 25%); missing: 2032, close, contract, data, election, exchange, last, market), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2032, close, contract, data, election, exchange, kalshi, last), worldbank (content covers 0% of the question's topical words (need 25%); missing: 2032, close, contract, data, election, exchange, kalshi, last), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 13% of the question's topical words (need 25%); missing: 2032, close, contract, data, election, exchange, kalshi, market); answer rests on NO sources",
+      "leaf 'What was the last traded/settlement price of that 2032 elect': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2032, close, contract, data, election, exchange, kalshi, last; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2032, close, contract, data, election, exchange, last, market; [fred] content covers 0% of the question's topical words (need 25%); missing: 2032, close, contract, data, election, exchange, kalshi, last; [worldbank] content covers 0% of the question's topical words (need 25%); missing: 2032, close, contract, data, election, exchange, kalshi, last; [wikidata] content covers 13% of the question's topical words (need 25%); missing: 2032, close, contract, data, election, exchange, kalshi, market",
+      "leaf 'Do secondary sources (market data aggregators, news reports)': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: aggregators, closing, corroborate, corroborating, data, exchange, feed, market), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: aggregators, closing, corroborate, corroborating, data, exchange, feed, market), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 15% of the question's topical words (need 25%); missing: aggregators, closing, corroborate, corroborating, data, exchange, feed, market); answer rests on NO sources",
+      "leaf 'Do secondary sources (market data aggregators, news reports)': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: aggregators, closing, corroborate, corroborating, data, exchange, feed, market; [fred] content covers 0% of the question's topical words (need 25%); missing: aggregators, closing, corroborate, corroborating, data, exchange, feed, market; [wikidata] content covers 15% of the question's topical words (need 25%); missing: aggregators, closing, corroborate, corroborating, data, exchange, feed, market"
+    ],
+    "gap_kinds": {
+      "834e9b1d88804a87": "honest_null",
+      "20d84bb987dd477c": "honest_null",
+      "c3b1c62da5e540f2": "honest_null"
+    },
+    "verdict": "correct"
   }
 ]
