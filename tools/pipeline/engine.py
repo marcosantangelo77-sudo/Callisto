@@ -188,11 +188,21 @@ class _FetchRecorder:
 
     def __init__(self) -> None:
         self.calls: list[tuple] = []
+        self.rejections: list[tuple] = []
 
     def record_tool_result(self, tool_name: str, content: str, *,
                            primary: bool = False, urls=None):
         self.calls.append((tool_name, content,
                            bool(primary), list(urls or ())))
+        return None
+
+    def record_gate_rejection(self, content: str,
+                              urls=None) -> None:
+        # R4/R4b (laundering-remainder): the gate's REJECT verdict must be
+        # bound to the ledger too. Captured here and replayed in leaf order
+        # by the engine so the real ledger sees rejections exactly where the
+        # serial run wrote them.
+        self.rejections.append((content, list(urls or ())))
         return None
 
 
@@ -726,6 +736,11 @@ class ResearchPipeline:
                 for tool, body, primary, urls in retrieved[i][2].calls:
                     self.ledger.record_tool_result(tool, body, primary=primary,
                                                    urls=urls or None)
+                # R4/R4b replay: gate rejections land on the real ledger in
+                # leaf order, right after the leaf's own fetch records — the
+                # position the serial loop wrote them.
+                for content, urls in retrieved[i][2].rejections:
+                    self.ledger.record_gate_rejection(content, urls)
 
         fetches_by_leaf: list[list[FetchResult]] = []
         traces_by_leaf: list[Any] = []
