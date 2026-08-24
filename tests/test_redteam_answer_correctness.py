@@ -243,23 +243,19 @@ def test_series_window_is_explicit_and_recorded_on_the_answer():
     assert any(k in kwargs for k in ("observation_start", "start")), kwargs
 
 
-@pytest.mark.xfail(reason="C5/C3 companion: produced_quant reads ANY digit "
-                          "in the answer as quantitative evidence — prose "
-                          "'in 2023 the rate was high' satisfies "
-                          "quant_required", strict=True)
 def test_digit_in_prose_is_not_quantitative_evidence():
-    from agp.research_program import EvidenceRequirement, SourceClassRank
-    req = EvidenceRequirement(min_source_class=SourceClassRank.SECONDARY,
-                              min_independent_sources=1, quant_required=True)
-    reasons = req.unmet_reasons(achieved=SourceClassRank.SECONDARY,
-                                n_indep=1,
-                                produced_quant=False)
-    # simulate the engine's heuristic directly:
-    import re
-    answer = "In 2023 the rate was considered elevated by commentators."
-    heuristic = bool(answer and re.search(r"\d", answer))
-    assert not heuristic, "a year mentioned in prose counted as quant"
-    assert reasons, "quant requirement should stay unmet"
+    """PROMOTED from strict-xfail canary to passing pin: the engine's
+    quant gate now ignores year tokens and counts only real numbers in
+    prose, or a sandbox run that returned a numeric value."""
+    from tools.pipeline.engine import (
+        _produced_quantitative, _prose_carries_quantity)
+    assert not _prose_carries_quantity(
+        "In 2023 the rate was considered elevated by commentators."), \
+        "a year mentioned in prose counted as quant"
+    assert not _produced_quantitative("In 2023 the rate was high", None)
+    assert _prose_carries_quantity("The rate was 4.1 percent.")
+    assert not _produced_quantitative("", None), \
+        "empty answer with no sandbox is never quantitative"
 
 
 # ── C4: asked vs answered ───────────────────────────────────────────────────

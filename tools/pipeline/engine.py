@@ -550,8 +550,7 @@ class ResearchPipeline:
                 1 if out.sandbox_status == "ok" else 0)
         reasons = q.evidence_requirements.unmet_reasons(
             achieved, n_indep,
-            produced_quant=out.sandbox_status == "ok" or
-            bool(out.answer and re.search(r"\d", out.answer)))
+            produced_quant=_produced_quantitative(out.answer, sbx))
 
         out.requirement_reasons = reasons
         if reasons:
@@ -1154,6 +1153,40 @@ def _sole_bare_boolean(stdout: str) -> Optional[bool]:
     if stripped == "False":
         return False
     return None
+
+
+_YEAR_RE = re.compile(r"(?:^|[^\w.])(19|20)\d{2}(?:[^\w.]|$)")
+
+
+def _prose_carries_quantity(answer: str) -> bool:
+    """True iff the answer prose contains a number that is not purely a
+    year token. A year (19xx/20xx) is a date reference, not quantitative
+    evidence: 'in 2023 the rate was high' asserts no quantity. Redteam C5
+    companion canary, promoted to a real gate — a digit alone no longer
+    satisfies quant_required. Conservative: any non-year number counts
+    (units/polarity are NOT interpreted here; this only decides whether
+    the requirement is met at all)."""
+    if not answer:
+        return False
+    cleaned = _YEAR_RE.sub(" ", answer)
+    return bool(re.search(r"\d", cleaned))
+
+
+def _produced_quantitative(answer: str, sbx) -> bool:
+    """Quantitative-support test for the requirement gate.
+
+    A successful sandbox run whose structured `result` is a NUMBER is real
+    quantitative production (a boolean verdict is a comparison, not a
+    quantity). Prose falls back to _prose_carries_quantity. The old rule —
+    ANY successful sandbox run or ANY digit — counted a bare 'ok' status
+    and year tokens as quantitative evidence."""
+    if sbx is not None and getattr(sbx, "status", None) == "ok":
+        rv = getattr(sbx, "return_value", None)
+        if isinstance(rv, bool):
+            pass  # comparison verdict, not a quantity
+        elif isinstance(rv, (int, float)):
+            return True
+    return _prose_carries_quantity(answer)
 
 
 def _store_sandbox(sbx, store: ArtifactStore) -> list[ArtifactRef]:
