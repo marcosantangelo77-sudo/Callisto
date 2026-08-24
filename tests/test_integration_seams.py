@@ -170,11 +170,11 @@ def test_s4_all_junk_single_source_stop_reason_is_not_route_missing():
     # ...and the stop reason misattributes the exclusion:
     assert "lack generic fetch routes" in tr_a.stop_reason
 
-    # Contrast: two junk sources where round 2 CAN re-run -> stasis fires.
+    # Contrast: one junk + one good source -> round 2 re-runs (the good
+    # source stays routable), admits nothing new -> stasis DOES fire.
     reg2 = _registry(_spec("alpha", "https://api.openalex.org"),
                      _spec("beta", "https://b.example"))
-    r2 = _retriever(reg2, {"/fetch_alpha": IRRELEVANT,
-                           "/fetch_beta": IRRELEVANT},
+    r2 = _retriever(reg2, {"/fetch_alpha": IRRELEVANT, "/fetch_beta": GOOD},
                     adaptive_gain=False, stasis=True)
     qb = _q(min_ind=3)
     tr_b = r2.retrieve(qb, qb.text, min_independent=3)
