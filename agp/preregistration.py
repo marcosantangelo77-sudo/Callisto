@@ -253,8 +253,12 @@ class Preregistration:
         Divergences are returned loudly in Outcome.divergences AND logged via
         the module logger at WARNING. Nothing here rewrites the criteria.
         """
-        crit = criteria if criteria is not None else self.effective_criteria
-        using_amended = criteria is not None or bool(self.amendments)
+        # THE CONTRACT (module docstring): scoring runs against the ORIGINAL
+        # sealed criteria unless the caller explicitly passes an amendment.
+        # Amendments never silently become the scoring basis — a forged or
+        # opportunistic append cannot change what a claim was held to.
+        crit = criteria if criteria is not None else self.criteria
+        using_amended = criteria is not None
         if not self._sealed:
             raise PreregistrationError("cannot score an unsealed preregistration")
 

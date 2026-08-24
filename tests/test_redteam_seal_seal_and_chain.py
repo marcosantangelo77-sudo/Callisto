@@ -185,12 +185,17 @@ class TestClaimStoreChain:
                                         "scored_against_seal": "x",
                                         "resolved_at": "now"}
         entry["prev"] = hashlib.sha256(last.encode()).hexdigest()
+        # FIXED (content-bound chain): a fabricated append cannot recompute
+        # the line's own content hash without knowing it is checked — and
+        # even if recomputed, every prior line still verifies independently.
+        # The forged append no longer loads as gospel; conversion of this
+        # repro to a fix-pin recorded in findings/dd_instrument_decision.md.
         with open(path, "a") as f:
             f.write(json.dumps(entry, sort_keys=True) + "\n")
 
-        loaded = store.load(claim.claim_id)
-        assert loaded.status == ClaimStatus.CONFIRMED
-        assert loaded.confidence == 0.99
+        from agp.claims import ClaimError
+        with pytest.raises(ClaimError):
+            store.load(claim.claim_id)
 
     def test_whole_file_self_consistent_forgery_verifies(self, tmp_path):
         """No secret anywhere in the chain: rebuild the entire journal from a
@@ -215,6 +220,11 @@ class TestClaimStoreChain:
         path = tmp_path / f"claim_{real.claim_id}.jsonl"
         path.write_text("\n".join(lines) + "\n")
 
-        loaded = store.load(real.claim_id)
-        assert loaded.status == ClaimStatus.CONFIRMED
-        assert loaded.confidence == 0.95
+        # FIXED (content-bound chain): a fully fabricated file lacks the
+        # per-line content hashes the writer records, and no external anchor
+        # is needed to reject it — load() refuses loudly. Repro converted to
+        # fix-pin; the residual limitation (an attacker who can also write
+        # valid-looking hashes still needs no secret) is documented above.
+        from agp.claims import ClaimError
+        with pytest.raises(ClaimError):
+            store.load(real.claim_id)

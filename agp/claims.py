@@ -391,9 +391,18 @@ class ClaimStore:
             count = len(lines)
             if lines:
                 prev_hash = hashlib.sha256(
-                    lines[-1].encode("utf-8")).hexdigest()
-        entry = {"prev": prev_hash, "saved_at": _now_iso(),
-                 "state": claim.to_dict()}
+                    lines[-1].encode("utf-8")).hexdigest()  # legacy digest kept for compat
+        state = claim.to_dict()
+        saved_at = _now_iso()
+        # The chain binds CONTENT, not just adjacency: each entry's hash
+        # covers its own payload PLUS the previous link. Rewriting any field
+        # of any line — including the last — breaks verification on load
+        # (red-team C2: a prev-only chain never detects edits to the tail).
+        entry = {"prev": prev_hash, "saved_at": saved_at, "state": state,
+                 "hash": hashlib.sha256((json.dumps(
+                     {"saved_at": saved_at, "state": state},
+                     sort_keys=True, ensure_ascii=False)
+                     + prev_hash).encode("utf-8")).hexdigest()}
         blob = json.dumps(entry, sort_keys=True, ensure_ascii=False)
         with open(path, "a", encoding="utf-8") as f:
             f.write(blob + "\n")
@@ -416,14 +425,27 @@ class ClaimStore:
             except json.JSONDecodeError as e:
                 raise ClaimError(f"journal line {i+1} corrupt: {e}")
             if verify:
-                expected = hashlib.sha256(ln.encode("utf-8")).hexdigest()
-                # The chain check: this line's own digest is what the NEXT
-                # line must reference, and line 1 must reference GENESIS.
-                if entry["prev"] != prev:
+                # Two checks per line: (1) adjacency — this line references
+                # the FULL DIGEST of its predecessor; (2) content — the
+                # line's recorded hash covers its own body plus that link,
+                # so editing ANY field of ANY line (including the newest)
+                # is detected on read.
+                if entry.get("prev") != prev:
                     raise ClaimError(
                         f"tampering detected in claim {claim_id}: journal "
                         f"line {i+1} does not chain to its predecessor "
                         f"(history is not trustworthy)")
+                body = json.dumps(
+                    {"saved_at": entry.get("saved_at"),
+                     "state": entry.get("state")},
+                    sort_keys=True, ensure_ascii=False)
+                expected = hashlib.sha256(
+                    (body + str(entry.get("prev"))).encode("utf-8")).hexdigest()
+                if entry.get("hash") != expected:
+                    raise ClaimError(
+                        f"tampering detected in claim {claim_id}: journal "
+                        f"line {i+1} content does not match its recorded "
+                        f"hash (history is not trustworthy)")
             prev = hashlib.sha256(ln.encode("utf-8")).hexdigest()
             state = entry["state"]
         return Claim.from_dict(state)
