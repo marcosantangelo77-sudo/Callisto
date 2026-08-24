@@ -265,9 +265,12 @@ def test_single_source_seal_surfaces_which_sources_failed():
     """A sealed answer backed by ONE source, out of 21 consulted, must SAY
     so: the run notes record which sources were asked and failed. (Fixed in
     this pass — additive notes only.)"""
+    # min_ind=1: the single admitting (fred) source must MEET the bar so
+    # the run seals — under the D2 seal-contract fix an all-unprovable
+    # parent refuses instead of sealing (tests/test_seal_unprovable.py).
     decomp = json.dumps({"sub_questions": [_leaf(
         "What was the US unemployment rate in January 2023 according to "
-        "BLS data", min_ind=2)]})
+        "BLS data", min_ind=1)]})
     model = ScriptedModel({
         "Architect": [{"content": decomp}],
         "Manager": [{"content": _ans("Jan 2023 rate was 3.5%")}]})

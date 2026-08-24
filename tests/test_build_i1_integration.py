@@ -62,7 +62,7 @@ def _routes() -> dict[str, str]:
     return {"/works": OPENALEX_BODY, "/graph/v1/paper/search": SS_BODY}
 
 
-def _decompose(min_indep=2) -> str:
+def _decompose(min_indep=1) -> str:
     return json.dumps({"sub_questions": [
         {"text": "what does scholarly research say about semiconductor "
          "supply chain resilience",
