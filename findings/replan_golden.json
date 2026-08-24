@@ -1,0 +1,922 @@
+[
+  {
+    "off": {
+      "case": "A1 news-sufficient-first-round",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 2,
+      "distinct_sources": [
+        "clinicaltrials",
+        "federalregister"
+      ],
+      "best_tier": "PROBABLE",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.041,
+      "conclusion_head": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [PROBABLE 0.55] Will Apple report quarterly results above Wall Street consensus expectation"
+    },
+    "on": {
+      "case": "A1 news-sufficient-first-round",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 2,
+      "distinct_sources": [
+        "clinicaltrials",
+        "federalregister"
+      ],
+      "best_tier": "PROBABLE",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.017,
+      "conclusion_head": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [PROBABLE 0.55] Will Apple report quarterly results above Wall Street consensus expectation"
+    }
+  },
+  {
+    "off": {
+      "case": "A2 news-null-irrelevant-only",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.044,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "A2 news-null-irrelevant-only",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.084,
+      "conclusion_head": ""
+    }
+  },
+  {
+    "off": {
+      "case": "A3 news-single-source-then-refine-fails",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "ad9a6d906d484591": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.036,
+      "conclusion_head": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Apple report quarterly results above Wall Street consensus expectat"
+    },
+    "on": {
+      "case": "A3 news-single-source-then-refine-fails",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "2dfffcdc0fd047ec": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.036,
+      "conclusion_head": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Apple report quarterly results above Wall Street consensus expectat"
+    }
+  },
+  {
+    "off": {
+      "case": "A4 scholarly-sufficient-first-round",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "openalex"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "61ceb2f586344602": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.007,
+      "conclusion_head": "What does research say about semiconductor supply chain resilience under export controls?\n\n- [SPECULATIVE 0.54] What does research say about semiconductor supply chain resilience under export controls"
+    },
+    "on": {
+      "case": "A4 scholarly-sufficient-first-round",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "openalex"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "30b6392c87e141d4": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.009,
+      "conclusion_head": "What does research say about semiconductor supply chain resilience under export controls?\n\n- [SPECULATIVE 0.54] What does research say about semiconductor supply chain resilience under export controls"
+    }
+  },
+  {
+    "off": {
+      "case": "A5 econ-time-series-sufficient",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.037,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "A5 econ-time-series-sufficient",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.072,
+      "conclusion_head": ""
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-00-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "84dd6af29e214b0c": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.038,
+      "conclusion_head": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Apple report quarterly results above Wall Street consensus expectat"
+    },
+    "on": {
+      "case": "C-retro-00-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "8f52d9a5d1404999": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.043,
+      "conclusion_head": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Apple report quarterly results above Wall Street consensus expectat"
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-01-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "9ba24cf0e3654d1d": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.041,
+      "conclusion_head": "Will Nvidia report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Nvidia report quarterly results above Wall Street consensus expect"
+    },
+    "on": {
+      "case": "C-retro-01-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "281cb99647ce4120": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.04,
+      "conclusion_head": "Will Nvidia report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Nvidia report quarterly results above Wall Street consensus expect"
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-02-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "5749c7f4d37348ed": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.042,
+      "conclusion_head": "Will Boeing report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Boeing report quarterly results above Wall Street consensus expect"
+    },
+    "on": {
+      "case": "C-retro-02-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "737f453640be4474": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.041,
+      "conclusion_head": "Will Boeing report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Boeing report quarterly results above Wall Street consensus expect"
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-03-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "026b2231ab674b72": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.043,
+      "conclusion_head": "Will Tesla report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Tesla report quarterly results above Wall Street consensus expectat"
+    },
+    "on": {
+      "case": "C-retro-03-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "d353f722a61c4962": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.041,
+      "conclusion_head": "Will Tesla report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Tesla report quarterly results above Wall Street consensus expectat"
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-04-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "ffce0d8d4b064ea9": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.041,
+      "conclusion_head": "Will Microsoft report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Microsoft report quarterly results above Wall Street consensus "
+    },
+    "on": {
+      "case": "C-retro-04-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "eca1f2e787564330": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.04,
+      "conclusion_head": "Will Microsoft report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Microsoft report quarterly results above Wall Street consensus "
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-05-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "8a9c86f1300547d8": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.058,
+      "conclusion_head": "Will Meta Platforms report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Meta Platforms report quarterly results above Wall Street "
+    },
+    "on": {
+      "case": "C-retro-05-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "90ea9cf882d54dc5": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.049,
+      "conclusion_head": "Will Meta Platforms report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Meta Platforms report quarterly results above Wall Street "
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-06-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "07a4a18fde114bcd": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.04,
+      "conclusion_head": "Will Intel report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Intel report quarterly results above Wall Street consensus expectat"
+    },
+    "on": {
+      "case": "C-retro-06-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "4c57e8447a114ee3": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.04,
+      "conclusion_head": "Will Intel report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Intel report quarterly results above Wall Street consensus expectat"
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-07-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "a9d538cbdf5d496a": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.04,
+      "conclusion_head": "Will Amazon report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Amazon report quarterly results above Wall Street consensus expect"
+    },
+    "on": {
+      "case": "C-retro-07-beat_or_miss",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "65a1cb48f58340b6": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.04,
+      "conclusion_head": "Will Amazon report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Amazon report quarterly results above Wall Street consensus expect"
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-08-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.044,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "C-retro-08-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.089,
+      "conclusion_head": ""
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-09-threshold_cross",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "ebdd2e3aab84461c": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.039,
+      "conclusion_head": "Will Bitcoin trade above $100,000 at any point before 2025-02-01?\n\n- [SPECULATIVE 0.54] Will Bitcoin trade above $100,000 at any point before 2025-02-01?: evidence from 1 source item(s) supports a bou"
+    },
+    "on": {
+      "case": "C-retro-09-threshold_cross",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "db75233707cf4dd1": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.039,
+      "conclusion_head": "Will Bitcoin trade above $100,000 at any point before 2025-02-01?\n\n- [SPECULATIVE 0.54] Will Bitcoin trade above $100,000 at any point before 2025-02-01?: evidence from 1 source item(s) supports a bou"
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-10-threshold_cross",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.028,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "C-retro-10-threshold_cross",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.059,
+      "conclusion_head": ""
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-11-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.034,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "C-retro-11-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.071,
+      "conclusion_head": ""
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-12-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.032,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "C-retro-12-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.064,
+      "conclusion_head": ""
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-13-event_outcome",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "f3afbd4eaaa64611": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.03,
+      "conclusion_head": "Will OpenAI release a model branded 'GPT-5' before 2024-12-31?\n\n- [SPECULATIVE 0.54] Will OpenAI release a model branded 'GPT-5' before 2024-12-31?: evidence from 1 source item(s) supports a bounded a"
+    },
+    "on": {
+      "case": "C-retro-13-event_outcome",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "632e2129234a4fe7": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.03,
+      "conclusion_head": "Will OpenAI release a model branded 'GPT-5' before 2024-12-31?\n\n- [SPECULATIVE 0.54] Will OpenAI release a model branded 'GPT-5' before 2024-12-31?: evidence from 1 source item(s) supports a bounded a"
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-14-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.043,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "C-retro-14-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.082,
+      "conclusion_head": ""
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-15-threshold_cross",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.051,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "C-retro-15-threshold_cross",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.106,
+      "conclusion_head": ""
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-16-threshold_cross",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.04,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "C-retro-16-threshold_cross",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.082,
+      "conclusion_head": ""
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-17-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.031,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "C-retro-17-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.063,
+      "conclusion_head": ""
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-18-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.035,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "C-retro-18-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.07,
+      "conclusion_head": ""
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-19-event_outcome",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "cc012822042e484a": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.042,
+      "conclusion_head": "Will Donald Trump win the 2024 United States presidential election?\n\n- [SPECULATIVE 0.54] Will Donald Trump win the 2024 United States presidential election?: evidence from 1 source item(s) supports a"
+    },
+    "on": {
+      "case": "C-retro-19-event_outcome",
+      "sealed": true,
+      "refusal_reason": "",
+      "n_leaves": 1,
+      "n_answered": 1,
+      "n_fetches": 1,
+      "distinct_sources": [
+        "federalregister"
+      ],
+      "best_tier": "SPECULATIVE",
+      "gap_kinds": {
+        "90b426e60d6c4f46": "unprovable"
+      },
+      "n_replan_consults": 0,
+      "elapsed_s": 0.042,
+      "conclusion_head": "Will Donald Trump win the 2024 United States presidential election?\n\n- [SPECULATIVE 0.54] Will Donald Trump win the 2024 United States presidential election?: evidence from 1 source item(s) supports a"
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-20-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.041,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "C-retro-20-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.081,
+      "conclusion_head": ""
+    }
+  },
+  {
+    "off": {
+      "case": "C-retro-21-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.042,
+      "conclusion_head": ""
+    },
+    "on": {
+      "case": "C-retro-21-event_outcome",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 1,
+      "elapsed_s": 0.092,
+      "conclusion_head": ""
+    }
+  }
+]
