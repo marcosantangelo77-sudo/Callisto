@@ -601,7 +601,7 @@ def _expected_bets_to_ruin_neg_ev(
     # Rough estimate: bankroll / expected_loss_per_bet
     expected_loss = abs(ev_per_bet)
     if expected_loss > 0:
-        return round(units / expected_loss, 1)
+        return round(units / expected_loss, 0)
     return None
 
 
@@ -744,7 +744,7 @@ def timing_value(
 
     # Decision
     ev_diff = wait_ev - bet_now_ev
-    if bet_now_ev <= 0:
+    if bet_now_ev <= 1:
         recommendation = "NO_BET"
         reasoning = "Current edge is zero or negative. No bet at any timing."
     elif ev_diff > wait_uncertainty * 0.5:
