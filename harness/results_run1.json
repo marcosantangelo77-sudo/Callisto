@@ -505,5 +505,120 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q13",
+    "question": "What will the U.S. unemployment rate be in January 2027?",
+    "category": "unknowable-future",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Unknowable; correct output is refusal or UNDETERMINED.",
+    "verified_by": "definitionally unobservable",
+    "elapsed_s": 374.8,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 7,
+    "sources": [
+      "fdic",
+      "openalex",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What is the U.S. unemployment rate as of the most recent BLS Current Population Survey release?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "What has been the historical trend and volatility of monthly changes in the U.S. unemployment rate over the past 24 months?",
+        "answer": "The evidence provided does not contain U.S. unemployment rate data: item [0] is a World Bank indicator search returning unrelated agricultural indicators (fertilizer consumption, arable land), and item [1] is an OpenAlex full-text search returning an academic abstract about wage bargaining persistence. Neither gives monthly unemployment figures for the past 24 months, so no historical trend or volatility of month-over-month changes can be established from this evidence.",
+        "tier": "VERIFIED",
+        "confidence": 0.9,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "What do professional forecasters (e.g., FOMC Summary of Economic Projections, Blue Chip, SPF) project the U.S. unemployment rate to be in late 2026 / January 2027?",
+        "answer": "The evidence provided does not contain any professional forecasts of the U.S. unemployment rate for late 2026 / January 2027. Evidence [0] is an unrelated World Bank indicator search (fertilizer/agricultural indicators), and evidence [1] is an OpenAlex work about AI and labor-market forecasts with no usable 2026 unemployment projection values. No SEP, Blue Chip, or SPF figures are present.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "How do leading labor-market indicators (initial jobless claims trend, job openings/quits rates, payroll growth) currently compare to levels historically associated with rising vs. stable unemployment?",
+        "answer": "The evidence provided does not contain any current values for initial jobless claims, job openings, quits rates, or payroll growth \u2014 item [0] is a World Bank indicator search returning unrelated agricultural indicators, and item [1] is an OpenAlex full-text keyword search returning academic paper metadata (e.g., Elsby et al. on long-term unemployment after 2007-2009) with no present-day readings or historical thresholds. Therefore the comparison of current labor-market indicators to levels histo",
+        "tier": "VERIFIED",
+        "confidence": 0.9,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What is the U.S. unemployment rate as of the most recent BLS': 5 fetch(s) rejected at ingestion: [bls] content covers 8% of the question's topical words (need 25%); missing: current, household, labor, most, official, population, rate, release; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bls, current, household, labor, most, official, population, rate; [fred] content covers 0% of the question's topical words (need 25%); missing: bls, current, household, labor, most, official, population, rate; [fred] content covers 0% of the question's topical words (need 25%); missing: bls, current, household, labor, most, official, population, rate; [worldbank] content covers 8% of the question's topical words (need 25%); missing: bls, current, household, labor, most, official, rate, release",
+      "leaf 'What has been the historical trend and volatility of monthly': 4 fetch(s) rejected at ingestion: [bls] content covers 18% of the question's topical words (need 25%); missing: changes, fred, historical, labor, monthly, months, official, over; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bls, changes, data, fred, historical, labor, monthly, months; [fred] content covers 12% of the question's topical words (need 25%); missing: bls, changes, data, historical, labor, monthly, months, official; [fred] content covers 12% of the question's topical words (need 25%); missing: bls, changes, data, historical, labor, monthly, months, official",
+      "leaf 'What do professional forecasters (e.g., FOMC Summary of Econ': 4 fetch(s) rejected at ingestion: [bls] content covers 14% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, economic, fed, fomc, january; [fdic] content covers 19% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, fed, fomc, forecasters, forecasts; [fred] content covers 5% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, economic, fed, fomc, forecasters; [fred] content covers 5% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, economic, fed, fomc, forecasters",
+      "leaf 'How do leading labor-market indicators (initial jobless clai': 3 fetch(s) rejected at ingestion: [bls] content covers 0% of the question's topical words (need 25%); missing: associated, ces, claims, compare, currently, dol, frequency, growth; [fred] content covers 0% of the question's topical words (need 25%); missing: associated, ces, claims, compare, currently, dol, frequency, growth; [fred] content covers 0% of the question's topical words (need 25%); missing: associated, ces, claims, compare, currently, dol, frequency, growth"
+    ],
+    "gap_kinds": {
+      "d70cd6d0562b4c0d": "unprovable"
+    },
+    "verdict": "correct"
+  },
+  {
+    "id": "Q14",
+    "question": "How many U.S. households owned a pet hamster in July 2019?",
+    "category": "unknowable-source-gap",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Not available from fred/treasury/fdic/courtlistener/gdelt/kalshi/openalex/wayback/wikidata/worldbank/census.",
+    "verified_by": "not collected by any working source adapter",
+    "elapsed_s": 88.2,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "correct"
+  },
+  {
+    "id": "Q15",
+    "question": "What did the Kalshi market price for the 2032 U.S. presidential election winner close at yesterday?",
+    "category": "unknowable-market",
+    "expected_stance": "UNDETERMINED",
+    "gt": "No 2032 presidential market exists; correct output is refusal/UNDETERMINED.",
+    "verified_by": "no such market exists yet",
+    "elapsed_s": 69.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "correct"
   }
 ]
