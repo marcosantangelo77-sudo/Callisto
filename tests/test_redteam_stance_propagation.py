@@ -176,12 +176,42 @@ def test_confidence_never_raised_by_the_stance_rule(tmp_path):
 
 def test_conflicting_decisional_leaves_take_the_higher_confidence_one(
         tmp_path):
-    """Two decisional leaves disagreeing on direction resolve to the more
+    """Two DECISIONAL leaves disagreeing on direction resolve to the more
     confident one — direction selection mirrors magnitude selection WITHIN
-    the decisional class only."""
+    the decisional class only. The lookup leaf's 0.90 AFFIRMS (its own
+    question) still cannot outvote a decisional leaf."""
     answers = dict(LEAF_ANSWERS_LIVE_CASE)
+    # two decisional leaves: leaf2 DENIES at 0.70, leaf3 AFFIRMS at 0.80
     answers["leaf2"] = _answer(0.70, "2026 was never below 3.5%", "DENIES")
-    answers["leaf1"] = _answer(0.90, "2026 ran lower throughout", "AFFIRMS")
-    result = _run(tmp_path, answers)
+    decompose = json.dumps({"sub_questions": [
+        DECOMPOSE and json.loads(DECOMPOSE)["sub_questions"][0],
+        json.loads(DECOMPOSE)["sub_questions"][1],
+        {"text": "Compared to the January 2023 rate of 2023 data, is the "
+                 "2026 rate lower?",
+         "kind": "descriptive", "question_type": "macro time series",
+         "min_source_tier": 1, "min_independent_sources": 1,
+         "quant_required": False, "horizon_days": None},
+        {"text": "Is the 2026 unemployment rate greater than the January "
+                 "2023 level of 2023?",
+         "kind": "descriptive", "question_type": "macro time series",
+         "min_source_tier": 1, "min_independent_sources": 1,
+         "quant_required": False, "horizon_days": None},
+    ]})
+    model = ScriptedModel({"Architect": [decompress := decompose]})
+    for tag, resp in (("leaf0", LEAF_ANSWERS_LIVE_CASE["leaf0"]),
+                      ("leaf1", answers["leaf1"]),
+                      ("leaf2", answers["leaf2"]),
+                      ("leaf3", _answer(0.80,
+                                        "2026 is higher than Jan 2023",
+                                        "AFFIRMS"))):
+        model.script_for(tag, "Manager", resp)
+        model.script_for(tag, "Manager", resp)
+    import asyncio as _aio
+    pipeline = ResearchPipeline(
+        model=model, adversary_router=_Adversary(),
+        transport=fixture_transport(ROUTES),
+        store=ArtifactStore(root=tmp_path / "artifacts"),
+        ledger=ProvenanceLedger())
+    result = _aio.run(pipeline.run(ROOT_QUESTION, today=date(2026, 8, 24)))
     assert result.sealed, result.refusal_reason
     assert result.stance == "AFFIRMS"
