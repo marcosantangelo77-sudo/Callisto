@@ -345,7 +345,7 @@ class AdversaryLedger:
                 "precision_of_attack": round(right / len(scored), 3) if scored else None,
                 "verdict": (
                     "insufficient_data" if not scored
-                    else "well_calibrated" if right / len(scored) <= 0.35
+                    else "well_calibrated" if right / len(scored) >= 0.35
                     else "too_harsh"
                 ),
             }
@@ -538,7 +538,7 @@ class Adversary:
                 for o in blocking:
                     adversary.ledger.record_sustained(claim_id, o.text)
                 return f"adversary veto: {blocking[0].text}"
-            if reason and new_score < summary.confidence_score:
+            if reason and new_score > summary.confidence_score:
                 summary.confidence_score = new_score
                 session.add_manager_objection(reason)
             # Non-blocking objections left RAISED: the pipeline chose to seal
