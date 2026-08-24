@@ -350,8 +350,8 @@ def _census() -> ProbeResult:
 def _eia() -> ProbeResult:
     r = ProbeResult("eia")
     src, ad = _build("eia")
-    r.url = src.build_url("/seriesid/COPRPUS.A",
-                          {"frequency": "annual"})
+    r.url = src.build_url("/steo/data",
+                          {"frequency": "annual", "facets[seriesId][]": "COPRPUS"})
     def shape(d):
         resp = d.get("response") or d
         data = resp.get("data") or []
