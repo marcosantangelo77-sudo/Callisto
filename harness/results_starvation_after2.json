@@ -132,5 +132,89 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q06",
+    "question": "Was the federal funds effective rate above 5 percent in June 2007?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "FEDFUNDS June 2007 = 5.25%.",
+    "verified_by": "fredgraph.csv FEDFUNDS 2007-06",
+    "elapsed_s": 153.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "fred"
+    ],
+    "leaves": [
+      {
+        "text": "What was the federal funds effective rate in June 2007?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'What was the federal funds effective rate in June 2007?': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2007, bank, central, dff, effective, federal, fred, funds), fdic (content covers 7% of the question's topical words (need 25%); missing: 2007, bank, central, dff, effective, federal, fred, funds), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 21% of the question's topical words (need 25%); missing: 2007, bank, dff, effective, fred, funds, june, rate); answer rests on ['fred']",
+      "leaf 'What was the federal funds effective rate in June 2007?': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2007, bank, central, dff, effective, federal, fred, funds; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2007, bank, central, dff, effective, federal, fred, funds; [wikidata] content covers 21% of the question's topical words (need 25%); missing: 2007, bank, dff, effective, fred, funds, june, rate"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q07",
+    "question": "Did any FDIC-insured banks fail during calendar year 2021?",
+    "category": "no-answer (answer is NO)",
+    "expected_stance": "DENIES",
+    "gt": "FDIC recorded ZERO bank failures in 2021.",
+    "verified_by": "banks.data.fdic.gov failures FAILYR=2021 \u2192 0 rows",
+    "elapsed_s": 239.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "fdic"
+    ],
+    "leaves": [
+      {
+        "text": "Which FDIC-insured banks were declared failed by the FDIC during calendar year 2021 (per the FDIC's official failed bank list)?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "What was the total count of FDIC-insured institution failures in 2021 as reported by FDIC Quarterly Banking Profile data?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'Which FDIC-insured banks were declared failed by the FDIC du': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=FD, fdic (content covers 20% of the question's topical words (need 25%); missing: 2021, calendar, declared, during, failed, insured, list, official), federalregister (error: exhausted retries; last error: HTTP 503 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic); answer rests on NO sources",
+      "leaf 'Which FDIC-insured banks were declared failed by the FDIC du': 3 fetch(s) rejected at ingestion: [fdic] content covers 20% of the question's topical words (need 25%); missing: 2021, calendar, declared, during, failed, insured, list, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic; [wikidata] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic",
+      "leaf 'What was the total count of FDIC-insured institution failure': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured), fred (content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured), fred (content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured), openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['fdic']",
+      "leaf 'What was the total count of FDIC-insured institution failure': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, banking, count, data, failures, fdic, institution, insured"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
