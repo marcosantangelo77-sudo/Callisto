@@ -368,9 +368,12 @@ def test_five_strong_hits_lift_parent_above_speculative_cap(journaled):
     assert [r["outcome"] for r in recs] == ["hit"] * 5
     raw_ceiling = inherited_ceiling(recs)
     assert raw_ceiling > SPECULATIVE_CAP
+    from tools.research_program import floor_conf, tier_ceiling_from_score
     clamped, tier = clamp_parent_confidence(0.99, recs)
-    assert clamped == pytest.approx(min(0.99, raw_ceiling))
-    assert tier in ("PROBABLE", "SPECULATIVE")
+    # the clamp may only pull DOWN, and floors (never rounds up — PATTERNS #6)
+    assert clamped == pytest.approx(floor_conf(min(0.99, raw_ceiling)))
+    assert clamped <= 0.99
+    assert tier == tier_ceiling_from_score(clamped)
 
 
 def test_track_summary_shape(journaled):

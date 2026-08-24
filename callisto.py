@@ -535,6 +535,7 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
             print(f"inherited ceiling for '{claim_id}': "
                   f"{s['inherited_ceiling']:.2f} ({s['ceiling_tier']}) "
                   f"— earned from resolved predictions only")
+            return 0
         except Exception as exc:
             print(f"refused: {exc}")
             return 2
