@@ -120,6 +120,20 @@ Found while grepping the same shape:
    seal point (red team A6). These are the two places the pattern was
    already closed.
 
+## 6. Carry-forward disposition (2026-08-24, landing pass)
+
+- Item 2 (digit-in-prose quant): **FIXED** — commit 38aee73. Year tokens and
+  bare sandbox 'ok' no longer satisfy quant_required; a numeric structured
+  return value does. Canary promoted to passing pin.
+- Item 3 (verified compute graded below prose): **CANARIED** — strict xfail
+  `TestVerifiedComputeBelowProse` in tests/test_redteam_answer_correctness.py.
+  A real fix re-ranks evidence classes or adds an entitlement-only channel;
+  both would raise confidence (barred this pass).
+- Item 4 (non-boolean outputs unreconciled): **CANARIED** — strict xfail
+  `TestNumericReconciliation`. Needs unit/encoding normalization; must not be
+  done casually (percent-vs-plain encodings).
+- Items 5 (synthesis max(abs)) and 6 (healthy) unchanged.
+
 ## Residual honesty note
 
 The reconciliation veto binds ONLY where the computation is unambiguous

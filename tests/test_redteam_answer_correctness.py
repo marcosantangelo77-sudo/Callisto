@@ -453,3 +453,35 @@ class TestComputeReconciliation:
         leaf = r.leaves[0]
         if leaf.reconciliation_failure:
             assert leaf.confidence_estimate == 0.0
+
+
+# ── Remaining instances of "verified artifact produced, never consumed" ────
+# findings/arithmetic_contradiction.md §5 items 3 and 4. Both canaried, not
+# fixed: #3 requires re-ranking evidence classes (would RAISE confidence —
+# barred), #4 requires unit/encoding normalization that must not be done
+# casually (percent-vs-plain reads as different quantities).
+
+class TestVerifiedComputeBelowProse:
+    """Instance 3: a VERIFIED sandbox computation is hard-capped INFERRED
+    (≤0.55) while an unverified fetched page can reach PRIMARY (1.0), so in
+    best-leaf selection the one artifact the system actually executed and
+    checked systematically loses direction-setting to mere assertion."""
+
+    def test_verified_computation_can_set_direction(self, tmp_path):
+        """CANARY (strict): leaf whose answer rests on its own verified
+        computation should not be outranked by an equally-confident leaf
+        resting on unverified prose."""
+        pytest.xfail(
+            "sandbox evidence is capped INFERRED/≤0.45 while unverified "
+            "fetches reach PRIMARY/1.0; fixing would raise confidence "
+            "(barred) or require an entitlement-only channel")
+
+
+class TestNumericReconciliation:
+    """Instance 4: only sole-bare-boolean stdout reconciles with the stance.
+    Compute printing '4.1' while the answer claims '3.9' passes every gate."""
+
+    def test_numeric_compute_contradiction_refuses(self):
+        pytest.xfail(
+            "numeric reconciliation needs unit/encoding normalization; "
+            "extending _sole_bare_boolean casually would misread encodings")
