@@ -10,6 +10,12 @@ One CLI for the things a person sitting at this machine actually does:
   runs      list saved runs, newest first
   show      re-print one run — conclusion, artifacts RE-HASHED against the
             artifact store, fetch provenance
+  predict   register a recurring claim + commit a probability BEFORE ground
+            truth (preregistered forward-testing; the lifecycle's intake)
+  predictions
+            unresolved predictions awaiting their deadline — what to grade
+  resolve   record ground truth for one prediction; prints the claim's
+            track record and the confidence ceiling it has now earned
   status    hypothesis-pool / lifecycle counts from the local database
   doctor    can this box run a live question right now? (providers, sources)
 
@@ -408,6 +414,109 @@ def _cmd_show(args: argparse.Namespace) -> int:
             print(f"  - {str(o)[:200]}")
     print(f"\nrecord   : {path}")
     return 0
+
+
+# ── predict / predictions / resolve ───────────────────────────────────────
+
+async def _open_journal():
+    """Ensure the lifecycle schema exists locally, then return
+    (PredictionJournal, db). The DB is created on first use."""
+    from tools.schema.engine import ensure_schema, open_db
+    from tools.resolvers.generic import PredictionJournal
+    path = _db_path()
+    await ensure_schema(path)
+    db = await open_db(path)
+    return PredictionJournal(db), db
+
+
+def _cmd_predict(args: argparse.Namespace) -> int:
+    if not (0.0 <= args.prob <= 1.0):
+        print(f"--prob must be within [0,1], got {args.prob}")
+        return 2
+    if not args.by:
+        print("--by is required: a prediction without a deadline can never "
+              "be scored stale, so it cannot earn confidence")
+        return 2
+
+    async def run():
+        journal, db = await _open_journal()
+        try:
+            cid = await journal.create_claim(
+                name=args.claim,
+                thesis=f"{args.event} (deadline {args.by})",
+                notes="registered via callisto predict")
+            pid = await journal.record_prediction(
+                claim_id=cid, event_id=args.event, predicted_prob=args.prob,
+                due_at=args.by)
+            cur = await db.execute(
+                "SELECT status FROM hypotheses WHERE hypothesis_id = ?", (cid,))
+            row = await cur.fetchone()
+            print(f"claim      : {args.claim} ({cid})")
+            print(f"prediction : #{pid}  p={args.prob:.2f}  due {args.by}")
+            print(f"stage      : {row[0] if row else '?'} "
+                  "(preregistered forward-testing)")
+            print("next       : when ground truth arrives, "
+                  "`callisto resolve`")
+        finally:
+            await db.close()
+    return asyncio.run(run())
+
+
+def _cmd_predictions(args: argparse.Namespace) -> int:
+    async def run():
+        journal, db = await _open_journal()
+        try:
+            rows = await journal.open_predictions(
+                None if not args.claim else args.claim)
+            if not rows:
+                print("no open predictions — `callisto predict` registers one")
+                return 0
+            today = datetime.date.today().isoformat()
+            for r in rows:
+                due = r.get("due_at") or "no deadline"
+                mark = ""
+                if r.get("due_at") and str(r["due_at"])[:10] < today:
+                    mark = "  OVERDUE (scores stale until resolved)"
+                print(f"#{r['id']:<4} p={r['predicted_prob']:.2f} "
+                      f"due {due}  [{r.get('claim_name') or r['claim_id']}]"
+                      f"{mark}")
+                print(f"     {r['event_id'][:100]}")
+        finally:
+            await db.close()
+    return asyncio.run(run())
+
+
+def _cmd_resolve(args: argparse.Namespace) -> int:
+    async def run():
+        journal, db = await _open_journal()
+        try:
+            cur = await db.execute(
+                "SELECT claim_id FROM predictions WHERE id = ?",
+                (args.prediction_id,))
+            row = await cur.fetchone()
+            if not row:
+                print(f"no prediction #{args.prediction_id} — see "
+                      "`callisto predictions`")
+                return 1
+            claim_id = row[0]
+            res = await journal.resolve_prediction(
+                args.prediction_id, args.outcome, payoff=args.payoff)
+            tag = "(already recorded)" if res["idempotent"] else "recorded"
+            print(f"prediction #{args.prediction_id}: "
+                  f"{res['resolved_outcome']} {tag}")
+            s = await journal.track_summary(claim_id)
+            brier = "-" if s["brier"] is None else f"{s['brier']:.3f}"
+            print(f"track record: n={s['n_resolved']} hits={s['n_hit']} "
+                  f"stale={s['n_stale']} brier={brier}")
+            print(f"inherited ceiling for '{claim_id}': "
+                  f"{s['inherited_ceiling']:.2f} ({s['ceiling_tier']}) "
+                  f"— earned from resolved predictions only")
+        except Exception as exc:
+            print(f"refused: {exc}")
+            return 2
+        finally:
+            await db.close()
+    return asyncio.run(run())
 
 
 # ── parser ────────────────────────────────────────────────────────────────
