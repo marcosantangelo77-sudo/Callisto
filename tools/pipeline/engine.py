@@ -247,6 +247,10 @@ class ResearchPipeline:
         if self.registry is None:
             from tools.sources.registry import get_source_registry
             self.registry = get_source_registry()
+        # Register the lookup seam the re-planner's fixability predicate
+        # uses (key reachability per source spec).
+        from tools.pipeline import replan as _rp
+        _rp.set_registry_lookup(self.registry.get)
         return self.registry
 
     @property
@@ -361,14 +365,15 @@ class ResearchPipeline:
     # ── Gap-triggered re-planning (tools.pipeline.replan) ─────────────────
 
     async def _maybe_replan_leaf(self, q: ResearchQuestion,
-                                 outcome, today: date):
-        """If this leaf's gap classification says the PLANNER can fix it,
-        ask the model for ONE replacement sub-question.
+                                 outcome, trace, today: date):
+        """If this leaf's structured gap says the PLANNER can fix it, ask
+        the model for ONE replacement sub-question.
 
         Returns (replacement_question_or_None, question_type_or_None,
                  ReplanEvent). Fires only per tools.pipeline.replan.
-        should_replan — honest nulls and unprovable claims never trigger.
-        No confidence information is an input; nothing here scores.
+                 gap_is_planner_fixable — honest nulls and unprovable
+        claims never trigger. No confidence information is an input;
+        nothing here scores.
         """
         from tools.pipeline import replan as rp
 
@@ -377,10 +382,11 @@ class ResearchPipeline:
         if q.question_id in self._replanned_qids \
                 or len(self._replanned_qids) >= rp.MAX_REPLANS_PER_LEAF * 5:
             return None, None, None
-        obstacle = ""
-        if outcome.gap_kind == "retrieval_failure":
-            obstacle = getattr(outcome, "gap_obstacle", "") or ""
-        if not rp.should_replan(outcome.gap_kind, obstacle):
+        if not outcome.gap_kind or getattr(self, "_last_gap", None) is None:
+            return None, None, None
+        obstacle = getattr(outcome, "gap_obstacle", "") or ""
+        if not (rp.should_replan(outcome.gap_kind, obstacle)
+                or rp.gap_is_planner_fixable(self._last_gap)):
             return None, None, None
 
         msgs = rp.replan_messages(q.text, outcome.gap_explanation,
@@ -555,6 +561,7 @@ class ResearchPipeline:
         #   evidence obtained but requirements unmet -> unprovable: a
         #     deliberate decision about OUR OWN bar, not a fetch fault.
         from tools.gaps import NullKind, classify_null_kind, classify_gap
+        self._last_gap = None
         if not fetches:
             kind, expl = classify_null_kind(trace)
             out.gap_kind, out.gap_explanation = kind, expl
@@ -566,6 +573,9 @@ class ResearchPipeline:
                                    self._question_types.get(q.question_id)
                                    or "")
                 out.gap_obstacle = gap.obstacle.value
+                # Kept for the re-planner's fixability predicate ONLY —
+                # never read by anything that scores.
+                self._last_gap = gap
             except Exception as e:  # noqa: BLE001 — degrade to no obstacle
                 logger.debug("gap obstacle derivation failed: %s", e)
         elif reasons and out.answer:
@@ -723,14 +733,14 @@ class ResearchPipeline:
                                                       trace=trace_q)
                 return outcome, fetches, trace_q
 
-            outcome, _, _ = await _leaf_attempt(current_q, current_qt)
+            outcome, _, trace_q = await _leaf_attempt(current_q, current_qt)
 
             # ── GAP-TRIGGERED RE-PLANNING (the one structural change) ────
             # A retrieval failure the PLANNER can fix gets ONE second
             # chance with a model-re-planned sub-question. Everything about
             # scoring is untouched; this decides WHAT is researched next.
             new_q, new_qt, event = await self._maybe_replan_leaf(
-                current_q, outcome, today)
+                current_q, outcome, trace_q, today)
             if event is not None:
                 replan_events.append(event.to_dict())
                 result.notes.append(

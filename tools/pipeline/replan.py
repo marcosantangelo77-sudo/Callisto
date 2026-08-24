@@ -42,8 +42,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from typing import Optional
+
+from tools.gaps import GapKind, Obstacle
 
 logger = logging.getLogger("callisto.pipeline.replan")
 
@@ -82,7 +85,7 @@ class ReplanEvent:
 
 
 def should_replan(gap_kind: str, obstacle: str) -> bool:
-    """THE single membership rule for triggering a re-plan.
+    """THE single membership rule for triggering a re-plan (obstacle form).
 
     Fires ONLY on a retrieval failure whose obstacle is one the planner can
     remove by researching differently. Honest nulls (competent search,
@@ -94,6 +97,56 @@ def should_replan(gap_kind: str, obstacle: str) -> bool:
     if gap_kind != "retrieval_failure":
         return False
     return obstacle in PLANNER_ACTIONABLE
+
+
+def gap_is_planner_fixable(gap) -> bool:
+    """THE single membership rule, on the full structured EvidenceGap.
+
+    A retrieval failure warrants ONE re-plan when the PLANNER can plausibly
+    fix it by researching differently:
+
+      - the recorded obstacle is itself planner-actionable
+        (nothing routable was selected / selected source had no route), or
+      - some plausible holder of this evidence was NEVER TRIED and is
+        reachable (has its API key, is not declared unable to hold it) —
+        routing the sub-question at that source is exactly what a
+        hierarchical planner does with a failed dispatch.
+    """
+    if getattr(gap, "kind", None) is None:
+        return False
+    if str(getattr(gap, "kind", "")) not in (
+            GapKind.RETRIEVAL_FAILURE.value, str(GapKind.RETRIEVAL_FAILURE)):
+        return False
+    if gap.obstacle.value in PLANNER_ACTIONABLE:
+        return True
+    for c in getattr(gap, "candidates", []) or []:
+        if c.tried or c.obstacle is Obstacle.NOT_INDEXED:
+            continue
+        if _missing_key_for(c.name):
+            continue          # unreachable: re-planning cannot conjure a key
+        return True
+    return False
+
+
+#: registry seam for gap_is_planner_fixable; set once per process by the
+#: engine (or tests) so the predicate stays import-cycle-free.
+_registry_lookup = None
+
+
+def set_registry_lookup(fn) -> None:
+    global _registry_lookup
+    _registry_lookup = fn
+
+
+def _missing_key_for(source_name: str) -> bool:
+    if _registry_lookup is None:
+        return False
+    entry = _registry_lookup(source_name)
+    if entry is None:
+        return True           # unknown source: treat as unreachable
+    spec = entry.spec
+    env = getattr(spec, "key_env_var", "") or ""
+    return bool(env) and not os.environ.get(env)
 
 
 def replan_messages(original_question_text: str, gap_explanation: str,

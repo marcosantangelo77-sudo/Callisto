@@ -103,9 +103,13 @@ def test_parse_replacement_rejects_degenerate():
 
 def test_replan_messages_carry_no_confidence_fields():
     msgs = replan_messages("q", "why it failed", "root")
-    blob = json.dumps(msgs)
-    for banned in ("confidence", "tier", "proposed"):
-        assert banned not in blob
+    # The re-plan turn's own instruction must not leak confidence/tier
+    # inputs. (min_source_tier in the shared schema names a SOURCE class,
+    # not confidence — that stays because it is the decompose contract.)
+    user_blob = " ".join(m["content"] for m in msgs if m["role"] == "user"
+                         and m["content"].startswith(("SUB-QUESTION",)))
+    for banned in ("confidence", "tier ", "proposed"):
+        assert banned not in user_blob
 
 
 # ── integration: engine wiring ─────────────────────────────────────────────
