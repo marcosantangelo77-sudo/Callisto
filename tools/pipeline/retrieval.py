@@ -321,6 +321,15 @@ class IterativeRetriever:
         #: "rejected_n"}. Reads nothing the conclusion does not depend on;
         #: default None means exactly the pre-instrumentation behaviour.
         self.round_observer = None
+        #: JOB 3 — optional stasis stop rule (tools.pipeline.stasis_stop).
+        #: When set, the loop breaks after a round that changed neither the
+        #: independent-key set nor the admitted-body set: every further
+        #: fetch would hand the answer model an IDENTICAL evidence payload,
+        #: so tier/stance/confidence provably cannot move. Opt-in; None is
+        #: exactly the pre-change behaviour. The stop reason records
+        #: "stasis:", distinct from "sufficient:" and from any null
+        #: classification, so an honest null never reads as saturation.
+        self.stasis_stop = None
 
     def retrieve(self, question, question_type: str,
                  min_independent: int) -> RetrievalTrace:
@@ -481,6 +490,20 @@ class IterativeRetriever:
             sufficient = len(trace.independent_keys) >= min_independent
             dec = term.record(min(1.0, len(trace.independent_keys) /
                                   max(1, min_independent)))
+            if self.stasis_stop is not None:
+                # JOB 3: consult the stasis rule AFTER sufficiency — a
+                # satisfied requirement still reports "sufficient:", never
+                # "stasis:". Stasis fires only when this round changed
+                # nothing AND the run is not already sufficient.
+                if not sufficient and not dec.stop and \
+                        self.stasis_stop.record(
+                            rnd, trace.independent_keys,
+                            [f.content_sha256 for f in trace.admitted]):
+                    trace.stop_reason = (
+                        f"stasis: round {rnd} changed neither independent "
+                        f"sources nor admitted evidence; further rounds "
+                        f"cannot alter tier/stance/confidence")
+                    break
             if sufficient:
                 trace.stop_reason = (
                     f"sufficient: {len(trace.independent_keys)} independent "

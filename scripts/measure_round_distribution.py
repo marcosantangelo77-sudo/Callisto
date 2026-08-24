@@ -30,6 +30,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import ssl  # noqa: F401 — must be imported BEFORE the socket guard patches
+           # socket.socket (ssl.py subclasses socket.socket at import time).
+
 from tests.helpers.no_socket import NoSocket  # noqa: E402
 
 NoSocket().install()
@@ -115,7 +118,7 @@ def run_case(case: dict) -> dict:
     if not trace.admitted:
         from tools.gaps import NullKind
         kind, expl = classify_null_kind(trace)
-        gap_kind, _gap_expl = kind.value, expl
+        gap_kind, _gap_expl = kind, expl
 
     n_rounds = len(traj)
     pure_cost = sum(1 for m in moved_flags[1:] if not m) if n_rounds > 1 \

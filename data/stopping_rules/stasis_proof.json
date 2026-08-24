@@ -1,0 +1,279 @@
+{
+  "n_cases": 27,
+  "all_conclusions_identical": true,
+  "total_fetch_attempts_baseline": 213,
+  "total_fetch_attempts_with_stasis": 157,
+  "fetch_attempts_saved_pct": 26.3,
+  "cases": [
+    {
+      "case": "A1 news-sufficient-first-round",
+      "baseline_rounds": 1,
+      "stasis_rounds": 1,
+      "rounds_saved": 0,
+      "fetch_attempts_baseline": 3,
+      "fetch_attempts_stasis": 3,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "sufficient: 2 independent sources >= required 2"
+    },
+    {
+      "case": "A2 news-null-irrelevant-only",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 8,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "A3 news-single-source-then-refine-fails",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 9,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "A4 scholarly-sufficient-first-round",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 5,
+      "fetch_attempts_stasis": 4,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "A5 econ-time-series-sufficient",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 8,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-00-beat_or_miss",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 9,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-01-beat_or_miss",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 9,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-02-beat_or_miss",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 9,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-03-beat_or_miss",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 9,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-04-beat_or_miss",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 9,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-05-beat_or_miss",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 9,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-06-beat_or_miss",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 9,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-07-beat_or_miss",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 9,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-08-event_outcome",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 8,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-09-threshold_cross",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 9,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-10-threshold_cross",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 7,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-11-event_outcome",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 7,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-12-event_outcome",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 7,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-13-event_outcome",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 9,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-14-event_outcome",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 7,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-15-threshold_cross",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 8,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-16-threshold_cross",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 8,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-17-event_outcome",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 7,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-18-event_outcome",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 7,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-19-event_outcome",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 9,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-20-event_outcome",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 7,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    },
+    {
+      "case": "C-retro-21-event_outcome",
+      "baseline_rounds": 3,
+      "stasis_rounds": 2,
+      "rounds_saved": 1,
+      "fetch_attempts_baseline": 8,
+      "fetch_attempts_stasis": 6,
+      "conclusion_identical": true,
+      "stasis_stop_reason": "stasis: round 2 changed neither independent sources nor admitted evidence; further rounds cannot alter tier/stance/confidence"
+    }
+  ]
+}
