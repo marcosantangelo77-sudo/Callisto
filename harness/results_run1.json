@@ -98,5 +98,28 @@
       "3f4f7406441f44df": "unprovable"
     },
     "verdict": "undetermined-sealed"
+  },
+  {
+    "id": "Q02",
+    "question": "Did the U.S. unemployment rate exceed 4.0 percent at any point in the first half of 2026?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "Jan\u2013Jun 2026 monthly rates were 4.3/4.4/4.3/4.3/4.3/4.2.",
+    "verified_by": "fredgraph.csv UNRATE 2026-01..06",
+    "elapsed_s": 78.2,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
