@@ -67,5 +67,70 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q04",
+    "question": "Was the U.S. total public debt lower on January 31, 2023 than $30 trillion?",
+    "category": "negation",
+    "expected_stance": "DENIES",
+    "gt": "$31,454,982,227,739.16 \u2014 higher than $30T.",
+    "verified_by": "debt_to_penny record_date=2023-01-31",
+    "elapsed_s": 240.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What was the U.S. total public debt outstanding as of January 31, 2023, according to the U.S. Treasury (Debt to the Penny / Monthly Statement of the Public Debt)?",
+        "answer": "No evidence was provided, so the debt figure as of January 31, 2023 cannot be established from the given items.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "The record contains zero retrieved items, yet the fact in question is trivially checkable: the U.S. Treasury's Debt to the Penny dataset publishes a daily Total Public Debt Outstanding figure for 01/31/2023 (approximately $31.4-31.5 trillion, above the $30 trillion threshold). A single API call to TreasuryDirect would settle it; treating this as 'no evidence was provided' when the authoritative pr",
+      "The same facts (empty evidence set, UNVERIFIED 0.00) are equally explained by planner/adapter failure \u2014 e.g., the Treasury fiscal-data endpoint returning an error or the planner failing to bind the date parameter \u2014 rather than by the question being genuinely unanswerable from available sources. Attributing the null to the epistemics of the question instead of to tooling malfunction is a mechanism ",
+      "An honest_null scored 0.00 with a GAP tag can be produced by any pipeline run whose fetch step fails, regardless of ground truth. Observing one such run tells us nothing about the underlying claim; selecting this instance as 'the conclusion under attack' guarantees the appearance of unsupportedness without any process having checked whether the claim is true.",
+      "If the pipeline's downstream consumer reads '[UNVERIFIED 0.00]' as evidence AGAINST the claim, the artifact manufactures a false negative: the actual value on 2023-01-31 exceeded $30T (debt crossed $31T in early January 2023), so the correct answer to the question is 'No, it was higher' \u2014 a determinate, well-sourced answer that the empty-evidence framing conceals entirely."
+    ],
+    "notes": [
+      "leaf 'What was the U.S. total public debt outstanding as of Januar': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=to, fdic (content covers 14% of the question's topical words (need 25%); missing: 2023, according, debt, government, january, official, outstanding, penny), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, according, debt, government, january, monthly, official, outstanding), treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/, courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 7% of the question's topical words (need 25%); missing: 2023, according, debt, government, january, monthly, official, outstanding); answer rests on NO sources",
+      "leaf 'What was the U.S. total public debt outstanding as of Januar': 3 fetch(s) rejected at ingestion: [fdic] content covers 14% of the question's topical words (need 25%); missing: 2023, according, debt, government, january, official, outstanding, penny; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, according, debt, government, january, monthly, official, outstanding; [wikidata] content covers 7% of the question's topical words (need 25%); missing: 2023, according, debt, government, january, monthly, official, outstanding"
+    ],
+    "gap_kinds": {
+      "9152060095214f09": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q05",
+    "question": "Did U.S. nonfarm payrolls fall by more than 15 million between February 2020 and April 2020?",
+    "category": "comparison+arithmetic",
+    "expected_stance": "AFFIRMS",
+    "gt": "Feb 2020 = 152,293k, Apr 2020 = 130,426k; drop = 21,867k \u2248 21.9M > 15M.",
+    "verified_by": "fredgraph.csv PAYEMS 2020-02..04",
+    "elapsed_s": 20.8,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
