@@ -299,24 +299,44 @@ class ResearchPipeline:
         def __init__(self, inner):
             self._inner = inner
             self._lock = threading.Lock()
-            self._cache: dict[str, tuple[int, str]] = {}
+            self._cache: dict[tuple, tuple[int, str]] = {}
+            # url-key -> Event for an in-flight fetch. Parallel leaves fire
+            # identical first-round URLs at the SAME moment; without
+            # coalescing every one of them is a concurrent miss.
+            self._inflight: dict[tuple, threading.Event] = {}
             self.hits = 0
 
         def __call__(self, url: str, headers: dict) -> tuple[int, str]:
             key = (url, headers.get("User-Agent", ""),
                    headers.get("Accept-Encoding", ""))
-            with self._lock:
-                if key in self._cache:
-                    self.hits += 1
-                    return self._cache[key]
-            # Fetch OUTSIDE the lock: concurrent first-calls for different
-            # URLs must not serialise. A duplicate concurrent miss re-fetches
-            # (same as today) and overwrites with identical bytes.
-            status, body = self._inner(url, headers)
-            if status == 200:
+            while True:
+                owner = False
+                ev = None
                 with self._lock:
-                    self._cache[key] = (status, body)
-            return status, body
+                    if key in self._cache:
+                        self.hits += 1
+                        return self._cache[key]
+                    ev = self._inflight.get(key)
+                    if ev is None:
+                        ev = threading.Event()
+                        self._inflight[key] = ev
+                        owner = True
+                if not owner:
+                    # Another thread is fetching this exact URL right now;
+                    # wait for its bytes instead of re-fetching. Bounded by
+                    # RestSource's own timeout, same as making the call.
+                    ev.wait()
+                    continue
+                try:
+                    status, body = self._inner(url, headers)
+                    if status == 200:
+                        with self._lock:
+                            self._cache[key] = (status, body)
+                    return status, body
+                finally:
+                    with self._lock:
+                        self._inflight.pop(key, None)
+                    ev.set()
 
     def _get_registry(self):
         if self.registry is None:
