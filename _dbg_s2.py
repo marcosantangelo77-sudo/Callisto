@@ -5,12 +5,11 @@ from tests.helpers.no_socket import NoSocket; NoSocket().install()
 from agp.provenance import ProvenanceLedger
 from agp.research_program import EvidenceRequirement, QuestionKind, ResearchQuestion, SourceClassRank
 from tools.pipeline.engine import fixture_transport
-from tools.pipeline.retrieval import IterativeRetriever, estimate_gain, independence_key
-from tools.pipeline.stasis_stop import StasisStop
+from tools.pipeline.retrieval import IterativeRetriever, RelevanceGate
 from tools.sources.registry import SourceRegistry, SourceAdapter, SourceSpec
 
-JUNK = json.dumps({"results": [{"id": "X9", "title": "Mating habits of deep-sea isopods"}]})
 GOOD = json.dumps({"results": [{"id": "W1", "title": "Semiconductor supply chain resilience review"}]})
+JUNK = json.dumps({"results": [{"id": "X9", "title": "Mating habits of deep-sea isopods"}]})
 
 def build(entries):
     reg = SourceRegistry()
@@ -31,27 +30,23 @@ def build(entries):
     return reg
 
 rq = ResearchQuestion(text="What does research say about semiconductor supply chain resilience?", kind=QuestionKind.DESCRIPTIVE)
-rq.evidence_requirements = EvidenceRequirement(min_source_class=SourceClassRank.SECONDARY, min_independent_sources=2)
+rq.evidence_requirements = EvidenceRequirement(min_source_class=SourceClassRank.SECONDARY, min_independent_sources=3)
 
-def run(entries, routes, order=None, label=""):
+def run(entries, routes, order=None, label="", maxr=2):
     reg = build(entries)
     r = IterativeRetriever(registry=reg, ledger=ProvenanceLedger(),
                            transport=fixture_transport(routes),
-                           max_rounds=3, adaptive_gain=True,
-                           source_order=order,
+                           max_rounds=maxr, adaptive_gain=True,
+                           source_order=order, gate=RelevanceGate(min_coverage=0.25),
+                           max_sources_per_leaf=1,
                            generic_calls={n: ("works_search", ("term",), {"limit": 3}) for n in reg.names()})
     tr = r.retrieve(rq, rq.text, min_independent=3)
-    print(label, "STOP:", tr.stop_reason[:70])
-    print("  keys:", sorted(tr.independent_keys))
+    print(label, "| stop:", tr.stop_reason[:55])
     for rd in tr.rounds: print("   round", rd["round"], [(s["name"], list(s)) for s in rd["sources"]])
-    print("  gain_skipped:", tr.gain_skipped)
+    print("   keys:", sorted(tr.independent_keys))
 
-# alpha & semanticscholar same family (both openalex base? no - family from independence_key)
-print("keys:", independence_key("alpha","https://api.openalex.org"), independence_key("scholarly","https://api.openalex.org"))
-
-# ORDER 1: alpha first
-run([("alpha","https://api.openalex.org"), ("beta","https://b.example")],
-    {"/fetch_alpha": GOOD, "/fetch_beta": GOOD}, None, "PLAIN:")
-run([("alpha","https://api.openalex.org"), ("beta","https://b.example")],
-    {"/fetch_alpha": GOOD, "/fetch_beta": GOOD},
-    lambda specs: sorted(specs, key=lambda s: s.name), "ORDERED(alpha,beta):")
+E2 = [("alpha","https://api.openalex.org"), ("beta","https://b.example")]
+R2 = {"/fetch_alpha": GOOD, "/fetch_beta": JUNK}
+run(E2, R2, None, "A REG (alpha first):")
+run(E2, R2, lambda s: sorted(s, key=lambda x: x.name!="beta"), "B junk beta FIRST:")
+run(E2, R2, lambda s: sorted(s, key=lambda x: x.name=="beta"), "C junk beta LAST:")
