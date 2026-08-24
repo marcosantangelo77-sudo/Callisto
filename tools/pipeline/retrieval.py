@@ -67,6 +67,10 @@ _QUERY_STOPWORDS = {
 }
 
 
+def _prefix_hit(a: str, b: str) -> bool:
+    return a == b or a.startswith(b) or b.startswith(a)
+
+
 def _tokens(text: str) -> list[str]:
     return [w for w in _WORD_RE.findall(text.lower())
             if len(w) >= 3 and w not in _QUERY_STOPWORDS]
@@ -266,6 +270,100 @@ def refine_query(previous_query: str, relevant_titles: list[str]) -> str:
     return (previous_query + " " + " ".join(add)).strip()
 
 
+# ── Expected information gain ranking ──────────────────────────────────────
+
+
+@dataclass
+class GainEstimate:
+    """Whether one candidate fetch could, IF it succeeds, satisfy an UNMET
+    declared requirement — and which one. This is the smallest viable
+    expected-information-gain test: not a Bayesian VOI model, just the
+    question 'could this call change the answer?' asked BEFORE spending
+    the call. A fetch that cannot move any unmet requirement has zero
+    possible effect on the leaf's conclusion and is skipped."""
+    source_name: str
+    #: requirement reasons this fetch could plausibly satisfy on success
+    satisfiable: list[str] = field(default_factory=list)
+    #: requirement reasons NO result from this source could ever satisfy
+    unsatisfiable: list[str] = field(default_factory=list)
+    #: sources of the same independence family already admitted — a second
+    #: member adds corroboration from ZERO new voices
+    duplicate_voice: bool = False
+
+    @property
+    def worth_the_call(self) -> bool:
+        return bool(self.satisfiable) and not self.duplicate_voice
+
+
+def estimate_gain(spec, requirements, independent_keys: set,
+                  question_type: str = "") -> GainEstimate:
+    """Rank one candidate source against the leaf's CURRENT unknowns.
+
+    Currently unknown = EvidenceRequirement.unmet_reasons over what the
+    trace holds so far. What evidence would reduce it: the spec's own
+    `answers` clauses (the registry's vocabulary for 'what would settle
+    this', same one tools.gaps uses). Which query is most likely to
+    produce it: the planner already authors per-source queries; here we
+    only decide WHETHER that query deserves to be issued.
+
+    Rules (each conservative — skips only provably useless calls):
+      - quant_required with no quantitative evidence yet: any real fetch
+        could carry numbers -> potentially satisfies.
+      - independent-source shortfall: a source whose independence_key is
+        NOT already in the trace can add a NEW voice -> potentially
+        satisfies. One already counted (same overlap family or host)
+        cannot, no matter how relevant its content.
+      - source-class shortfall: class is assigned AFTER ingest from
+        provenance, so a successful fetch could raise it — never skipped
+        on this ground.
+      - a source whose declared `cannot_answer` covers the question AND
+        whose answers clauses have no overlap with it cannot produce
+        admissible evidence for THIS question at all.
+    """
+    from agp.research_program import SourceClassRank
+
+    achieved = SourceClassRank.SECONDARY   # provisional: best case assumed
+    n_indep = len(independent_keys)
+    reasons = requirements.unmet_reasons(
+        achieved, n_indep, produced_quant=True)  # success-case upper bound
+    if not reasons:
+        # Everything already met on the success-case bound: nothing this
+        # call could add. (Callers normally stop before this point via
+        # sufficiency; kept as belt-and-braces.)
+        return GainEstimate(source_name=spec.name)
+
+    key = independence_key(spec.name, getattr(spec, "base_url", ""))
+    duplicate_voice = key in set(independent_keys)
+
+    qt_tokens = set(_tokens(question_type))
+    answers = [c for c in (getattr(spec, "answers", ()) or ())]
+    ans_tokens: set = set()
+    for clause in answers:
+        ans_tokens |= set(_tokens(clause))
+    cannot = " ".join(str(x) for x in
+                      (getattr(spec, "cannot_answer", ()) or ())).lower()
+    declared_cannot_only = (
+        bool(cannot) and not ans_tokens
+        and any(_prefix_hit(t, cw) or _prefix_hit(cw, t)
+                for t in qt_tokens
+                for cw in _tokens(cannot)))
+
+    est = GainEstimate(source_name=spec.name,
+                       duplicate_voice=duplicate_voice)
+    if declared_cannot_only:
+        est.unsatisfiable = list(reasons)
+        return est
+    # On the optimistic bound every remaining reason is addressable by a
+    # fresh-voice fetch; a duplicate voice can still serve quant/source-
+    # class needs but cannot serve an independence shortfall.
+    indep_short = [r for r in reasons if "independent sources <" in r]
+    if duplicate_voice and indep_short == reasons:
+        est.unsatisfiable = list(reasons)
+        return est
+    est.satisfiable = list(reasons)
+    return est
+
+
 # ── The iterative retriever ────────────────────────────────────────────────
 
 
@@ -280,6 +378,9 @@ class RetrievalTrace:
     #: sources the planner could not serve, with its honest reason
     skipped_sources: list[dict] = field(default_factory=list)
     independent_keys: set[str] = field(default_factory=set)
+    #: sources skipped BEFORE fetching because no result they could return
+    #: would satisfy an unmet declared requirement (expected-gain gate)
+    gain_skipped: list[dict] = field(default_factory=list)
     stop_reason: str = ""
 
     @property
@@ -302,7 +403,8 @@ class IterativeRetriever:
                  max_sources_per_leaf: int = 3,
                  max_fetches_per_round: int = 4,
                  generic_calls: Optional[dict] = None,
-                 use_planner: bool = True):
+                 use_planner: bool = True,
+                 adaptive_gain: bool = True):
         self.registry = registry
         self.ledger = ledger
         self.transport = transport
@@ -315,6 +417,13 @@ class IterativeRetriever:
         #: keeps the legacy W1 behaviour byte-for-byte.
         self.generic_calls = generic_calls
         self.use_planner = use_planner
+        #: EXPECTED INFORMATION GAIN gating (this task): before a fetch is
+        #: issued, ask whether its SUCCESS could satisfy an UNMET declared
+        #: requirement. If it cannot move the leaf past the tier boundary
+        #: the requirements define, the call is not worth making. Set False
+        #: to recover the plan-then-fetch behaviour exactly (used by the
+        #: golden-run comparison).
+        self.adaptive_gain = adaptive_gain
 
     def retrieve(self, question, question_type: str,
                  min_independent: int) -> RetrievalTrace:
@@ -374,7 +483,40 @@ class IterativeRetriever:
                 trace.stop_reason = (
                     "selected sources lack generic fetch routes")
                 break
-            specs = routable[:self.max_sources_per_leaf]
+            # ── EXPECTED INFORMATION GAIN gating ──────────────────────────
+            # Before issuing round N+1, rank every candidate by whether its
+            # SUCCESS could satisfy an UNMET declared requirement. Sources
+            # that cannot change the answer (duplicate voice against a pure
+            # independence shortfall; declared cannot-answer) are skipped —
+            # the call is not worth making. Recorded in the trace so an
+            # auditor can see WHY nothing more was fetched.
+            if self.adaptive_gain and rnd > 1:
+                reqs = getattr(question, "evidence_requirements", None)
+                kept: list = []
+                for s in routable:
+                    est = estimate_gain(
+                        s, reqs, trace.independent_keys,
+                        question_type or question.text)
+                    if est.worth_the_call:
+                        kept.append(s)
+                    else:
+                        why = ("duplicate independent voice" if
+                               est.duplicate_voice else
+                               "declared cannot-answer / no addressable "
+                               "requirement")
+                        trace.gain_skipped.append(
+                            {"round": rnd, "source": s.name,
+                             "reason": why})
+                        logger.info("gain-skip %s r%d: %s",
+                                    s.name, rnd, why)
+                if not kept:
+                    trace.stop_reason = (
+                        "no candidate fetch could satisfy any unmet "
+                        "declared requirement — stopping before spend")
+                    break
+                specs = kept[:self.max_sources_per_leaf]
+            else:
+                specs = routable[:self.max_sources_per_leaf]
             trace.queries.append(query)
             round_admitted = 0
             round_detail = {"round": rnd, "query": query,
