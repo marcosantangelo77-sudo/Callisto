@@ -313,17 +313,17 @@ def _bea() -> ProbeResult:
     src, ad = _build("bea")
     r.url = src.spec.base_url + "?DataSetName=NIPA&method=GetData..."
     def shape(d):
-        bea = d.get("BEAAPIs") or {}
+        bea = d.get("BEAAPI") or {}
         data = ((bea.get("Results") or {}).get("Data")) or []
-        err = bea.get("Error")
-        if err:
-            return f"BEA error payload: {err}"
-        return "" if data else "BEAAPIs.Results.Data empty"
+        if not data:
+            return ("BEAAPI.Results.Data empty (or missing — live root "
+                    "key is 'BEAAPI', not 'BEAAPIs')")
+        return ""
     def count(d):
-        bea = d.get("BEAAPIs") or {}
+        bea = d.get("BEAAPI") or {}
         return len(((bea.get("Results") or {}).get("Data")) or [])
     return _run(lambda: ad.get_data("NIPA", "T10101", linecode="1",
-                                    frequency="A", years="2023"), r,
+                                    frequency="Q", years="X"), r,
                 count, shape)
 
 
@@ -347,18 +347,26 @@ def _census() -> ProbeResult:
 def _eia() -> ProbeResult:
     r = ProbeResult("eia")
     src, ad = _build("eia")
-    r.url = src.build_url("/seriesid/COPRPUS.A",
-                          {"frequency": "annual"})
+    # /v2/seriesid/{ID} was removed by EIA (404 for every id, verified
+    # live 2026-08-24); the probe now exercises the v2 facet route that
+    # series() translates classic PET.<ID>.<FREQ> ids onto.
+    r.url = (src.build_url("/petroleum/stoc/wstk/data",
+                           {"frequency": "weekly", "data[0]": "value",
+                            "facets[series][]": "WCSSTUS1"}))
     def shape(d):
-        resp = d.get("response") or d
+        resp = d.get("response") or {}
         data = resp.get("data") or []
         if not data:
             return f"no response.data; keys={sorted(d)[:10]}"
+        row = data[0]
+        for col in ("period", "value"):
+            if col not in row:
+                return f"row missing '{col}': keys={sorted(row)[:10]}"
         return ""
     def count(d):
-        resp = d.get("response") or d
-        return len(resp.get("data", []) or [])
-    return _run(lambda: ad.series("COPRPUS.A", frequency="annual",
+        resp = d.get("response") or {}
+        return len(resp.get("data") or [])
+    return _run(lambda: ad.series("PET.WCSSTUS1.W", frequency="weekly",
                                   length=3), r, count, shape)
 
 

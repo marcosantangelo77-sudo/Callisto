@@ -16,18 +16,17 @@ state & metro personal income.
 Cannot answer: monthly sub-NIPA firm data, forecasts (BEA publishes
 estimates + revisions, not projections), real-time intraday anything;
 revisions mean the latest vintage is NOT what was known historically.
-    LIVE PROOF (2026-08-24): the root key is 'BEAAPI' (singular). Older
-    code parsed 'BEAAPIs' — a fixture-shaped phantom that made every real
-    response read as zero rows. Also: BEA returns HTTP 200 with an Error
-    object inside Results (e.g. APIErrorCode 4 'This UserId is not
-    active'); we raise on it rather than silently returning an empty
-    result, because a 200-with-zero-results is a failure mode this repo
-    has been burned by before (FDIC filters=/search=, ClinicalTrials).
-    """
+
+LIVE PROOF (2026-08-24): the payload root key is 'BEAAPI' (singular).
+Older code parsed 'BEAAPIs' — a fixture-shaped phantom, so every real
+response parsed as zero rows. BEA also returns HTTP 200 with an Error
+object inside Results (e.g. APIErrorCode 4 'This UserId is not active');
+get_data raises on that rather than silently returning empty Data[],
+because 200-with-zero-results is a failure mode this repo has been
+burned by before (FDIC filters=/search=, ClinicalTrials status word).
+"""
 
 from __future__ import annotations
-
-import re
 
 from tools.sources.base import RestSource, SourceError, SourceSpec
 
@@ -64,12 +63,34 @@ class BeaAdapter:
         params = {"UserID": key, "ResultFormat": "JSON", **params}
         return self.source.build_url("", params)
 
+    def _extract(self, data: dict) -> dict:
+        """Pull the Results object out of a live BEA payload.
+
+        BEA's documented root is 'BEAAPI' (the 'BEAAPIs' spelling some
+        fixtures used has never appeared on the wire). Raise SourceError
+        on an embedded error payload instead of returning empty results.
+        """
+        root = data.get("BEAAPI")
+        if not isinstance(root, dict):
+            raise SourceError(
+                "BEA: unexpected payload shape (no BEAAPI root); "
+                f"top-level keys={sorted(data)[:8]}")
+        results = root.get("Results") or {}
+        err = results.get("Error")
+        if err:
+            code = (err or {}).get("APIErrorCode", "?")
+            desc = (err or {}).get("APIErrorDescription", "")
+            raise SourceError(f"BEA API error {code}: {desc}")
+        return results
+
     def get_data(self, dataset: str, tablename: str = "",
                  linecode: str = "", frequency: str = "",
                  years: str = "", **extra) -> dict:
         """GetData for NIPA ('NIPA', 'T10101', linecode), regional
         ('Regional', TableName like 'SAINC1'), etc. Returns BEA's
-        {BEAAPIs:{Results:{Data:[...]}}} payload with '_fetch' attached."""
+        {BEAAPI:{Results:{Data:[...]}}} payload with '_fetch' attached.
+        Raises SourceError on any BEA-embedded error (bad table, inactive
+        key, throttle) — never returns an empty Data[] as success."""
         params: dict[str, str] = {"method": "GetData", "DataSetName": dataset}
         if tablename:
             params["TableName"] = tablename
@@ -82,11 +103,14 @@ class BeaAdapter:
         params.update({k: str(v) for k, v in extra.items()})
         url = self._url(params)
         data, rec = self.source.get_json(url)
-        data["_fetch"] = {"url": rec.url, "sha256": rec.content_sha256,
-                          "fetched_at": rec.fetched_at}
-        return data
+        results = self._extract(data)
+        out = {"BEAAPI": {"Results": results},
+               "_fetch": {"url": rec.url, "sha256": rec.content_sha256,
+                          "fetched_at": rec.fetched_at}}
+        return out
 
     def list_parameters(self, dataset: str) -> dict:
-        return self.source.get_json(
-            self._url({"method": "GetParameterList",
-                       "DataSetName": dataset}))[0]
+        url = self._url({"method": "GetParameterList",
+                         "DataSetName": dataset})
+        data, _rec = self.source.get_json(url)
+        return self._extract(data)
