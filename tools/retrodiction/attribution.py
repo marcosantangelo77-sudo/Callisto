@@ -41,6 +41,7 @@ class RoleTrackingModel:
     def __init__(self, inner):
         self._inner = inner
         self._lock = threading.Lock()
+        self._run_id: str | None = None
         # run_id -> Counter({role: n_calls})
         self.role_calls: dict[str, Counter] = {}
         # run_id -> {role: last backend model name reported ("" if none)}

@@ -47,14 +47,14 @@ from tools.routing.scores import ModelScoreStore
 
 
 class _FakeInner:
-    name = "fake-backend"
+    name = "stub-model"
 
     def __init__(self):
         self.calls = []
 
     async def complete(self, role, messages, **kw):
         self.calls.append(role)
-        return {"content": "{}", "model": "fake-backend"}
+        return {"content": "{}", "model": "stub-model"}
 
 
 class _FakeResearcher:
@@ -80,7 +80,7 @@ async def test_tracker_records_roles_per_run():
     used = roles_for_run(tracker, rid)
     assert used == {"Architect": 1, "Manager": 2}
     assert researcher.results == []          # transparent passthrough
-    assert tracker.name == "fake-backend"
+    assert tracker.name == "stub-model"
 
 
 @pytest.mark.asyncio
@@ -173,11 +173,11 @@ class _SyncStubResearcher(_StubResearcher):
 
 def _mk_question(qid, answer=True):
     from datetime import date
-    from tools.retrodiction.questions import RetrodictionQuestion, QuestionKind
+    from tools.retrodiction.questions import RetrodictionQuestion
     return RetrodictionQuestion(
         question_id=qid, text=f"text of {qid}", domain="GENERAL",
         claim_date=date(2024, 1, 1), horizon_days=30,
-        question_type=QuestionKind.PREDICTIVE, answer_binary=answer)
+        answer_binary=answer)
 
 
 @pytest.mark.asyncio
@@ -317,7 +317,8 @@ def test_correlated_runs_do_not_inflate_readiness():
     rr = role_readiness("Sentinel", {
         "solo": atts, "other": other}, candidates=["solo", "other"])
     assert rr.honest_counts["solo"] == PAIRWISE_MIN_N      # counted once/run
-    assert rr.raw_counts["solo"] == 2 * PAIRWISE_MIN_N     # what inflation
+    assert rr.raw_counts["solo"] == PAIRWISE_MIN_N         # per-role records
+                                                        # in THIS role
     assert rr.ready                                        # would look like
 
 

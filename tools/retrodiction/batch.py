@@ -250,7 +250,10 @@ class RetrodictionBatch:
             # RTR: attribute roles when the researcher exposes a trackable
             # model seam. A plain PipelineResearcher carries `.model`.
             inner_model = getattr(researcher, "model", None)
-            if inner_model is not None:
+            if isinstance(inner_model, RoleTrackingModel):
+                tracker = inner_model
+                run_id = tracker.start_run()
+            elif inner_model is not None:
                 tracker = RoleTrackingModel(inner_model)
                 researcher.model = tracker
                 run_id = tracker.start_run()
@@ -309,8 +312,10 @@ class RetrodictionBatch:
             # (`model=` on AdversaryObjection), so an attack that actually
             # RAN is attributable even though it bypassed our tracker.
             adv_models = {o.model for o in
-                          (getattr(researcher.results[-1], "objections", [])
-                           or []) if getattr(o, "model", "")}
+                          ((getattr(researcher.results[-1], "objections", [])
+                            or []) if getattr(researcher, "results", None)
+                           else [])
+                          if getattr(o, "model", "")}
             if len(adv_models) == 1:
                 att.role_models["Adversary"] = next(iter(adv_models))
                 att.n_distinct_models = len(set(att.role_models.values()))
