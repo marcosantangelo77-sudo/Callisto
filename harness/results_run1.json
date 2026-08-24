@@ -188,5 +188,75 @@
       "82f39e98db0f4fc7": "unprovable"
     },
     "verdict": "undetermined-sealed"
+  },
+  {
+    "id": "Q05",
+    "question": "Did U.S. nonfarm payrolls fall by more than 15 million between February 2020 and April 2020?",
+    "category": "comparison+arithmetic",
+    "expected_stance": "AFFIRMS",
+    "gt": "Feb 2020 = 152,293k, Apr 2020 = 130,426k; drop = 21,867k \u2248 21.9M > 15M.",
+    "verified_by": "fredgraph.csv PAYEMS 2020-02..04",
+    "elapsed_s": 207.7,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 5,
+    "sources": [
+      "openalex",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What was the official BLS seasonally adjusted U.S. nonfarm payroll employment level in February 2020?",
+        "answer": "The provided evidence is irrelevant \u2014 it shows a World Bank indicator search for agricultural metrics and contains no BLS nonfarm payroll data, so the question cannot be answered from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "What was the official BLS seasonally adjusted U.S. nonfarm payroll employment level in April 2020?",
+        "answer": "None",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "Does the difference between the February 2020 and April 2020 nonfarm payroll levels exceed 15 million jobs?",
+        "answer": "The provided evidence does not contain February 2020 or April 2020 nonfarm payroll level figures \u2014 item [0] is an unrelated World Bank indicator listing and item [1] is a literature-search result without the data. No determination can be made from this evidence.",
+        "tier": "VERIFIED",
+        "confidence": 0.9,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "How do subsequent benchmark revisions to the February-April 2020 payrolls affect the size of that decline?",
+        "answer": "The evidence provided does not address the question: the single item is a World Bank indicator search result (agriculture indicators) with no data on US payrolls or benchmark revisions. It cannot be used to say how subsequent revisions changed the size of the February\u2013April 2020 payroll decline.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.05,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What was the official BLS seasonally adjusted U.S. nonfarm p': 3 fetch(s) rejected at ingestion: [bls] content covers 14% of the question's topical words (need 25%); missing: 2020, adjusted, current, employment, february, labor, level, nonfarm; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, adjusted, bls, current, employment, february, government, labor; [courtlistener] content covers 7% of the question's topical words (need 25%); missing: 2020, adjusted, bls, current, employment, february, labor, level",
+      "leaf 'What was the official BLS seasonally adjusted U.S. nonfarm p': 3 fetch(s) rejected at ingestion: [bls] content covers 14% of the question's topical words (need 25%); missing: 2020, adjusted, april, current, employment, labor, level, nonfarm; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, adjusted, april, bls, current, employment, government, labor; [courtlistener] content covers 7% of the question's topical words (need 25%); missing: 2020, adjusted, april, bls, current, employment, labor, level",
+      "leaf 'Does the difference between the February 2020 and April 2020': 6 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, difference, exceed, february, government; [fdic] content covers 6% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, difference, exceed, government, jobs; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, difference, exceed, february, government; [courtlistener] content covers 6% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, difference, exceed, february, jobs; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, difference, exceed, february, government; [courtlistener] content covers 6% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, difference, exceed, february, jobs",
+      "leaf 'How do subsequent benchmark revisions to the February-April ': 6 fetch(s) rejected at ingestion: [bls] content covers 7% of the question's topical words (need 25%); missing: 2020, affect, annual, april, benchmark, decline, february, historical; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2020, affect, annual, april, benchmark, bls, decline, historical; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, affect, annual, april, benchmark, bls, decline, february; [courtlistener] content covers 13% of the question's topical words (need 25%); missing: affect, annual, april, benchmark, bls, decline, february, payrolls; [courtlistener] content covers 13% of the question's topical words (need 25%); missing: affect, annual, april, benchmark, bls, decline, february, payrolls; [wikidata] content covers 13% of the question's topical words (need 25%); missing: 2020, affect, annual, april, benchmark, bls, decline, february"
+    ],
+    "gap_kinds": {
+      "fa3b08504a3f4d7b": "unprovable",
+      "fa67cd461b0f4377": "unprovable",
+      "44fbcc44e6f440e8": "unprovable"
+    },
+    "verdict": "refused"
   }
 ]
