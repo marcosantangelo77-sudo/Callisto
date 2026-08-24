@@ -224,5 +224,55 @@
       "8dc2f710dbd344c0": "unprovable"
     },
     "verdict": "refused"
+  },
+  {
+    "id": "Q08",
+    "question": "Is Paris the capital of France according to Wikidata?",
+    "category": "checkable-yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "Wikidata Q142 P36 = Q90 = Paris.",
+    "verified_by": "wikidata wbgetclaims Q142 P36 \u2192 Q90 (Paris)",
+    "elapsed_s": 192.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "wikidata"
+    ],
+    "leaves": [
+      {
+        "text": "What does the Wikidata entry for Paris (Q90) list as its 'capital of' (P1376) or 'country' (P17) property value?",
+        "answer": "No evidence items were provided, so the Wikidata P1376/P17 values for Paris (Q90) cannot be determined from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Does Wikidata identify France (Q142) with a 'capital' (P36) property whose value is Paris?",
+        "answer": "The provided evidence does not contain any statement about France (Q142) or a P36 'capital' property; the SPARQL results returned unrelated Wikidata/WikiProject items. The evidence therefore does not establish whether Q142 has P36 = Paris.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What does the Wikidata entry for Paris (Q90) list as its 'ca': 5 fetch(s) rejected at ingestion: [bls] content covers 0% of the question's topical words (need 25%); missing: capital, country, entity, entry, list, p1376, p17, paris; [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: capital, country, entity, entry, list, p1376, p17, paris; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: capital, country, entity, entry, list, p1376, p17, paris; [fdic] content covers 8% of the question's topical words (need 25%); missing: capital, country, entity, entry, list, p1376, p17, paris; [worldbank] content covers 15% of the question's topical words (need 25%); missing: capital, entity, entry, list, p1376, p17, paris, property",
+      "leaf 'Does Wikidata identify France (Q142) with a 'capital' (P36) ': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: capital, entity, france, identify, p36, paris, property, q142; [fdic] content covers 8% of the question's topical words (need 25%); missing: capital, entity, france, identify, p36, paris, property, q142; [worldbank] content covers 17% of the question's topical words (need 25%); missing: capital, entity, identify, p36, paris, property, query, value"
+    ],
+    "gap_kinds": {
+      "f49034e0b79543c4": "honest_null",
+      "9d2f8e8acd4a4946": "unprovable"
+    },
+    "verdict": "refused"
   }
 ]
