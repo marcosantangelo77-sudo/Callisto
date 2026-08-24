@@ -1119,6 +1119,47 @@ class ProviderRouter:
             emp.get("usd_per_brier_point", 5.0))
         self._score_store = None
         self._routing_policy = None
+        # Shared HTTP connection pool (speed run 2026-08-23, ported to this
+        # branch 2026-08-24). Created lazily, bound to the first running
+        # event loop that uses it; a test can force re-creation with
+        # _reset_shared_client() after changing loops.
+        self._http_client: Optional[httpx.AsyncClient] = None
+
+    def _shared_client(self) -> httpx.AsyncClient:
+        """Process/router-wide pooled AsyncClient. Rebuilt if the running
+        event loop changed (asyncio transports are loop-bound). A client that
+        does not expose ``is_closed`` (test doubles) is treated as spent, so
+        opaque stand-ins keep the legacy fresh-client-per-call shape."""
+        try:
+            loop = _asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        current = self._http_client
+        spent = (current is None
+                 or bool(getattr(current, "is_closed", True))
+                 or getattr(current, "_bound_loop", None) is not loop)
+        if spent:
+            client = httpx.AsyncClient(
+                timeout=httpx.Timeout(300.0, connect=10.0),
+                limits=httpx.Limits(
+                    max_connections=32,
+                    max_keepalive_connections=8,
+                    keepalive_expiry=120.0,
+                ),
+            )
+            client._bound_loop = loop  # type: ignore[attr-defined]
+            self._http_client = client
+        return self._http_client
+
+    def _reset_shared_client(self) -> None:
+        self._http_client = None
+
+    async def aclose(self) -> None:
+        """Close the shared pool (graceful shutdown / tests)."""
+        client = self._http_client
+        self._http_client = None
+        if client is not None and not getattr(client, "is_closed", True):
+            await client.aclose()
 
     @property
     def score_store(self):
@@ -1313,12 +1354,14 @@ class ProviderRouter:
             "max_tokens": 1,
         }
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(
-                    f"{ep.base_url}/chat/completions", json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
+            # SPEED (ported 2026-08-24): shared pool here too — health probes
+            # were paying the same fresh-handshake tax per endpoint per pass.
+            client = self._shared_client()
+            resp = await client.post(
+                f"{ep.base_url}/chat/completions", json=payload,
+                headers=headers, timeout=timeout,
+            )
+            resp.raise_for_status()
             self.states[name].record_success()
             return {"endpoint": name, "status": "ok"}
         except Exception as e:
@@ -1381,13 +1424,18 @@ class ProviderRouter:
         headers = {"Content-Type": "application/json"}
         if endpoint.api_key:
             headers["Authorization"] = f"Bearer {endpoint.api_key}"
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{endpoint.base_url}/chat/completions", json=payload,
-                headers=headers,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        # SPEED (ported 2026-08-24 from run 2026-08-23): one shared AsyncClient
+        # (connection pool) instead of a fresh client per request. A fresh
+        # client pays TCP connect + TLS handshake every call — measured ~0.3s
+        # extra per call against a remote TLS host. Per-request timeout still
+        # overrides the client default; failover semantics unchanged.
+        client = self._shared_client()
+        resp = await client.post(
+            f"{endpoint.base_url}/chat/completions", json=payload,
+            headers=headers, timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
         try:
             content = data["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError, TypeError):
@@ -1550,7 +1598,15 @@ class ProviderRouter:
 async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
                            timeout: float, attempts: int = 2) -> tuple[str, dict]:
     """Retry transient failures within one endpoint before failing over.
-    Connection errors and 5xx retry; other HTTP errors do not."""
+    Connection errors and 5xx retry; other HTTP errors do not.
+
+    SPEED (ported 2026-08-24, run 12): connect-phase failures
+    (ConnectError / ConnectTimeout) are NOT retried in place — no bytes were
+    sent, so an immediate second attempt against the same dead socket carries
+    no information and only taxed every dead-hop probe ~0.5s (measured 0.528s
+    on loopback refusals). They propagate to the failover chain at once;
+    read/write-phase errors keep the in-place retry with backoff.
+    """
     last_exc: Optional[Exception] = None
     for i in range(attempts):
         try:
@@ -1559,6 +1615,11 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
             if e.response.status_code < 500:
                 raise
             last_exc = e
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            # SPEED run 12: connect-phase failure sent no bytes anywhere —
+            # nothing transient to recover within one in-place retry. The
+            # caller's failover chain takes over; record_failure still runs.
+            raise
         except (httpx.TransportError,) as e:
             last_exc = e
         if i < attempts - 1:
