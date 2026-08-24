@@ -64,3 +64,22 @@ all-unprovable parent now refuses (was asserting `result.sealed`).
 Baseline 25 failures → suite run recorded in session log; new tests 5/5.
 unknowable_04 and unknowable_05 shapes can no longer enter the record as
 sealed answers.
+
+## Verification (final)
+
+- Full suite (minus 2 xgboost-collection-error files, pre-existing):
+  failure set byte-identical to parent commit db08c13 — zero new failures,
+  zero regressions. 79 baseline failures are other agents' concurrent
+  in-flight work on this tree, untouched by this change.
+- All seal-related suites green: test_seal_unprovable (5),
+  gap_verdict_wiring, estimate_wiring, integration_seam_engine,
+  build_why_explain (18), redteam_answer_correctness (10),
+  speed_parallel_leaves (16) — 72 passed.
+- Pushed: fix/seal-unprovable @ fd5f43a.
+
+## Fixture updates required by the contract change
+
+Three fixtures had pinned the defective behavior (single leaf,
+min_independent_sources=2, one admitting source → sealed 0.54 unprovable).
+They now either meet the bar legitimately (min_indep=1) or assert the new
+refusal while keeping their disclosure checks.
