@@ -121,5 +121,72 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q03",
+    "question": "Was the U.S. national debt on March 31, 2020 higher than $23 trillion?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "$23,686,870,812,640.08 on 2020-03-31.",
+    "verified_by": "fiscaldata.treasury.gov debt_to_penny record_date=2020-03-31",
+    "elapsed_s": 84.2,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q04",
+    "question": "Was the U.S. total public debt lower on January 31, 2023 than $30 trillion?",
+    "category": "negation",
+    "expected_stance": "DENIES",
+    "gt": "$31,454,982,227,739.16 \u2014 higher than $30T.",
+    "verified_by": "debt_to_penny record_date=2023-01-31",
+    "elapsed_s": 70.2,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "Was the U.S. total public debt lower on January 31, 2023 than $30 trillion?\n\n- [SPECULATIVE 0.54] What was the U.S. total public debt outstanding as of January 31, 2023, per the U.S. Treasury's Debt to the Penny dataset?: The provided evidence does not contain the U.S. total public debt outstanding as of January 31, 2023 from the Treasury's Debt to the Penny dataset. Evidence [0] is a court opinion search result and evidence [1] is a scholarly works search about European bond markets; neither cites the Treasury figure.  [GAP: unprovable]",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.34,
+    "confidence_tier": "SPECULATIVE",
+    "n_fetches": 2,
+    "sources": [
+      "courtlistener",
+      "openalex"
+    ],
+    "leaves": [
+      {
+        "text": "What was the U.S. total public debt outstanding as of January 31, 2023, per the U.S. Treasury's Debt to the Penny dataset?",
+        "answer": "The provided evidence does not contain the U.S. total public debt outstanding as of January 31, 2023 from the Treasury's Debt to the Penny dataset. Evidence [0] is a court opinion search result and evidence [1] is a scholarly works search about European bond markets; neither cites the Treasury figure.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "The evidence set contains no Treasury Debt to the Penny data at all \u2014 the two retrieved sources are a 2025 Texas court opinion and an OpenAlex work on European bond-market microstructure, both irrelevant. The claim is marked SPECULATIVE 0.54 rather than UNDETERMINED despite a self-declared [GAP: unprovable]; with zero supporting observations, even a sub-0.5 confidence score is unearned \u2014 the corre",
+      "The retrieval failure has a simpler explanation than 'the answer is hard to know': the queries were malformed for the task. The CourtListener search returns case law (BM25 scores on litigation text) and the OpenAlex OQL searched full text of scholarly works for a phrasing ('per Treasury's Debt Penny dataset') that would never appear in prose \u2014 both searches were guaranteed to miss the primary sour",
+      "The evidence is the output of exactly two domain-mismatched search endpoints (court opinions, academic works), so the pattern 'no evidence contains the figure' is fully produced by the source-selection process itself; nothing in the corpus could have contained Treasury data even in principle. Inferring anything from this evidence set about the debt value is survivorship over a filtered sample.",
+      "Most likely artifact: the residual confidence (0.54) leaks prior knowledge \u2014 the widely reported fact that the U.S. debt ceiling was breached and total public debt crossed $31 trillion around January 2023 \u2014 into what is presented as an evidence-grounded assessment. A model answering from parametric memory while citing unrelated court-opinion JSON as its 'evidence' produces a confident-looking numb"
+    ],
+    "notes": [
+      "leaf 'What was the U.S. total public debt outstanding as of Januar': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, daily, data, dataset, debt, fiscal, government, january; [fdic] content covers 6% of the question's topical words (need 25%); missing: 2023, daily, data, dataset, debt, fiscal, government, january; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, daily, data, dataset, debt, fiscal, government, january; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, daily, data, dataset, debt, fiscal, government, january"
+    ],
+    "gap_kinds": {
+      "82f39e98db0f4fc7": "unprovable"
+    },
+    "verdict": "undetermined-sealed"
   }
 ]
