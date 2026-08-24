@@ -658,6 +658,24 @@ import re as _re
 from tools.domain_registry import get_tool_registry
 from tools.domains.sports import build_sports_plugin
 from tools.domains.compute import register_if_available as _register_compute
+from tools.domains.finance.plugin import register_if_available as _register_finance
+from tools.domains.kalshi.plugin import register_if_available as _register_kalshi
+from tools.sources.plugin import register_if_available as _register_sources
+
+
+def _try_register(reg, register, name: str) -> None:
+    """Register a plugin; a broken plugin degrades to absent, never fatal.
+
+    A registration failure must not take down the loop (the sports plugin
+    above is registered unguarded on purpose: the regression domain). Every
+    optional plugin goes through here.
+    """
+    try:
+        register(reg)
+    except Exception as exc:  # noqa: BLE001 — plugin import/registration errors
+        logging.getLogger("callisto.domain_registry").warning(
+            "plugin %r failed to register: %s: %s",
+            name, type(exc).__name__, exc)
 
 
 def _default_registry():
@@ -670,6 +688,13 @@ def _default_registry():
         reg.register(build_sports_plugin(ODDS_TOOLS, _execute_sports_tool))
         # B2's sandboxed compute (build/sandbox-artifacts) when merged.
         _register_compute(reg)
+        # RED TEAM FAMILY 1 fix: finance, kalshi and sources were built with
+        # register_if_available seams whose ONLY callers were their own tests.
+        # The plugins existed, looked registered, and reached no session —
+        # edgar/kalshi_market_edge tools were unreachable at runtime.
+        _try_register(reg, _register_finance, "finance")
+        _try_register(reg, _register_kalshi, "kalshi")
+        _try_register(reg, _register_sources, "sources")
         _registry_seeded = True
         return reg
     return get_tool_registry()
