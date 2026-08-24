@@ -305,5 +305,81 @@
       "75d580b9980f4e56": "honest_null"
     },
     "verdict": "refused"
+  },
+  {
+    "id": "Q09",
+    "question": "Did the Supreme Court decide Loper Bright Enterprises v. Raimondo before 2024?",
+    "category": "multi-hop/negation",
+    "expected_stance": "DENIES",
+    "gt": "dateFiled = 2024-06-28 \u2014 not before 2024.",
+    "verified_by": "courtlistener search API caseName/dateFiled",
+    "elapsed_s": 289.5,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "fdic"
+    ],
+    "leaves": [
+      {
+        "text": "On what date did the Supreme Court decide Loper Bright Enterprises v. Raimondo?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Does that decision date fall before January 1, 2024?",
+        "answer": "No evidence items were provided, so the decision date cannot be determined and it cannot be compared to January 1, 2024.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "Refuting evidence exists and is trivially available: the Supreme Court decided Loper Bright Enterprises v. Raimondo on June 28, 2024 (603 U.S. 369). That date falls AFTER January 1, 2024, so the proposition 'decided before 2024' is affirmatively FALSE, not merely unverifiable. The pipeline returned an honest null because its only query hit an index with zero matches for NAME:'Loper Bright Enterpri",
+      "The zero-match index result has a more mundane explanation than absence of data: the filter syntax or field name ('NAME:Loper Bright Enterprises') does not match how that particular institutions_20260821090006 index records case names (e.g., capitalized full citation form 'Loper Bright Enterprises v. Raimondo', party-only fields, or docket number 22-451). A broken or wrong-corpus query, not eviden",
+      "The most likely artifact is scope confusion in the question itself: 'before 2024' conflates two different events. The Tenth Circuit decided Loper Bright on August 12, 2022 \u2014 which IS before 2024 \u2014 while the Supreme Court decision is June 28, 2024, which is not. If the pipeline ever resolves the null by grabbing any court decision date for the case without checking the forum, it could return 'yes' "
+    ],
+    "notes": [
+      "leaf 'On what date did the Supreme Court decide Loper Bright Enter': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official), fred (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official), fred (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official), openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['fdic']",
+      "leaf 'On what date did the Supreme Court decide Loper Bright Enter': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official; [fred] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official; [fred] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official",
+      "leaf 'Does that decision date fall before January 1, 2024?': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2024, against, before, calendar, comparison, date, decision, fall), fdic (content covers 10% of the question's topical words (need 25%); missing: 2024, against, before, calendar, comparison, date, decision, fall), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2024, against, before, calendar, comparison, date, decision, fall), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 10% of the question's topical words (need 25%); missing: 2024, against, before, calendar, comparison, date, fall, january); answer rests on NO sources",
+      "leaf 'Does that decision date fall before January 1, 2024?': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2024, against, before, calendar, comparison, date, decision, fall; [fdic] content covers 10% of the question's topical words (need 25%); missing: 2024, against, before, calendar, comparison, date, decision, fall; [fred] content covers 0% of the question's topical words (need 25%); missing: 2024, against, before, calendar, comparison, date, decision, fall; [wikidata] content covers 10% of the question's topical words (need 25%); missing: 2024, against, before, calendar, comparison, date, fall, january"
+    ],
+    "gap_kinds": {
+      "52fd3684449d414c": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q10",
+    "question": "Was the World Bank estimate of U.S. population in 2020 greater than 330 million?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "331,578,104.",
+    "verified_by": "api.worldbank.org SP.POP.TOTL USA 2020",
+    "elapsed_s": 20.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
