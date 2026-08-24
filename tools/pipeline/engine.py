@@ -149,6 +149,13 @@ class PipelineResult:
     #: the top level so a sealed result states WHICH kind of null each thin
     #: leaf is. Classification only — never read by scoring.
     gap_kinds: dict = field(default_factory=dict)   # qid -> kind value
+    #: I3 synthesis adoption: the evidence's agreement structure as a
+    #: serialisable dict (claim groups, independent-voice counts, extraction
+    #: table, honest nulls), plus any first-class Contradiction objects the
+    #: structure exposed. The structural score can only LOWER the parent
+    #: proposal (engine stage 6b); these fields carry the WHY.
+    synthesis: Optional[dict] = None
+    contradictions: list = field(default_factory=list)
 
     def summary_dict(self) -> dict:
         return {
@@ -161,6 +168,10 @@ class PipelineResult:
             "n_leaves": len(self.leaves),
             "n_fetches": len(self.fetches),
             "gap_kinds": dict(self.gap_kinds),
+            "synthesis": self.synthesis,
+            "contradictions": [
+                c.to_dict() if hasattr(c, "to_dict") else str(c)
+                for c in self.contradictions],
             "artifacts": [r.sha256[:12] for r in self.artifact_refs],
             "objections": [getattr(o, "text", str(o)) for o in self.objections],
         }
@@ -644,6 +655,66 @@ class ResearchPipeline:
         proposed = best_leaf.confidence
         # The parent's DIRECTION comes from the same leaf as its magnitude.
         parent_stance = best_leaf.stance
+
+        # 6b. Cross-source synthesis (I3 adoption). The evidence's AGREEMENT
+        # structure — who corroborates in INDEPENDENT units, what conflicts —
+        # is computed from the admitted fetches and can only LOWER the
+        # parent proposal. This is the mechanism the second live run named:
+        # nine fetches from one host scored like one source, and the
+        # synthesizer had no way to say so numerically. Asymmetry kept:
+        # min(...) against the structural score; nothing here can raise a
+        # confidence. See findings/improve_synthesis_adoption.md.
+        try:
+            from tools.pipeline.synthesis import (
+                EvidenceItem as _EvItem,
+                synthesize as _synthesize,
+            )
+            syn_items: list = []
+            null_traces: dict = {}
+            for q, l in zip(program.leaves, result.leaves):
+                leaf_fetches = [f for f in result.fetches
+                                if f.question_id == q.question_id]
+                if l.answer and leaf_fetches:
+                    for f in leaf_fetches:
+                        ev = next(
+                            (e for e in session.evidence
+                             if e.source_name == f.source_name
+                             and e.content.startswith(f.body[:100])), None)
+                        entry = self._get_registry().get(f.source_name)
+                        base_url = getattr(getattr(entry, "spec", None),
+                                           "base_url", "") \
+                            or f"https://{f.source_name}"
+                        syn_items.append(_EvItem.from_fetch(
+                            f, claim=l.answer.strip(),
+                            source_class=(ev.source_class.value
+                                          if ev else "INFERRED"),
+                            base_url=base_url))
+                elif not l.answer:
+                    # Honest-null classification for thin leaves uses the
+                    # same trace the gap classifier already consumed.
+                    from tools.pipeline.retrieval import RetrievalTrace
+                    null_traces[q.question_id] = getattr(
+                        l, "_trace", None) or RetrievalTrace(
+                            question_id=q.question_id)
+            rep = _synthesize(question, syn_items,
+                              null_traces=null_traces)
+            result.synthesis = rep.to_dict()
+            result.contradictions.extend(rep.contradictions)
+            if rep.groups:
+                structural = rep.confidence
+                if structural < proposed - 1e-9:
+                    result.notes.append(
+                        f"synthesis agreement lowered the parent proposal "
+                        f"{proposed:.2f} -> {structural:.2f}: "
+                        f"{rep.max_independent_agreement} independent "
+                        f"source unit(s) across {len(rep.groups)} claim "
+                        f"group(s)"
+                        + (f"; {len(rep.contradictions)} live "
+                           f"contradiction(s)" if rep.contradictions else ""))
+                proposed = min(proposed, structural)
+        except Exception as e:  # noqa: BLE001 — synthesis must never break sealing
+            logger.warning("synthesis stage skipped for %s: %s",
+                           session.session_id, e)
 
         # Inheritance rule: zero/weak resolved descendants cap at SPECULATIVE.
         clamped, tier = clamp_parent_confidence(
