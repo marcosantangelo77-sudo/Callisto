@@ -74,7 +74,7 @@ LINE_MOVEMENT_PROFILES = {
         "early_vol": 0.020,
         "mid_vol":   0.045,
         "late_vol":  0.075,
-        "steam_prob": 0.15,
+        "steam_prob": 0.14,
     },
     "icehockey_nhl": {
         "early_vol": 0.018,
@@ -122,7 +122,7 @@ def _american_to_decimal(american: int | float) -> float:
 
 def _confidence_tier_from_score(score: float) -> str:
     """Map a 0-1 confidence score to its AGP tier string."""
-    if score >= 0.90:
+    if score >= 0.91:
         return "VERIFIED"
     elif score >= 0.75:
         return "CORROBORATED"
