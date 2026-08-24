@@ -210,20 +210,46 @@ class TestSecFullText:
 
 
 class TestBea:
-    def test_get_data_requires_key_and_builds_params(self, monkeypatch):
+    def test_get_data_parses_live_beaaapi_root(self, monkeypatch):
+        # Re-captured from the live endpoint 2026-08-24: the payload root
+        # is 'BEAAPI' (singular). The old fixture used 'BEAAPIs', a shape
+        # BEA has never returned — it let a real zero-row parse defect
+        # through while the suite stayed green.
         bea, t = build("bea", "BeaAdapter", {
             "https://apps.bea.gov/api/data/?UserID=k&ResultFormat=JSON"
             "&method=GetData&DataSetName=NIPA&TableName=T10101"
             "&LineCode=1&Frequency=A&Year=2023": {
-                "BEAAPIs": {"Results": {"Data": [
-                    {"DataValue": "22671.0", "TimePeriod": "2023"}]}}},
+                "BEAAPI": {"Request": {"RequestParam": []},
+                           "Results": {"Data": [
+                    {"DataValue": "22671.0", "TimePeriod": "2023"}]}},
+            },
         })
         monkeypatch.setenv("CALLISTO_BEA_API_KEY", "k")
         out = bea.get_data("NIPA", tablename="T10101", linecode=1,
                            frequency="A", years="2023")
-        data = out["BEAAPIs"]["Results"]["Data"]
+        data = out["BEAAPI"]["Results"]["Data"]
         assert data[0]["TimePeriod"] == "2023"
         assert "_fetch" in out
+
+    def test_error_payload_raises_not_empty(self, monkeypatch):
+        # Live BEA returns HTTP 200 with an Error object inside Results
+        # (e.g. an inactive UserId). The adapter must raise, never
+        # silently return empty Data[] as success.
+        bea, t = build("bea", "BeaAdapter", {
+            "https://apps.bea.gov/api/data/?UserID=k&ResultFormat=JSON"
+            "&method=GetData&DataSetName=NIPA&TableName=T10101"
+            "&LineCode=1&Frequency=A&Year=2023": {
+                "BEAAPI": {"Request": {"RequestParam": []},
+                           "Results": {"Error": {
+                    "APIErrorCode": "4",
+                    "APIErrorDescription":
+                        "This UserId is not active."}}},
+            },
+        })
+        monkeypatch.setenv("CALLISTO_BEA_API_KEY", "k")
+        with pytest.raises(SourceError, match="not active"):
+            bea.get_data("NIPA", tablename="T10101", linecode=1,
+                         frequency="A", years="2023")
 
     def test_missing_key_no_fetch(self):
         bea, t = build("bea", "BeaAdapter", {})
@@ -267,18 +293,39 @@ class TestCensus:
 
 
 class TestEia:
-    def test_series_requires_key_header_not_query(self, monkeypatch):
+    def test_series_translates_legacy_id_to_v2_route(self, monkeypatch):
+        # /v2/seriesid/{ID} was REMOVED by EIA (live-verified 404 on
+        # 2026-08-24). series() must translate the classic PET.<ID>.<FREQ>
+        # id onto its v2 facet route. Fixture re-captured live from
+        # /v2/petroleum/stoc/wstk/data (tests/fixtures/sources/).
         eia, t = build("eia", "EiaAdapter", {
-            EIA_BASE + "/seriesid/PET.WCESTUS1.W?frequency=weekly": {
-                "response": {"data": [{"period": "2024-01-05",
-                                       "value": 73.81}]}}},
+            EIA_BASE + "/petroleum/stoc/wstk/data?frequency=weekly"
+            "&data%5B0%5D=value&facets%5Bseries%5D%5B%5D=WCESTUS1"
+            "&sort%5B0%5D%5Bcolumn%5D=period"
+            "&sort%5B0%5D%5Bdirection%5D=desc": {
+                "response": {"total": "2290", "frequency": "weekly",
+                             "data": [{"period": "2026-08-14",
+                                       "duoarea": "NUS",
+                                       "series": "WCESTUS1",
+                                       "value": "428815",
+                                       "units": "MBBL"}]}}},
         )
         monkeypatch.setenv("CALLISTO_EIA_API_KEY", "ek")
         out = eia.series("pet.wcestus1.w", frequency="weekly")
         assert out["series_id"] == "PET.WCESTUS1.W"
-        assert out["data"][0]["value"] == 73.81
+        assert out["data"][0]["value"] == "428815"
+        assert out["data"][0]["series"] == "WCESTUS1"
+        assert "/petroleum/stoc/wstk/data" in t.calls[0][0]
         assert t.calls[0][1]["X-Api-Key"] == "ek"
-        assert "api_key=ek" not in t.calls[0][0] and "key=ek" not in t.calls[0][0]
+
+    def test_series_unknown_id_raises_with_guidance(self, monkeypatch):
+        # COPRPUS.A has no automatic v2 route mapping; the adapter must
+        # fail loudly instead of hitting the removed /seriesid endpoint.
+        eia, t = build("eia", "EiaAdapter", {})
+        monkeypatch.setenv("CALLISTO_EIA_API_KEY", "ek")
+        with pytest.raises(SourceError, match="browse"):
+            eia.series("COPRPUS.A", frequency="annual")
+        assert t.calls == []
 
     def test_missing_key_no_fetch(self):
         eia, t = build("eia", "EiaAdapter", {})
