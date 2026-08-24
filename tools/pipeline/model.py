@@ -33,34 +33,73 @@ class PipelineModel:
 
 
 def extract_json(text: str) -> Optional[dict]:
-    """First balanced JSON object in *text*, or None."""
-    start = text.find("{")
-    if start < 0:
+    """First parseable JSON object in *text*, or None.
+
+    Robust to prose wrapping (battery finding D3): hermes_cli and chatty
+    backends wrap the JSON verdict in leading commentary, trailing
+    explanation, or markdown fences. Strategy, most-specific first:
+      1. whole text parses (the clean case);
+      2. each ```fenced``` block;
+      3. every balanced {...} candidate — an earlier UNPARSEABLE candidate
+         no longer poisons the scan (a prose sentence like "result {see
+         below}" used to abort extraction entirely).
+    Returns None only when nothing in the text is a valid JSON object.
+    """
+    text = (text or "").strip()
+    if not text:
         return None
-    depth = 0
-    in_str = False
-    esc = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-            continue
-        if ch == '"':
-            in_str = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start:i + 1])
-                except json.JSONDecodeError:
-                    return None
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            return obj
+    except json.JSONDecodeError:
+        pass
+
+    def _try(candidate: str) -> Optional[dict]:
+        try:
+            obj = json.loads(candidate)
+            return obj if isinstance(obj, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+    for m in re.finditer(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL):
+        obj = _try(m.group(1))
+        if obj is not None:
+            return obj
+
+    # Every balanced-brace span; skip candidates that fail to parse instead
+    # of giving up (the old first-candidate-or-None behaviour).
+    start = text.find("{")
+    while start >= 0:
+        depth = 0
+        in_str = False
+        esc = False
+        end = -1
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end < 0:
+            break  # unmatched brace — no further complete candidate possible
+        obj = _try(text[start:end + 1])
+        if obj is not None:
+            return obj
+        start = text.find("{", start + 1)
     return None
 
 
