@@ -611,5 +611,89 @@
       "a5c6faa34ff7474a": "unprovable"
     },
     "verdict": "correct"
+  },
+  {
+    "id": "Q15",
+    "question": "What did the Kalshi market price for the 2032 U.S. presidential election winner close at yesterday?",
+    "category": "unknowable-market",
+    "expected_stance": "UNDETERMINED",
+    "gt": "No 2032 presidential market exists; correct output is refusal/UNDETERMINED.",
+    "verified_by": "no such market exists yet",
+    "elapsed_s": 256.7,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "What did the Kalshi market price for the 2032 U.S. presidential election winner close at yesterday?\n\n- [VERIFIED 0.95] Which Kalshi market contracts cover the winner of the 2032 U.S. presidential election, and what are their ticker identifiers?: The evidence does not address Kalshi market contracts or ticker identifiers. The single evidence item is a World Bank indicator search result (agricultural indicators) that is unrelated to the question, so the 2032 U.S. presidential election winner contracts and their tickers cannot be identified from the provided evidence.\n- [SPECULATIVE 0.54] Do independent records (news reports or market-data aggregators) corroborate the same closing prices for those 2032 election contracts yesterday?: No. The only evidence provided is a World Bank indicator search result (fertilizer/agricultural land indicators), which contains no information about 2032 election contracts or closing prices from news reports or market-data aggregators. No independent record corroborates any closing price.  [GAP: unprovable]",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.35,
+    "confidence_tier": "PROBABLE",
+    "n_fetches": 3,
+    "sources": [
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "Which Kalshi market contracts cover the winner of the 2032 U.S. presidential election, and what are their ticker identifiers?",
+        "answer": "The evidence does not address Kalshi market contracts or ticker identifiers. The single evidence item is a World Bank indicator search result (agricultural indicators) that is unrelated to the question, so the 2032 U.S. presidential election winner contracts and their tickers cannot be identified from the provided evidence.",
+        "tier": "VERIFIED",
+        "confidence": 0.95,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "What was the official daily closing price of each 2032 U.S. presidential election winner contract on Kalshi yesterday?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Do independent records (news reports or market-data aggregators) corroborate the same closing prices for those 2032 election contracts yesterday?",
+        "answer": "No. The only evidence provided is a World Bank indicator search result (fertilizer/agricultural land indicators), which contains no information about 2032 election contracts or closing prices from news reports or market-data aggregators. No independent record corroborates any closing price.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "There is no conclusion to verify: all three evidence items are World Bank agricultural-indicator listings (fertilizer consumption, arable land) fetched from api.worldbank.org, which by construction contain zero information about Kalshi election contracts or any closing prices. The pipeline's own VERIFIED-0.95 item explicitly states 'the evidence does not address Kalshi market contracts or ticker i",
+      "The [VERIFIED 0.95] label on the first sub-item is itself the artifact: a retrieval step searched the wrong API entirely (World Bank indicators endpoint queried with free-text Kalshi/election phrases), got back generic indicator rows for every query (all three fetches return identical sha256 bd377215... and near-identical rows regardless of query), and this empty-but-well-formed response may have ",
+      "Even the negative corroboration finding ([SPECULATIVE 0.54], GAP: unprovable) rests only on the same broken World Bank fetches; absence of news/aggregator confirmation in this evidence says nothing about whether independent records exist. The observed pattern (no supporting evidence found) is fully explained by querying a source that cannot possibly contain the target data, not by non-existence or",
+      "Source selection bias: every query was routed to one domain-insensitive API whose /indicator search matches only its own indicator catalog (total=1498 agricultural/development indicators), guaranteeing irrelevant hits for any query text. This process produces plausible-looking fetched-evidence objects for arbitrary questions without ever touching Kalshi, news wires, or market-data aggregators \u2014 th"
+    ],
+    "notes": [
+      "leaf 'Which Kalshi market contracts cover the winner of the 2032 U': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2032, api, contracts, cover, docs, election, exchange, identifiers; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2032, api, contracts, cover, docs, election, exchange, identifiers; [fred] content covers 0% of the question's topical words (need 25%); missing: 2032, api, contracts, cover, docs, election, exchange, identifiers",
+      "leaf 'What was the official daily closing price of each 2032 U.S. ': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2032, api, candlestick, close, closing, contract, daily, data; [fdic] content covers 6% of the question's topical words (need 25%); missing: 2032, api, candlestick, close, closing, contract, daily, data; [fred] content covers 0% of the question's topical words (need 25%); missing: 2032, api, candlestick, close, closing, contract, daily, data; [fred] content covers 0% of the question's topical words (need 25%); missing: 2032, api, candlestick, close, closing, contract, daily, data",
+      "leaf 'Do independent records (news reports or market-data aggregat': 2 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: 2032, aggregators, closing, contracts, corroborate, data, election, independent; [wikidata] content covers 17% of the question's topical words (need 25%); missing: 2032, aggregators, closing, contracts, corroborate, data, election, market"
+    ],
+    "gap_kinds": {
+      "483142d02e744c44": "unprovable"
+    },
+    "verdict": "correct"
+  },
+  {
+    "id": "Q16",
+    "question": "Did the U.S. total public debt reach $30 trillion before the unemployment rate fell to its January 2023 level?",
+    "category": "multi-hop",
+    "expected_stance": "AFFIRMS",
+    "gt": "Debt first exceeded $30T around 31 Jan 2022 ($30.01T), before Jan 2023.",
+    "verified_by": "debt_to_penny series + UNRATE series",
+    "elapsed_s": 62.2,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
