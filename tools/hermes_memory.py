@@ -73,7 +73,9 @@ class HermesMemory:
                 learned_at TEXT NOT NULL,
                 confidence REAL DEFAULT 0.5,
                 occurrences INTEGER DEFAULT 1,
-                source TEXT DEFAULT 'claude'
+                source TEXT DEFAULT 'claude',
+                source_class TEXT,
+                provenance_seal TEXT
             )""",
             """CREATE TABLE IF NOT EXISTS hermes_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,6 +86,19 @@ class HermesMemory:
             )""",
         ):
             await db.execute(stmt)
+        # EPISTEMICS (build/memory-wiki-improve): lazily upgrade tables created
+        # before the provenance columns existed (the workstation DB has not run
+        # migration 015). Migration 015 guards on the same column names, so
+        # either order of [runtime upgrade, migration] converges.
+        for alter in (
+            "ALTER TABLE hermes_learnings ADD COLUMN source_class TEXT",
+            "ALTER TABLE hermes_learnings ADD COLUMN provenance_seal TEXT",
+        ):
+            try:
+                await db.execute(alter)
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
         await db.commit()
         self._db_initialized = True
 
@@ -304,14 +319,23 @@ class HermesMemory:
                 if not self._db_initialized:
                     async with aiosqlite.connect(self.db_path) as db:
                         await self._ensure_tables(db)
+                # EPISTEMICS (build/memory-wiki-improve): the admitted class and
+                # its seal evidence are PERSISTED. They used to be computed,
+                # logged, and dropped — every read then defaulted the row back
+                # to INFERRED, so even a seal-verified learning reinjected as an
+                # unverified guess.
                 await coord.execute(
-                    "INSERT INTO hermes_learnings (key, value, learned_at, confidence, source) "
-                    "VALUES (?, ?, ?, ?, ?) "
+                    "INSERT INTO hermes_learnings (key, value, learned_at, "
+                    "confidence, source, source_class, provenance_seal) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(key) DO UPDATE SET "
                     "value=excluded.value, occurrences=occurrences+1, "
                     "confidence=excluded.confidence, "
-                    "learned_at=excluded.learned_at, source=excluded.source",
-                    (key, value, datetime.now(timezone.utc).isoformat(), confidence, source),
+                    "learned_at=excluded.learned_at, source=excluded.source, "
+                    "source_class=excluded.source_class, "
+                    "provenance_seal=excluded.provenance_seal",
+                    (key, value, datetime.now(timezone.utc).isoformat(),
+                     confidence, source, provenance_class, seal_hash),
                 )
                 self._cache.clear()
                 self._cache_time.clear()
@@ -324,13 +348,17 @@ class HermesMemory:
                 await db.execute("PRAGMA busy_timeout = 60000")
                 await self._ensure_tables(db)
                 await db.execute(
-                    "INSERT INTO hermes_learnings (key, value, learned_at, confidence, source) "
-                    "VALUES (?, ?, ?, ?, ?) "
+                    "INSERT INTO hermes_learnings (key, value, learned_at, "
+                    "confidence, source, source_class, provenance_seal) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(key) DO UPDATE SET "
                     "value=excluded.value, occurrences=occurrences+1, "
                     "confidence=excluded.confidence, "
-                    "learned_at=excluded.learned_at, source=excluded.source",
-                    (key, value, datetime.now(timezone.utc).isoformat(), confidence, source),
+                    "learned_at=excluded.learned_at, source=excluded.source, "
+                    "source_class=excluded.source_class, "
+                    "provenance_seal=excluded.provenance_seal",
+                    (key, value, datetime.now(timezone.utc).isoformat(),
+                     confidence, source, provenance_class, seal_hash),
                 )
                 await db.commit()
                 # Invalidate cache so next read picks up the new learning
@@ -381,8 +409,8 @@ class HermesMemory:
                 await db.execute("PRAGMA busy_timeout = 60000")
                 await self._ensure_tables(db)
                 cursor = await db.execute(
-                    "SELECT key, value, confidence, occurrences, source, learned_at "
-                    "FROM hermes_learnings "
+                    "SELECT key, value, confidence, occurrences, source, learned_at, "
+                    "source_class FROM hermes_learnings "
                     "WHERE confidence >= ? "
                     "ORDER BY learned_at DESC LIMIT ?",
                     (min_confidence, limit),
@@ -397,6 +425,10 @@ class HermesMemory:
                         "occurrences": r[3],
                         "source": r[4],
                         "learned_at": r[5],
+                        # Persisted provenance class ('' / NULL → INFERRED in
+                        # the annotator). Before this was stored, every row —
+                        # seal-verified included — read back as INFERRED.
+                        "source_class": r[6],
                     })
                     for r in rows
                 ]
@@ -730,8 +762,9 @@ class HermesMemory:
         """
         try:
             rows = await db.execute_fetchall(
-                "SELECT key, value, confidence, occurrences, learned_at, source "
-                "FROM hermes_learnings ORDER BY learned_at DESC LIMIT 60"
+                "SELECT key, value, confidence, occurrences, learned_at, source, "
+                "source_class FROM hermes_learnings "
+                "ORDER BY learned_at DESC LIMIT 60"
             )
             if not rows:
                 return ""
@@ -742,7 +775,7 @@ class HermesMemory:
             now = datetime.now(timezone.utc)
             items = []
             for r in rows:
-                key, value, conf, occ, learned_at, source = r
+                key, value, conf, occ, learned_at, source, source_class = r
                 eff = decay_confidence(conf, learned_at, now)
                 item = annotate_for_reinjection({
                     "id": key,
@@ -752,6 +785,7 @@ class HermesMemory:
                     "occurrences": occ,
                     "learned_at": learned_at,
                     "source": source,
+                    "source_class": source_class,
                     # Memory rows do not carry stance today; only explicitly
                     # marked disconfirmations count (conservative — see
                     # trim_learnings_for_context).

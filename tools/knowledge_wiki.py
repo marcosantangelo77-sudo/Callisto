@@ -115,6 +115,17 @@ MAX_SOURCES_PER_COMPILE = 30    # Don't overwhelm the local model
 MAX_ARTICLE_LENGTH = 4000       # Characters — keep articles focused
 STALE_THRESHOLD_HOURS = 72      # Flag articles not updated in 3 days
 
+# ── Learning admission (build/memory-wiki-improve) ─────
+#
+# The INFERRED ceiling (0.55) sits ABOVE the old flat `confidence >= 0.5`
+# gate, so every clamped model guess cleared admission — the exact
+# wiki-side half of the trust escalator instance4.md documented. A learning
+# now compiles only when its CURRENT standing (read-time decay applied)
+# clears the gate, and an INFERRED-class learning must additionally have
+# been re-observed: a one-shot guess cannot become a compiled prior alone.
+LEARNING_ADMISSION_GATE = 0.5
+LEARNING_MIN_OBSERVATIONS = 2
+
 
 # ── Article confidence: min-of-sources, never the mean ───────────────────
 #
@@ -318,22 +329,37 @@ class KnowledgeWiki:
                 "timestamp": row[5],
             })
 
-        # Recent hermes learnings
+        # Recent hermes learnings — admitted on CURRENT standing, not the
+        # stored peak (see LEARNING_ADMISSION_GATE above).
         cursor = await db.execute(
-            "SELECT key, value, confidence, learned_at "
+            "SELECT key, value, confidence, learned_at, occurrences, source_class "
             "FROM hermes_learnings WHERE learned_at > ? AND confidence >= 0.5 "
             "ORDER BY learned_at DESC LIMIT ?",
             (last_compile, MAX_SOURCES_PER_COMPILE),
         )
+        from tools.memory_epistemics import (
+            PROVENANCE_CEILINGS, decay_confidence, normalize_source_class,
+        )
+        now_utc = datetime.now(timezone.utc)
         for row in await cursor.fetchall():
+            (lkey, lvalue, lconf, learned_at, locc, lclass) = row
+            cls = normalize_source_class(lclass) or "INFERRED"
+            standing = decay_confidence(float(lconf or 0.0), learned_at, now_utc)
+            if standing < LEARNING_ADMISSION_GATE:
+                continue  # unobserved long enough to lose standing
+            if cls == "INFERRED" and int(locc or 1) < LEARNING_MIN_OBSERVATIONS:
+                continue  # a one-shot unverified guess compiles nothing alone
             sources.append({
                 "type": "learning",
-                "id": row[0],
-                "query": row[0],
+                "id": lkey,
+                "query": lkey,
                 "domain": "GENERAL",
-                "content": row[1],
-                "confidence": row[2],
-                "timestamp": row[3],
+                "content": lvalue,
+                # Compile input carries the learning's current standing,
+                # ceiling-clamped — never its historical peak.
+                "confidence": round(min(standing, PROVENANCE_CEILINGS[cls]), 3),
+                "provenance_class": cls,
+                "timestamp": learned_at,
             })
 
         return sources

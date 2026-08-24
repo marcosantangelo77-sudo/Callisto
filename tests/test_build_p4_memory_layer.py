@@ -370,7 +370,9 @@ class TestHermesMemoryRoundTrip(unittest.TestCase):
             learned_at TEXT NOT NULL,
             confidence REAL DEFAULT 0.5,
             occurrences INTEGER DEFAULT 1,
-            source TEXT DEFAULT 'claude')""")
+            source TEXT DEFAULT 'claude',
+            source_class TEXT,
+            provenance_seal TEXT)""")
         conn.commit()
         conn.close()
         from tools.hermes_memory import HermesMemory
