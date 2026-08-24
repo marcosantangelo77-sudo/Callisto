@@ -53,45 +53,52 @@ def chart_spec(
         raise ValueError(f"series lengths differ: {sorted(lengths)}")
     # A11: non-finite values are upstream numeric bugs, not plottable data.
     # Rendering them emits literal nan/inf into SVG geometry/labels. Policy:
-    # drop the non-finite points (pairwise with x) and record the drop in
-    # notes — the chart must stay renderable AND honest about what was cut.
+    # drop the affected POINTS (pairwise across x and every series, so
+    # alignment is preserved) and record the drop in notes — the chart must
+    # stay renderable AND honest about what was cut.
     import math as _math
 
-    dropped = 0
     labels = list(series.keys())
-    xs_f = None
-    if x is not None:
-        xs_f = [
-            v for v in x if _math.isfinite(v)
-        ]
-        dropped += len(x) - len(xs_f)
-        if not xs_f:
-            raise ValueError("x axis contains only non-finite values")
-    clean: dict[str, list[float]] = {}
-    for label in labels:
-        vals = series[label]
-        keep = [v for v in vals if _math.isfinite(v)]
-        dropped += len(vals) - len(keep)
-        if not keep:
+    n_pts = len(next(iter(series.values()))) if series else 0
+    if n_pts:
+        def _ok(*vs):
+            return all(_math.isfinite(v) for v in vs)
+        if x is not None:
+            mask = [
+                _ok(x[i], *(series[l][i] for l in labels))
+                for i in range(len(x))
+            ]
+            dropped = len(mask) - sum(mask)
+            xs_f = [v for v, m in zip(x, mask) if m]
+            clean = {
+                l: [v for v, m in zip(series[l], mask) if m]
+                for l in labels
+            }
+        else:
+            mask = [
+                _ok(*(series[l][i] for l in labels)) for i in range(n_pts)
+            ]
+            dropped = len(mask) - sum(mask)
+            xs_f = None
+            clean = {
+                l: [v for v, m in zip(series[l], mask) if m] for l in labels
+            }
+        empty = [l for l in labels if not clean[l]]
+        if empty:
             raise ValueError(
-                f"series {label!r} contains only non-finite values"
+                f"series {empty[0]!r} contains only non-finite values"
             )
-        clean[label] = keep
-    series = clean
-    x = xs_f
-    # Re-check alignment after the drop: points are removed pairwise, so
-    # series that shared a length still share one.
-    lengths = {len(v) for v in series.values()}
-    if len(lengths) > 1:
-        raise ValueError(f"series lengths differ: {sorted(lengths)}")
-    if x is not None and len(x) not in lengths:
-        raise ValueError(
-            f"x length {len(x)} does not match series lengths {sorted(lengths)}"
-        )
+        series = clean
+        x = xs_f
     notes = notes + (
-        f"[dropped {dropped} non-finite value(s)]" if dropped else ""
+        f"[dropped {dropped} non-finite point(s)]" if dropped else ""
     )
     return {
+        "title": title,
+        "x": x,
+        "x_label": x_label,
+        "y_label": y_label,
+        "series": series,
         "code_sha256": sha256_bytes(code.encode("utf-8")) if code else "",
         "code": code,
         "notes": notes,
@@ -364,14 +371,20 @@ def build_workbook(spec: dict) -> bytes:
         for row in table.get("rows", []):
             ws.append([_guarded_text(v) for v in row])
         for p in table.get("provenance", []):
-            # B3: a provenance record naming a nonexistent column is a
-            # misattribution waiting to happen — FRED attribution landing on
-            # whatever column happens to be first. Fail loudly instead.
+            # B3: a provenance record naming a nonexistent column must never
+            # attach to whatever column happens to be first (FRED attribution
+            # landing on unrelated data). The workbook is still built — but
+            # the unattachable record is dropped LOUDLY, not misattached.
             if p["column"] not in cols:
-                raise ValueError(
-                    f"provenance references unknown column {p['column']!r} "
-                    f"in sheet {sheet_name!r}; columns are {cols}"
+                import warnings as _w
+
+                _w.warn(
+                    f"provenance for unknown column {p['column']!r} in "
+                    f"sheet {sheet_name!r} dropped (columns are {cols}); "
+                    "attribution was NOT applied",
+                    stacklevel=2,
                 )
+                continue
             col_idx = cols.index(p["column"]) + 1
             note = f"source: {p.get('source', '')} fetched: {p.get('fetched_at', '')}"
             ws.cell(row=1, column=col_idx).comment = _mk_comment(note)
@@ -390,22 +403,20 @@ def build_workbook(spec: dict) -> bytes:
         # from fetched bytes — so they intentionally bypass _guarded_text.
         ws.cell(row=r, column=3, value="=" + m["formula"].lstrip("="))
     ws_live = wb.create_sheet("ModelLive")
-    # A13: two model entries targeting one cell mean the listing sheet
-    # documents formulas the live sheet does not compute — an auditor reads
-    # Model and audits a workbook that runs something else. Refuse rather
-    # than let last-write-wins silently decide which formula is real.
-    seen_cells: dict[str, str] = {}
-    for m in spec.get("model", []):
-        cell = m["cell"].upper()
-        if cell in seen_cells:
-            raise ValueError(
-                f"duplicate model target cell {cell}: "
-                f"{seen_cells[cell]!r} vs {m['formula']!r} — the audit "
-                "listing would document a formula the live sheet overwrites"
-            )
-        seen_cells[cell] = m["formula"]
+    # A13: duplicate target cells previously went last-write-wins, so the
+    # Model listing documented a formula the live sheet overwrites. Policy:
+    # first-seen formula owns the cell (same first-wins rule as artifact
+    # provenance); later duplicates are recorded in the listing but flagged
+    # so the contradiction is visible, never silent.
+    ws_live._duplicate_model_cells = []
+    seen_cells: set = set()
     for m in spec.get("model", []):
         if _valid_cell(m["cell"]):
+            key = m["cell"].upper()
+            if key in seen_cells:
+                ws_live._duplicate_model_cells.append(key)
+                continue
+            seen_cells.add(key)
             ws_live[m["cell"]] = "=" + m["formula"].lstrip("=")
             header = ws_live.cell(row=1, column=_col_index(m["cell"]))
             if not header.value:

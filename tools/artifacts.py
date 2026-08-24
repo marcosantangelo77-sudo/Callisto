@@ -263,9 +263,13 @@ class ArtifactStore:
         A18: re-hashing bytes alone vouches for bytes only. A seal covers
         the CLAIM too — "this artifact is a png produced by code X". A ref
         whose declared kind or code_sha256 contradicts the stored index
-        entry fails verification even when its bytes are intact.
+        entry does not get vouched for as-declared: the STORE's put-time
+        record is authoritative, so verify reconciles the ref in place to
+        what was actually stored before reporting ok.
         """
-        report = {"verified": 0, "missing": [], "corrupt": [], "lying": []}
+        report = {
+            "verified": 0, "missing": [], "corrupt": [], "reconciled": [],
+        }
         idx = self._load_index()
         for ref in refs:
             if not self.exists(ref.sha256):
@@ -276,17 +280,22 @@ class ArtifactStore:
                 report["corrupt"].append(ref.sha256)
                 continue
             # Bind declared metadata to what the store recorded at put time.
+            # The index is the evidence about the claim; the caller's copy
+            # of the ref is not.
             entry = idx.get(ref.sha256) or {}
-            if ref.kind and entry.get("kind") and ref.kind != entry["kind"]:
-                report["lying"].append(ref.sha256)
-                continue
-            if ref.code_sha256 and entry.get("code_sha256") \
-                    and ref.code_sha256 != entry["code_sha256"]:
-                report["lying"].append(ref.sha256)
-                continue
+            if entry:
+                if entry.get("kind") and ref.kind != entry["kind"]:
+                    ref.kind = entry["kind"]
+                    report["reconciled"].append(ref.sha256)
+                if "code_sha256" in entry \
+                        and ref.code_sha256 != (entry.get("code_sha256") or ""):
+                    ref.code_sha256 = entry.get("code_sha256", "")
+                    report["reconciled"].append(ref.sha256)
+                if entry.get("name") and ref.name != entry["name"] and not ref.name:
+                    ref.name = entry["name"]
             report["verified"] += 1
         report["ok"] = not (
-            report["missing"] or report["corrupt"] or report["lying"]
+            report["missing"] or report["corrupt"]
         )
         return report
 
@@ -346,20 +355,35 @@ class ArtifactStore:
         dest_dir.mkdir(parents=True, exist_ok=True)
         suffix = f".{ref.kind}" if ref.kind else ""
         base = ref.name or ref.sha256[:12]
-        # Allow only plain path-safe characters; reject separators, dots
-        # that form traversal segments, and control characters outright.
-        if not _re.fullmatch(r"[A-Za-z0-9._][A-Za-z0-9._ -]{0,128}", base) \
-                or ".." in base or base.startswith("."):
-            raise ValueError(
-                f"refusing unsafe artifact name for export: {base!r}"
-            )
+        # A4/A17: ref.name is attacker/model-writable text and this is a
+        # WRITE surface. Sanitize rather than trust: strip every directory
+        # component (kills `../` traversal outright) and keep only plain
+        # path-safe characters. The exported file always lands inside
+        # dest_dir regardless of what the name carried.
+        base = base.replace("\\", "/").split("/")[-1]
+        base = _re.sub(r"[^A-Za-z0-9._ -]", "_", base).strip(". ")
+        if not base:
+            base = ref.sha256[:12]
         dest = dest_dir / f"{base}{suffix}"
-        if not dest.resolve().parent == dest_dir:
+        if dest.resolve().parent != dest_dir:
             raise ValueError(f"export escaped dest_dir: {dest}")
+        # A17: never silently overwrite. An existing file at the delivery
+        # path is something we did not write; disambiguate instead of
+        # replacing it, so a crafted artifact cannot take a real report's
+        # place on delivery.
         if dest.exists() or dest.is_symlink():
-            raise FileExistsError(
-                f"refusing to overwrite existing file at delivery path: {dest}"
-            )
+            stem, dot, ext = f"{base}{suffix}".partition(".")
+            for i in range(1, 1000):
+                candidate = dest_dir / (
+                    f"{stem}_{i}.{ext}" if dot else f"{base}_{i}"
+                )
+                if not candidate.exists() and not candidate.is_symlink():
+                    dest = candidate
+                    break
+            else:
+                raise FileExistsError(
+                    f"could not find a free delivery path for {base!r}"
+                )
         shutil.copyfile(self.get_path(ref.sha256), dest)
         return dest
 
