@@ -161,5 +161,8 @@ survived once was four months of building without running.
 
     in flight:         build/pipeline           end-to-end wiring  <- the one that matters
                        build/preregistration    sealed falsifiers + long-lived claims
+                                                [NOTE 2026-08-24: built but NOT
+                                                wired into the engine's live
+                                                path; see SEAL_CONTRACT.md]
                        build/sources-2          more adapters incl. Wayback-as-proof
                        build/loop-quality       information-gain termination

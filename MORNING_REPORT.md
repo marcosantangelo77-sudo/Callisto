@@ -131,6 +131,11 @@ across roughly 20 agent instances in three waves.
 - `agp/preregistration.py` — commit, sealed, to what would confirm and refute
   BEFORE evidence. Immutable after seal (enforced, not conventional);
   amendments append with reasons and disclose the chain.
+  [CORRECTION 2026-08-24: this subsystem is NOT in the live pipeline path —
+  tools/pipeline/engine.py never calls it; it is reachable only through
+  long-lived Claims (agp/claims.py:169). "Sealed criteria committed before
+  evidence" below therefore overstates what a one-shot pipeline seal today
+  guarantees. See SEAL_CONTRACT.md.]
 - `agp/claims.py` — claims that stay open for months, accrue evidence, and
   append a BeliefRecord every time confidence moves. Hash-chained journal:
   rewriting history to flatter yourself breaks the chain and raises on load.
@@ -258,7 +263,9 @@ ingestion.
 + transport wired correctly, and gets deep into a run before telling you.
 
 Everything else built tonight — provenance, sealing, the adversary, the
-inheritance rule, preregistration, the sandbox — **worked**. The failure was in
+inheritance rule, preregistration, the sandbox — **worked**. (Preregistration
+worked as a subsystem; note it is not on the engine's live path — see
+SEAL_CONTRACT.md.) The failure was in
 getting good evidence in, not in reasoning honestly about it.
 
 ---

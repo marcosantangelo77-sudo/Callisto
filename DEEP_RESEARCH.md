@@ -224,10 +224,13 @@ artifact or executes model-authored code. None exists.
      captured stdout + return value + generated files.
    - Every execution is logged as AGP Evidence with `source_class=SIGNAL` initially;
    the code AND its full output are sealed — reproducibility becomes part of the
-   seal payload. This is the crucial epistemics move: **an answer with runnable,
-   sealed math attached is checkable by anyone forever**, which converts instance
-   4's "earned against reality" standard into something mechanically verifiable
-   even before outcomes resolve.
+   seal payload. This matters: **an answer with runnable, sealed math attached
+   is re-runnable by anyone forever** — the artifact hashes make the *math*
+   checkable (see SEAL_CONTRACT.md for exactly what the seal does and does not
+   cover). Note the boundary: sealing makes the computation tamper-evidently
+   reproducible; it does not verify that the model's prose conclusions are
+   true, and it never did. The "earned against reality" standard still
+   requires outcomes to resolve; a seal alone does not substitute.
 2. **S1 — Artifact type.** `{id, kind: csv|xlsx|json|png|ipynb, sha256, code_ref,
    data_refs[], session_seal}`. Files land in a content-addressed store; API gains
    `GET /artifact/{id}`. Session summaries reference artifacts by id; the seal

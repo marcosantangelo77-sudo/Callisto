@@ -231,6 +231,11 @@ Six mechanisms, each addressing a known failure mode of standalone models:
   4. An adversary that must try to break the conclusion before it seals.
   5. A scored track record, per claim class.
   6. Preregistration — commits to what would falsify before running.
+     [STATUS CORRECTION, 2026-08-24: built (agp/preregistration.py) and
+     reachable only via long-lived Claims (agp/claims.py). It is NOT wired
+     into the pipeline engine path (tools/pipeline/engine.py never touches
+     it), so a one-shot sealed answer carries no preregistration guarantee.
+     Open work; see SEAL_CONTRACT.md.]
 
 **Caveat, kept honest:** a harness that constrains a strong model also costs
 something. Frontier models are good at holistic synthesis, and a rigid pipeline
