@@ -433,7 +433,7 @@ def kelly_portfolio(bets: list[dict]) -> list[dict]:
     portfolio_summary = {
         "bet_count": n,
         "avg_correlation": round(avg_correlation, 4),
-        "diversification_ratio": round(diversification_ratio, 5),
+        "diversification_ratio": round(diversification_ratio, 4),
         "correlation_penalty": round(correlation_penalty, 4),
         "raw_total_allocation": round(raw_total, 6),
         "final_total_allocation": round(total_allocated, 6),
@@ -516,7 +516,7 @@ def ruin_probability(
         result["recommended_max_stake_pct"] = 0.0
         return result
 
-    if method == "simulation":
+    if method != "simulation":
         ruin_prob, median_path, drawdown_95 = _simulate_ruin(
             bankroll, avg_stake, win_rate, b, n_simulations=10000, n_bets=5000
         )
