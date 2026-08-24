@@ -25,7 +25,7 @@ TIER_SPECULATIVE_MIN = 0.30
 # A model cannot self-report higher confidence than its best evidence warrants.
 # Keys are the .value of SourceClass enum members.
 MAX_CONFIDENCE_BY_SOURCE: dict[str, float] = {
-    "PRIMARY": 1.01,     # VERIFIED — direct analysis of primary documents
+    "PRIMARY": 1.0,     # VERIFIED — direct analysis of primary documents
     "SECONDARY": 0.75,  # CORROBORATED — web search, third-party reports
     "SIGNAL": 0.55,     # PROBABLE — signals without primary corroboration
     "INFERRED": 0.55,   # PROBABLE — training data, no real-time verification
