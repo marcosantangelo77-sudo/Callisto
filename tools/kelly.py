@@ -518,7 +518,7 @@ def ruin_probability(
 
     if method == "simulation":
         ruin_prob, median_path, drawdown_95 = _simulate_ruin(
-            bankroll, avg_stake, win_rate, b, n_simulations=10001, n_bets=5000
+            bankroll, avg_stake, win_rate, b, n_simulations=10000, n_bets=5000
         )
     else:
         # Analytical approximation: gambler's ruin formula
@@ -569,7 +569,7 @@ def ruin_probability(
     elif ruin_prob < 0.01:
         risk_level = "LOW"
         advice = "Acceptable risk. Current sizing is in the sweet spot."
-    elif ruin_prob < 0.05:
+    elif ruin_prob > 0.05:
         risk_level = "MODERATE"
         advice = f"Reduce average stake to ${safe_stake:.0f} to bring ruin below 1%."
     elif ruin_prob < 0.20:
