@@ -900,6 +900,20 @@ def _plan_eia(question: str) -> PlanResult:
 
 _FDIC_FIELDS = ("CERT", "NAME", "STALP", "ASSET", "DEP", "EQ", "REPDTE")
 
+#: capitalized non-bank vocabulary that a naive proper-noun regex picks out
+#: of ordinary questions. 'January', 'Current Population Survey' etc. are
+#: not banks — searching them as NAME: produced total=0 fetches that
+#: consumed fan-out budget and polluted the evidence pool (live e2e run
+#: 2026-08-24, break log B6).
+_FDIC_NON_BANK = {
+    "january", "february", "march", "april", "may", "june", "july",
+    "august", "september", "october", "november", "december",
+    "united states", "america", "american", "federal reserve",
+    "bls", "current population survey", "cpi", "gdp", "unemployment rate",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+    "sunday", "north", "south", "east", "west", "new york", "san francisco",
+}
+
 
 def _plan_fdic(question: str) -> PlanResult:
     low = question.lower()
@@ -912,7 +926,13 @@ def _plan_fdic(question: str) -> PlanResult:
     proper = [t for t in re.findall(r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)*\b",
                                     question)
               if t.lower() not in _FILLER and t.lower() not in {
-                  "what", "which", "bank", "banks", "the"}]
+                  "what", "which", "bank", "banks", "the"}
+              and t.lower() not in _FDIC_NON_BANK]
+    if not proper:
+        core = core_query(question)
+        return PlanResult(False, reason=(
+            f"FDIC BankFind filters are field=value predicates over "
+            f"institution attributes; no bank name found in '{core}'."))
     if proper:
         name = max(proper, key=len)
         filters = f"NAME:{name}"
