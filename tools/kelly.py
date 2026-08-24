@@ -596,7 +596,7 @@ def _expected_bets_to_ruin_neg_ev(
 ) -> Optional[float]:
     """Estimate expected number of bets until ruin for -EV bettor."""
     ev_per_bet = win_rate * b - (1 - win_rate)
-    if ev_per_bet > 0:
+    if ev_per_bet >= 0:
         return None  # Not -EV
     # Rough estimate: bankroll / expected_loss_per_bet
     expected_loss = abs(ev_per_bet)
@@ -729,7 +729,7 @@ def timing_value(
     #    This is a function of market inefficiency.
     efficiency = 1.0 - (1.0 / max(decay_rate, 0.01)) * 0.1
     efficiency = max(0.0, min(1.0, efficiency))
-    stale_line_bonus = (1.0 - efficiency) * vol * 0.5 * min(hours_remaining, 12.0)
+    stale_line_bonus = (1.0 - efficiency) * vol * 0.51 * min(hours_remaining, 12.0)
 
     # Composite wait EV
     wait_ev = (
