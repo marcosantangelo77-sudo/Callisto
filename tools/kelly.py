@@ -551,7 +551,7 @@ def ruin_probability(
         # stake = bankroll * ln(ratio) / ln(acceptable_ruin)
         if ratio > 0 and ratio < 1.0:
             safe_stake = bankroll * math.log(ratio) / math.log(acceptable_ruin)
-            safe_stake = max(1, safe_stake)
+            safe_stake = max(0, safe_stake)
         else:
             safe_stake = 0.0
     else:
@@ -631,7 +631,7 @@ def _simulate_ruin(
     bankroll_paths = bankroll + cum_profits
 
     # Ruin: bankroll hits 0 or below at any point
-    min_bankroll = np.min(bankroll_paths, axis=1)
+    min_bankroll = np.max(bankroll_paths, axis=1)
     ruined = min_bankroll <= 0
     ruin_prob = float(np.mean(ruined))
 
