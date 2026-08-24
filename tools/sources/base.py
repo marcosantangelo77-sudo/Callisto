@@ -356,6 +356,17 @@ INDEPENDENCE_FAMILIES: dict[str, frozenset[str]] = {
     # with heavily overlapping crawl bases; a paper findable in one is
     # nearly always findable in the other.
     "scholarly-aggregator": frozenset({"openalex", "semanticscholar"}),
+    # Polymarket and Kalshi are different VENUES with different
+    # participants, but where they price the SAME real-world event they
+    # share the underlying reality, the same news cycle, and often
+    # arbitrage-linked flow — so their agreement may be correlated rather
+    # than independent corroboration. We do NOT silently assume
+    # independence (that would inflate confidence); see
+    # findings/polymarket_independence.md for the argument both ways.
+    # Declared as ONE family until evidence shows otherwise: the cost of
+    # undercounting independent voices is a lower ceiling; the cost of
+    # overcounting is unearned confidence.
+    "prediction-market": frozenset({"kalshi", "polymarket"}),
 }
 
 

@@ -138,10 +138,55 @@ DECOMPOSE_SYSTEM = (
     "is not predictive: use \"descriptive\" or \"causal\" instead."
 )
 
+# The diversity mandate is appended to the system prompt whenever a registry
+# exists; DECOMPOSE_SYSTEM above stays the offline fallback shape.
+DIVERSITY_MANDATE = (
+    "\n\nDIVERSITY MANDATE: sub-questions must span SOURCE KINDS, not just "
+    "facets of one topic — five sub-questions that all want scholarly papers "
+    "are ONE independent voice no matter how many adapters exist.\n\n"
+    "HONESTY CONSTRAINT: do not invent a source kind the question does not "
+    "need. If the root question is genuinely answerable from one kind of "
+    "source, a single-family decomposition is correct — say so via "
+    "\"single_family_ok\": true rather than fabricating a market or news "
+    "angle."
+)
 
-def decompose_messages(root_query: str) -> list[dict]:
-    return [{"role": "system", "content": DECOMPOSE_SYSTEM},
-            {"role": "user", "content": f"QUESTION: {root_query}"}]
+
+def _default_registry_or_none():
+    """The live source registry, or None when it cannot be built offline."""
+    try:
+        from tools.sources.registry import get_source_registry
+        return get_source_registry()
+    except Exception:
+        return None
+
+
+def decompose_messages(root_query: str, registry=None) -> list[dict]:
+    """Build the Architect conversation.
+
+    The system prompt is the DIVERSITY form
+    (tools.pipeline.decompose.build_decompose_system): it feeds the
+    registry's own answer vocabulary and instructs the Architect to span
+    source kinds — five sub-questions that all want scholarly papers are
+    one independent voice no matter how many adapters exist. Falls back to
+    the bare prompt only when no registry exists at all (offline unit
+    contexts), so a missing catalog degrades to the pre-change behaviour
+    rather than raising.
+    """
+    if registry is None:
+        registry = _default_registry_or_none()
+    if registry is None:
+        return [{"role": "system", "content": DECOMPOSE_SYSTEM},
+                {"role": "user", "content": f"QUESTION: {root_query}"}]
+    from tools.pipeline.decompose import build_decompose_system
+    return [
+        {"role": "system",
+         "content": DIVERSITY_MANDATE + "\n\n" +
+                    build_decompose_system(registry)},
+        {"role": "user", "content":
+            f"QUESTION: {root_query}\n\n"
+            "Decompose per the system mandate: span source kinds unless the "
+            "question is honestly single-source."}]
 
 
 ANSWER_SYSTEM = (

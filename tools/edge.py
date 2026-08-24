@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional, Union
 
 from tools.devig import devig_market
@@ -51,6 +52,15 @@ def _raw_implied(price: Quote) -> float:
     if isinstance(price, int) and price != 0 and abs(price) >= 100:
         # American odds are integers with |value| >= 100 by convention.
         return _american_to_implied(price)
+    if 2 <= price < 100 and float(price).is_integer():
+        # H1a (red team): a WHOLE number in [2, 100) is a contract price
+        # quoted in cents (Kalshi/Polymarket), not decimal odds of 47-to-1.
+        # int 47 and float 47.0 are the same price and must parse the same;
+        # previously both silently became decimal odds -> implied 2.1%.
+        # Non-integral values in this band stay decimal odds (2.13 is
+        # legitimately 2.13-to-1); callers with cent prices should still
+        # prefer kind="contract_cents".
+        return float(price) / 100.0
     return _continuous_to_prob(float(price))
 
 
@@ -105,15 +115,44 @@ class MarketQuote:
         With a counter-quote: two-way devig via tools/devig.py (auto method).
         Without: raw implied, flagged devigged=False — callers must treat
         that as carrying phantom vig, never as a fair price.
+
+        H1e (red team): the counter is parsed INDEPENDENTLY (auto semantics),
+        not under this quote's kind — a cent price pasted in as an American
+        or decimal counter used to be silently reinterpreted and devigged
+        against, inflating our side.
         """
         raw = self.implied_probability()
         if self.counter_price is None:
             return raw, {"devigged": False, "method": "none",
                          "note": "no counter-quote; raw implied carries the vig"}
-        counter = MarketQuote(price=self.counter_price, kind=self.kind)
+        try:
+            counter_implied = _raw_implied(self.counter_price)
+        except ValueError as e:
+            return raw, {"devigged": False, "method": "invalid_counter",
+                         "note": f"counter-quote unparseable: {e}"}
+        if not (0.0 < raw < 1.0) or not (0.0 < counter_implied < 1.0):
+            # An implied probability outside (0,1) means the sides were not
+            # both real prices; report the overround so the garbage is
+            # visible, but refuse to call anything devigged.
+            return raw, {
+                "devigged": False,
+                "method": "invalid_sides",
+                "overround": round(raw + counter_implied - 1.0, 6),
+                "raw_implied": raw,
+                "note": (
+                    f"side implied {raw:.4g} / counter implied "
+                    f"{counter_implied:.4g} outside (0, 1) — mixed-format or "
+                    f"impossible quote; refusing to devig"
+                ),
+            }
         result = devig_market(
-            [1.0 / raw, 1.0 / counter.implied_probability()]
+            [1.0 / raw, 1.0 / counter_implied]
         )
+        if "error" in result:
+            # Sub-fair / crossed book: nothing to devig (tools/devig refused).
+            return raw, {"devigged": False, "method": "refused",
+                         "overround": result["overround"],
+                         "note": result["error"]}
         fair = result["fair_probabilities"][0]
         return fair, {
             "devigged": True,
@@ -123,11 +162,41 @@ class MarketQuote:
         }
 
 
-def _to_decimal(price: Quote) -> float:
-    p = _raw_implied(price)
-    if p <= 0 or p >= 1:
-        raise ValueError(f"implied probability {p} out of (0,1)")
-    return 1.0 / p
+def _american_to_decimal(american: int) -> float:
+    if american > 0:
+        return 1.0 + american / 100.0
+    return 1.0 + 100.0 / abs(american)
+
+
+def _quote_decimal(quote: "MarketQuote") -> float:
+    """Decimal payout odds for OUR side, honouring the declared kind.
+
+    H1e/H1g (red team): this used to re-parse the price with auto semantics
+    regardless of kind, so a decimal-odds 3.0 read as 3 cents (and a
+    probability-kind negative slipped through). The payout must come from
+    the representation the caller declared.
+    """
+    kind = quote.kind
+    price = quote.price
+    if kind == "auto":
+        p = _raw_implied(price)
+        if not 0.0 < p < 1.0:
+            raise ValueError(f"implied probability {p} out of (0,1)")
+        return 1.0 / p
+    if kind == "decimal":
+        d = float(price)
+    elif kind == "probability":
+        d = 1.0 / float(price)
+    elif kind == "contract_cents":
+        d = 100.0 / float(price)
+    elif kind == "american":
+        d = _american_to_decimal(int(price))
+    else:
+        raise ValueError(f"unknown quote kind {kind!r}")
+    if not math.isfinite(d) or d <= 1.0:
+        raise ValueError(
+            f"quote implies decimal odds {d}; payout must exceed 1.0 to risk against")
+    return d
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +208,27 @@ def _to_decimal(price: Quote) -> float:
 # never loosen.
 MAX_FRACTION_FULL_KELLY = 0.25
 MIN_EDGE_TO_ACT = 0.005          # half a point of probability
+
+# H1d (red team): a quote older than this may not arm a position. A stale
+# price silently sizes against a market that has long since moved. Empty or
+# unparseable as_of counts as UNVERIFIABLE and is refused the same way —
+# "no timestamp" is not fresh, it is unauditable. May be tightened; never
+# loosened.
+MAX_QUOTE_AGE_S = 24 * 3600.0
+
+
+def _parse_as_of(as_of: str) -> Optional[datetime]:
+    """Parse an ISO-8601 quote timestamp; naive values are read as UTC."""
+    text = (as_of or "").strip()
+    if not text:
+        return None
+    try:
+        ts = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts
 
 
 @dataclass
@@ -203,12 +293,13 @@ def assess_edge(
     notes = []
     if not audit.get("devigged"):
         notes.append(
-            "single-sided quote: market probability is RAW IMPLIED, not "
-            "devigged — edge may include up to the full vig as phantom"
+            "single-sided or undeviggable quote: market probability is RAW "
+            "IMPLIED, not devigged — edge may include up to the full vig as "
+            "phantom, and it may not arm a position"
         )
 
     # Decimal payout available at the quoted price.
-    decimal = _to_decimal(quote.price)
+    decimal = _quote_decimal(quote)
     b = decimal - 1.0
     q = 1.0 - calibrated_prob
     kelly_full_frac = max(0.0, (b * calibrated_prob - q) / b)
@@ -216,7 +307,30 @@ def assess_edge(
 
     ev_per_unit = calibrated_prob * b - q      # stake 1, win b*p - q expectation
 
-    actionable = edge >= min_edge and ev_per_unit > 0
+    actionable = edge >= min_edge and ev_per_unit > 0 and audit.get("devigged", False)
+
+    # H1d (red team): freshness gate. A stale quote — or one with no
+    # verifiable timestamp at all — measures a market that no longer exists.
+    ts = _parse_as_of(quote.as_of)
+    if ts is None:
+        actionable = False
+        notes.append(
+            "quote has no parseable as_of timestamp: freshness unverifiable, "
+            "not actionable"
+        )
+    else:
+        age_s = (datetime.now(timezone.utc) - ts).total_seconds()
+        if age_s < -300.0:
+            # timestamp in the future beyond clock-skew tolerance: bad feed
+            actionable = False
+            notes.append(f"quote as_of {quote.as_of} is in the future")
+        elif age_s > MAX_QUOTE_AGE_S:
+            actionable = False
+            notes.append(
+                f"quote is stale: as_of {quote.as_of} exceeds the "
+                f"{MAX_QUOTE_AGE_S / 3600.0:.0f}h freshness gate"
+            )
+
     if kelly_full_frac > MAX_FRACTION_FULL_KELLY:
         notes.append(
             f"full Kelly {kelly_full_frac:.4f} capped at "

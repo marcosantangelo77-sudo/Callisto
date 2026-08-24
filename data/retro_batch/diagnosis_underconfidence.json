@@ -1,0 +1,421 @@
+{
+  "finding": "predicted mean 0.33 vs realised 0.60 (n=5). Every question collapsed to the same fixed point regardless of the raw estimate \u2014 see stacking.compounded_note.",
+  "attribution": {
+    "n_questions": 5,
+    "raw_estimate_assumed": 0.8,
+    "raw_estimate_caveat": "the raw model estimate was DISCARDED at clamp time (engine.py:379-383); this reconstruction assumes 0.80. Any estimate in [0.55, 1.0] produces the IDENTICAL trace \u2014 the collapse is many-to-one, which is itself the finding.",
+    "mean_final": 0.34,
+    "mean_removed_by_mechanism": {
+      "provenance_ceiling": 0.25,
+      "adversary_penalty": 0.2,
+      "requirement_cap": 0.01,
+      "inheritance_clamp": 0.0,
+      "self_review_cap": 0.0,
+      "synthesis_agreement": 0.0,
+      "floor_conf": 0.0
+    },
+    "per_question": [
+      {
+        "raw_estimate": 0.8,
+        "final": 0.34,
+        "total_removed": 0.46,
+        "by_mechanism": {
+          "provenance_ceiling": 0.25,
+          "adversary_penalty": 0.2,
+          "requirement_cap": 0.01,
+          "inheritance_clamp": 0.0,
+          "self_review_cap": 0.0,
+          "synthesis_agreement": 0.0,
+          "floor_conf": 0.0
+        },
+        "steps": [
+          {
+            "mechanism": "provenance_ceiling",
+            "before": 0.8,
+            "after": 0.55,
+            "removed": 0.25
+          },
+          {
+            "mechanism": "requirement_cap",
+            "before": 0.55,
+            "after": 0.54,
+            "removed": 0.01
+          },
+          {
+            "mechanism": "inheritance_clamp",
+            "before": 0.54,
+            "after": 0.54,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "adversary_penalty",
+            "before": 0.54,
+            "after": 0.34,
+            "removed": 0.2
+          },
+          {
+            "mechanism": "self_review_cap",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "synthesis_agreement",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "floor_conf",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          }
+        ]
+      },
+      {
+        "raw_estimate": 0.8,
+        "final": 0.34,
+        "total_removed": 0.46,
+        "by_mechanism": {
+          "provenance_ceiling": 0.25,
+          "adversary_penalty": 0.2,
+          "requirement_cap": 0.01,
+          "inheritance_clamp": 0.0,
+          "self_review_cap": 0.0,
+          "synthesis_agreement": 0.0,
+          "floor_conf": 0.0
+        },
+        "steps": [
+          {
+            "mechanism": "provenance_ceiling",
+            "before": 0.8,
+            "after": 0.55,
+            "removed": 0.25
+          },
+          {
+            "mechanism": "requirement_cap",
+            "before": 0.55,
+            "after": 0.54,
+            "removed": 0.01
+          },
+          {
+            "mechanism": "inheritance_clamp",
+            "before": 0.54,
+            "after": 0.54,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "adversary_penalty",
+            "before": 0.54,
+            "after": 0.34,
+            "removed": 0.2
+          },
+          {
+            "mechanism": "self_review_cap",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "synthesis_agreement",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "floor_conf",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          }
+        ]
+      },
+      {
+        "raw_estimate": 0.8,
+        "final": 0.34,
+        "total_removed": 0.46,
+        "by_mechanism": {
+          "provenance_ceiling": 0.25,
+          "adversary_penalty": 0.2,
+          "requirement_cap": 0.01,
+          "inheritance_clamp": 0.0,
+          "self_review_cap": 0.0,
+          "synthesis_agreement": 0.0,
+          "floor_conf": 0.0
+        },
+        "steps": [
+          {
+            "mechanism": "provenance_ceiling",
+            "before": 0.8,
+            "after": 0.55,
+            "removed": 0.25
+          },
+          {
+            "mechanism": "requirement_cap",
+            "before": 0.55,
+            "after": 0.54,
+            "removed": 0.01
+          },
+          {
+            "mechanism": "inheritance_clamp",
+            "before": 0.54,
+            "after": 0.54,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "adversary_penalty",
+            "before": 0.54,
+            "after": 0.34,
+            "removed": 0.2
+          },
+          {
+            "mechanism": "self_review_cap",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "synthesis_agreement",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "floor_conf",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          }
+        ]
+      },
+      {
+        "raw_estimate": 0.8,
+        "final": 0.34,
+        "total_removed": 0.46,
+        "by_mechanism": {
+          "provenance_ceiling": 0.25,
+          "adversary_penalty": 0.2,
+          "requirement_cap": 0.01,
+          "inheritance_clamp": 0.0,
+          "self_review_cap": 0.0,
+          "synthesis_agreement": 0.0,
+          "floor_conf": 0.0
+        },
+        "steps": [
+          {
+            "mechanism": "provenance_ceiling",
+            "before": 0.8,
+            "after": 0.55,
+            "removed": 0.25
+          },
+          {
+            "mechanism": "requirement_cap",
+            "before": 0.55,
+            "after": 0.54,
+            "removed": 0.01
+          },
+          {
+            "mechanism": "inheritance_clamp",
+            "before": 0.54,
+            "after": 0.54,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "adversary_penalty",
+            "before": 0.54,
+            "after": 0.34,
+            "removed": 0.2
+          },
+          {
+            "mechanism": "self_review_cap",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "synthesis_agreement",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "floor_conf",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          }
+        ]
+      },
+      {
+        "raw_estimate": 0.8,
+        "final": 0.34,
+        "total_removed": 0.46,
+        "by_mechanism": {
+          "provenance_ceiling": 0.25,
+          "adversary_penalty": 0.2,
+          "requirement_cap": 0.01,
+          "inheritance_clamp": 0.0,
+          "self_review_cap": 0.0,
+          "synthesis_agreement": 0.0,
+          "floor_conf": 0.0
+        },
+        "steps": [
+          {
+            "mechanism": "provenance_ceiling",
+            "before": 0.8,
+            "after": 0.55,
+            "removed": 0.25
+          },
+          {
+            "mechanism": "requirement_cap",
+            "before": 0.55,
+            "after": 0.54,
+            "removed": 0.01
+          },
+          {
+            "mechanism": "inheritance_clamp",
+            "before": 0.54,
+            "after": 0.54,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "adversary_penalty",
+            "before": 0.54,
+            "after": 0.34,
+            "removed": 0.2
+          },
+          {
+            "mechanism": "self_review_cap",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "synthesis_agreement",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          },
+          {
+            "mechanism": "floor_conf",
+            "before": 0.34,
+            "after": 0.34,
+            "removed": 0.0
+          }
+        ]
+      }
+    ]
+  },
+  "ab_arms": {
+    "raw_estimate": 0.8,
+    "baseline_final": 0.34,
+    "total_removed": 0.46,
+    "arms": {
+      "provenance_ceiling": {
+        "final_without": 0.34,
+        "points_restored": 0.0,
+        "share_of_gap": 0.0
+      },
+      "requirement_cap": {
+        "final_without": 0.35,
+        "points_restored": 0.01,
+        "share_of_gap": 0.0217
+      },
+      "inheritance_clamp": {
+        "final_without": 0.34,
+        "points_restored": 0.0,
+        "share_of_gap": 0.0
+      },
+      "adversary_penalty": {
+        "final_without": 0.38,
+        "points_restored": 0.04,
+        "share_of_gap": 0.087
+      },
+      "self_review_cap": {
+        "final_without": 0.34,
+        "points_restored": 0.0,
+        "share_of_gap": 0.0
+      },
+      "ensemble_spread": {
+        "final_without": 0.34,
+        "points_restored": 0.0,
+        "share_of_gap": 0.0
+      },
+      "synthesis_agreement": {
+        "final_without": 0.34,
+        "points_restored": 0.0,
+        "share_of_gap": 0.0
+      },
+      "floor_conf": {
+        "final_without": 0.34,
+        "points_restored": 0.0,
+        "share_of_gap": 0.0
+      }
+    },
+    "verdict_largest_single": "adversary_penalty"
+  },
+  "stacking": {
+    "raw_estimate": 0.8,
+    "chain": [
+      {
+        "step": "provenance_ceiling",
+        "value": 0.55,
+        "removed_this_step": 0.25
+      },
+      {
+        "step": "requirement_cap",
+        "value": 0.54,
+        "removed_this_step": 0.01
+      },
+      {
+        "step": "inheritance_clamp",
+        "value": 0.54,
+        "removed_this_step": 0.0
+      },
+      {
+        "step": "adversary_penalty",
+        "value": 0.39,
+        "removed_this_step": 0.15
+      },
+      {
+        "step": "self_review_cap",
+        "value": 0.39,
+        "removed_this_step": 0.0
+      },
+      {
+        "step": "synthesis_agreement",
+        "value": 0.38,
+        "removed_this_step": 0.01
+      }
+    ],
+    "compounded_final": 0.38,
+    "compounded_removed": 0.42,
+    "each_alone_final": {
+      "provenance_ceiling": 0.55,
+      "requirement_cap": 0.54,
+      "inheritance_clamp": 0.55,
+      "adversary_penalty": 0.65,
+      "self_review_cap": 0.54,
+      "synthesis_agreement": 0.38
+    },
+    "sum_if_naive_additive": 1.59,
+    "compounding_note": "caps compound multiplicatively (min of mins), so the compounded removal is LESS than the naive sum of single-mechanism removals \u2014 each later cap acts on an already-shrunken base. The bias is structural: ANY estimate above ~0.34 collapses to the same floor (0.38)."
+  },
+  "estimate_vs_ceiling_rescore": {
+    "n": 5,
+    "reported": {
+      "brier": 0.4336,
+      "mean_underconfidence_bias": 0.44
+    },
+    "estimate_separated": {
+      "brier": 0.49,
+      "mean_underconfidence_bias": 0.5
+    },
+    "brier_improvement": -0.0564,
+    "note": "counterfactual rescore of recorded numbers; no stored confidence was changed and no mechanism raised anything",
+    "interpretation": "NOT DECISIVE: raw_estimate is a reconstruction (0.80 assumed); the true value was not recorded. Separation improves Brier exactly when the estimate carries information the collapse destroyed. Deciding that requires instrumented runs (tools.calibration.instrument) on the next batch."
+  },
+  "sample_size_caveat": "n=5. A McNemar-style paired comparison of Brier deltas at this effect size (~0.27 bias) needs roughly n\u224830-50 questions to reach 80% power; n\u2248100 settles it comfortably and matches the existing 100-question batch plan.",
+  "invariant": "no mechanism was relaxed anywhere; min() guards are untouched; this is measurement only"
+}

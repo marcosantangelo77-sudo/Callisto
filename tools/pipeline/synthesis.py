@@ -355,6 +355,7 @@ def confidence_from_agreement(group: ClaimGroup,
                      "nothing is not evidence — score held at 0"]
     frac = min(1.0, _SINGLE_VOICE_FRACTION
                + _PER_EXTRA_VOICE * max(0, n_indep - 1))
+<<<<<<< HEAD
     # F5/F4c: corroboration is counted per PROVENANCE CLASS, never pooled.
     # Under the previous formula every voice borrowed the group MAX class's
     # ceiling, so one PRIMARY item let INFERRED gossip lift a mixed group to
@@ -377,6 +378,9 @@ def confidence_from_agreement(group: ClaimGroup,
         reasons.append(
             f"class {cls}: {cls_voices} independent voice(s) -> "
             f"{cls_frac:.0%} of its {cls_ceiling:.2f} ceiling")
+=======
+    score = floor_conf(ceiling * frac)
+>>>>>>> origin/build/dd-decomposition-diversity
     reasons.append(
         f"{n_indep} independent source(s) agree overall -> "
         f"{frac:.0%} of best-class ceiling (per-class accounting governs)")

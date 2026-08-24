@@ -45,12 +45,12 @@ class PipelineResearcher(Researcher):
 
     name = "pipeline"
 
-    def __init__(self, *, model, routes: dict[str, str],
+    def __init__(self, *, model, routes: Optional[dict[str, str]] = None,
                  adversary_router=None, store=None,
                  descendant_resolutions: Optional[list] = None,
                  claim_date: Optional[date] = None):
         self.model = model
-        self.routes = dict(routes)
+        self.routes = dict(routes) if routes is not None else None
         self.adversary_router = adversary_router or _AdversaryRouterStub()
         self.store = store
         self.descendant_resolutions = list(descendant_resolutions or [])
@@ -60,6 +60,7 @@ class PipelineResearcher(Researcher):
     def answer(self, prompts: list[dict],
                evidence: list[RetroEvidenceRecord],
                loops: int = 1) -> list[Prediction]:
+<<<<<<< HEAD
         # The batch runner executes sync researchers on a worker thread, where
         # no current event loop exists (get_event_loop() would raise). Create
         # and close our own — this method owns its loop lifetime completely.
@@ -69,17 +70,36 @@ class PipelineResearcher(Researcher):
                 self.answer_async(prompts, evidence, loops))
         finally:
             loop.close()
+=======
+        # Batch callers (tools/retrodiction/batch.py) invoke this from inside
+        # a running loop; standalone harness callers do not. Support both.
+        try:
+            asyncio.get_running_loop()
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(1) as ex:
+                return ex.submit(
+                    lambda: asyncio.run(
+                        self.answer_async(prompts, evidence, loops))
+                ).result()
+        except RuntimeError:
+            return asyncio.run(self.answer_async(prompts, evidence, loops))
+>>>>>>> origin/build/dd-decomposition-diversity
 
     async def answer_async(self, prompts, evidence, loops=1) -> list[Prediction]:
         # Cutoff enforcement already happened in the harness (CutoffEnforcer);
-        # records arriving here are proven-admitted. We surface their URLs as
-        # fixture routes so the source layer can serve exactly those bytes.
+        # records arriving here are proven-admitted.
+        # routes=dict  -> fixture_transport serves exactly those bytes
+        #                 (tests; no socket)
+        # routes=None  -> real HTTP transport through the source registry
+        #                 (live batch runs)
+        transport = (fixture_transport(self.routes)
+                     if self.routes is not None else None)
         out: list[Prediction] = []
         for p in prompts:
             pipeline = ResearchPipeline(
                 model=self.model,
                 adversary_router=self.adversary_router,
-                transport=fixture_transport(self.routes),
+                transport=transport,
                 store=self.store,
                 descendant_resolutions=self.descendant_resolutions,
             )

@@ -290,7 +290,8 @@ class TestEia:
 class TestFdic:
     def test_financials_filter_and_rows(self):
         fdic, _t = build("fdic", "FdicAdapter", {
-            "https://banks.data.fdic.gov/api/financials?"
+            # host moved to api.fdic.gov (old one 301s) — I2 live smoke
+            "https://api.fdic.gov/banks/financials?"
             "filters=CERT%3A3510&field_names=ASSET%2CDEP&limit=40"
             "&sort_by=REPDTE&sort_order=DESC": {
                 "data": [{"data": {"ASSET": 1000, "DEP": 800}}]}},

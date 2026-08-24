@@ -22,6 +22,12 @@ DEPRECATION NOTE (feat/portfolio-kelly-live-loop, audit 2026-04-22):
 from tools.math_utils import american_to_decimal, american_to_implied
 from tools.ev import ev_binary, ev_with_push
 
+import math
+
+# Single-bet hard cap as a fraction of bankroll. Mirrors tools.kelly's
+# dynamic-Kelly cap so the legacy primitives can't be talked past it.
+HARD_CAP_PCT = 0.05
+
 
 # Noise estimates by confidence level (in probability units)
 NOISE = {
@@ -37,6 +43,8 @@ def kelly_binary(fair_prob: float, decimal_odds: float) -> float:
     Returns 0 if bet is not +EV.
     Verified: prob=0.55, odds=2.10 -> f*=0.1409
     """
+    if not math.isfinite(fair_prob) or not math.isfinite(decimal_odds):
+        return 0.0
     b = decimal_odds - 1
     if b <= 0:
         return 0.0
@@ -52,9 +60,17 @@ def kelly_with_push(p_win: float, p_push: float, decimal_odds: float) -> float:
 
     CRITICAL: Ignoring push HALVES the Kelly fraction.
     Verified: p_win=0.54, p_push=0.04, odds=1.909 -> f*=0.078
+
+    H2c (red team): p_win + p_push > 1 makes p_loss NEGATIVE — an impossible
+    market that the naive formula reads as hugely +EV. Refuse, never size.
     """
+    if not (math.isfinite(p_win) and math.isfinite(p_push)
+            and math.isfinite(decimal_odds)):
+        return 0.0
     b = decimal_odds - 1
     if b <= 0:
+        return 0.0
+    if p_win < 0 or p_push < 0 or p_win + p_push >= 1.0:
         return 0.0
     p_loss = 1 - p_win - p_push
     f = (b * p_win - p_loss) / b
@@ -104,22 +120,47 @@ def bet_size(
     """
     Full sizing recommendation.
     Returns: recommended_stake, kelly_fraction, edge_pct, etc.
+
+    H2b/H2c/H3 (red team): the stake is hard-capped at 5% of bankroll for
+    EVERY input (degenerate p=1 included), and an impossible push mass
+    (p_win + p_push >= 1) stakes exactly zero instead of reading as +EV.
     """
-    if p_push > 0:
-        fk = kelly_with_push(fair_prob, p_push, decimal_odds)
-        ev = ev_with_push(fair_prob, p_push, decimal_odds)
+    if (p_push > 0 and (
+            not math.isfinite(p_push)
+            or not math.isfinite(fair_prob)
+            or fair_prob <= 0
+            or fair_prob + p_push >= 1.0)):
+        # Impossible market mass: refuse to size rather than let a negative
+        # loss probability masquerade as edge.
+        fk = 0.0
+        ev = 0.0
+        adjusted = 0.0
+        stake = 0.0
     else:
-        fk = kelly_binary(fair_prob, decimal_odds)
-        ev = ev_binary(fair_prob, decimal_odds)
+        if p_push > 0:
+            fk = kelly_with_push(fair_prob, p_push, decimal_odds)
+            ev = ev_with_push(fair_prob, p_push, decimal_odds)
+        else:
+            fk = kelly_binary(fair_prob, decimal_odds)
+            ev = ev_binary(fair_prob, decimal_odds)
 
-    adjusted = uncertainty_adjusted_kelly(fk, ev, confidence)
-    stake = bankroll * adjusted
+        adjusted = uncertainty_adjusted_kelly(fk, ev, confidence)
+        stake = bankroll * adjusted
 
-    if max_wager:
-        stake = min(stake, max_wager)
+    cap = bankroll * HARD_CAP_PCT
+    stake = min(stake, max_wager) if max_wager else stake
+    stake = min(stake, cap)
+
+    if not math.isfinite(stake):
+        stake = 0.0
+
+    # Round to cents like before — but never round UP through the cap.
+    stake = round(stake, 2)
+    if stake > cap:
+        stake = math.floor(cap * 100) / 100.0
 
     return {
-        "recommended_stake": round(stake, 2),
+        "recommended_stake": stake,
         "kelly_full": round(fk, 4),
         "kelly_quarter": round(fk * 0.25, 4),
         "kelly_adjusted": round(adjusted, 4),
