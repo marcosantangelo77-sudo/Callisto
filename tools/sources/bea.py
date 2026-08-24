@@ -55,12 +55,25 @@ class BeaAdapter:
         params = {"UserID": key, "ResultFormat": "JSON", **params}
         return self.source.build_url("", params)
 
+    @staticmethod
+    def _check_errors(data: dict) -> None:
+        """BEA returns HTTP 200 with an embedded error payload
+        ({BEAAPI:{Results:{Error:{APIErrorCode, APIErrorDescription}}}}).
+        A 200-with-error is a failed fetch, not an empty result — raise.
+        Live-verified 2026-08: envelope key is 'BEAAPI' (singular)."""
+        bea = data.get("BEAAPI") or {}
+        results = bea.get("Results") or {}
+        err = (bea.get("Error") or results.get("Error"))
+        if err:
+            raise SourceError(f"BEA API error: {err}")
+
     def get_data(self, dataset: str, tablename: str = "",
                  linecode: str = "", frequency: str = "",
                  years: str = "", **extra) -> dict:
         """GetData for NIPA ('NIPA', 'T10101', linecode), regional
         ('Regional', TableName like 'SAINC1'), etc. Returns BEA's
-        {BEAAPIs:{Results:{Data:[...]}}} payload with '_fetch' attached."""
+        {BEAAPI:{Request, Results:{Data:[...]}}} payload with '_fetch'
+        attached. Raises SourceError when BEA embeds an error."""
         params: dict[str, str] = {"method": "GetData", "DataSetName": dataset}
         if tablename:
             params["TableName"] = tablename
@@ -73,6 +86,13 @@ class BeaAdapter:
         params.update({k: str(v) for k, v in extra.items()})
         url = self._url(params)
         data, rec = self.source.get_json(url)
+        self._check_errors(data)
+        results = ((data.get("BEAAPI") or {}).get("Results")) or {}
+        if not results.get("Data"):
+            # 200-with-zero-results is broken, not OK — say which query died
+            raise SourceError(
+                f"BEA returned ZERO Data rows for {dataset} "
+                f"{tablename} line={linecode} years={years}")
         data["_fetch"] = {"url": rec.url, "sha256": rec.content_sha256,
                           "fetched_at": rec.fetched_at}
         return data

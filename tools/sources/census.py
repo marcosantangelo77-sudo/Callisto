@@ -1,8 +1,9 @@
 """Census Data API — construction, housing, retail, demographics. Tier 1.
 
 api.census.gov/data/{year}/{dataset}?get=VARS&for=GEO:*[&in=...].
-Key optional for light use but REQUIRED above ~500 queries/day
-(api.census.gov/data/key_signup.html); set CALLISTO_CENSUS_API_KEY.
+Key REQUIRED for ALL datasets as of 2026-08 (signup:
+api.census.gov/data/key_signup.html); set CALLISTO_CENSUS_API_KEY.
+Keyless requests get a 302 to data/missing_key.html (HTML, not JSON).
 No stated per-second ceiling; we self-limit to ~2 req/s. Responses are
 a flat JSON array: first row = column names, subsequent rows = values
 (all strings; 'N'/'-' etc. mean suppressed — preserved verbatim).
@@ -17,7 +18,7 @@ on some surveys, business identifiers/firm financials, suppressed cells
 
 from __future__ import annotations
 
-from tools.sources.base import RestSource, SourceSpec
+from tools.sources.base import RestSource, SourceError, SourceSpec
 
 SPEC = SourceSpec(
     name="census",
@@ -62,7 +63,21 @@ class CensusAdapter:
         if key:
             params["key"] = key
         url = self.source.build_url(f"/{year}/{dataset}", params)
-        data, rec = self.source.get_json(url)
+        try:
+            data, rec = self.source.get_json(url)
+        except SourceError as exc:
+            # Live-verified 2026-08: with no (or an exhausted) key the API
+            # 302-redirects to data/missing_key.html, which urllib follows
+            # to a 200 HTML page — surfacing as "non-JSON response". Make
+            # the real cause explicit instead.
+            if "non-JSON" in str(exc):
+                raise SourceError(
+                    f"census returned HTML instead of JSON for {url} — "
+                    f"almost certainly the missing-key redirect "
+                    f"(data/missing_key.html). Census now REQUIRES a key: "
+                    f"sign up at api.census.gov/data/key_signup.html and "
+                    f"set CALLISTO_CENSUS_API_KEY") from exc
+            raise
         if not isinstance(data, list) or not data:
             raise ValueError(f"unexpected census response shape from {url}")
         out = {"columns": data[0], "rows": data[1:]}

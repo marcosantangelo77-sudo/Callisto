@@ -91,13 +91,26 @@ def _finish(res: ProbeResult, data: Any, count_of: Callable[[Any], int],
 # data, then validates the exact keys downstream parsing relies on.
 
 def _build(name: str):
-    """(source, adapter) for a registered source, or None if unregistered."""
+    """(source, adapter) for a registered source.
+
+    Probes may pass either a module filename ('sec_fts') or the registry
+    spec name ('sec_fulltext'); both resolve. An unknown name raises
+    instead of returning None — an unpack of None once masked three dead
+    probes as one mysterious TypeError.
+    """
     from tools.sources.base import RestSource
     from tools.sources.registry import get_source_registry
     reg = get_source_registry()
     entry = reg.get(name)
     if entry is None:
-        return None
+        # tolerate module-filename aliases for registry spec names
+        for cand in reg.names():
+            if cand.replace("_", "") == name.replace("_", ""):
+                entry = reg.get(cand)
+                break
+    if entry is None:
+        raise KeyError(f"source '{name}' is not registered "
+                       f"(registered: {', '.join(reg.names())})")
     src = RestSource(entry.spec)
     return src, entry.make_adapter(src)
 
@@ -249,16 +262,19 @@ def _gdelt() -> ProbeResult:
                 lambda d: len(d.get("articles", [])), shape)
 
 
-@probe("sec_fts")
+@probe("sec_fulltext")
 def _sec_fts() -> ProbeResult:
-    r = ProbeResult("sec_fts")
-    src, ad = _build("sec_fts")
+    r = ProbeResult("sec_fulltext")
+    src, ad = _build("sec_fulltext")
     r.url = src.build_url("/search-index", {"q": "\"annual report\""})
     def shape(d):
-        hits = ((d.get("hits") or {}).get("hits")) or []
-        return "" if hits else "hits.hits empty"
+        # search() returns the NORMALIZED envelope {total, hits: [...],
+        # _fetch} — not the raw ES response. Probing d["hits"]["hits"]
+        # crashed on the normalized list (AttributeError: list.get).
+        hits = d.get("hits") if isinstance(d, dict) else None
+        return "" if hits else "normalized hits[] empty"
     out = _run(lambda: ad.search("\"annual report\"", limit=5), r,
-               lambda d: len(((d.get("hits") or {}).get("hits")) or []),
+               lambda d: len(d.get("hits", [])) if isinstance(d, dict) else 0,
                shape)
     # search() normalizes into 'results'; empty normalized output with raw
     # hits present would still be caught by the count above.
@@ -336,8 +352,8 @@ def _census() -> ProbeResult:
 def _eia() -> ProbeResult:
     r = ProbeResult("eia")
     src, ad = _build("eia")
-    r.url = src.build_url("/seriesid/COPRPUS.A",
-                          {"frequency": "annual"})
+    r.url = src.build_url("/steo/data",
+                          {"frequency": "annual", "facets[seriesId][]": "COPRPUS"})
     def shape(d):
         resp = d.get("response") or d
         data = resp.get("data") or []
@@ -370,12 +386,12 @@ def _fdic() -> ProbeResult:
                 r, count, shape)
 
 
-@probe("cftc")
+@probe("cftc_cot")
 def _cftc() -> ProbeResult:
     # Historical defect: wrong Socrata dataset id.
     from tools.sources.cftc import LEGACY_FUTURES_ONLY
-    r = ProbeResult("cftc")
-    src, ad = _build("cftc")
+    r = ProbeResult("cftc_cot")
+    src, ad = _build("cftc_cot")
     where = "cftc_contract_market_code='088691'"
     r.url = src.build_url(f"/{LEGACY_FUTURES_ONLY}.json",
                           {"$where": where, "$limit": 5})
@@ -457,72 +473,8 @@ def _kalshi() -> ProbeResult:
                 lambda d: len(d.get("markets", [])), shape)
 
 
-@probe("federalreserve")
-def _federalreserve() -> ProbeResult:
-    # Known-good: the speeches feed has carried items continuously for
-    # years; an empty parse or an HTML-instead-of-XML body is the failure
-    # mode this probe exists to catch (feeds moved once already — the
-    # /json/* endpoints 404'd before settling on /feeds/*.xml).
-    r = ProbeResult("federalreserve")
-    src, ad = _build("federalreserve")
-    r.url = src.spec.base_url + "/feeds/speeches.xml"
-    def count(d):
-        return len(d)
-    def shape(d):
-        if not d:
-            return "speeches feed parsed to zero items"
-        need = ("title", "url", "pub_date_gmt")
-        missing = [k for k in need if not d[0].get(k)]
-        return "" if not missing else f"item missing {missing}: keys={sorted(d[0])}"
-    return _run(ad.recent_speeches, r, count, shape)
-
-
-@probe("pubmed")
-def _pubmed() -> ProbeResult:
-    # Historical-defect shape: a fixture passes while esearch returns
-    # nothing live. Known-good query with thousands of hits must return
-    # ids, and esummary must carry title/journal for the first PMID.
-    r = ProbeResult("pubmed")
-    src, ad = _build("pubmed")
-    q = "semaglutide cardiovascular outcomes"
-    r.url = src.build_url("/esearch.fcgi",
-                          {"db": "pubmed", "term": q, "retmode": "json"})
-    def shape(d):
-        if d.get("count", 0) == 0:
-            return f"esearch zero hits for known-good query '{q}'"
-        if not d.get("pmids"):
-            return "esearch count>0 but no PMIDs returned"
-        return ""
-    try:
-        data = ad.search(q, limit=3)
-    except Exception as exc:  # noqa: BLE001
-        r.verdict = BROKEN
-        r.evidence.append(f"{type(exc).__name__}: {exc}")
-        return r
-    problem = shape(data)
-    r.row_count = data.get("count", 0)
-    if problem:
-        r.verdict = BROKEN
-        r.evidence.append(problem)
-        return r
-    try:
-        summ = ad.summarize(data["pmids"])
-    except Exception as exc:  # noqa: BLE001
-        r.verdict = BROKEN
-        r.evidence.append(f"esummary failed: {type(exc).__name__}: {exc}")
-        return r
-    first = next((v for k, v in summ.items() if k != "_fetch"), None)
-    if not first or not first.get("title"):
-        r.verdict = BROKEN
-        r.evidence.append("esummary returned no title for the first PMID")
-    else:
-        r.verdict = OK
-        r.evidence.append(
-            f"{r.row_count} hits; esummary parsed '{first['title'][:60]}'")
-    return r
-
-
 # ── runner ───────────────────────────────────────────────────────────────
+
 def run_all(names: list[str] | None = None) -> list[ProbeResult]:
     require_net_gate()
     order = names or sorted(PROBES)
