@@ -52,7 +52,8 @@ from agp.research_program import (
     ResearchQuestion,
     SourceClassRank,
 )
-from agp.thresholds import MAX_CONFIDENCE_BY_SOURCE, DB_CONFIDENCE_FLOOR
+from agp.thresholds import MAX_CONFIDENCE_BY_SOURCE, DB_CONFIDENCE_FLOOR, floor_conf
+from agp.ensemble import normalize_model
 from agp import ConfidenceTier
 from tools.artifacts import ArtifactStore, ArtifactRef
 from tools.pipeline import checkpoint as ckpt
@@ -252,7 +253,8 @@ class ResearchPipeline:
                  registry=None,
                  descendant_resolutions: Optional[list] = None,
                  checkpointer: Optional[ckpt.FileCheckpointer] = None,
-                 crossrun_store=None):
+                 crossrun_store=None,
+                 dissent_path: Optional[str] = None):
         self.model = model
         self.transport = transport
         self.store = store or ArtifactStore()
@@ -264,6 +266,14 @@ class ResearchPipeline:
         #: True when the adversary runs on the SAME model as the author
         #: (no adversary_router injected). Self-review is visible and capped.
         self._adversary_is_self_review = adversary_router is None
+        #: Model identity reported by the author backend (from response
+        #: dicts), used to judge reviewer independence at seal time.
+        self._author_model = ""
+        #: Where the dissent/track-record ledger lives. Default: the
+        #: persistent state dir (AdversaryLedger's own default) so objections
+        #: and their scoring ACCRUE across runs instead of dying in a
+        #: per-run mkdtemp scratch dir.
+        self._dissent_path = dissent_path
         # None = no checkpointing; behaviour identical to the pre-W3 run.
         self.checkpointer = checkpointer
         # Parallel-leaf machinery: compute-path serialization and artifact
@@ -293,21 +303,25 @@ class ResearchPipeline:
     def adversary(self):
         if self._adversary is None:
             from agp.adversary import Adversary, AdversaryLedger
-            import tempfile
-            tmp = tempfile.mkdtemp(prefix="callisto_adv_")
             # CONSTRUCTION ERGONOMICS (JOB 3): a live run used to die at
             # stage 6 — ~100 seconds in — because no adversary router was
             # wired. Defaulting to the SAME model as the author is safe by
-            # construction: agp.ensemble marks same-model review as
-            # self_review and caps it at SELF_REVIEW_CEILING, so this can
+            # construction: the seal path marks same-model review as
+            # self-review and caps it at SELF_REVIEW_CEILING, so this can
             # only ever subtract confidence, never inflate independence.
             router = self._adversary_router or self.model
             self._adversary = Adversary(
                 router,
-                ledger=AdversaryLedger(path=f"{tmp}/dissent.jsonl"))
+                ledger=(AdversaryLedger(path=self._dissent_path)
+                        if self._dissent_path else AdversaryLedger()))
             self._adversary_is_self_review = (
                 self._adversary_router is None)
         return self._adversary
+
+    @staticmethod
+    def _resp_model(resp: object) -> str:
+        """The model identity a backend reported for one response."""
+        return str(resp.get("model") or "") if isinstance(resp, dict) else ""
 
     # ── Stage 1: decompose ────────────────────────────────────────────────
 
@@ -325,6 +339,7 @@ class ResearchPipeline:
                             "Return corrected JSON in the same shape. Fix only "
                             "the rejected items."}]
         resp = await self.model.complete("Architect", msgs)
+        self._author_model = self._resp_model(resp) or self._author_model
         parsed = parse_model_json(resp) or {}
         program = ResearchProgram(root_query=query)
         self._question_types = {}
@@ -437,6 +452,7 @@ class ResearchPipeline:
         resp = await self.model.complete(
             "Manager", answer_messages(q.text, [e.content for e in evidence_items]),
             _call_tag=call_tag or q.question_id)
+        self._author_model = self._resp_model(resp) or self._author_model
         proposal = parse_model_json(resp) or {}
 
         compute = proposal.get("compute")
@@ -478,8 +494,13 @@ class ResearchPipeline:
             # Re-ask for the final answer now that computation ran.
             resp = await self.model.complete(
                 "Manager", answer_messages(
+<<<<<<< HEAD
                     q.text, [e.content for e in evidence_items]),
                 _call_tag=call_tag or q.question_id)
+=======
+                    q.text, [e.content for e in evidence_items]))
+            self._author_model = self._resp_model(resp) or self._author_model
+>>>>>>> origin/fix/bea-eia-queries
             proposal = parse_model_json(resp) or {}
 
         out.answer = str(proposal.get("answer", "")).strip()
@@ -919,19 +940,46 @@ class ResearchPipeline:
             proposed, self.descendant_resolutions)
 
         # 7. Adversary. When no dedicated router was injected, the author's
-        # own model attacks — recorded honestly as self-review in the notes.
-        if self._adversary_is_self_review:
+        # own model attacks. Reviewer independence is judged on reported
+        # MODEL IDENTITY (agp.ensemble ReviewProvenance) — not on which
+        # constructor flag was set — and a self-review is CAPPED here, in
+        # the same path that reports it. Before this enforcement the run
+        # notes claimed a SELF_REVIEW_CEILING cap that no code applied.
+        reviewer_model = (getattr(self.adversary, "last_model", "")
+                          or "(unattributed)")
+        from agp.ensemble import ReviewProvenance, SELF_REVIEW_CEILING
+        prov = ReviewProvenance(
+            author_model=self._author_model,
+            reviewer_models=[reviewer_model])
+        independent = (not self._adversary_is_self_review) and prov.independent
+        if independent:
             result.notes.append(
-                "adversary running in self-review mode: no separate "
-                "adversary_router was wired; same-model review is capped "
-                "(SELF_REVIEW_CEILING) and counts as zero independent "
-                "reviewers")
+                f"independent adversarial review by {reviewer_model}")
+        else:
+            # Conservative rule: cap unless the reviewer is known-DISTINCT
+            # from the author. Unknown identities (model name not reported)
+            # count as self-review — ambiguity never buys independence.
+            if self._adversary_is_self_review:
+                why = "no separate adversary_router was wired"
+            elif normalize(self._author_model) == normalize(reviewer_model):
+                why = f"adversary resolved to the author's model ({reviewer_model})"
+            else:
+                why = ("reviewer identity unattributable — ambiguity resolves "
+                       "conservative")
+            if clamped > SELF_REVIEW_CEILING:
+                clamped = floor_conf(SELF_REVIEW_CEILING)
+            result.notes.append(
+                f"self-review mode ({why}): same-model review counts as zero "
+                f"independent reviewers and confidence is capped at "
+                f"{SELF_REVIEW_CEILING} "
+                f"(SELF_REVIEW_CEILING)")
         objections = await self.adversary.attack(
             claim_id=session.session_id, conclusion=conclusion,
             evidence_items=[e.content for e in session.evidence])
         result.objections = objections
         from agp.adversary import Adversary
         clamped, _ = Adversary.apply_verdict(clamped, objections)
+        result.review_provenance = prov.to_dict()
 
         session.summary = SessionSummary(
             scope=question, domain=domain, conclusion=conclusion,
