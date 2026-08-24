@@ -46,12 +46,13 @@ Quote = Union[int, float]
 def _raw_implied(price: Quote) -> float:
     """Raw implied probability from any accepted price representation.
 
-    AUTO-KIND RULE (unit confusion, Family 4): an integer in [2, 99] is
-    ambiguous — decimal odds 47 and a 47-cent contract are equally valid
-    readings, and they differ by a factor of ~22 in implied probability.
-    Auto refuses to guess between them and raises; the caller must declare
-    kind='contract_cents' or kind='decimal'. Integers with |v| >= 100 are
-    unambiguously American odds by market convention.
+    AUTO-KIND RULE (unit confusion, Family 4): an integer in [2, 99] reads
+    as a cent-quoted CONTRACT PRICE (Kalshi/Polymarket convention), NOT as
+    decimal odds. Reading 47 as decimal odds implies 1/47 ≈ 2.1% when the
+    contract says 47% — a ~22x error whose direction depends on which side
+    you back. Callers quoting genuine integer decimal odds in 2..99 must
+    declare kind='decimal'. Integers with |v| >= 100 are American odds by
+    market convention.
     """
     if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price):
         raise ValueError(f"price must be a finite number, got {price!r}")
@@ -60,13 +61,13 @@ def _raw_implied(price: Quote) -> float:
         if abs(price) >= 100:
             # American odds are integers with |value| >= 100 by convention.
             return _american_to_implied(price)
-        if abs(price) <= 99:
-            raise ValueError(
-                f"integer price {price} is ambiguous under kind='auto': it "
-                f"could be decimal odds {price} (implied {1.0/price:.4f}) or "
-                f"a cent-quoted contract ({price/100.0:.4f}). Pass "
-                f"kind='contract_cents' or kind='decimal' explicitly."
-            )
+        if price >= 2:
+            # Cent-quoted contract: 47 means $0.47.
+            return price / 100.0
+        raise ValueError(
+            f"integer price {price} has no unambiguous reading under "
+            f"kind='auto'; declare kind explicitly"
+        )
     return _continuous_to_prob(float(price))
 
 
@@ -135,14 +136,15 @@ class MarketQuote:
         # one live book (crossed/stale mix — a free lunch); > 0.5 means no
         # real book holds 50 points. Either way there is no honest fair
         # price to devig to, so refuse rather than manufacture one.
-        if result["overround"] <= 0.0 or result["overround"] > 0.5:
+        if result["overround"] <= MIN_OVERROUND or result["overround"] > MAX_OVERROUND:
             return raw, {
                 "devigged": False,
                 "method": "refused",
                 "overround": result["overround"],
                 "error": (
                     f"book rejected: overround {result['overround']} outside "
-                    f"(0, 0.5] — sides are crossed, stale-mixed or not one market"
+                    f"({MIN_OVERROUND}, {MAX_OVERROUND}] — sides are crossed, "
+                    f"stale-mixed or not one market"
                 ),
                 "raw_implied": raw,
             }
@@ -153,6 +155,15 @@ class MarketQuote:
             "overround": result["overround"],
             "raw_implied": raw,
         }
+
+
+# Overround sanity bounds (M1c). A real two-way book carries positive but
+# bounded hold: <= 0 means the sides cannot both be live asks of one market
+# (crossed/stale mix — an apparent free lunch); > MAX_OVERROUND means no
+# real book holds that much. Books outside the window are refused, never
+# devigged into a "fair" price.
+MIN_OVERROUND = 0.0
+MAX_OVERROUND = 0.60
 
 
 def _to_decimal(price: Quote) -> float:
@@ -280,9 +291,15 @@ def assess_edge(
             )
     q = 1.0 - p_win
     kelly_full_frac = max(0.0, (b * p_win - q) / b)
-    kelly_full_capped = min(kelly_full_frac, MAX_FRACTION_FULL_KELLY)
-
     ev_per_unit = p_win * b - q      # stake 1, win b*p - q expectation
+    if audit.get("method") == "refused":
+        # A refused (crossed/stale-mixed) book has no honest price to size
+        # against: sizing is zeroed outright, not recomputed on the raw side.
+        if kelly_full_frac > 0 or ev_per_unit > 0:
+            notes.append("refused book: Kelly and EV zeroed")
+        kelly_full_frac = 0.0
+        ev_per_unit = 0.0
+    kelly_full_capped = min(kelly_full_frac, MAX_FRACTION_FULL_KELLY)
     if not audit.get("devigged") and ev_per_unit > 0:
         notes.append(
             "EV computed against RAW implied (no counter-quote): treat as "
