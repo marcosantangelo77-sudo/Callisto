@@ -717,6 +717,16 @@ class IterativeRetriever:
                             f"{spec.name} returned "
                             f"{getattr(source.last_record, 'status', '?')}")
                     body = __import__("json").dumps(fetched, sort_keys=True)
+                    # D2 (known-answer harness): a 200-OK payload can still
+                    # be an ERROR ENVELOPE (BLS REQUEST_NOT_PROCESSED =
+                    # no-key quota exhausted). Report it as a fetch failure,
+                    # never let it reach the gate where it would read as
+                    # 'irrelevant data' instead of 'no data was fetched'.
+                    from tools.sources import query_builder as _qbf
+                    envelope_err = _qbf.classify_fetch_failure(
+                        spec.name, fetched)
+                    if envelope_err:
+                        return ("fail", envelope_err[:120])
                     ok, cov, reason = self.gate.judge(
                         question.text, question_type, fetched)
                     url = getattr(source.last_record, "url", "")

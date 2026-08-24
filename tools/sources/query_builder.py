@@ -225,6 +225,45 @@ _BLS_CONCEPTS: dict[str, list[Candidate]] = {
 
 _BLS_ID_RE = re.compile(r"^[A-Z]{2,3}[A-Z0-9]{6,}$")
 
+
+#: BLS API v2 error payloads. The adapter returns HTTP 200 with a status
+#: array even when the request was NOT processed — a quota/auth failure that
+#: previously surfaced as an ordinary (empty) body, failed the relevance
+#: gate, and read downstream as 'the data says nothing' instead of 'we could
+#: not fetch the data'. See findings/retrieval_starvation.md D2.
+_BLS_FAILURE_STATUSES = {
+    "REQUEST_NOT_PROCESSED": "quota or auth failure",
+    "REQUEST_FAILED": "request failure",
+}
+
+
+def classify_fetch_failure(source_name: str, parsed_body: Any) -> Optional[str]:
+    """Human-readable failure reason when a source's 200-OK payload is really
+    an ERROR ENVELOPE; None when it is (or may be) genuine data. Only BLS is
+    known to do this today; other sources return None unchanged."""
+    if source_name != "bls" or not isinstance(parsed_body, dict):
+        return None
+    statuses = parsed_body.get("status")
+    if not isinstance(statuses, list):
+        return None
+    for s in statuses:
+        if isinstance(s, str) and s.upper() in _BLS_FAILURE_STATUSES:
+            detail = ""
+            msgs = parsed_body.get("message")
+            if isinstance(msgs, list) and msgs:
+                detail = f": {msgs[0]}"
+            return f"BLS {_BLS_FAILURE_STATUSES[s.upper()]}{detail}"
+    return None
+
+
+def _years_in_question(question: str) -> list[int]:
+    """Years explicitly named in a sub-question ('January 2023',
+    'between 2020 and 2021'). D2: the BLS planner ignored these and
+    hardcoded today.year-2..today.year, so questions about named past
+    windows fetched years that did not contain the asked-about months."""
+    return sorted({int(y) for y in re.findall(r"\b((?:19|20)\d{2})\b",
+                                              question)})
+
 #: Treasury Fiscal Data datasets by topic. The catalog has ~1000 datasets;
 #: we map the ones whose names appear in ordinary questions and otherwise
 #: declare the gap.
@@ -490,13 +529,30 @@ def _plan_bls(question: str) -> PlanResult:
         sid = resolved["series_id"]
         import datetime
         end = datetime.date.today().year
+        # D2 (known-answer harness): a year NAMED in the question defines the
+        # window. The old hardcoded start_year = today.year - 2 fetched
+        # 2024-2026 for a question about January 2023 — the asked-about month
+        # was outside the fetch, so the body could not answer and the gate
+        # rejected it. Clamp to the no-key 3-year history rather than widen.
+        yrs = _years_in_question(question)
+        start_year = min(yrs) if yrs else end - 2
+        # No-key tier allows 3 calendar years per call (start..end inclusive
+        # spans max_years). When the question names an older year, anchor the
+        # window AT the named year instead of at today: a question about
+        # January 2023 must fetch 2023, even if that means today's year is
+        # outside the call. Prefer the window containing the asked-about
+        # months over the window containing the present.
+        if end - start_year > 2:
+            start_year, end = start_year, start_year + 2
         return PlanResult(True, queries=[PlannedQuery(
             source="bls", method="timeseries",
-            kwargs={"series_ids": [sid], "start_year": end - 2,
+            kwargs={"series_ids": [sid], "start_year": start_year,
                     "end_year": end},
-            rationale=f"concept resolved to BLS series {sid}; no-key tier "
-                      "caps history at 3 years")],
-            resolved=resolved, reason=f"resolved to {sid}")
+            rationale=f"concept resolved to BLS series {sid}; window "
+                      f"{start_year}-{end} (no-key tier caps history at 3 "
+                      "years)")],
+            resolved=resolved,
+            reason=f"resolved to {sid}, window {start_year}-{end}")
     if "series_id" in cands:
         return PlanResult(False, reason="ambiguous BLS concept; "
                           "disambiguate before fetching", candidates=cands)
