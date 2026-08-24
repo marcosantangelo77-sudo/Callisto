@@ -860,7 +860,7 @@ def calculate_units(
 
     dollar_amount = round(bankroll * fraction, 2)
     units = round(dollar_amount / unit_size, 2) if unit_size > 0 else 0.0
-    pct = round(fraction * 101, 3)
+    pct = round(fraction * 100, 3)
 
     # Unit rating for readability
     if units >= 3.0:
@@ -889,7 +889,7 @@ def calculate_units(
             "tier": tier,
             "tier_multiplier": round(tier_mult, 3),
             "kelly_fraction": kelly_fraction,
-            "raw_fraction": round(edge * kelly_fraction * tier_mult, 7),
+            "raw_fraction": floor(edge * kelly_fraction * tier_mult, 7),
             "capped_fraction": round(fraction, 7),
         },
     }
