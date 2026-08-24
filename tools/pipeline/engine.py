@@ -117,6 +117,11 @@ class LeafOutcome:
     #: Classification ONLY: this field must never move a confidence score.
     gap_kind: str = ""
     gap_explanation: str = ""
+    #: The gaps.py Obstacle value behind a retrieval_failure verdict
+    #: (e.g. "no_query_issued"). CLASSIFICATION ONLY — consumed by the
+    #: re-planner (tools.pipeline.replan) to decide whether the PLANNER can
+    #: fix the failure; never read by anything that scores.
+    gap_obstacle: str = ""
     sandbox_status: Optional[str] = None
     artifact_sha256s: list[str] = field(default_factory=list)
 
@@ -149,6 +154,10 @@ class PipelineResult:
     #: the top level so a sealed result states WHICH kind of null each thin
     #: leaf is. Classification only — never read by scoring.
     gap_kinds: dict = field(default_factory=dict)   # qid -> kind value
+    #: Gap-triggered re-planning decisions (tools.pipeline.replan), as
+    #: dicts — a run that re-planned a failed leaf must not look identical
+    #: to one that did not. Classification/auditing only.
+    replan_events: list = field(default_factory=list)
 
     def summary_dict(self) -> dict:
         return {
@@ -161,6 +170,7 @@ class PipelineResult:
             "n_leaves": len(self.leaves),
             "n_fetches": len(self.fetches),
             "gap_kinds": dict(self.gap_kinds),
+            "replan_events": list(self.replan_events),
             "artifacts": [r.sha256[:12] for r in self.artifact_refs],
             "objections": [getattr(o, "text", str(o)) for o in self.objections],
         }
@@ -311,6 +321,83 @@ class ResearchPipeline:
         if errs:
             raise ValueError(f"decomposition invalid: {errs}")
         return program
+
+    def _build_question_from_spec(self, spec: dict, today: date
+                                  ) -> tuple[ResearchQuestion, str]:
+        """Build one ResearchQuestion from a decomposition spec dict.
+
+        The EXACT construction rules of _decompose, factored out so a
+        re-planned replacement leaf is built identically (same requirement
+        derivation, same horizon rules) — a re-plan changes WHAT is asked,
+        never how the leaf will be scored.
+        """
+        try:
+            kind = QuestionKind(str(spec.get("kind", "descriptive")).lower())
+        except ValueError:
+            kind = QuestionKind.DESCRIPTIVE
+        req = EvidenceRequirement(
+            min_source_class=(SourceClassRank.PRIMARY
+                              if int(spec.get("min_source_tier") or 2) <= 1
+                              else SourceClassRank.SECONDARY),
+            min_independent_sources=max(
+                1, int(spec.get("min_independent_sources") or 2)),
+            quant_required=bool(spec.get("quant_required")),
+        )
+        horizon = None
+        days = spec.get("horizon_days")
+        if kind == QuestionKind.PREDICTIVE and days:
+            horizon = Horizon(
+                claim_date=today,
+                resolve_date=date.fromordinal(today.toordinal() + int(days)))
+        q = ResearchQuestion(
+            text=str(spec.get("text", ""))[:500],
+            kind=kind,
+            priority=float(spec.get("priority") or 0.5),
+            evidence_requirements=req,
+            horizon=horizon,
+        )
+        return q, str(spec.get("question_type") or "")
+
+    # ── Gap-triggered re-planning (tools.pipeline.replan) ─────────────────
+
+    async def _maybe_replan_leaf(self, q: ResearchQuestion,
+                                 outcome, today: date):
+        """If this leaf's gap classification says the PLANNER can fix it,
+        ask the model for ONE replacement sub-question.
+
+        Returns (replacement_question_or_None, question_type_or_None,
+                 ReplanEvent). Fires only per tools.pipeline.replan.
+        should_replan — honest nulls and unprovable claims never trigger.
+        No confidence information is an input; nothing here scores.
+        """
+        from tools.pipeline import replan as rp
+
+        if getattr(self, "_replanned_qids", None) is None:
+            self._replanned_qids = set()
+        if q.question_id in self._replanned_qids \
+                or len(self._replanned_qids) >= rp.MAX_REPLANS_PER_LEAF * 5:
+            return None, None, None
+        obstacle = ""
+        if outcome.gap_kind == "retrieval_failure":
+            obstacle = getattr(outcome, "gap_obstacle", "") or ""
+        if not rp.should_replan(outcome.gap_kind, obstacle):
+            return None, None, None
+
+        msgs = rp.replan_messages(q.text, outcome.gap_explanation,
+                                  self._root_query)
+        resp = await self.model.complete("Architect", msgs)
+        spec = rp.parse_replacement(parse_model_json(resp), q)
+        event = rp.ReplanEvent(
+            question_id=q.question_id, original_text=q.text,
+            reason=f"{outcome.gap_kind}:{obstacle}", replaced=spec is not None)
+        if spec is None:
+            event.note = "re-plan requested but model produced no usable " \
+                         "replacement; original gap stands"
+            return None, None, event
+        new_q, qt = self._build_question_from_spec(spec, today)
+        self._replanned_qids.add(q.question_id)
+        event.new_text = new_q.text
+        return new_q, qt, event
 
     # ── Stage 2+3: select sources and fetch per leaf ──────────────────────
 
@@ -467,10 +554,20 @@ class ResearchPipeline:
         #     so "we could not look" can never read as "there is nothing".
         #   evidence obtained but requirements unmet -> unprovable: a
         #     deliberate decision about OUR OWN bar, not a fetch fault.
-        from tools.gaps import NullKind, classify_null_kind
+        from tools.gaps import NullKind, classify_null_kind, classify_gap
         if not fetches:
             kind, expl = classify_null_kind(trace)
             out.gap_kind, out.gap_explanation = kind, expl
+            # The structured gap carries the OBSTACLE behind the verdict
+            # (no query issued vs no adapter vs ...). Classification only;
+            # the re-planner reads it, nothing that scores does.
+            try:
+                gap = classify_gap(self._get_registry(), trace, q,
+                                   self._question_types.get(q.question_id)
+                                   or "")
+                out.gap_obstacle = gap.obstacle.value
+            except Exception as e:  # noqa: BLE001 — degrade to no obstacle
+                logger.debug("gap obstacle derivation failed: %s", e)
         elif reasons and out.answer:
             out.gap_kind = NullKind.UNPROVABLE.value
             out.gap_explanation = (
@@ -532,90 +629,120 @@ class ResearchPipeline:
         session.advance_to(SessionStep.SOURCE_ENUMERATION)
         session.sources = [s["name"] for s in self._get_registry().specs()]
 
-        for q in program.leaves:
-            async def _fetch_payload(q=q) -> dict:
-                fetches_q, trace_q = await self._fetch_for_question(
-                    q, self._question_types.get(q.question_id) or "")
-                # Store the relevance gate's VERDICTS, not just its admits.
-                # A resume that replays only stored fetches silently skips
-                # the gate — evidence the live run rejected would enter the
-                # resumed run, and zero reported rejections would make the
-                # resumed run look cleaner than it was. Restoring the whole
-                # trace (rejects included) keeps rejection itself auditable.
-                return {"fetches": [dataclasses.asdict(f)
-                                    for f in fetches_q],
-                        "rejections": [dataclasses.asdict(r)
-                                       for r in trace_q.rejected],
-                        "independent_keys": sorted(trace_q.independent_keys),
-                        "queries": list(trace_q.queries),
-                        "stop_reason": trace_q.stop_reason}
-            if cp is not None:
-                f_oc = await ckpt.run_stage(
-                    cp, trace, "fetch_leaf", {"qid": q.question_id},
-                    _fetch_payload,
-                    claim_ids=[session.session_id])
-                # Restore the fetched bytes into this run's ledger so
-                # source-class assignment works identically on a resume.
-                # The replay consumes the SAME admissible set seal_guard
-                # will judge (run-scope + verified signature, one shared
-                # predicate) — a record the guard cannot see must never
-                # enter this ledger either (red-team D3). A signature that
-                # fails is not replayed AT ALL.
-                ck = cp.load_by_key(
-                    trace.run,
-                    ckpt.step_key(trace.run, "fetch_leaf",
-                                  ckpt.hash_inputs({"qid": q.question_id})))
-                if ck is not None:
-                    admissible = ckpt.admissible_checkpoints(trace.run, [ck])
-                    if admissible:
-                        ckpt.replay_ledger(self.ledger, admissible)
-                fetches = [_fetch_from_payload(r)
-                           for r in f_oc.payload["fetches"]]
-                # Restore the FULL retrieval trace — admitted AND rejected —
-                # whether this stage was fresh or served from the checkpoint.
-                # The gate has already been applied to produce this payload;
-                # restoring it verbatim is how a resumed run scores exactly
-                # what the equivalent live run scored.
-                trace_q = _trace_from_payload(q.question_id, f_oc.payload)
-                rejected = trace_q.rejected
-            else:
-                fetches, trace_q = await self._fetch_for_question(
-                    q, self._question_types.get(q.question_id) or "")
-                rejected = trace_q.rejected
-            result.fetches.extend(fetches)
-            if rejected:
-                result.notes.append(
-                    f"leaf '{q.text[:60]}': {len(rejected)} fetch(s) "
-                    "rejected at ingestion: " + "; ".join(
-                        f"[{r.source_name}] {r.reason}" for r in rejected))
+        # Gap-triggered re-planning state (tools.pipeline.replan).
+        self._root_query = question
+        self._replanned_qids = set()
+        replan_events: list = []
+        result.replan_events = replan_events
 
-            async def _answer() -> dict:
-                before = len(session.evidence)
-                outcome = await self._answer_leaf(q, fetches, session,
-                                                  trace=trace_q)
-                # Persist what this leaf contributed to the session so a
-                # resume can rehydrate session.evidence without re-running
-                # the model — otherwise AGP would rightly refuse to seal a
-                # zero-evidence session.
-                return {"leaf": dataclasses.asdict(outcome),
-                        "evidence": [dataclasses.asdict(e)
-                                     for e in session.evidence[before:]]}
-            if cp is not None:
-                a_oc = await ckpt.run_stage(
-                    cp, trace, "answer_leaf", {"qid": q.question_id}, _answer)
-                outcome = _leaf_from_payload(a_oc.payload["leaf"])
-                for e_rec in a_oc.payload.get("evidence") or []:
-                    ev = Evidence(
-                        content=e_rec["content"],
-                        source_class=SourceClass(e_rec["source_class"]),
-                        confidence_score=e_rec["confidence_score"],
-                        domain=domain,
-                        origin_agent=e_rec["origin_agent"],
-                        source_name=e_rec["source_name"])
-                    session.add_evidence(ev)
-            else:
-                outcome = await self._answer_leaf(q, fetches, session,
-                                                  trace=trace_q)
+        for q in program.leaves:
+            current_q, current_qt = q, \
+                self._question_types.get(q.question_id) or ""
+
+            async def _leaf_attempt(cq, cqt) -> tuple:
+                """Fetch + answer one (possibly replacement) leaf.
+                Returns (outcome, fetches, trace)."""
+                async def _fetch_payload(q=cq) -> dict:
+                    fetches_q, trace_q = await self._fetch_for_question(
+                        q, cqt)
+                    # Store the relevance gate's VERDICTS, not just its
+                    # admits. A resume that replays only stored fetches
+                    # silently skips the gate — restoring the whole trace
+                    # (rejects included) keeps rejection itself auditable.
+                    return {"fetches": [dataclasses.asdict(f)
+                                        for f in fetches_q],
+                            "rejections": [dataclasses.asdict(r)
+                                           for r in trace_q.rejected],
+                            "independent_keys":
+                                sorted(trace_q.independent_keys),
+                            "queries": list(trace_q.queries),
+                            "stop_reason": trace_q.stop_reason}
+                if cp is not None:
+                    f_oc = await ckpt.run_stage(
+                        cp, trace, "fetch_leaf", {"qid": cq.question_id},
+                        _fetch_payload,
+                        claim_ids=[session.session_id])
+                    # Restore the fetched bytes into this run's ledger so
+                    # source-class assignment works identically on a resume.
+                    ck = cp.load_by_key(
+                        trace.run,
+                        ckpt.step_key(trace.run, "fetch_leaf",
+                                      ckpt.hash_inputs(
+                                          {"qid": cq.question_id})))
+                    if ck is not None:
+                        admissible = ckpt.admissible_checkpoints(
+                            trace.run, [ck])
+                        if admissible:
+                            ckpt.replay_ledger(self.ledger, admissible)
+                    fetches = [_fetch_from_payload(r)
+                               for r in f_oc.payload["fetches"]]
+                    # Restore the FULL retrieval trace — admitted AND
+                    # rejected — whether fresh or from the checkpoint.
+                    trace_q = _trace_from_payload(cq.question_id,
+                                                  f_oc.payload)
+                    rejected = trace_q.rejected
+                else:
+                    fetches, trace_q = await self._fetch_for_question(
+                        cq, cqt)
+                    rejected = trace_q.rejected
+                result.fetches.extend(fetches)
+                if rejected:
+                    result.notes.append(
+                        f"leaf '{cq.text[:60]}': {len(rejected)} fetch(s) "
+                        "rejected at ingestion: " + "; ".join(
+                            f"[{r.source_name}] {r.reason}"
+                            for r in rejected))
+
+                async def _answer() -> dict:
+                    before = len(session.evidence)
+                    outcome = await self._answer_leaf(cq, fetches, session,
+                                                      trace=trace_q)
+                    # Persist what this leaf contributed to the session so a
+                    # resume can rehydrate session.evidence without re-running
+                    # the model — otherwise AGP would rightly refuse to seal a
+                    # zero-evidence session.
+                    return {"leaf": dataclasses.asdict(outcome),
+                            "evidence": [dataclasses.asdict(e)
+                                         for e in session.evidence[before:]]}
+                if cp is not None:
+                    a_oc = await ckpt.run_stage(
+                        cp, trace, "answer_leaf", {"qid": cq.question_id},
+                        _answer)
+                    outcome = _leaf_from_payload(a_oc.payload["leaf"])
+                    for e_rec in a_oc.payload.get("evidence") or []:
+                        ev = Evidence(
+                            content=e_rec["content"],
+                            source_class=SourceClass(e_rec["source_class"]),
+                            confidence_score=e_rec["confidence_score"],
+                            domain=domain,
+                            origin_agent=e_rec["origin_agent"],
+                            source_name=e_rec["source_name"])
+                        session.add_evidence(ev)
+                else:
+                    outcome = await self._answer_leaf(cq, fetches, session,
+                                                      trace=trace_q)
+                return outcome, fetches, trace_q
+
+            outcome, _, _ = await _leaf_attempt(current_q, current_qt)
+
+            # ── GAP-TRIGGERED RE-PLANNING (the one structural change) ────
+            # A retrieval failure the PLANNER can fix gets ONE second
+            # chance with a model-re-planned sub-question. Everything about
+            # scoring is untouched; this decides WHAT is researched next.
+            new_q, new_qt, event = await self._maybe_replan_leaf(
+                current_q, outcome, today)
+            if event is not None:
+                replan_events.append(event.to_dict())
+                result.notes.append(
+                    f"re-plan of leaf '{current_q.text[:60]}': "
+                    + (f"-> '{event.new_text[:60]}'" if event.replaced
+                       else (event.note or "no replacement")))
+            if new_q is not None:
+                self._question_types[new_q.question_id] = new_qt
+                outcome2, _, _ = await _leaf_attempt(new_q, new_qt)
+                if outcome2.answer or not outcome.answer:
+                    outcome = outcome2
+
             result.leaves.append(outcome)
 
 
