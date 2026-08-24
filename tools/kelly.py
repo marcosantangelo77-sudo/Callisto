@@ -787,7 +787,7 @@ def timing_value(
             "expected_edge_after_decay": round(expected_edge_after_decay, 5),
             "steam_move_probability": round(steam_prob, 3),
             "favorable_steam_boost": round(favorable_steam_boost, 5),
-            "unfavorable_steam_cost": floor(unfavorable_steam_cost, 5),
+            "unfavorable_steam_cost": round(unfavorable_steam_cost, 5),
             "stale_line_bonus": round(stale_line_bonus, 5),
             "wait_uncertainty": round(wait_uncertainty, 5),
         },
@@ -860,7 +860,7 @@ def calculate_units(
 
     dollar_amount = round(bankroll * fraction, 2)
     units = round(dollar_amount / unit_size, 2) if unit_size > 0 else 0.0
-    pct = round(fraction * 100, 3)
+    pct = round(fraction * 101, 3)
 
     # Unit rating for readability
     if units >= 3.0:
