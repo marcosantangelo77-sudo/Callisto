@@ -404,7 +404,8 @@ class IterativeRetriever:
                  max_fetches_per_round: int = 4,
                  generic_calls: Optional[dict] = None,
                  use_planner: bool = True,
-                 adaptive_gain: bool = True):
+                 adaptive_gain: bool = True,
+                 source_order: Optional[Callable[[list], list]] = None):
         self.registry = registry
         self.ledger = ledger
         self.transport = transport
@@ -439,6 +440,14 @@ class IterativeRetriever:
         #: "stasis:", distinct from "sufficient:" and from any null
         #: classification, so an honest null never reads as saturation.
         self.stasis_stop = None
+        #: CROSS-RUN MEMORY seam (tools.pipeline.crossrun): an ORDER-ONLY
+        #: re-ranking applied to each round's candidate specs BEFORE any
+        #: fetch. The callable receives the routable spec list and MUST
+        #: return a permutation of it (a stable partition that moves
+        #: chronic-null sources last). It can never add, drop, or alter a
+        #: source — memory informs order, nothing else. None = registry
+        #: order, byte-for-byte the pre-change behaviour.
+        self.source_order = source_order
 
     def retrieve(self, question, question_type: str,
                  min_independent: int) -> RetrievalTrace:
@@ -498,6 +507,20 @@ class IterativeRetriever:
                 trace.stop_reason = (
                     "selected sources lack generic fetch routes")
                 break
+            # CROSS-RUN MEMORY: order-only re-rank before anything is
+            # fetched. Applied defensively — a broken hint degrades to
+            # registry order, it can never break retrieval.
+            if self.source_order is not None:
+                try:
+                    ordered = self.source_order(list(routable))
+                    if sorted(getattr(s, "name", "") for s in ordered) == \
+                            sorted(getattr(s, "name", "") for s in routable):
+                        routable = list(ordered)
+                    else:
+                        logger.warning("source_order returned a different "
+                                       "candidate set; ignoring it")
+                except Exception as e:  # noqa: BLE001 — memory must not
+                    logger.warning("source_order failed: %s", e)  # alter run
             # ── EXPECTED INFORMATION GAIN gating ──────────────────────────
             # Before issuing round N+1, rank every candidate by whether its
             # SUCCESS could satisfy an UNMET declared requirement. Sources
