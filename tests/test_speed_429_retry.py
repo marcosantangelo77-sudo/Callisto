@@ -89,8 +89,11 @@ def test_429_exhaustion_propagates_to_failover():
 
 
 def test_retry_after_capped_and_defaulted():
+    """Run 10: no fixed cap on the single header — the per-call budget
+    (_429_PATIENCE_S) bounds total waiting instead. Garbled/negative still
+    fall back to the default backoff."""
     assert inference._retry_after_seconds(
-        _ErrResp(429, "120")) == inference._429_MAX_TOTAL_WAIT_S
+        _ErrResp(429, "120")) == 120.0
     assert inference._retry_after_seconds(
         _ErrResp(429)) == inference._429_DEFAULT_BACKOFF_S
     assert inference._retry_after_seconds(

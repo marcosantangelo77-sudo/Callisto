@@ -1616,10 +1616,12 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
     every such call on the ~12-20s fresh-fork CLI path. Retry-in-place
     changes only WHERE the identical completion is served; non-429 4xx
     still fail over immediately and exhaustion still propagates to the
-    existing failover chain. A Retry-After header is honoured, capped at
-    _429_RETRY_AFTER_CAP_S so a hostile/lazy server cannot stall a call.
+    existing failover chain. A Retry-After header is honoured; the TOTAL
+    time spent sleeping on 429s for one call is bounded (_429_PATIENCE_S,
+    run 10) so a hostile/lazy server cannot stall a call.
     """
     last_exc: Optional[Exception] = None
+    waited = 0.0  # total seconds slept on 429s for THIS call (run 10)
     for i in range(attempts):
         slept = False
         try:
@@ -1631,8 +1633,9 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
             last_exc = e
             if status == 429:
                 retry_after = _retry_after_seconds(e.response)
-                if retry_after > _429_MAX_TOTAL_WAIT_S:
-                    raise  # server says: back off longer than we may wait
+                if waited + retry_after > _429_PATIENCE_S:
+                    raise  # 429-patience budget for THIS CALL spent
+                waited += retry_after
                 await _asyncio.sleep(retry_after)
                 slept = True
         except (httpx.TransportError,) as e:
@@ -1645,19 +1648,24 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
 
 _router: Optional[ProviderRouter] = None
 
-# ── SPEED run 8: 429 retry-in-place constants ─────────────────────────────
+# ── SPEED run 8/10: 429 retry-in-place constants ──────────────────────────
 # A 429 with no Retry-After waits this long before the next in-place attempt.
 _429_DEFAULT_BACKOFF_S = 1.0
-# Never sleep longer than this on a Retry-After; a server demanding more
-# backoff than we may spend fails over instead of stalling the caller.
-_429_MAX_TOTAL_WAIT_S = 10.0
+# Run 10: patience is PER CALL, not per sleep. Total time spent sleeping on
+# 429s for one completion is bounded by this; a Retry-After may exceed what
+# remains only while the running total stays within budget. When the budget
+# is spent, failover — never wait longer than a fork would have cost.
+_429_PATIENCE_S = 35.0
 
 
 def _retry_after_seconds(response: httpx.Response) -> float:
-    """Retry-After from a 429 response, in seconds, capped.
+    """Retry-After from a 429 response, in seconds.
 
     Accepts delta-seconds (and ignores HTTP-date form — treat as default
     backoff rather than parsing dates). Missing/garbled header -> default.
+    NOT capped here: the per-call budget in _post_with_retry bounds total
+    waiting (run 9's fixed cap re-created the run-8 disease one level up —
+    a single 30s window passed but a second consecutive window did not).
     """
     raw = ""
     try:
@@ -1670,7 +1678,7 @@ def _retry_after_seconds(response: httpx.Response) -> float:
         return _429_DEFAULT_BACKOFF_S
     if val < 0:
         return _429_DEFAULT_BACKOFF_S
-    return min(val, _429_MAX_TOTAL_WAIT_S)
+    return val
 
 
 def get_router() -> ProviderRouter:
