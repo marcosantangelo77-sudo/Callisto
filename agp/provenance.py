@@ -208,6 +208,6 @@ def relabel_evidence(evidence_list: "Iterable[Evidence]",
         prior = float(ev.confidence_score)
         conf = min(prior, min(float(ev.confidence_score),
                               max_by_source.get(assigned.value, 0.55)))
-        ev.confidence_score = round_conf(min(prior, max(floor, conf))
+        ev.confidence_score = floor_conf(min(prior, max(floor, conf))
                                  if prior >= floor else min(prior, conf))
     return demoted
