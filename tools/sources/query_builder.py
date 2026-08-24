@@ -30,6 +30,7 @@ an entity or a concept mapping is a data edit, not code surgery.
 
 from __future__ import annotations
 
+import datetime
 import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -456,15 +457,38 @@ def _plan_gdelt(question: str) -> PlanResult:
         reason=f"phrase query {q!r}, mode={mode}")
 
 
+#: explicit years in a sub-question ("since 2023", "during 2026") define the
+#: observation window. Without this, UNRATE + limit=120 returned 1948–1957
+#: data whose text carried zero topical overlap — the relevance gate then
+#: rejected the single most relevant source on the machine while junk
+#: keyword-matching sources sailed through (live e2e run 2026-08-24, break
+#: log B2 in findings/one_real_question.md).
+_YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
+
+
+def _years_in(question: str) -> list[int]:
+    return sorted({int(m.group(1)) for m in _YEAR_RE.finditer(question)})
+
+
 def _plan_fred(question: str) -> PlanResult:
     resolved, cands = _resolve("series_id", question, _FRED_CONCEPTS)
     core = core_query(question)
     if "series_id" in resolved:
         sid = resolved["series_id"]
+        kw: dict = {"series_id": sid, "limit": 120}
+        yrs = _years_in(question)
+        if yrs:
+            # window from the question: Jan 1 of the earliest named year;
+            # cap at Dec 31 of the latest only when it is in the past.
+            kw["start"] = f"{min(yrs)}-01-01"
+            latest = max(yrs)
+            if latest < datetime.date.today().year:
+                kw["end"] = f"{latest}-12-31"
         return PlanResult(True, queries=[PlannedQuery(
-            source="fred", method="series_observations",
-            kwargs={"series_id": sid, "limit": 120},
-            rationale=f"concept resolved to series {sid}")],
+            source="fred", method="series_observations", kwargs=kw,
+            rationale=f"concept resolved to series {sid}"
+                      + (f"; observation window from {kw.get('start')}"
+                         if yrs else ""))],
             resolved=resolved,
             reason=f"'{core or question}' -> {sid}")
     if "series_id" in cands:
@@ -488,15 +512,25 @@ def _plan_bls(question: str) -> PlanResult:
     resolved, cands = _resolve("series_id", question, _BLS_CONCEPTS)
     if "series_id" in resolved:
         sid = resolved["series_id"]
-        import datetime
         end = datetime.date.today().year
+        # A year named in the question defines the window's start — a leaf
+        # asking about January 2023 must fetch 2023, not today.year-2 (live
+        # e2e run 2026-08-24: BLS data was admitted as PRIMARY with the
+        # asked-about month outside the window; break log B1). The no-key
+        # tier caps history at 3 years per call, so clamp rather than widen.
+        yrs = _years_in(question)
+        start_year = min(yrs) if yrs else end - 2
+        if end - start_year > 2:
+            start_year = end - 2
         return PlanResult(True, queries=[PlannedQuery(
             source="bls", method="timeseries",
-            kwargs={"series_ids": [sid], "start_year": end - 2,
+            kwargs={"series_ids": [sid], "start_year": start_year,
                     "end_year": end},
-            rationale=f"concept resolved to BLS series {sid}; no-key tier "
-                      "caps history at 3 years")],
-            resolved=resolved, reason=f"resolved to {sid}")
+            rationale=f"concept resolved to BLS series {sid}; window "
+                      f"{start_year}-{end} (no-key tier caps history at "
+                      "3 years)")],
+            resolved=resolved,
+            reason=f"resolved to {sid}, window {start_year}-{end}")
     if "series_id" in cands:
         return PlanResult(False, reason="ambiguous BLS concept; "
                           "disambiguate before fetching", candidates=cands)
