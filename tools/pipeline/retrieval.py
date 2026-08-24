@@ -650,7 +650,7 @@ class IterativeRetriever:
                     # rejected bytes re-classed PRIMARY and any text citing
                     # the rejected URL re-classed SECONDARY — the gate said
                     # 'irrelevant' while provenance said 'primary document'.
-                    self.ledger.record_gate_rejection(body, [fr.url])
+                    self.ledger.record_gate_rejection(fr.body, [fr.url])
                     trace.rejected.append(RejectedItem(
                         source_name=spec.name,
                         url=fr.url, reason=reason,
