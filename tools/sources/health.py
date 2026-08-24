@@ -473,6 +473,71 @@ def _kalshi() -> ProbeResult:
                 lambda d: len(d.get("markets", [])), shape)
 
 
+@probe("federalreserve")
+def _federalreserve() -> ProbeResult:
+    # Known-good: the speeches feed has carried items continuously for
+    # years; an empty parse or an HTML-instead-of-XML body is the failure
+    # mode this probe exists to catch (feeds moved once already — the
+    # /json/* endpoints 404'd before settling on /feeds/*.xml).
+    r = ProbeResult("federalreserve")
+    src, ad = _build("federalreserve")
+    r.url = src.spec.base_url + "/feeds/speeches.xml"
+    def count(d):
+        return len(d)
+    def shape(d):
+        if not d:
+            return "speeches feed parsed to zero items"
+        need = ("title", "url", "pub_date_gmt")
+        missing = [k for k in need if not d[0].get(k)]
+        return "" if not missing else f"item missing {missing}: keys={sorted(d[0])}"
+    return _run(ad.recent_speeches, r, count, shape)
+
+
+@probe("pubmed")
+def _pubmed() -> ProbeResult:
+    # Historical-defect shape: a fixture passes while esearch returns
+    # nothing live. Known-good query with thousands of hits must return
+    # ids, and esummary must carry title/journal for the first PMID.
+    r = ProbeResult("pubmed")
+    src, ad = _build("pubmed")
+    q = "semaglutide cardiovascular outcomes"
+    r.url = src.build_url("/esearch.fcgi",
+                          {"db": "pubmed", "term": q, "retmode": "json"})
+    def shape(d):
+        if d.get("count", 0) == 0:
+            return f"esearch zero hits for known-good query '{q}'"
+        if not d.get("pmids"):
+            return "esearch count>0 but no PMIDs returned"
+        return ""
+    try:
+        data = ad.search(q, limit=3)
+    except Exception as exc:  # noqa: BLE001
+        r.verdict = BROKEN
+        r.evidence.append(f"{type(exc).__name__}: {exc}")
+        return r
+    problem = shape(data)
+    r.row_count = data.get("count", 0)
+    if problem:
+        r.verdict = BROKEN
+        r.evidence.append(problem)
+        return r
+    try:
+        summ = ad.summarize(data["pmids"])
+    except Exception as exc:  # noqa: BLE001
+        r.verdict = BROKEN
+        r.evidence.append(f"esummary failed: {type(exc).__name__}: {exc}")
+        return r
+    first = next((v for k, v in summ.items() if k != "_fetch"), None)
+    if not first or not first.get("title"):
+        r.verdict = BROKEN
+        r.evidence.append("esummary returned no title for the first PMID")
+    else:
+        r.verdict = OK
+        r.evidence.append(
+            f"{r.row_count} hits; esummary parsed '{first['title'][:60]}'")
+    return r
+
+
 # ── runner ───────────────────────────────────────────────────────────────
 
 def run_all(names: list[str] | None = None) -> list[ProbeResult]:
