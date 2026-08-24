@@ -75,14 +75,38 @@ class RouterModel(PipelineModel):
     """Adapter over anything exposing ``await complete(task_class, messages,
     schema=...)`` — i.e. inference.ProviderRouter. Roles map to task classes
     via agp.adversary.AGPRole.ROLE_TASK_CLASSES so model-per-role stays a
-    config concern."""
+    config concern.
+
+    ROUTE BY DIFFICULTY (perf wave): role_task_classes may be overridden per
+    construction so a deployment can steer grind and judgment independently:
+      Architect (framing)        -> hypothesis_generation / research_synthesis
+      Manager  (extraction grind)-> extraction / classification / screening
+      Adversary/Sentinel (critic)-> adversarial_review
+    An override REPLACES the default table wholesale (partial tables fall
+    back per-role to AGPRole defaults), never merges tiers silently.
+    """
+
+    #: Difficulty classification of every pipeline role. Grind roles may be
+    #: served by the cheapest capable endpoint; judgment roles must not be
+    #: downgraded below their declared class. Tests pin this contract.
+    ROLE_DIFFICULTY = {
+        "Architect": "judgment",
+        "Manager": "grind",
+        "Sentinel": "judgment",
+        "Adversary": "judgment",
+    }
 
     def __init__(self, router, role_task_classes: Optional[dict] = None):
+        from agp.adversary import AGPRole
+        defaults = dict(AGPRole.ROLE_TASK_CLASSES)
+        if role_task_classes:
+            # explicit None value for a role restores its default
+            for k in list(role_task_classes):
+                if role_task_classes[k] is None:
+                    role_task_classes.pop(k)
+            defaults.update(role_task_classes)
+        self._rtc = defaults
         self.router = router
-        self._rtc = dict(role_task_classes or {})
-        if not self._rtc:
-            from agp.adversary import AGPRole
-            self._rtc = dict(AGPRole.ROLE_TASK_CLASSES)
 
     @property
     def name(self) -> str:  # type: ignore[override]
