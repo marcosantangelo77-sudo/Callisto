@@ -90,6 +90,15 @@ class WorldBankAdapter:
             "rows": [{"country": r.get("country", {}).get("value"),
                       "date": r.get("date"), "value": r.get("value"),
                       "indicator": kcode} for r in rows],
+            # The indicator's NAME ('Unemployment, total (% of total labor
+            # force)') is the only topical text a normalized row body has —
+            # codes like SL.UEM.TOTL.ZS carry no judgeable words, so the
+            # relevance gate scored real WB unemployment data 11% while
+            # keyword-junk indicator-name searches scored ~100% (live e2e
+            # run 2026-08-24, break log B3).
+            "_indicator_name":
+                (rows[0].get("indicator", {}) or {}).get("value", "")
+                if rows else "",
             "_fetch": {"url": rec.url, "sha256": rec.content_sha256,
                        "fetched_at": rec.fetched_at},
         }

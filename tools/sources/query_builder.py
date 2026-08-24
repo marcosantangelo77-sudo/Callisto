@@ -627,6 +627,15 @@ _WORLDBANK_INDICATORS: dict[str, list[Candidate]] = {
     "population": [
         Candidate("SP.POP.TOTL", "Population, total", 0.95),
     ],
+    "unemployment": [
+        # ILO-modeled annual series — the WB analogue of FRED's UNRATE.
+        # Added after the live e2e run showed the planner falling back to
+        # indicator NAME search, whose results are catalogue rows, not data
+        # (findings/one_real_question.md, break log B3).
+        Candidate("SL.UEM.TOTL.ZS",
+                  "Unemployment, total (% of total labor force "
+                  "(modeled ILO estimate))", 0.95),
+    ],
     "trade": [
         Candidate("NE.TRD.GNFS.ZS", "Trade (% of GDP)", 0.8),
     ],

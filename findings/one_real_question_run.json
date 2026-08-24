@@ -1,0 +1,24 @@
+{
+  "root_query": "Has the US unemployment rate been lower in 2026 than it was in January 2023?",
+  "sealed": true,
+  "refusal_reason": "",
+  "confidence": 0.35,
+  "tier": "PROBABLE",
+  "stance": "AFFIRMS",
+  "n_fetches": 6,
+  "sources": [
+    "courtlistener",
+    "fred",
+    "worldbank"
+  ],
+  "gap_kinds": {
+    "21d8bbe911d64ee8": "unprovable"
+  },
+  "conclusion": "Has the US unemployment rate been lower in 2026 than it was in January 2023?\n\n- [SPECULATIVE 0.54] What was the official US unemployment rate (BLS Current Population Survey) in January 2023?: The official BLS unemployment rate in January 2023 was 3.5%, per the FRED UNRATE series (CPS-derived) observation dated 2023-01-01.  [GAP: unprovable]\n- [VERIFIED 0.95] What has been the US unemployment rate in each month of 2026 to date?: Per FRED series UNRATE (BLS), the US unemployment rate in 2026 to date: Jan 4.3%, Feb 4.4%, Mar 4.3%, Apr 4.3%, May 4.3%, Jun 4.2%, Jul 4.1% (as of Aug 24, 2026 vintage; August not yet available).\n- [VERIFIED 0.90] Is the minimum monthly 2026 unemployment rate lower than the January 2023 rate?: The evidence does not settle it. FRED observations (evidence [0]) show January 2023 unemployment at 3.5%, but the series is truncated after 2025-09 and contains no 2026 monthly values, so the minimum monthly 2026 rate cannot be determined from the given evidence.",
+  "objections": [
+    "The conclusion's own evidence is internally contradictory on the 2026 data. The second FRED fetch (sha256 fad38750...) returns seven complete 2026 monthly observations ending Jul 2026, but the third fetch from the same UNRATE series taken one second earlier (fetched_at 06:55:59 vs 06:56:13, sha256 bd377215...) is truncated mid-record after 2025-11 with a '.' missing value at 2025-10 \u2014 and the pipeline itself cites this truncation in evidence item [0] to declare the comparison 'does not settle it.' Two same-day vintages of the identical series cannot both define what 'the given evidence' contains; if the truncated pull reflects an upstream data gap or partial response rather than reality, the VERIFIED 0.90 claim that the minimum cannot be determined is an artifact of one bad HTTP response, not of the data.",
+    "The January-2023 anchor rests on a SPECULATIVE 0.54 item flagged [GAP: unprovable], yet it is treated as settled. Its only support is the same FRED vintage whose sibling pull demonstrably returned a truncated/partial payload within the same minute. A single compromised or rate-limited API session (note the exposed api_key reused across all calls) could corrupt both windows; no second independent source (BLS directly, ALFRED, CPS public tables) corroborates either endpoint value.",
+    "The 2026 values could be benchmarked/revised figures while the Jan 2023 value of 3.5% is compared against them inconsistently: UNRATE observations carry realtime vintage 2026-08-24 for both, so any post-collection annual benchmark revision applies asymmetrically across the three-year span. If the 2026 months are provisional first-print estimates subject to downward revision (a pattern visible in the series' own 2024\u20132025 wobble), the current 0.8-point gap overstates the true difference; the correct comparison requires aligned realtime vintages (ALFRED), which were never pulled.",
+    "Two of five evidence items (the World Bank indicator searches and the CourtListener opinion search) are keyword-mangled garbage with zero bearing on US unemployment, yet they sit in the evidence pool as if retrieved deliberately. Their presence signals the retrieval layer fired queries verbatim into unrelated APIs and kept whatever returned \u2014 meaning the FRED pulls that DO matter may equally have been shaped by whatever query formulation happened to succeed, and failed or contradictory pulls were silently dropped rather than reported (no error records accompany the truncated third fetch)."
+  ]
+}
