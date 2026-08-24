@@ -303,7 +303,8 @@ class ResearchPipeline:
             self.hits = 0
 
         def __call__(self, url: str, headers: dict) -> tuple[int, str]:
-            key = url
+            key = (url, headers.get("User-Agent", ""),
+                   headers.get("Accept-Encoding", ""))
             with self._lock:
                 if key in self._cache:
                     self.hits += 1
@@ -619,6 +620,15 @@ class ResearchPipeline:
                         domain: Domain = Domain.GENERAL,
                         today: Optional[date] = None) -> PipelineResult:
         """One pipeline run with cross-run memory wrapped around it.
+
+        Start of run (when a crossrun_store is injected): load the records
+        for this QUESTION CLASS and expose them as an ORDER-ONLY hint to
+        retrieval. End of run: persist one structured record of what this
+        run's sources actually did — admitted vs rejected vs errored, the
+        per-leaf gap kinds, final stance and tier. Facts, not prose; never
+        evidence, never confidence (see tools.pipeline.crossrun gate rules).
+        """
+        if self.crossrun_store is not None:
             try:
                 from tools.pipeline.crossrun import question_class_for, \
                     planning_view
