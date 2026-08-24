@@ -87,6 +87,10 @@ All merged to master (`cb950d0`). Read `ROADMAP.md`, `ARCHITECTURE_MAP.md`,
 - `clv_tracker`'s canonical writers are unit-consistent and devigged.
 - The seal is now HMAC-keyed; provenance is now ledger-assigned; VERIFIED tier
   is reachable for the first time.
+  [BOUNDARY, 2026-08-24: the seal attests process integrity and internal
+  consistency of the sealed snapshot — not that its conclusions are true.
+  Preregistration is built but NOT on the engine's live path. Authoritative
+  contract: SEAL_CONTRACT.md.]
 
 **The failure that was diagnosed** — do not reintroduce any part of it:
 every loop start lowered edge thresholds, then rewrote historical
