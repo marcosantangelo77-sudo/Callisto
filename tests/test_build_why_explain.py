@@ -55,7 +55,7 @@ def _routes() -> dict[str, str]:
     }
 
 
-def _decompose_response(min_indep=2) -> str:
+def _decompose_response(min_indep=1) -> str:
     return json.dumps({"sub_questions": [
         {"text": "what does the scholarly literature say about the topic",
          "kind": "descriptive", "question_type": "scholarly work search",
