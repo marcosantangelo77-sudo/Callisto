@@ -333,5 +333,55 @@
       "4aa55a66e2e6490e": "unprovable"
     },
     "verdict": "refused"
+  },
+  {
+    "id": "Q10",
+    "question": "Was the World Bank estimate of U.S. population in 2020 greater than 330 million?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "331,578,104.",
+    "verified_by": "api.worldbank.org SP.POP.TOTL USA 2020",
+    "elapsed_s": 280.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 2,
+    "sources": [
+      "fdic",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What is the World Bank's published estimate of the United States resident population for 2020?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "How does the World Bank's 2020 U.S. population figure compare numerically to the 330 million threshold?",
+        "answer": "The provided evidence contains no World Bank U.S. population figure for 2020 \u2014 the only item is an FDIC bank-institution record matching 'World Bank' as a bank name filter. No comparison to the 330 million threshold can be made from this evidence.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What is the World Bank's published estimate of the United St': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, bank, dataset, development, estimate, indicators, official, population; [fdic] content covers 15% of the question's topical words (need 25%); missing: 2020, bank, dataset, development, estimate, indicators, official, population; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, bank, dataset, development, estimate, indicators, official, population; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, bank, dataset, development, estimate, indicators, official, population",
+      "leaf 'How does the World Bank's 2020 U.S. population figure compar': 6 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, 330, bank, compare, comparison, direct, figure, million; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, 330, bank, compare, comparison, direct, figure, million; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, 330, bank, compare, comparison, direct, figure, million; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, 330, bank, compare, comparison, direct, figure, million; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, 330, bank, compare, comparison, direct, figure, million; [worldbank] content covers 20% of the question's topical words (need 25%); missing: 330, bank, compare, comparison, direct, figure, million, numerically"
+    ],
+    "gap_kinds": {
+      "8cd67dd1ca1a4db8": "unprovable"
+    },
+    "verdict": "refused"
   }
 ]
