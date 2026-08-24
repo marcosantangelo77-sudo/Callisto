@@ -300,14 +300,16 @@ def _bea() -> ProbeResult:
     src, ad = _build("bea")
     r.url = src.spec.base_url + "?DataSetName=NIPA&method=GetData..."
     def shape(d):
-        bea = d.get("BEAAPIs") or {}
+        # Live-verified 2026-08: envelope key is "BEAAPI" (singular).
+        bea = d.get("BEAAPI") or {}
         data = ((bea.get("Results") or {}).get("Data")) or []
-        err = bea.get("Error")
+        err = (bea.get("Error")
+               or ((bea.get("Results") or {}).get("Error")))
         if err:
             return f"BEA error payload: {err}"
-        return "" if data else "BEAAPIs.Results.Data empty"
+        return "" if data else f"BEAAPI.Results.Data empty; keys={sorted(d)[:8]}"
     def count(d):
-        bea = d.get("BEAAPIs") or {}
+        bea = d.get("BEAAPI") or {}
         return len(((bea.get("Results") or {}).get("Data")) or [])
     return _run(lambda: ad.get_data("NIPA", "T10101", linecode="1",
                                     frequency="A", years="2023"), r,
