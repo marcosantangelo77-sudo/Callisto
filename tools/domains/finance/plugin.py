@@ -101,6 +101,37 @@ BUILD_MODEL_TOOL = {
 }
 
 
+ANOMALIES_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "edgar_anomalies",
+        "description": (
+            "Derived-analysis loop over assembled SEC statements: compare "
+            "each period's derived relationships against the company's OWN "
+            "historical normal range and flag deviations. Output is a bounded "
+            "set of QUESTIONS for the research pipeline (never conclusions, "
+            "no confidence scores). With emit=true each question is submitted "
+            "to the task queue for normal AGP research."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string"},
+                "n_periods": {
+                    "type": "integer",
+                    "description": ("history used to derive the normal range "
+                                    "(default 4; at least 3 needed)")},
+                "emit": {
+                    "type": "boolean",
+                    "description": ("submit flagged questions to the research "
+                                    "task queue (default false = report only)")},
+            },
+            "required": ["ticker"],
+        },
+    },
+}
+
+
 def _statements_payload(ticker: str, n_periods: int) -> dict:
     from tools.domains.finance.edgar import EdgarError
     from tools.domains.finance.statements import assemble_statements
@@ -167,6 +198,69 @@ def _model_payload(template: str, ticker: str, analyst_inputs: Optional[dict],
     }
 
 
+def _anomalies_payload(ticker: str, n_periods: int, emit: bool) -> dict:
+    """Derived-analysis loop: assembled statements → deviations from the
+    entity's OWN historical behaviour → questions for the research pipeline.
+
+    Hard rules honoured here:
+      - each anomaly is emitted as a QUESTION via TaskQueue.submit_task (the
+        normal pipeline; normal confidence/provenance apply to the RESEARCH,
+        never to the anomaly, which carries no confidence);
+      - at most MAX_QUESTIONS_PER_EXTRACTION per call — bounded, cannot run away;
+      - nothing is concluded and no confidence score is touched.
+    """
+    import asyncio
+
+    from tools.derived_analysis import (
+        MAX_QUESTIONS_PER_EXTRACTION,
+        detect_anomalies,
+        emit_questions,
+    )
+    from tools.domains.finance.derived_analysis import (
+        RELATIONSHIPS,
+        finance_focus_period,
+        statements_series,
+    )
+    from tools.domains.finance.statements import assemble_statements
+    from tools.task_queue import TaskQueue
+
+    client = _get_client()
+    cik, facts = client.facts_for_ticker(ticker)
+    stmt = assemble_statements(facts, n_periods=max(2, min(int(n_periods), 10)))
+    stmt.ticker = ticker.upper()
+
+    focus = finance_focus_period(stmt)
+    anomalies = detect_anomalies(
+        RELATIONSHIPS, statements_series(stmt),
+        entity=stmt.entity_name or ticker.upper(), focus=[focus])
+
+    emission = {"submitted": 0, "dropped_over_bound": 0,
+                "bound": MAX_QUESTIONS_PER_EXTRACTION, "tasks": []}
+    if emit and anomalies:
+        async def _go():
+            q = TaskQueue()
+            await q.initialize()
+            try:
+                return await emit_questions(anomalies, q)
+            finally:
+                await q.close()
+        emission = asyncio.run(_go())
+
+    return {
+        "ticker": stmt.ticker,
+        "focus_period": focus,
+        "relationships_checked": len(RELATIONSHIPS),
+        "questions": [a.question() for a in
+                      sorted(anomalies, key=lambda a: -a.magnitude)
+                      [:MAX_QUESTIONS_PER_EXTRACTION]],
+        "evidence": [a.evidence() for a in anomalies],
+        "emitted_to_pipeline": emission,
+        "note": ("Anomalies are QUESTIONS for research, not findings. They "
+                 "carry no confidence. Bound: max "
+                 f"{MAX_QUESTIONS_PER_EXTRACTION} questions per extraction."),
+    }
+
+
 LIMITS = [
     "XBRL gives tagged statement lines only — NO footnotes, segment detail, "
     "lease schedules, commitments, contingencies, or non-GAAP adjustments.",
@@ -184,6 +278,10 @@ async def _execute(name: str, arguments: dict) -> dict:
         if name == "edgar_get_statements":
             return _statements_payload(
                 args.get("ticker", ""), int(args.get("n_periods", 4)))
+        if name == "edgar_anomalies":
+            return _anomalies_payload(
+                args.get("ticker", ""), int(args.get("n_periods", 4)),
+                bool(args.get("emit", False)))
         if name == "edgar_build_model":
             return _model_payload(
                 args.get("template", ""),
@@ -218,7 +316,7 @@ def build_finance_plugin() -> DomainPlugin:
         name="finance",
         domains={"FINANCIAL"},
         keywords=_KEYWORDS,
-        tool_schemas=[GET_STATEMENTS_TOOL, BUILD_MODEL_TOOL],
+        tool_schemas=[GET_STATEMENTS_TOOL, BUILD_MODEL_TOOL, ANOMALIES_TOOL],
         freshness=[],  # filings are historical by nature; no window forcing
         execute=_execute,
     )

@@ -424,6 +424,21 @@ class IterativeRetriever:
         #: to recover the plan-then-fetch behaviour exactly (used by the
         #: golden-run comparison).
         self.adaptive_gain = adaptive_gain
+        #: MEASUREMENT ONLY (JOB 1, stopping-rule study). Optional callback
+        #: invoked after each retrieval round with the CUMULATIVE
+        #: conclusion-relevant state: {"round", "indep_keys", "admitted",
+        #: "rejected_n"}. Reads nothing the conclusion does not depend on;
+        #: default None means exactly the pre-instrumentation behaviour.
+        self.round_observer = None
+        #: JOB 3 — optional stasis stop rule (tools.pipeline.stasis_stop).
+        #: When set, the loop breaks after a round that changed neither the
+        #: independent-key set nor the admitted-body set: every further
+        #: fetch would hand the answer model an IDENTICAL evidence payload,
+        #: so tier/stance/confidence provably cannot move. Opt-in; None is
+        #: exactly the pre-change behaviour. The stop reason records
+        #: "stasis:", distinct from "sufficient:" and from any null
+        #: classification, so an honest null never reads as saturation.
+        self.stasis_stop = None
 
     def retrieve(self, question, question_type: str,
                  min_independent: int) -> RetrievalTrace:
@@ -596,9 +611,41 @@ class IterativeRetriever:
             round_detail["admitted"] = round_admitted
             trace.rounds.append(round_detail)
 
+            if self.round_observer is not None:
+                # JOB 1 instrumentation: cumulative conclusion-relevant state.
+                # The leaf's sealed (tier, confidence) depends exactly on the
+                # best source class and count of these fetches plus the
+                # independent-key set; stance depends on the same bodies.
+                try:
+                    self.round_observer({
+                        "qid": question.question_id,
+                        "round": rnd,
+                        "indep_keys": sorted(trace.independent_keys),
+                        "admitted": [
+                            (f.source_name, f.content_sha256)
+                            for f in trace.admitted],
+                        "rejected_n": len(trace.rejected),
+                    })
+                except Exception as e:  # noqa: BLE001 — observation never
+                    logger.warning("round_observer failed: %s", e)  # alters run
+
             sufficient = len(trace.independent_keys) >= min_independent
             dec = term.record(min(1.0, len(trace.independent_keys) /
                                   max(1, min_independent)))
+            if self.stasis_stop is not None:
+                # JOB 3: consult the stasis rule AFTER sufficiency — a
+                # satisfied requirement still reports "sufficient:", never
+                # "stasis:". Stasis fires only when this round changed
+                # nothing AND the run is not already sufficient.
+                if not sufficient and not dec.stop and \
+                        self.stasis_stop.record(
+                            rnd, trace.independent_keys,
+                            [f.content_sha256 for f in trace.admitted]):
+                    trace.stop_reason = (
+                        f"stasis: round {rnd} changed neither independent "
+                        f"sources nor admitted evidence; further rounds "
+                        f"cannot alter tier/stance/confidence")
+                    break
             if sufficient:
                 trace.stop_reason = (
                     f"sufficient: {len(trace.independent_keys)} independent "

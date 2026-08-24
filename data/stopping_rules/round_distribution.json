@@ -1,0 +1,851 @@
+{
+  "n_cases": 27,
+  "total_retrieval_rounds": 79,
+  "conclusion_moving_rounds": 53,
+  "pure_cost_rounds": 26,
+  "pct_pure_cost": 32.9,
+  "by_ordinal_round": {
+    "1": {
+      "moving": 27,
+      "pure_cost": 0
+    },
+    "2": {
+      "moving": 13,
+      "pure_cost": 13
+    },
+    "3": {
+      "moving": 13,
+      "pure_cost": 13
+    }
+  },
+  "null_split": {
+    "(answered)": 14,
+    "honest_null": 12,
+    "retrieval_failure": 1
+  },
+  "cases": [
+    {
+      "case": "A1 news-sufficient-first-round",
+      "stop_reason": "sufficient: 2 independent sources >= required 2",
+      "gap_kind": "",
+      "sealed_equivalent": true,
+      "n_rounds": 1,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 2,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "A2 news-null-irrelevant-only",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "honest_null",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    },
+    {
+      "case": "A3 news-single-source-then-refine-fails",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "A4 scholarly-sufficient-first-round",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "A5 econ-time-series-sufficient",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "retrieval_failure",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    },
+    {
+      "case": "C-retro-00-beat_or_miss",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "C-retro-01-beat_or_miss",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "C-retro-02-beat_or_miss",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "C-retro-03-beat_or_miss",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "C-retro-04-beat_or_miss",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "C-retro-05-beat_or_miss",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "C-retro-06-beat_or_miss",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "C-retro-07-beat_or_miss",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "C-retro-08-event_outcome",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "honest_null",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    },
+    {
+      "case": "C-retro-09-threshold_cross",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "C-retro-10-threshold_cross",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "honest_null",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    },
+    {
+      "case": "C-retro-11-event_outcome",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "honest_null",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    },
+    {
+      "case": "C-retro-12-event_outcome",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "honest_null",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    },
+    {
+      "case": "C-retro-13-event_outcome",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "C-retro-14-event_outcome",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "honest_null",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    },
+    {
+      "case": "C-retro-15-threshold_cross",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "honest_null",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    },
+    {
+      "case": "C-retro-16-threshold_cross",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "honest_null",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    },
+    {
+      "case": "C-retro-17-event_outcome",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "honest_null",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    },
+    {
+      "case": "C-retro-18-event_outcome",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "honest_null",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    },
+    {
+      "case": "C-retro-19-event_outcome",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 0,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 1,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 2,
+          "moved_conclusion": true,
+          "n_admitted": 2,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        },
+        {
+          "round": 3,
+          "moved_conclusion": true,
+          "n_admitted": 3,
+          "n_indep": 1,
+          "best_class": "PRIMARY"
+        }
+      ]
+    },
+    {
+      "case": "C-retro-20-event_outcome",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "honest_null",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    },
+    {
+      "case": "C-retro-21-event_outcome",
+      "stop_reason": "terminator: max_iterations (3) reached \u2014 hard budget ceiling, stopping regardless of movement",
+      "gap_kind": "honest_null",
+      "sealed_equivalent": false,
+      "n_rounds": 3,
+      "pure_cost_rounds": 2,
+      "rounds": [
+        {
+          "round": 1,
+          "moved_conclusion": true,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 2,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        },
+        {
+          "round": 3,
+          "moved_conclusion": false,
+          "n_admitted": 0,
+          "n_indep": 0,
+          "best_class": null
+        }
+      ]
+    }
+  ]
+}
