@@ -21,12 +21,15 @@ import argparse
 import asyncio
 import datetime
 import json
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, "/Users/marcosantangelo/callisto-wt/epistemics")
+sys.path.insert(0, os.environ.get("CALLISTO_REPO",
+                                  "/Users/marcosantangelo/callisto-wt/epistemics"))
 
-REPO = Path("/Users/marcosantangelo/callisto-wt/epistemics")
+REPO = Path(os.environ.get("CALLISTO_REPO",
+                           "/Users/marcosantangelo/callisto-wt/epistemics"))
 HERE = Path(__file__).resolve().parent
 
 
@@ -112,6 +115,8 @@ def main():
     ap.add_argument("--backend", default=None)
     ap.add_argument("--only", default="")
     ap.add_argument("--tag", default="run1")
+    ap.add_argument("--repo", default="/Users/marcosantangelo/callisto-wt/epistemics",
+                    help="which Callisto checkout to run against")
     args = ap.parse_args()
 
     questions = load_questions()
