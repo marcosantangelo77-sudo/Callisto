@@ -18,12 +18,6 @@ Layers:
   ablate      rerun the same questions with ONE mechanism disabled at a
               time (runtime-patched inside this process, restored after;
               no repo value is edited) and attribute the gap per mechanism.
-  bridge      prototype carrying ESTIMATE and CEILING as two separate
-              numbers: p_reported = 0.5 + sign(p_hat-0.5)*min(2|p_hat-0.5|,
-              ceiling)/2. Inflation stays structurally impossible: the
-              reported number never crosses 0.5 against the model's own
-              side, never exceeds the model's own magnitude, and never
-              exceeds the ceiling.
 
 Nothing here may raise a ceiling, weaken a gate, or let an automated actor
 inflate confidence. The resolution to underconfidence explored here is
@@ -37,9 +31,4 @@ from tools.calibration.instrument import (  # noqa: F401
     MECHANISMS,
     instrumented_run,
     wrap_model,
-)
-from tools.calibration.bridge import (  # noqa: F401
-    separated_report,
-    certainty_of,
-    rescore_separated,
 )

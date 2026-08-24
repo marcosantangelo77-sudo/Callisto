@@ -109,26 +109,16 @@ def test_clamp_parent_round_promotes_tier():
              "best_source_class": "SECONDARY"} for i in range(5)]
     assert inherited_ceiling(recs) == 0.75
     out, tier = clamp_parent_confidence(0.7499, recs)
-<<<<<<< HEAD
     # FIXED: was (0.75, "CORROBORATED") — a tier promotion bought by rounding.
     assert (out, tier) == (0.74, "PROBABLE")
     assert out <= 0.7499                            # the invariant, now enforced
-=======
-    assert (out, tier) == (0.75, "CORROBORATED")   # the bug
-    assert out <= 0.7499                            # now HOLDS (floor_conf): +0.0001
->>>>>>> origin/build/dd-decomposition-diversity
 
 
 def test_clamp_parent_probable_boundary_round_up():
     out, _ = clamp_parent_confidence(0.5551, [])
-<<<<<<< HEAD
     # FIXED: was 0.56, rounded UP past the PROBABLE floor band.
     assert out == 0.55
     assert out <= 0.5551     # the invariant, now enforced
-=======
-    assert out == 0.56       # 0.5551 rounded UP past the PROBABLE floor band
-    assert out <= 0.5551     # now HOLDS (floor_conf)
->>>>>>> origin/build/dd-decomposition-diversity
 
 
 # ── F3: relabel_evidence floors a score UPWARD during demotion ──────────

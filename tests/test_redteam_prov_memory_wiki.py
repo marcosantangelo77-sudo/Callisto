@@ -39,11 +39,7 @@ class TestMemoryReinjection:
             json.dumps(forged_session, sort_keys=True,
                        ensure_ascii=False).encode("utf-8")).hexdigest()
 
-<<<<<<< HEAD
         assert verify_learning_seal(forged_session, legacy_hash) is False, (
-=======
-        assert verify_learning_seal(forged_session, legacy_hash) is True, (
->>>>>>> origin/build/dd-decomposition-diversity
             "unkeyed sha256 accepted as seal verification — an attacker "
             "without CALLISTO_SEAL_KEY can mint seals for claimed-class "
             "escalation")
@@ -110,11 +106,7 @@ class TestWikiCompilation:
         0.5 floor for the whole article."""
         from tools.knowledge_wiki import _article_confidence
         c = _article_confidence([{"id": "a"}, {"id": "b"}])  # no confidence
-<<<<<<< HEAD
         assert c == 0.0  # fail closed: omitting confidence must pull DOWN
-=======
-        assert c == 0.5  # documents the defect if it holds
->>>>>>> origin/build/dd-decomposition-diversity
 
     def test_no_source_class_anywhere_in_wiki_confidence(self):
         """Article confidence is computed ONLY from float confidences; there
