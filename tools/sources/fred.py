@@ -56,9 +56,12 @@ class FredAdapter:
 
     def series_observations(self, series_id: str,
                             start: str = "", end: str = "",
-                            limit: int = 0) -> dict:
-        """Observations for one series, oldest-first. Returns dict with the
-        fetch record attached under '_fetch'."""
+                            limit: int = 0,
+                            sort_order: str = "") -> dict:
+        """Observations for one series. Returns dict with the fetch record
+        attached under '_fetch'. sort_order ('asc'|'desc') passes through to
+        FRED; the planner uses 'desc' so a limit cut can never silently drop
+        the RECENT end of the window (known-answer harness D1)."""
         params = {"series_id": series_id.upper()}
         if start:
             params["observation_start"] = start
@@ -66,6 +69,8 @@ class FredAdapter:
             params["observation_end"] = end
         if limit:
             params["limit"] = int(limit)
+        if sort_order in ("asc", "desc"):
+            params["sort_order"] = sort_order
         url = self._url("/series/observations", params)
         data, rec = self.source.get_json(url)
         data["_fetch"] = {"url": rec.url, "sha256": rec.content_sha256,

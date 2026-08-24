@@ -500,10 +500,23 @@ def _plan_fred(question: str) -> PlanResult:
     core = core_query(question)
     if "series_id" in resolved:
         sid = resolved["series_id"]
+        # D1/D4 (known-answer harness): window the observations on the years
+        # the question names and sort descending. limit=120 ascending ended
+        # in 1957; without a start filter a desc cut can still drop the
+        # OLDEST end of an old window, so pin observation_start to Jan 1 of
+        # the earliest named year whenever the question names any.
+        kw: dict = {"series_id": sid, "limit": 120, "sort_order": "desc"}
+        yrs = _years_in_question(question)
+        if yrs:
+            kw["start"] = f"{min(yrs)}-01-01"
+            latest = max(yrs)
+            import datetime as _dt
+            if latest < _dt.date.today().year:
+                kw["end"] = f"{latest}-12-31"
         return PlanResult(True, queries=[PlannedQuery(
-            source="fred", method="series_observations",
-            kwargs={"series_id": sid, "limit": 120},
-            rationale=f"concept resolved to series {sid}")],
+            source="fred", method="series_observations", kwargs=kw,
+            rationale=f"concept resolved to series {sid}"
+                      + (f"; window from {kw.get('start')}" if yrs else ""))],
             resolved=resolved,
             reason=f"'{core or question}' -> {sid}")
     if "series_id" in cands:
