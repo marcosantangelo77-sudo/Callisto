@@ -911,8 +911,70 @@ class ResearchPipeline:
                 result.gap_kinds[l.question_id] = l.gap_kind
         best_leaf = max(answered, key=lambda l: l.confidence)
         proposed = best_leaf.confidence
-        # The parent's DIRECTION comes from the same leaf as its magnitude.
-        parent_stance = best_leaf.stance
+        # ── STANCE PROPAGATION (defect found by the one-real-question run,
+        # findings/one_real_question.md) ────────────────────────────────────
+        # The parent's DIRECTION may not come from the same leaf as its
+        # magnitude. In that run, two factual-lookup leaves ("what was the
+        # Jan 2023 rate?", "what has 2026 been?") each sealed VERIFIED 0.95
+        # with stance AFFIRMS — affirming THEIR OWN sub-questions — while the
+        # only leaf actually answering the parent's comparison claim sat at
+        # 0.54 UNDETERMINED. Taking direction from the highest-confidence
+        # leaf sealed AFFIRMS on a question whose true answer was NO.
+        # Confidence and direction are different quantities with different
+        # selection rules:
+        #
+        #   (a) Only DECISIONAL leaves — those whose own sub-question is a
+        #       comparison/evaluation over other leaves' facts, detected as
+        #       leaves that reference quantities established elsewhere and
+        #       declare a direction on the parent's actual claim — may set
+        #       the parent's stance. Lookup leaves contribute EVIDENCE but
+        #       never direction: a leaf affirming itself is not evidence
+        #       about the parent's claim.
+        #   (b) If no decisional leaf bears on the parent claim with an
+        #       adequate-confidence declared direction, the parent is
+        #       UNDETERMINED (p=0.5 semantics) — the honest outcome when
+        #       every confident leaf answered a different question.
+        #
+        # A decisional leaf is identified structurally, without re-running
+        # the model: its sub-question text must contain a comparative frame
+        # AND at least one quantity-bearing token also present in another
+        # leaf's text (it compares across leaves), and it must have declared
+        # a non-UNDETERMINED stance. Its direction counts only if its own
+        # confidence clears the PROBABLE band floor; below that the leaf
+        # itself said the comparison is unproven.
+        from agp import TIER_PROBABLE_MIN
+
+        def _decisional(leaf, others) -> bool:
+            low = leaf.text.lower()
+            comparative = any(w in low for w in (
+                "compare", "comparison", "compared", "lower", "higher",
+                "greater", "less than", "more than", "than it was",
+                "relative to", "versus", " vs "))
+            if not comparative:
+                return False
+            # It must engage quantities another leaf establishes (dates,
+            # numbers shared across sub-questions), i.e. synthesize rather
+            # than look up.
+            def _quants(t: str) -> set[str]:
+                return set(re.findall(r"\d+(?:\.\d+)?%?", t))
+            mine = _quants(low)
+            return any(mine & _quants(o.text.lower()) for o in others)
+
+        directional = [l for l in answered if l.stance != "UNDETERMINED"]
+        decisional = [l for l in directional
+                      if _decisional(l, [x for x in result.leaves
+                                         if x is not l])
+                      and l.confidence >= TIER_PROBABLE_MIN]
+        if decisional:
+            best_decisional = max(decisional, key=lambda l: l.confidence)
+            parent_stance = best_decisional.stance
+        else:
+            parent_stance = "UNDETERMINED"
+            result.notes.append(
+                "parent stance UNDETERMINED: no leaf bearing directly on "
+                "the parent's claim reached the confidence bar with a "
+                "declared direction; lookup leaves contribute evidence, "
+                "never direction")
 
         # Inheritance rule: zero/weak resolved descendants cap at SPECULATIVE.
         clamped, tier = clamp_parent_confidence(
