@@ -161,6 +161,10 @@ class PipelineResult:
             "tier": self.confidence_tier,
             "n_leaves": len(self.leaves),
             "n_fetches": len(self.fetches),
+            # RED TEAM C4: sources that ANSWERED (contributed evidence), not
+            # merely asked. A consumer reading n_fetches alone cannot tell a
+            # triangulated answer from one resting on a single source.
+            "n_sources_answered": len({f.source_name for f in self.fetches}),
             "gap_kinds": dict(self.gap_kinds),
             # A20: full sha256 ids — a truncated 12-hex id cannot be
             # resolved back to the stored object, so citing it vouches for
@@ -673,6 +677,10 @@ class ResearchPipeline:
                                    for r in trace_q.rejected],
                     "independent_keys": sorted(trace_q.independent_keys),
                     "queries": list(trace_q.queries),
+                    # RED TEAM C4: round details feed the asked-vs-answered
+                    # notes; a resume that drops them cannot reproduce the
+                    # fresh run's observable output.
+                    "rounds": list(trace_q.rounds),
                     "stop_reason": trace_q.stop_reason}
 
         def _fetch_inputs(q: ResearchQuestion) -> dict:
@@ -789,6 +797,27 @@ class ResearchPipeline:
             fetches_by_leaf.append(fetches_i)
             traces_by_leaf.append(trace_q)
             result.fetches.extend(fetches_i)
+            # RED TEAM C4 (answer correctness): a sealed answer must be able
+            # to say WHICH sources were asked and did NOT contribute. Before
+            # this note, a single-source answer looked identical to a
+            # triangulated one: session.sources listed all 21 registry specs,
+            # and source errors produced no trace anywhere in the result.
+            # Additive information only — reads nothing that scores.
+            asked_failed = []
+            for rd in trace_q.rounds:
+                for s_detail in (rd.get("sources") or []):
+                    name = s_detail.get("name", "")
+                    if not s_detail.get("admitted"):
+                        asked_failed.append(
+                            f"{name} ({'error: ' + s_detail['error'][:80]}"
+                            if s_detail.get("error")
+                            else f"{name} ({s_detail.get('skipped') or s_detail.get('rejected', 'not admitted')})")
+            if asked_failed:
+                answered_names = sorted({f.source_name for f in fetches_i})
+                result.notes.append(
+                    f"leaf '{q.text[:60]}': sources asked but NOT "
+                    f"contributing evidence: {', '.join(asked_failed)}; "
+                    f"answer rests on {answered_names or 'NO sources'}")
             rejected = trace_q.rejected
             if rejected:
                 result.notes.append(
@@ -1022,6 +1051,12 @@ def _trace_from_payload(question_id: str, payload: dict):
             content_sha256=r.get("content_sha256", "")))
     trace.independent_keys = set(payload.get("independent_keys") or [])
     trace.queries = list(payload.get("queries") or [])
+    # RED TEAM C4: round details restore verbatim so the resumed run emits
+    # the same asked-vs-answered notes the fresh run did. Legacy payloads
+    # without them degrade to empty (no notes), never to fabricated detail.
+    for rd in payload.get("rounds") or []:
+        if isinstance(rd, dict):
+            trace.rounds.append(rd)
     trace.stop_reason = payload.get("stop_reason", "")
     return trace
 
