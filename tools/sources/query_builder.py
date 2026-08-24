@@ -705,7 +705,7 @@ _WORLDBANK_INDICATORS: dict[str, list[Candidate]] = {
 
 #: ISO3 country codes that appear as ordinary words in questions.
 _WB_COUNTRIES: dict[str, str] = {
-    "usa": "USA", "united states": "USA", "china": "CHN", "india": "IND",
+    "usa": "USA", "united states": "USA", "us": "USA", "china": "CHN", "india": "IND",
     "germany": "DEU", "japan": "JPN", "brazil": "BRA", "mexico": "MEX",
     "nigeria": "NGA", "uk": "GBR", "britain": "GBR",
     "united kingdom": "GBR", "france": "FRA", "russia": "RUS",
