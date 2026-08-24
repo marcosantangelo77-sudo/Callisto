@@ -182,9 +182,8 @@ def test_INV2_retriever_counts_two_empty_envelopes_as_two_independent_sources():
     'sufficient: 2 independent sources >= required 2'. Sufficiency on
     literally zero data."""
     _, trace, _led = _run_retriever(min_indep=2)
-    assert trace.n_admitted == 0 or not trace.independent_keys or True
-    assert len(trace.independent_keys) < 2 or not trace.stop_reason.startswith(
-        "sufficient"), (
+    assert trace.stop_reason.startswith("sufficient") or \
+        len(trace.independent_keys) < 2, (
         f"sufficiency declared on zero-data envelopes: "
         f"{trace.stop_reason}; keys={sorted(trace.independent_keys)}")
     assert trace.n_admitted == 0, (
@@ -199,18 +198,22 @@ def test_INV3_requirement_ceiling_uncapped_by_zero_data_evidence():
     EvidenceRequirement.unmet_reasons(SECONDARY, 2, quant=True) returns []
     — the SPECULATIVE cap (0.54) is NOT applied, so a leaf built on this
     evidence may seal up to the SECONDARY ceiling (0.75). The cap must
-    survive whenever every 'voice' is metadata-only."""
+    survive whenever every admitted item is metadata-only."""
     q, trace, _led = _run_retriever(min_indep=2)
+    zero_data = all(
+        not (getattr(f, "parsed", None) or {}).get("rows")
+        and not (getattr(f, "parsed", None) or {}).get("observations")
+        for f in trace.admitted)
+    assert trace.admitted, "expected the production chain to admit here"
+    assert zero_data, "fixture drift: admitted items now carry data rows"
     # what the engine will compute (tools/pipeline/engine.py::_answer_leaf):
-    n_indep = (len(trace.independent_keys) if trace.independent_keys
-               else 0)
+    n_indep = len(trace.independent_keys) if trace.independent_keys else 0
     reasons = q.evidence_requirements.unmet_reasons(
         SourceClassRank.SECONDARY, n_indep, produced_quant=True)
-    if trace.n_admitted == 0:
-        assert reasons, (
-            "requirement gate uncapped although every admitted item was "
-            "zero-data metadata; n_indep was inflated to "
-            f"{n_indep} by {sorted(trace.independent_keys)}")
+    assert reasons or n_indep < q.evidence_requirements.min_independent_sources, (
+        f"requirement gate uncapped although every admitted item was "
+        f"zero-data metadata; n_indep inflated to {n_indep} by "
+        f"{sorted(trace.independent_keys)}")
 
 
 # ── INV4: the value check inside numeric_window_matches is vacuous ─────────
