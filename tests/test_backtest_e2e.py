@@ -43,6 +43,8 @@ async def db_path(tmp_path):
         await db.executescript(SCHEMA_SQL)
         # Also create the odds_snapshots table (normally created by line_monitor)
         # so _enrich_snapshot_with_multibook doesn't crash.
+        # closing_lines is normally created by CLVTracker.initialize(); data_collector
+        # queries it directly during paper-trade resolution so we need it too.
         await db.executescript("""
             CREATE TABLE IF NOT EXISTS odds_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,6 +54,19 @@ async def db_path(tmp_path):
                 game_count INTEGER DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS closing_lines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL,
+                sport TEXT,
+                captured_at TEXT NOT NULL,
+                source TEXT DEFAULT 'pinnacle',
+                market TEXT,
+                team TEXT,
+                closing_odds INTEGER,
+                closing_point REAL,
+                closing_implied REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_closing_event ON closing_lines(event_id, market);
         """)
         await db.commit()
     return path
@@ -113,18 +128,26 @@ def build_odds_api_snapshot(
     """
     Build a realistic historical odds API response with multi-book data.
 
-    The key to generating cross-book edges: comparison books (FanDuel, BetMGM)
-    price the home team MORE aggressively than DraftKings. When devigged, these
-    comparison books imply ~54% on the home side, but DK offers -110 (only 52.4%
-    implied). That gap is the edge: fair value says 54% but you can buy it at 52.4%.
+    The key to generating cross-book edges: comparison books (FanDuel, BetMGM,
+    Caesars, PointsBet) price the home team MORE aggressively than DraftKings.
+    When devigged, these comparison books imply ~54% on the home side, but DK
+    offers -110 (only 52.4% implied). That gap is the edge: fair value says 54%
+    but you can buy it at 52.4%.
 
     DraftKings (target): Home -3.5 at -110 / Away +3.5 at -110  (standard vig)
     FanDuel (comparison): Home -3.5 at -130 / Away +3.5 at +110  (prices home heavier)
     BetMGM (comparison):  Home -3.5 at -125 / Away +3.5 at +105  (prices home heavier)
+    Caesars (comparison): Home -3.5 at -128 / Away +3.5 at +108  (prices home heavier)
+    PointsBet (comparison):Home -3.5 at -122 / Away +3.5 at +102 (prices home heavier)
 
     Devigged consensus fair prob for home ~54%, creating +3% EV on DK's -110 line.
 
-    Also includes totals and h2h with similar cross-book divergence.
+    NOTE: The backtest engine enforces MIN_BOOKS_FOR_SIGNAL = 4 (non-target books).
+    Therefore we include 5 total books (1 target + 4 comparison) so signals can fire.
+
+    Also includes totals and h2h with similar cross-book divergence. For h2h
+    we keep the home fair prob below 80% (heavy_fav cutoff) so signals still
+    fire — achieved with prices around -150/+130.
     """
     event_id = f"nba-{game_date}-{home.replace(' ', '_')}-{away.replace(' ', '_')}"
     return {
@@ -220,6 +243,60 @@ def build_odds_api_snapshot(
                             },
                         ],
                     },
+                    {
+                        "key": "caesars",
+                        "title": "Caesars",
+                        "markets": [
+                            {
+                                "key": "spreads",
+                                "outcomes": [
+                                    {"name": home, "price": -128, "point": -3.5},
+                                    {"name": away, "price": 108, "point": 3.5},
+                                ],
+                            },
+                            {
+                                "key": "totals",
+                                "outcomes": [
+                                    {"name": "Over", "price": -128, "point": 220.5},
+                                    {"name": "Under", "price": 108, "point": 220.5},
+                                ],
+                            },
+                            {
+                                "key": "h2h",
+                                "outcomes": [
+                                    {"name": home, "price": -178},
+                                    {"name": away, "price": 152},
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "key": "pointsbetus",
+                        "title": "PointsBet",
+                        "markets": [
+                            {
+                                "key": "spreads",
+                                "outcomes": [
+                                    {"name": home, "price": -122, "point": -3.5},
+                                    {"name": away, "price": 102, "point": 3.5},
+                                ],
+                            },
+                            {
+                                "key": "totals",
+                                "outcomes": [
+                                    {"name": "Over", "price": -122, "point": 220.5},
+                                    {"name": "Under", "price": 102, "point": 220.5},
+                                ],
+                            },
+                            {
+                                "key": "h2h",
+                                "outcomes": [
+                                    {"name": home, "price": -172},
+                                    {"name": away, "price": 147},
+                                ],
+                            },
+                        ],
+                    },
                 ],
             },
         ],
@@ -278,17 +355,31 @@ async def create_test_hypothesis(
     This is intentional for integration testing: we want to validate the full
     pipeline mechanics (create events -> resolve -> evaluate), not the edge
     detection thresholds (those are unit-tested elsewhere in test_devig.py).
+
+    For h2h and totals markets, the backtest engine enforces side_filter_required
+    (FWER audit, 2026-04-22) to prevent both-sides double-counting. These e2e
+    tests intentionally exercise BOTH sides, so we mark the test hypotheses
+    with legacy=True to grandfather them past that gate.
     """
+    model_config = {
+        "target_book": "draftkings",
+        "devig_method": "power",
+        "consensus_min_books": 1,
+        # legacy=True forces deterministic `best_edge` signal collapse (by
+        # max edge per event_id) instead of random_row. Without this, tests
+        # that depend on which side of a spread gets picked are flaky because
+        # random_row chooses non-deterministically (though seeded per hid).
+        # It also grandfathers binary-both-sides tests (h2h/totals) past the
+        # FWER side_filter gate so both sides can be evaluated together.
+        "legacy": True,
+    }
+
     hid = await hypothesis_manager.create_hypothesis(
         name=f"NBA Cross-Book {market_type.title()} Edges (Test){name_suffix}",
         thesis=f"Cross-book devigging reveals mispriced NBA {market_type} on DraftKings",
         sport=SPORT,
         market_type=market_type,
-        model_config={
-            "target_book": "draftkings",
-            "devig_method": "power",
-            "consensus_min_books": 1,
-        },
+        model_config=model_config,
         edge_threshold=edge_threshold,
         min_sample_size=1,     # Low for testing
         significance_level=0.10,
@@ -310,20 +401,40 @@ class TestBacktestEndToEnd:
         and verifies every stage produces correct output.
 
         Uses edge_threshold=-1.0 so both sides of every spread are signals.
-        This gives us 2 resolved signals (Lakers WON, Celtics LOST), enough
-        for evaluate_significance() to produce a full statistical report.
+
+        `_get_backtest_signals` collapses multiple book-level rows with the
+        same (event_id, side) into a single signal (one per unique bet).
+        We seed TWO distinct games so sample_size is >= 2 and
+        evaluate_significance() can produce a full statistical report.
         """
         # ── Setup ──
         hid = await create_test_hypothesis(hypothesis_manager, market_type="spreads")
-        snapshot = build_odds_api_snapshot()
-        await insert_cached_odds(db_path, snapshot)
+
+        # Signals are collapsed to one row per unique event_id. To guarantee
+        # at least 1 win AND 1 loss in the significance report, we seed two
+        # games where the home team (Lakers in G1, Warriors in G2) is also
+        # the collapsed side: Game 1 home covers, Game 2 home fails to cover.
+        # Game 1: Lakers host Celtics, Lakers win 110-105 (home -3.5 covers)
+        snapshot1 = build_odds_api_snapshot()
+        await insert_cached_odds(db_path, snapshot1)
         await insert_game_result(db_path)
+
+        # Game 2: Warriors host Knicks, Warriors lose 100-115 (home -3.5 loses)
+        game2_date = "2025-12-16"
+        home2, away2 = "Golden State Warriors", "New York Knicks"
+        snapshot2 = build_odds_api_snapshot(home=home2, away=away2, game_date=game2_date)
+        await insert_cached_odds(db_path, snapshot2, game_date=game2_date)
+        await insert_game_result(
+            db_path, game_date=game2_date, home=home2, away=away2,
+            home_score=100, away_score=115,
+        )
+        snapshot = snapshot1  # legacy local reference used below for assertions
 
         # ── Run backtest ──
         result = await backtest_engine.run_backtest(
             hypothesis_id=hid,
             start_date=GAME_DATE,
-            end_date=GAME_DATE,
+            end_date=game2_date,
             credit_budget=0,  # 0 budget = use only cached data
         )
 
@@ -383,22 +494,23 @@ class TestBacktestEndToEnd:
             spread_rows = await cursor.fetchall()
             assert len(spread_rows) >= 2, "Expected at least 2 resolved spread events"
 
-            # Note: the backtest engine stores abs(point) as the line (3.5 for both sides).
-            # Resolution uses: home -> margin + line, away -> -margin + line.
-            # Lakers (home): 5 + 3.5 = 8.5 > 0 -> WON
-            # Celtics (away): -5 + 3.5 = -1.5 < 0 -> LOST
+            # Note: the backtest engine stores the SIGNED point as `line`
+            # (home = -3.5, away = +3.5). Resolution logic then uses the
+            # signed line directly:
+            #   home: margin + line  ->  5 + (-3.5) = 1.5 > 0 -> WON
+            #   away: -margin + line -> -5 + 3.5    = -1.5 < 0 -> LOST
             lakers_found = False
             celtics_found = False
             for side, line, actual_result in spread_rows:
-                if side == HOME_TEAM and line == 3.5:
+                if side == HOME_TEAM and line == -3.5:
                     assert actual_result == "won", (
-                        f"Lakers spread should be WON (margin=5, adjusted=5+3.5=8.5), "
+                        f"Lakers -3.5 should be WON (margin=5, adjusted=5+(-3.5)=1.5), "
                         f"got {actual_result}"
                     )
                     lakers_found = True
                 elif side == AWAY_TEAM and line == 3.5:
                     assert actual_result == "lost", (
-                        f"Celtics spread should be LOST (adjusted=-5+3.5=-1.5), "
+                        f"Celtics +3.5 should be LOST (adjusted=-5+3.5=-1.5), "
                         f"got {actual_result}"
                     )
                     celtics_found = True
@@ -511,18 +623,12 @@ class TestBacktestEndToEnd:
     @pytest.mark.asyncio
     async def test_spreads_push(self, backtest_engine, hypothesis_manager, db_path):
         """
-        When the margin exactly matches the spread, the away side should push.
+        When the margin exactly matches the spread, BOTH sides should push.
 
-        Note: The backtest engine stores abs(point) as the line for spreads
-        grouping. For resolution, the formula is:
-          home:  margin + line  (line is abs)
-          away: -margin + line  (line is abs)
-
-        With margin=5 and line=5.0 (from abs(-5)):
-          away: -5 + 5 = 0 => push
-          home:  5 + 5 = 10 => won (home side effectively sees a +5 line)
-
-        This tests the push path via the away side.
+        The backtest engine stores the SIGNED point as the `line` column
+        (home = -5.0, away = +5.0). Resolution formula is:
+          home:  margin + line  ->  5 + (-5) = 0  => push
+          away: -margin + line  -> -5 +  5  = 0  => push
         """
         hid = await create_test_hypothesis(hypothesis_manager, market_type="spreads")
 
@@ -562,16 +668,16 @@ class TestBacktestEndToEnd:
 
             for side, line, actual_result in rows:
                 if side == AWAY_TEAM:
-                    # Away team (Celtics +5): -margin + line = -5 + 5 = 0 => push
+                    # Away +5, margin +5: -margin + line = -5 + 5 = 0 => push
                     assert actual_result == "push", (
                         f"{AWAY_TEAM} with line={line} should be PUSH "
                         f"(formula: -margin + line = -5 + 5 = 0), got {actual_result}"
                     )
                 elif side == HOME_TEAM:
-                    # Home team (Lakers): margin + line = 5 + 5 = 10 => won
-                    assert actual_result == "won", (
-                        f"{HOME_TEAM} with line={line} should be WON "
-                        f"(formula: margin + line = 5 + 5 = 10 > 0), got {actual_result}"
+                    # Home -5, margin +5: margin + line = 5 + (-5) = 0 => push
+                    assert actual_result == "push", (
+                        f"{HOME_TEAM} with line={line} should be PUSH "
+                        f"(formula: margin + line = 5 + (-5) = 0), got {actual_result}"
                     )
 
     @pytest.mark.asyncio
@@ -678,16 +784,33 @@ class TestBacktestEndToEnd:
     async def test_backtest_run_record(
         self, backtest_engine, hypothesis_manager, db_path,
     ):
-        """Verify the backtest_runs table is populated with correct metadata."""
+        """Verify the backtest_runs table is populated with correct metadata.
+
+        Uses TWO games so signals collapse to >= 2 unique (event_id) rows —
+        evaluate_significance requires `resolved >= 2` before it populates the
+        run's actual_win/actual_loss columns.
+        """
         hid = await create_test_hypothesis(hypothesis_manager)
-        snapshot = build_odds_api_snapshot()
-        await insert_cached_odds(db_path, snapshot)
+
+        # Game 1: Lakers vs Celtics on GAME_DATE, Lakers win 110-105
+        snapshot1 = build_odds_api_snapshot()
+        await insert_cached_odds(db_path, snapshot1)
         await insert_game_result(db_path)
+
+        # Game 2: Warriors vs Knicks on GAME_DATE+1, Warriors win 120-110
+        game2_date = "2025-12-16"
+        home2, away2 = "Golden State Warriors", "New York Knicks"
+        snapshot2 = build_odds_api_snapshot(home=home2, away=away2, game_date=game2_date)
+        await insert_cached_odds(db_path, snapshot2, game_date=game2_date)
+        await insert_game_result(
+            db_path, game_date=game2_date, home=home2, away=away2,
+            home_score=120, away_score=110,
+        )
 
         result = await backtest_engine.run_backtest(
             hypothesis_id=hid,
             start_date=GAME_DATE,
-            end_date=GAME_DATE,
+            end_date=game2_date,
             credit_budget=0,
         )
 
@@ -704,7 +827,7 @@ class TestBacktestEndToEnd:
 
             assert run["hypothesis_id"] == hid
             assert run["date_range_start"] == GAME_DATE
-            assert run["date_range_end"] == GAME_DATE
+            assert run["date_range_end"] == game2_date
             assert run["total_events"] > 0
             assert run["completed_at"] is not None
             # Should have wins/losses after resolution

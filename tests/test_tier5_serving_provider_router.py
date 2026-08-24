@@ -132,7 +132,10 @@ class TestPayloadShape:
                     return self
                 async def __aexit__(self, *a):
                     return False
-                async def post(self, url, json=None, headers=None):
+                # timeout kwarg accepted: the router now passes a per-request
+                # timeout on every post (shared pooled client, speed run).
+                async def post(self, url, json=None, headers=None,
+                               timeout=None):
                     captured["url"] = url
                     return FakeResp()
 
