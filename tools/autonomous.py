@@ -4544,7 +4544,7 @@ class ResearchLoop:
             # Record to Hermes for cross-session awareness
             try:
                 from tools.hermes_memory import get_hermes_memory
-                hm = await get_hermes_memory()
+                hm = get_hermes_memory()
                 if hm:
                     await hm.record_learning(
                         key="pipeline_validation_issues",
@@ -7788,7 +7788,7 @@ class ResearchLoop:
             )
             # Record to Hermes
             try:
-                hm = await get_hermes_memory()
+                hm = get_hermes_memory()
                 if hm:
                     await hm.record_learning(
                         key="system_watchdog_findings",

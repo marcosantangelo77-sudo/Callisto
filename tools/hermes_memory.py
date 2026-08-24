@@ -73,7 +73,9 @@ class HermesMemory:
                 learned_at TEXT NOT NULL,
                 confidence REAL DEFAULT 0.5,
                 occurrences INTEGER DEFAULT 1,
-                source TEXT DEFAULT 'claude'
+                source TEXT DEFAULT 'claude',
+                source_class TEXT,
+                provenance_seal TEXT
             )""",
             """CREATE TABLE IF NOT EXISTS hermes_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,6 +86,19 @@ class HermesMemory:
             )""",
         ):
             await db.execute(stmt)
+        # EPISTEMICS (build/memory-wiki-improve): lazily upgrade tables created
+        # before the provenance columns existed (the workstation DB has not run
+        # migration 015). Migration 015 guards on the same column names, so
+        # either order of [runtime upgrade, migration] converges.
+        for alter in (
+            "ALTER TABLE hermes_learnings ADD COLUMN source_class TEXT",
+            "ALTER TABLE hermes_learnings ADD COLUMN provenance_seal TEXT",
+        ):
+            try:
+                await db.execute(alter)
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
         await db.commit()
         self._db_initialized = True
 

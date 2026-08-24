@@ -328,13 +328,20 @@ def annotate_for_reinjection(row: dict) -> dict:
     The emitted dict always carries source_class and confidence_ceiling so
     downstream prompt-builders (and the wiki's source admission) cannot treat
     a reinjected INFERRED learning as PRIMARY evidence.
+
+    If the caller computed an ``effective_confidence`` (the read path applies
+    time decay before calling this), that value is PRESERVED, clamped to the
+    class ceiling — the annotator used to overwrite it with the undecayed
+    stored confidence, which silently disabled read-time decay on the only
+    production path that computed it.
     """
     cls = normalize_source_class(row.get("source_class")) or "INFERRED"
     out = dict(row)
     out["source_class"] = cls
-    out["confidence_ceiling"] = PROVENANCE_CEILINGS[cls]
-    out["effective_confidence"] = min(
-        float(row.get("confidence", 0.0)),
-        PROVENANCE_CEILINGS[cls],
-    )
+    ceiling = PROVENANCE_CEILINGS[cls]
+    out["confidence_ceiling"] = ceiling
+    effective = row.get("effective_confidence")
+    if effective is None:
+        effective = float(row.get("confidence", 0.0))
+    out["effective_confidence"] = min(float(effective), ceiling)
     return out
