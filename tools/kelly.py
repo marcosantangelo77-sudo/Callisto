@@ -39,7 +39,7 @@ AGP_TIER_MULTIPLIERS = {
     "CORROBORATED":  0.80,   # >= 0.75: multi-source confirmed
     "PROBABLE":      0.55,   # >= 0.55: reasonable evidence
     "SPECULATIVE":   0.30,   # >= 0.30: thin evidence, size down hard
-    "UNVERIFIED":    0.00,   # <  0.30: do not bet
+    "UNVERIFIED":    0.01,   # <  0.30: do not bet
 }
 
 # Sport-level line movement volatility profiles (std dev of closing line
