@@ -103,6 +103,35 @@ bar. Šidák over lifetime N produced 3,192 rejections and zero promotions.
 **Rule:** nothing automated may weaken a gate. A gate may be re-scoped on an
 argued basis; it may never be lowered because it is inconvenient.
 
+## 9. Internally consistent, externally wrong  (THE NEWEST, AND THE WORST)
+
+Every check in this system verifies an INTERNAL property: provenance intact,
+no confidence raised, seal valid, adversary satisfied, requirements met.
+NOTHING verifies that the answer corresponds to reality.
+
+The first real question Callisto answered end-to-end was WRONG and sealed at
+PROBABLE. It said US unemployment was LOWER in 2026 than January 2023; FRED
+says 3.5% then, 4.1-4.4% now — it is HIGHER. Every internal signal passed. The
+pipeline fetched real data, a leaf honestly refused to fabricate, provenance
+held, the seal verified. 11,300 tests passed. A human doing arithmetic caught
+it in one question.
+
+Root cause, for the record: the parent took its stance from the
+highest-CONFIDENCE leaf, which answered "what was the rate in Jan 2023?" and
+affirmed ITSELF. The only leaf bearing on the actual comparison sat at 0.54 and
+was outvoted. Confidence and DIRECTION are different quantities and must not
+share a selection rule.
+
+**How to hunt it:** stop asking whether the machinery behaved. Ask whether the
+ANSWER IS RIGHT, against a source you check yourself. Build cases where every
+leaf is individually true and the parent is false. Any property a parent
+inherits from a child — stance, tier, source class, gap kind — is suspect
+unless that child bears on the parent's claim.
+
+**Why it is the worst family:** a wrong answer sealed at PROBABLE is more
+dangerous than a refusal, an error, or a crash. It is the only failure mode
+that looks exactly like success.
+
 ---
 
 ## Method matters more than surface
