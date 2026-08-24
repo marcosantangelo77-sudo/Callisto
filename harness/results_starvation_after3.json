@@ -67,5 +67,58 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q04",
+    "question": "Was the U.S. total public debt lower on January 31, 2023 than $30 trillion?",
+    "category": "negation",
+    "expected_stance": "DENIES",
+    "gt": "$31,454,982,227,739.16 \u2014 higher than $30T.",
+    "verified_by": "debt_to_penny record_date=2023-01-31",
+    "elapsed_s": 307.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What was the U.S. total public debt outstanding as of January 31, 2023, according to the U.S. Treasury's Debt to the Penny dataset?",
+        "answer": "No evidence items were provided, so the debt figure as of January 31, 2023 cannot be determined from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Does the statutory debt limit and contemporaneous reporting (e.g., debt subject to limit figures for January 2023) corroborate that total public debt stood above $30 trillion at that date?",
+        "answer": "No evidence items were provided, so the evidence cannot corroborate whether total public debt stood above $30 trillion in January 2023.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "The question is trivially checkable against a single authoritative source the pipeline names but never queried: Treasury's Debt to the Penny dataset reports Total Public Debt Outstanding of roughly $31.46 trillion for 2023-01-31 (debt subject to limit sat at the suspended statutory ceiling of ~$31.38T through January 2023). A 'no evidence items were provided' null on a fact this directly retrievab",
+      "The most likely artifact: the evidence-fetch step returned empty (transport error, auth failure, or malformed query to fiscaldata.treasury.gov / Debt to the Penny), and the harness's honest_null policy then stamped both sub-questions UNVERIFIED 0.00. The 'conclusion' here is not a finding but a logged fetch failure dressed as epistemic output \u2014 its confidence of exactly 0.00 on both branches is th",
+      "An alternative explanation for the observed pattern (two parallel honest_nulls) is that both sub-queries shared one failing dependency \u2014 e.g., the same Treasury endpoint or planner date-parsing step \u2014 so the nulls are perfectly correlated artifacts of a single broken call path rather than two independent assessments concluding the evidence is absent. Independent gaps would be coincidentally aligne",
+      "Selection effect on the corpus: if the retrieval pass filters sources by domain allowlist or recency window, contemporaneous January-2023 reporting (Treasury statements, CBO monthly budget review for FY2023 Q1 published Feb 2023, press coverage of the X-date during the debt-ceiling standoff) would be systematically excluded while the null is reported as if the whole evidentiary world were searched"
+    ],
+    "notes": [
+      "leaf 'What was the U.S. total public debt outstanding as of Januar': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, according, data, dataset, debt, fiscal, government, january), fdic (content covers 12% of the question's topical words (need 25%); missing: 2023, according, data, dataset, debt, fiscal, government, january), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, according, data, dataset, debt, fiscal, government, january), treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/, courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 6% of the question's topical words (need 25%); missing: 2023, according, data, dataset, debt, fiscal, government, january); answer rests on NO sources",
+      "leaf 'What was the U.S. total public debt outstanding as of Januar': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, according, data, dataset, debt, fiscal, government, january; [fdic] content covers 12% of the question's topical words (need 25%); missing: 2023, according, data, dataset, debt, fiscal, government, january; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, according, data, dataset, debt, fiscal, government, january; [wikidata] content covers 6% of the question's topical words (need 25%); missing: 2023, according, data, dataset, debt, fiscal, government, january",
+      "leaf 'Does the statutory debt limit and contemporaneous reporting ': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=st, fdic (content covers 4% of the question's topical words (need 25%); missing: 2023, above, contemporaneous, contemporary, corroborate, date, debt, figures), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, above, contemporaneous, contemporary, corroborate, date, debt, figures), treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/, courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 13% of the question's topical words (need 25%); missing: 2023, above, contemporaneous, contemporary, corroborate, date, debt, figures); answer rests on NO sources",
+      "leaf 'Does the statutory debt limit and contemporaneous reporting ': 3 fetch(s) rejected at ingestion: [fdic] content covers 4% of the question's topical words (need 25%); missing: 2023, above, contemporaneous, contemporary, corroborate, date, debt, figures; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, above, contemporaneous, contemporary, corroborate, date, debt, figures; [wikidata] content covers 13% of the question's topical words (need 25%); missing: 2023, above, contemporaneous, contemporary, corroborate, date, debt, figures"
+    ],
+    "gap_kinds": {
+      "b048ad12e66549d4": "honest_null",
+      "c4f165e382614f4a": "honest_null"
+    },
+    "verdict": "refused"
   }
 ]
