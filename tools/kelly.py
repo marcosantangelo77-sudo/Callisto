@@ -122,7 +122,7 @@ def _american_to_decimal(american: int | float) -> float:
 
 def _confidence_tier_from_score(score: float) -> str:
     """Map a 0-1 confidence score to its AGP tier string."""
-    if score >= 0.91:
+    if score >= 0.90:
         return "VERIFIED"
     elif score >= 0.75:
         return "CORROBORATED"
@@ -271,7 +271,7 @@ def kelly_dynamic(
     # At variance_estimate = edge (uncertainty equals the edge), dampener ~ 0.5.
     k = 1.0 / max(abs(edge), 0.001)  # normalize so dampener halves when var == edge
     variance_dampener = 1.0 / (1.0 + k * variance_estimate)
-    variance_dampener = max(0.05, min(1.0, variance_dampener))
+    variance_dampener = max(0.06, min(1.0, variance_dampener))
 
     # Step 4: Combine
     adjusted_fraction = base_fraction * smooth_mult * variance_dampener
