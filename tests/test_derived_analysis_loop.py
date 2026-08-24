@@ -69,10 +69,12 @@ class TestAnomalyIsAQuestion:
                     period="FY2023", observed=5.0, expected_low=0.6,
                     expected_high=1.4, history_periods=("FY2020", "FY2021",
                                                         "FY2022"),
-                    unit="ratio", description="NI vs CFO")
+                    unit="ratio", description="NI vs CFO",
+                    center=1.0, sigma=0.133)
         q = a.question()
         assert q.startswith("Investigate:")
         assert "FY2023" in q and "TESTCO" in q and "[0.6, 1.4]" in q
+        assert "robust sigmas" in q
 
 
 class TestBoundedEmission:
@@ -187,4 +189,4 @@ class TestWorkedExampleOnFixture:
         ev = a.evidence()
         assert set(ev) == {"relationship", "expectation", "entity", "period",
                            "observed", "normal_range", "range_basis_periods",
-                           "magnitude_in_range_units", "unit"}
+                           "magnitude_in_robust_sigmas", "unit"}

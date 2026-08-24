@@ -71,16 +71,15 @@ class Anomaly:
     history_periods: tuple[str, ...]
     unit: str
     description: str
+    center: float = 0.0      # median of the entity's own history
+    sigma: float = 0.0       # 1.4826·MAD of that history
 
     @property
     def magnitude(self) -> float:
-        """How far outside the range, in units of the range's own scale."""
-        span = self.expected_high - self.expected_low
-        if span <= 0:
-            return abs(self.observed - self.expected_high)
-        if self.observed > self.expected_high:
-            return (self.observed - self.expected_high) / span
-        return (self.expected_low - self.observed) / span
+        """How many robust sigmas the observation sits from its own norm."""
+        if self.sigma > 0:
+            return abs(self.observed - self.center) / self.sigma
+        return abs(self.observed - self.center)
 
     def evidence(self) -> dict:
         """Provenance-grade evidence for the researcher. Facts only."""
@@ -93,7 +92,7 @@ class Anomaly:
             "normal_range": [round(self.expected_low, 6),
                              round(self.expected_high, 6)],
             "range_basis_periods": list(self.history_periods),
-            "magnitude_in_range_units": round(self.magnitude, 3),
+            "magnitude_in_robust_sigmas": round(self.magnitude, 3),
             "unit": self.unit,
         }
 
@@ -106,8 +105,9 @@ class Anomaly:
             f"Investigate: why is {self.entity}'s {self.relationship_key} "
             f"({self.description}) {self.observed:.4g} {self.unit} in "
             f"{self.period}, outside the range [{lo:.4g}, {hi:.4g}] its own "
-            f"history ({basis}) implies? Magnitude ~{self.magnitude:.1f} "
-            f"range-widths. Evidence: {self.evidence()}"
+            f"history ({basis}) implies? Deviation ~{self.magnitude:.1f} "
+            f"robust sigmas from the historical median. "
+            f"Evidence: {self.evidence()}"
         )
 
 
@@ -118,11 +118,12 @@ def _median(xs: Sequence[float]) -> float:
     return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2.0
 
 
-def _mad_sigma_range(observations: dict[str, float]) -> Optional[tuple[float, float, tuple[str, ...]]]:
+def _mad_sigma_range(observations: dict[str, float]) -> Optional[tuple[float, float, tuple[str, ...], float, float]]:
     """Normal range from the entity's OWN history: median ± 3·(1.4826·MAD).
 
-    Returns (low, high, periods_used) or None when history is too thin or too
-    degenerate (zero dispersion makes any range meaningless).
+    Returns (low, high, periods_used, median, sigma) or None when history is
+    too thin. Zero dispersion gets a tiny epsilon band around the median so an
+    actual move still trips the flag instead of dividing by zero.
     """
     periods = sorted(observations)
     if len(periods) < MIN_PERIODS_FOR_RANGE:
@@ -136,7 +137,7 @@ def _mad_sigma_range(observations: dict[str, float]) -> Optional[tuple[float, fl
         # so an actual move still trips the flag instead of dividing by zero.
         scale = max(abs(med) * 1e-6, 1e-9)
         sigma = scale
-    return med - MAD_SIGMA * sigma, med + MAD_SIGMA * sigma, tuple(periods)
+    return med - MAD_SIGMA * sigma, med + MAD_SIGMA * sigma, tuple(periods), med, sigma
 
 
 def detect_anomalies(
@@ -162,7 +163,7 @@ def detect_anomalies(
         rng = _mad_sigma_range(baseline)
         if rng is None:
             continue
-        low, high, used = rng
+        low, high, used, med, sig = rng
         for p in focus_periods:
             if p not in obs:
                 continue
@@ -178,6 +179,8 @@ def detect_anomalies(
                     history_periods=used,
                     unit=rel.unit,
                     description=rel.description,
+                    center=med,
+                    sigma=sig,
                 ))
     return anomalies
 
