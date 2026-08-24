@@ -39,7 +39,9 @@
     "d6b25d3001a8802bb40cbd6ba5e0cce9a6818d3942c7c96c19005ceec0318883",
     "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8"
   ],
-  "notes": [],
+  "notes": [
+    "parent stance UNDETERMINED: no leaf bearing directly on the parent's claim reached the confidence bar with a declared direction; lookup leaves contribute evidence, never direction"
+  ],
   "objections": [],
   "refusal_reason": "",
   "seal_verifies": true,
