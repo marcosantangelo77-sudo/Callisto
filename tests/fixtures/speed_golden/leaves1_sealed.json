@@ -34,7 +34,9 @@
     "d6b25d3001a8802bb40cbd6ba5e0cce9a6818d3942c7c96c19005ceec0318883",
     "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8"
   ],
-  "notes": [],
+  "notes": [
+    "leaf 'leaf 0: what does the evidence say about apple earnings expe': sources asked but NOT contributing evidence: clinicaltrials (error: clinicaltrials returned 404, fred (error: fred returned 404; answer rests on ['federalregister']"
+  ],
   "objections": [],
   "refusal_reason": "",
   "seal_verifies": true,
