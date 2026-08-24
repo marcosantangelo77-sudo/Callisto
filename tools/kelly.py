@@ -121,14 +121,30 @@ def _american_to_decimal(american: int | float) -> float:
 
 
 def _confidence_tier_from_score(score: float) -> str:
-    """Map a 0-1 confidence score to its AGP tier string."""
-    if score >= 0.90:
+    """Map a 0-1 confidence score to its AGP tier string.
+
+    Boundaries come from agp/thresholds.py — the single source of truth.
+    (Family-2 fix: this function previously hardcoded its own copy of
+    0.90/0.75/0.55/0.30; a boundary change in thresholds.py would have left
+    money sizing silently disagreeing with the confidence system.)
+    """
+    try:
+        from agp.thresholds import (
+            TIER_CORROBORATED_MIN,
+            TIER_PROBABLE_MIN,
+            TIER_SPECULATIVE_MIN,
+            TIER_VERIFIED_MIN,
+        )
+    except ImportError:
+        TIER_VERIFIED_MIN, TIER_CORROBORATED_MIN = 0.90, 0.75
+        TIER_PROBABLE_MIN, TIER_SPECULATIVE_MIN = 0.55, 0.30
+    if score >= TIER_VERIFIED_MIN:
         return "VERIFIED"
-    elif score >= 0.75:
+    elif score >= TIER_CORROBORATED_MIN:
         return "CORROBORATED"
-    elif score >= 0.55:
+    elif score >= TIER_PROBABLE_MIN:
         return "PROBABLE"
-    elif score >= 0.30:
+    elif score >= TIER_SPECULATIVE_MIN:
         return "SPECULATIVE"
     else:
         return "UNVERIFIED"
