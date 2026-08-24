@@ -49,6 +49,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from tools.retrodiction.attribution import (
+    RoleTrackingModel,
+    RunAttribution,
+    attribute_run,
+)
 from tools.pipeline.checkpoint import FileCheckpointer, hash_inputs
 from tools.retrodiction.questions import RetrodictionQuestion
 from tools.retrodiction.scoring import (
@@ -138,6 +143,9 @@ class BatchResult:
     error: str = ""
     elapsed_s: float = 0.0
     recorded_at: str = ""
+    #: RTR — which model played which pipeline role on this question
+    #: ({role: model}), plus correlation metadata (see attribution.py).
+    attribution: Optional[dict] = None
 
     def to_dict(self) -> dict:
         d = self.__dict__.copy()
@@ -237,6 +245,15 @@ class RetrodictionBatch:
                     horizon_band=horizon_band(q.horizon_days))
         try:
             researcher = self.researcher_factory()
+            tracker = None
+            run_id = ""
+            # RTR: attribute roles when the researcher exposes a trackable
+            # model seam. A plain PipelineResearcher carries `.model`.
+            inner_model = getattr(researcher, "model", None)
+            if inner_model is not None:
+                tracker = RoleTrackingModel(inner_model)
+                researcher.model = tracker
+                run_id = tracker.start_run()
             prompts = [q.prompt_for_researcher()]
             preds = await _call_researcher(researcher, prompts)
             pred = next((p for p in preds
@@ -273,6 +290,34 @@ class RetrodictionBatch:
             result.notes = list(getattr(r, "notes", []) or [])
             if not result.sealed and not result.refusal_reason:
                 result.refusal_reason = "pipeline did not seal"
+        # RTR: record which model played which role. The adversary runs on
+        # its own router seam (adversary_router), tracked via the result's
+        # objection model tags where present; the Architect/Manager roles go
+        # through the wrapped model.
+        if tracker is not None:
+            from tools.retrodiction.attribution import roles_for_run
+            used = roles_for_run(tracker, run_id)
+            seen = tracker.role_models_seen.get(run_id, {})
+            att = attribute_run(
+                run_id, used,
+                default_model=(getattr(self.config, "model_name", "")
+                               or "unknown"),
+                role_models_seen=seen)
+            # The Adversary runs on its OWN router seam (adversary_router),
+            # not through the wrapped pipeline model — but agp.adversary
+            # stamps every objection with the backend that produced it
+            # (`model=` on AdversaryObjection), so an attack that actually
+            # RAN is attributable even though it bypassed our tracker.
+            adv_models = {o.model for o in
+                          (getattr(researcher.results[-1], "objections", [])
+                           or []) if getattr(o, "model", "")}
+            if len(adv_models) == 1:
+                att.role_models["Adversary"] = next(iter(adv_models))
+                att.n_distinct_models = len(set(att.role_models.values()))
+                att.single_model_run = (
+                    len(att.role_models) > 1
+                    and att.n_distinct_models == 1)
+            result.attribution = att.to_dict()
         return result
 
     # -- the batch --
@@ -524,19 +569,51 @@ def write_routing_scores(results: dict[str, BatchResult],
                          role: str = "pipeline",
                          model: str = "hermes-cli",
                          task_class: str = "research_synthesis") -> int:
-    """Append every scored observation into ModelScoreStore so empirical
-    routing has measurements. Nulls/errors are NOT written — absence of a
-    record is honest; a fabricated loss would be flattery either way."""
+    """Append scored observations into ModelScoreStore — PER ROLE.
+
+    RTR wiring: each scored question carries an `attribution` ({role:
+    model}). Every (role, model) pair that actually ran on that question gets
+    its own record tagged with run_id and correlated=single_model_run, so a
+    model that played every role of a run is visible as ONE observation about
+    itself in several roles — never as several independent models. Results
+    without attribution (legacy rows) fall back to one record under
+    `role`/`model` exactly as before. Nulls/errors are NOT written — absence
+    of a record is honest; a fabricated loss would be flattery either way.
+    """
     n = 0
     for r in results.values():
         if r.status != "scored" or r.brier is None:
             continue
-        score_store.record(role=role, model=model, task_class=task_class,
-                           question_id=r.question_id, brier=r.brier,
-                           predicted_probability=r.predicted_probability,
-                           source="retrodiction_batch")
+        att = r.attribution or {}
+        role_models = att.get("role_models") or {role: model}
+        single = bool(att.get("single_model_run"))
+        run_id = att.get("run_id", "")
+        for r_role, r_model in sorted(role_models.items()):
+            score_store.record(
+                role=r_role, model=r_model,
+                task_class=task_class if not att else _role_task_class(
+                    r_role, task_class),
+                question_id=r.question_id, brier=r.brier,
+                predicted_probability=r.predicted_probability,
+                answer_binary=r.answer_binary,
+                source="retrodiction_batch",
+                notes=(f"run_id={run_id} correlated={str(single).lower()}"))
         n += 1
     return n
+
+
+# AGP role → primary task class (agp.adversary.AGPRole.ROLE_TASK_CLASSES[0]),
+# mirrored so tools/retrodiction never imports agp.
+_ROLE_TASK_CLASSES = {
+    "Architect": "hypothesis_generation",
+    "Manager": "extraction",
+    "Sentinel": "adversarial_review",
+    "Adversary": "adversarial_review",
+}
+
+
+def _role_task_class(r_role: str, default: str) -> str:
+    return _ROLE_TASK_CLASSES.get(r_role, default)
 
 
 # ── Human-readable rendering ───────────────────────────────────────────────
