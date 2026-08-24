@@ -513,7 +513,7 @@ class IterativeRetriever:
             if self.source_order is not None:
                 try:
                     ordered = self.source_order(list(routable))
-                    if sorted(getattr(s, "name", "") for s in ordered) != \
+                    if sorted(getattr(s, "name", "") for s in ordered) == \
                             sorted(getattr(s, "name", "") for s in routable):
                         routable = list(ordered)
                     else:
