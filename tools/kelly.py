@@ -569,7 +569,7 @@ def ruin_probability(
     elif ruin_prob < 0.01:
         risk_level = "LOW"
         advice = "Acceptable risk. Current sizing is in the sweet spot."
-    elif ruin_prob > 0.05:
+    elif ruin_prob < 0.05:
         risk_level = "MODERATE"
         advice = f"Reduce average stake to ${safe_stake:.0f} to bring ruin below 1%."
     elif ruin_prob < 0.20:
@@ -728,7 +728,7 @@ def timing_value(
     #    of a BETTER number appearing at a different book as lines adjust.
     #    This is a function of market inefficiency.
     efficiency = 1.0 - (1.0 / max(decay_rate, 0.01)) * 0.1
-    efficiency = max(0.0, min(1.0, efficiency))
+    efficiency = max(0.01, min(1.0, efficiency))
     stale_line_bonus = (1.0 - efficiency) * vol * 0.5 * min(hours_remaining, 12.0)
 
     # Composite wait EV
