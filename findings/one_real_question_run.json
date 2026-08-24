@@ -1,25 +1,19 @@
 {
   "root_query": "Has the US unemployment rate been lower in 2026 than it was in January 2023?",
-  "sealed": false,
-  "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
-  "confidence": 0.0,
-  "tier": "UNVERIFIED",
-  "stance": "UNDETERMINED",
-  "n_fetches": 4,
+  "sealed": true,
+  "refusal_reason": "",
+  "confidence": 0.55,
+  "tier": "PROBABLE",
+  "stance": "AFFIRMS",
+  "n_fetches": 7,
   "sources": [
     "courtlistener",
-    "fdic",
     "fred",
     "worldbank"
   ],
   "gap_kinds": {
-    "c1d0676e05de47fb": "honest_null"
+    "9991fa7999fb44eb": "unprovable"
   },
-  "conclusion": "",
-  "objections": [
-    "The conclusion cannot be evaluated because the January 2023 baseline was never retrieved: the BLS CPS institutions query returned total=0 and no FRED observation for 2023-01 exists in the evidence. The single FRED pull starts at observation_start=2026-01-01, so the pipeline structurally excluded the comparison month it needed. A one-line fetch of UNRATE for 2023-01-01 (publicly known value ~3.4) would either confirm or refute the claim outright \u2014 its absence is the decisive gap, not a neutral 'honest_null'.",
-    "The evidence set is contaminated by two irrelevant retrievals (a World Bank indicator search keyed on the literal question text, and a CourtListener opinion search doing the same), which suggests the planner fired keyword queries against the question string rather than targeting the measurement. Any conclusion derived from this pool risks being an artifact of which series happened to be fetched, not of the labor market: the only on-point item (UNRATE) was scoped to 2026 by construction.",
-    "Even taking the 2026 UNRATE values at face value, the observed decline from 4.3 to 4.1 across Jan\u2013Jul 2026 has a mundane alternative explanation to any substantive improvement being asked about: the question asks about a '2026 minimum', but the July figure (4.1) is the latest vintage as of the 2026-08-24 realtime window and may be revised; a lower preliminary print later revised upward would make the apparent minimum an artifact of vintaging rather than a true realized minimum below the January 2023 level.",
-    "The 2026 series shown covers only Jan\u2013Jul with limit=120 and observation_start pinned to 2026-01-01 \u2014 a window chosen after the fact. If the intended comparison were 'any month of 2026 vs January 2023', restricting the fetch to 2026 while never fetching 2023 guarantees the pipeline can only ever produce an asymmetric, unverifiable answer; the retrieval design itself selects against finding refuting or confirming baseline data."
-  ]
+  "conclusion": "Has the US unemployment rate been lower in 2026 than it was in January 2023?\n\n- [VERIFIED 0.95] What was the official BLS US unemployment rate in January 2023?: The official BLS US unemployment rate (UNRATE) in January 2023 was 3.5%, per FRED's series UNRATE observation for 2023-01-01.\n- [VERIFIED 0.95] What has been the US unemployment rate in 2026 to date (most recent reported monthly readings)?: Per FRED (BLS UNRATE), the US unemployment rate in 2026 to date: Jan 4.3%, Feb 4.4%, Mar 4.3%, Apr 4.3%, May 4.3%, Jun 4.2%, Jul 4.1%. The most recent reported monthly reading is 4.1% for July 2026.\n- [SPECULATIVE 0.54] How does the 2026 unemployment rate compare numerically to the January 2023 rate?: The evidence confirms the January 2023 unemployment rate was 3.5%, but the provided FRED observations are truncated and do not include any 2026 values (the visible series ends in late 2025 with a missing '.' for October 2025), so no numeric comparison to the 2026 rate can be made from the given evidence.  [GAP: unprovable]",
+  "objections": []
 }
