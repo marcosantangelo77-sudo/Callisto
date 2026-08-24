@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import date
@@ -282,6 +283,39 @@ class ResearchPipeline:
         self._crossrun_traces: dict = {}
 
     # -- lazy components ---------------------------------------------------
+
+    # WITHIN-RUN FETCH MEMO (speed run 14, 2026-08-24). Sibling leaves of one
+    # decomposition author colliding queries against the same sources: the
+    # instrumented profile shows 15 fetches covering only 3 distinct URLs in
+    # a single run. The memo wraps THIS run's transport so identical URLs
+    # fetch once and share bytes. Contract:
+    #   - created at run() entry, discarded at run() exit — nothing crosses
+    #     runs, therefore nothing can cross a retrodiction cutoff;
+    #   - every leaf still receives full FetchResults built from the shared
+    #     body; gate, ledger replay order, hashes are all computed from the
+    #     same bytes as before → outputs byte-identical (fingerprint-tested);
+    #   - thread-safe: leaves retrieve concurrently off-loop.
+    class _RunFetchMemo:
+        def __init__(self, inner):
+            self._inner = inner
+            self._lock = threading.Lock()
+            self._cache: dict[str, tuple[int, str]] = {}
+            self.hits = 0
+
+        def __call__(self, url: str, headers: dict) -> tuple[int, str]:
+            key = url
+            with self._lock:
+                if key in self._cache:
+                    self.hits += 1
+                    return self._cache[key]
+            # Fetch OUTSIDE the lock: concurrent first-calls for different
+            # URLs must not serialise. A duplicate concurrent miss re-fetches
+            # (same as today) and overwrites with identical bytes.
+            status, body = self._inner(url, headers)
+            if status == 200:
+                with self._lock:
+                    self._cache[key] = (status, body)
+            return status, body
 
     def _get_registry(self):
         if self.registry is None:
@@ -566,7 +600,25 @@ class ResearchPipeline:
         self._crossrun_class = ""
         self._crossrun_view = None
         self._crossrun_traces = {}
-        if self.crossrun_store is not None:
+        # WITHIN-RUN fetch memo: identical URLs inside ONE run fetch once.
+        # Scoped to this call frame — torn down before run() returns, so no
+        # bytes can leak across a retrodiction cutoff (hard rule).
+        self._run_memo = None
+        if self.transport is not None:
+            self._run_memo = self._RunFetchMemo(self.transport)
+            self.transport = self._run_memo
+        try:
+            return await self._run_impl(
+                question, domain=domain, today=today)
+        finally:
+            if self._run_memo is not None:
+                self.transport = self._run_memo._inner
+                self._run_memo = None
+
+    async def _run_impl(self, question: str, *,
+                        domain: Domain = Domain.GENERAL,
+                        today: Optional[date] = None) -> PipelineResult:
+        """One pipeline run with cross-run memory wrapped around it.
             try:
                 from tools.pipeline.crossrun import question_class_for, \
                     planning_view
