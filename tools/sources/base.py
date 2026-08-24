@@ -322,7 +322,10 @@ class RestSource:
     def build_url(self, path: str = "", params: Optional[dict] = None) -> str:
         url = self.spec.base_url.rstrip("/") + "/" + path.lstrip("/")
         if params:
-            url += "?" + urllib.parse.urlencode(params)
+            # doseq: repeated keys for list values (e.g. fields[]=a,
+            # fields[]=b) — the Federal Register API 400s on comma-joined
+            # field lists.
+            url += "?" + urllib.parse.urlencode(params, doseq=True)
         return url
 
 
