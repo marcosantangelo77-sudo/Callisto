@@ -525,7 +525,7 @@ def ruin_probability(
         # P(ruin) = (q / (p * b))^(bankroll / avg_stake)
         # This is the fixed-stake approximation.
         ratio = q / (win_rate * b) if (win_rate * b) > 0 else 1.0
-        if ratio > 1.0:
+        if ratio >= 1.0:
             ruin_prob = 1.0
         else:
             ruin_prob = ratio ** units
@@ -596,7 +596,7 @@ def _expected_bets_to_ruin_neg_ev(
 ) -> Optional[float]:
     """Estimate expected number of bets until ruin for -EV bettor."""
     ev_per_bet = win_rate * b - (1 - win_rate)
-    if ev_per_bet >= 0:
+    if ev_per_bet > 0:
         return None  # Not -EV
     # Rough estimate: bankroll / expected_loss_per_bet
     expected_loss = abs(ev_per_bet)
