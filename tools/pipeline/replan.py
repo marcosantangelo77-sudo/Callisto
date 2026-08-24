@@ -99,26 +99,35 @@ def should_replan(gap_kind: str, obstacle: str) -> bool:
     return obstacle in PLANNER_ACTIONABLE
 
 
-def gap_is_planner_fixable(gap) -> bool:
+def gap_is_planner_fixable(gap, null_kind: str = "") -> bool:
     """THE single membership rule, on the full structured EvidenceGap.
 
-    A retrieval failure warrants ONE re-plan when the PLANNER can plausibly
-    fix it by researching differently:
+    `null_kind` is the trace-level verdict (tools.gaps.NullKind) the
+    pipeline sealed on. The gate is deliberately STRICTER than
+    classify_gap's registry-aware verdict: a leaf that REACHED some
+    sources and had responses judged at the gate is an honest_null at the
+    trace level even when other plausible holders were never consulted —
+    re-rolling those is the retriever's refine-loop job, not the
+    planner's. The planner fires only when the search never really
+    happened (no query issued / no route / nothing reached) yet reachable
+    holders exist.
 
-      - the recorded obstacle is itself planner-actionable
-        (nothing routable was selected / selected source had no route), or
-      - some plausible holder of this evidence was NEVER TRIED and is
-        reachable (has its API key, is not declared unable to hold it) —
-        routing the sub-question at that source is exactly what a
-        hierarchical planner does with a failed dispatch.
+    Honest nulls with no such structural hole, unprovable claims (our own
+    bar), and access obstacles (key/rate-limit/paywall) never fire.
     """
-    if getattr(gap, "kind", None) is None:
+    kind_val = str(getattr(gap, "kind", ""))
+    if kind_val not in (GapKind.RETRIEVAL_FAILURE.value,
+                        str(GapKind.RETRIEVAL_FAILURE)):
         return False
-    if str(getattr(gap, "kind", "")) not in (
-            GapKind.RETRIEVAL_FAILURE.value, str(GapKind.RETRIEVAL_FAILURE)):
-        return False
-    if gap.obstacle.value in PLANNER_ACTIONABLE:
+    if getattr(gap, "obstacle", None).value in PLANNER_ACTIONABLE:
         return True
+    # Structural hole: sources were NOT reached (no rejected/admitted
+    # items anywhere in this question's evidence acquisition).
+    reached_anything = (
+        int(getattr(gap, "n_admitted", 0) or 0) > 0
+        or int(getattr(gap, "n_rejected", 0) or 0) > 0)
+    if reached_anything:
+        return False
     for c in getattr(gap, "candidates", []) or []:
         if c.tried or c.obstacle is Obstacle.NOT_INDEXED:
             continue

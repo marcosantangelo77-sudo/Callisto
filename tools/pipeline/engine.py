@@ -386,7 +386,8 @@ class ResearchPipeline:
             return None, None, None
         obstacle = getattr(outcome, "gap_obstacle", "") or ""
         if not (rp.should_replan(outcome.gap_kind, obstacle)
-                or rp.gap_is_planner_fixable(self._last_gap)):
+                or rp.gap_is_planner_fixable(self._last_gap,
+                                             outcome.gap_kind)):
             return None, None, None
 
         msgs = rp.replan_messages(q.text, outcome.gap_explanation,
@@ -425,7 +426,8 @@ class ResearchPipeline:
         # replaced the 4-entry GENERIC_CALLS table whose mono-source fan-out
         # kept independence at 1 in the second live run.
         retriever = IterativeRetriever(
-            registry=reg, ledger=self.ledger, transport=self.transport)
+            registry=reg, ledger=self.ledger, transport=self.transport,
+            max_sources_per_leaf=6)
         trace = retriever.retrieve(
             q, qt, min_independent=q.evidence_requirements.min_independent_sources)
         return list(trace.admitted), trace

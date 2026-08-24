@@ -14,7 +14,7 @@
       "best_tier": "PROBABLE",
       "gap_kinds": {},
       "n_replan_consults": 0,
-      "elapsed_s": 0.041,
+      "elapsed_s": 0.043,
       "conclusion_head": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [PROBABLE 0.55] Will Apple report quarterly results above Wall Street consensus expectation"
     },
     "on": {
@@ -47,7 +47,7 @@
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
       "n_replan_consults": 0,
-      "elapsed_s": 0.044,
+      "elapsed_s": 0.041,
       "conclusion_head": ""
     },
     "on": {
@@ -60,8 +60,8 @@
       "distinct_sources": [],
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
-      "n_replan_consults": 1,
-      "elapsed_s": 0.084,
+      "n_replan_consults": 0,
+      "elapsed_s": 0.041,
       "conclusion_head": ""
     }
   },
@@ -78,10 +78,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "ad9a6d906d484591": "unprovable"
+        "63b0407b19e74cf6": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.036,
+      "elapsed_s": 0.035,
       "conclusion_head": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Apple report quarterly results above Wall Street consensus expectat"
     },
     "on": {
@@ -96,7 +96,7 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "2dfffcdc0fd047ec": "unprovable"
+        "d1cf261cca5a4d11": "unprovable"
       },
       "n_replan_consults": 0,
       "elapsed_s": 0.036,
@@ -116,10 +116,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "61ceb2f586344602": "unprovable"
+        "e076a960bb764959": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.007,
+      "elapsed_s": 0.01,
       "conclusion_head": "What does research say about semiconductor supply chain resilience under export controls?\n\n- [SPECULATIVE 0.54] What does research say about semiconductor supply chain resilience under export controls"
     },
     "on": {
@@ -134,10 +134,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "30b6392c87e141d4": "unprovable"
+        "9f5cd4f10d6e408c": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.009,
+      "elapsed_s": 0.008,
       "conclusion_head": "What does research say about semiconductor supply chain resilience under export controls?\n\n- [SPECULATIVE 0.54] What does research say about semiconductor supply chain resilience under export controls"
     }
   },
@@ -153,7 +153,7 @@
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
       "n_replan_consults": 0,
-      "elapsed_s": 0.037,
+      "elapsed_s": 0.034,
       "conclusion_head": ""
     },
     "on": {
@@ -167,7 +167,7 @@
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
       "n_replan_consults": 1,
-      "elapsed_s": 0.072,
+      "elapsed_s": 0.069,
       "conclusion_head": ""
     }
   },
@@ -184,7 +184,7 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "84dd6af29e214b0c": "unprovable"
+        "ca9d289fc1514b18": "unprovable"
       },
       "n_replan_consults": 0,
       "elapsed_s": 0.038,
@@ -202,10 +202,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "8f52d9a5d1404999": "unprovable"
+        "b50a1b9942364378": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.043,
+      "elapsed_s": 0.037,
       "conclusion_head": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Apple report quarterly results above Wall Street consensus expectat"
     }
   },
@@ -222,10 +222,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "9ba24cf0e3654d1d": "unprovable"
+        "3f77a50667b34dc4": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.041,
+      "elapsed_s": 0.037,
       "conclusion_head": "Will Nvidia report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Nvidia report quarterly results above Wall Street consensus expect"
     },
     "on": {
@@ -240,10 +240,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "281cb99647ce4120": "unprovable"
+        "4ea17f44ed5c4840": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.04,
+      "elapsed_s": 0.038,
       "conclusion_head": "Will Nvidia report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Nvidia report quarterly results above Wall Street consensus expect"
     }
   },
@@ -260,10 +260,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "5749c7f4d37348ed": "unprovable"
+        "ca6d8c6a362a4808": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.042,
+      "elapsed_s": 0.038,
       "conclusion_head": "Will Boeing report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Boeing report quarterly results above Wall Street consensus expect"
     },
     "on": {
@@ -278,10 +278,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "737f453640be4474": "unprovable"
+        "319fd71c139a41db": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.041,
+      "elapsed_s": 0.037,
       "conclusion_head": "Will Boeing report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Boeing report quarterly results above Wall Street consensus expect"
     }
   },
@@ -298,10 +298,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "026b2231ab674b72": "unprovable"
+        "9b8793efd90c4485": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.043,
+      "elapsed_s": 0.042,
       "conclusion_head": "Will Tesla report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Tesla report quarterly results above Wall Street consensus expectat"
     },
     "on": {
@@ -316,10 +316,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "d353f722a61c4962": "unprovable"
+        "f64d22bdffe24ad1": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.041,
+      "elapsed_s": 0.037,
       "conclusion_head": "Will Tesla report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Tesla report quarterly results above Wall Street consensus expectat"
     }
   },
@@ -336,10 +336,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "ffce0d8d4b064ea9": "unprovable"
+        "72b35a9c592e4a19": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.041,
+      "elapsed_s": 0.039,
       "conclusion_head": "Will Microsoft report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Microsoft report quarterly results above Wall Street consensus "
     },
     "on": {
@@ -354,10 +354,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "eca1f2e787564330": "unprovable"
+        "b500048c3fbc4c14": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.04,
+      "elapsed_s": 0.038,
       "conclusion_head": "Will Microsoft report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Microsoft report quarterly results above Wall Street consensus "
     }
   },
@@ -374,10 +374,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "8a9c86f1300547d8": "unprovable"
+        "5f7b9f9ea76a4f60": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.058,
+      "elapsed_s": 0.045,
       "conclusion_head": "Will Meta Platforms report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Meta Platforms report quarterly results above Wall Street "
     },
     "on": {
@@ -392,10 +392,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "90ea9cf882d54dc5": "unprovable"
+        "4722e61c84104875": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.049,
+      "elapsed_s": 0.047,
       "conclusion_head": "Will Meta Platforms report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Meta Platforms report quarterly results above Wall Street "
     }
   },
@@ -412,10 +412,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "07a4a18fde114bcd": "unprovable"
+        "8f1dc698158f4fc8": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.04,
+      "elapsed_s": 0.036,
       "conclusion_head": "Will Intel report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Intel report quarterly results above Wall Street consensus expectat"
     },
     "on": {
@@ -430,10 +430,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "4c57e8447a114ee3": "unprovable"
+        "271c385779cf4b2d": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.04,
+      "elapsed_s": 0.038,
       "conclusion_head": "Will Intel report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Intel report quarterly results above Wall Street consensus expectat"
     }
   },
@@ -450,10 +450,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "a9d538cbdf5d496a": "unprovable"
+        "58f6cb0f612f49d2": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.04,
+      "elapsed_s": 0.038,
       "conclusion_head": "Will Amazon report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Amazon report quarterly results above Wall Street consensus expect"
     },
     "on": {
@@ -468,10 +468,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "65a1cb48f58340b6": "unprovable"
+        "76ff06496aea4634": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.04,
+      "elapsed_s": 0.038,
       "conclusion_head": "Will Amazon report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [SPECULATIVE 0.54] Will Amazon report quarterly results above Wall Street consensus expect"
     }
   },
@@ -487,7 +487,7 @@
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
       "n_replan_consults": 0,
-      "elapsed_s": 0.044,
+      "elapsed_s": 0.041,
       "conclusion_head": ""
     },
     "on": {
@@ -500,8 +500,8 @@
       "distinct_sources": [],
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
-      "n_replan_consults": 1,
-      "elapsed_s": 0.089,
+      "n_replan_consults": 0,
+      "elapsed_s": 0.055,
       "conclusion_head": ""
     }
   },
@@ -518,10 +518,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "ebdd2e3aab84461c": "unprovable"
+        "f46ce1fb58b94aa5": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.039,
+      "elapsed_s": 0.054,
       "conclusion_head": "Will Bitcoin trade above $100,000 at any point before 2025-02-01?\n\n- [SPECULATIVE 0.54] Will Bitcoin trade above $100,000 at any point before 2025-02-01?: evidence from 1 source item(s) supports a bou"
     },
     "on": {
@@ -536,15 +536,29 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "db75233707cf4dd1": "unprovable"
+        "5a4b292c656442ae": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.039,
+      "elapsed_s": 0.041,
       "conclusion_head": "Will Bitcoin trade above $100,000 at any point before 2025-02-01?\n\n- [SPECULATIVE 0.54] Will Bitcoin trade above $100,000 at any point before 2025-02-01?: evidence from 1 source item(s) supports a bou"
     }
   },
   {
     "off": {
+      "case": "C-retro-10-threshold_cross",
+      "sealed": false,
+      "refusal_reason": "every leaf came back unanswered",
+      "n_leaves": 1,
+      "n_answered": 0,
+      "n_fetches": 0,
+      "distinct_sources": [],
+      "best_tier": "UNVERIFIED",
+      "gap_kinds": {},
+      "n_replan_consults": 0,
+      "elapsed_s": 0.029,
+      "conclusion_head": ""
+    },
+    "on": {
       "case": "C-retro-10-threshold_cross",
       "sealed": false,
       "refusal_reason": "every leaf came back unanswered",
@@ -556,20 +570,6 @@
       "gap_kinds": {},
       "n_replan_consults": 0,
       "elapsed_s": 0.028,
-      "conclusion_head": ""
-    },
-    "on": {
-      "case": "C-retro-10-threshold_cross",
-      "sealed": false,
-      "refusal_reason": "every leaf came back unanswered",
-      "n_leaves": 1,
-      "n_answered": 0,
-      "n_fetches": 0,
-      "distinct_sources": [],
-      "best_tier": "UNVERIFIED",
-      "gap_kinds": {},
-      "n_replan_consults": 1,
-      "elapsed_s": 0.059,
       "conclusion_head": ""
     }
   },
@@ -598,8 +598,8 @@
       "distinct_sources": [],
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
-      "n_replan_consults": 1,
-      "elapsed_s": 0.071,
+      "n_replan_consults": 0,
+      "elapsed_s": 0.035,
       "conclusion_head": ""
     }
   },
@@ -615,7 +615,7 @@
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
       "n_replan_consults": 0,
-      "elapsed_s": 0.032,
+      "elapsed_s": 0.035,
       "conclusion_head": ""
     },
     "on": {
@@ -628,8 +628,8 @@
       "distinct_sources": [],
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
-      "n_replan_consults": 1,
-      "elapsed_s": 0.064,
+      "n_replan_consults": 0,
+      "elapsed_s": 0.033,
       "conclusion_head": ""
     }
   },
@@ -646,10 +646,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "f3afbd4eaaa64611": "unprovable"
+        "1d4af039820342a4": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.03,
+      "elapsed_s": 0.029,
       "conclusion_head": "Will OpenAI release a model branded 'GPT-5' before 2024-12-31?\n\n- [SPECULATIVE 0.54] Will OpenAI release a model branded 'GPT-5' before 2024-12-31?: evidence from 1 source item(s) supports a bounded a"
     },
     "on": {
@@ -664,10 +664,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "632e2129234a4fe7": "unprovable"
+        "21527ffa609146b2": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.03,
+      "elapsed_s": 0.029,
       "conclusion_head": "Will OpenAI release a model branded 'GPT-5' before 2024-12-31?\n\n- [SPECULATIVE 0.54] Will OpenAI release a model branded 'GPT-5' before 2024-12-31?: evidence from 1 source item(s) supports a bounded a"
     }
   },
@@ -683,7 +683,7 @@
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
       "n_replan_consults": 0,
-      "elapsed_s": 0.043,
+      "elapsed_s": 0.04,
       "conclusion_head": ""
     },
     "on": {
@@ -696,8 +696,8 @@
       "distinct_sources": [],
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
-      "n_replan_consults": 1,
-      "elapsed_s": 0.082,
+      "n_replan_consults": 0,
+      "elapsed_s": 0.041,
       "conclusion_head": ""
     }
   },
@@ -726,8 +726,8 @@
       "distinct_sources": [],
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
-      "n_replan_consults": 1,
-      "elapsed_s": 0.106,
+      "n_replan_consults": 0,
+      "elapsed_s": 0.05,
       "conclusion_head": ""
     }
   },
@@ -756,8 +756,8 @@
       "distinct_sources": [],
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
-      "n_replan_consults": 1,
-      "elapsed_s": 0.082,
+      "n_replan_consults": 0,
+      "elapsed_s": 0.041,
       "conclusion_head": ""
     }
   },
@@ -786,8 +786,8 @@
       "distinct_sources": [],
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
-      "n_replan_consults": 1,
-      "elapsed_s": 0.063,
+      "n_replan_consults": 0,
+      "elapsed_s": 0.03,
       "conclusion_head": ""
     }
   },
@@ -803,7 +803,7 @@
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
       "n_replan_consults": 0,
-      "elapsed_s": 0.035,
+      "elapsed_s": 0.034,
       "conclusion_head": ""
     },
     "on": {
@@ -816,8 +816,8 @@
       "distinct_sources": [],
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
-      "n_replan_consults": 1,
-      "elapsed_s": 0.07,
+      "n_replan_consults": 0,
+      "elapsed_s": 0.034,
       "conclusion_head": ""
     }
   },
@@ -834,10 +834,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "cc012822042e484a": "unprovable"
+        "a9687de49f814b52": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.042,
+      "elapsed_s": 0.041,
       "conclusion_head": "Will Donald Trump win the 2024 United States presidential election?\n\n- [SPECULATIVE 0.54] Will Donald Trump win the 2024 United States presidential election?: evidence from 1 source item(s) supports a"
     },
     "on": {
@@ -852,10 +852,10 @@
       ],
       "best_tier": "SPECULATIVE",
       "gap_kinds": {
-        "90b426e60d6c4f46": "unprovable"
+        "69e7eb31888e4f7c": "unprovable"
       },
       "n_replan_consults": 0,
-      "elapsed_s": 0.042,
+      "elapsed_s": 0.04,
       "conclusion_head": "Will Donald Trump win the 2024 United States presidential election?\n\n- [SPECULATIVE 0.54] Will Donald Trump win the 2024 United States presidential election?: evidence from 1 source item(s) supports a"
     }
   },
@@ -884,8 +884,8 @@
       "distinct_sources": [],
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
-      "n_replan_consults": 1,
-      "elapsed_s": 0.081,
+      "n_replan_consults": 0,
+      "elapsed_s": 0.043,
       "conclusion_head": ""
     }
   },
@@ -901,7 +901,7 @@
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
       "n_replan_consults": 0,
-      "elapsed_s": 0.042,
+      "elapsed_s": 0.041,
       "conclusion_head": ""
     },
     "on": {
@@ -914,8 +914,8 @@
       "distinct_sources": [],
       "best_tier": "UNVERIFIED",
       "gap_kinds": {},
-      "n_replan_consults": 1,
-      "elapsed_s": 0.092,
+      "n_replan_consults": 0,
+      "elapsed_s": 0.039,
       "conclusion_head": ""
     }
   }
