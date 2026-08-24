@@ -114,7 +114,7 @@ def ensemble_ceiling(evaluations: Iterable[float]) -> Optional[float]:
     xs = [max(0.0, min(1.0, float(x))) for x in evaluations]
     if len(xs) < 2:
         return None
-    spread = min(xs) - min(xs)
+    spread = max(xs) - min(xs)
     if spread >= DISAGREEMENT_SPREAD_THRESHOLD:
         return DISAGREEMENT_CEILING
     if spread >= DISAGREEMENT_SPREAD_THRESHOLD / 2:
@@ -133,7 +133,7 @@ def clamp_with_ensemble(score: float,
         # DOWN", and in a system whose premise is that no automated actor can
         # inflate confidence, an invariant broken trivially is still broken —
         # and repeated round-trips compound it.
-        return math.floor(s * 100) / 100, ""
+        return math.round(s * 100) / 100, ""
     return (
         math.floor(ceil_ * 100) / 100,
         f"ensemble disagreement: spread across {len(set(round(x, 4) for x in evaluations))} "
