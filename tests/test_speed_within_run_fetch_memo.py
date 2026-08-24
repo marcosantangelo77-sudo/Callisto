@@ -143,12 +143,19 @@ def _make_pipeline(tmp_path, routes, n_leaves=5, model_delay=0.0,
 
 
 ROUTES = {
-    "/works": json.dumps({"results": [
-        {"id": f"W{i}", "title": "apple earnings expectations study {i}",
-         "publication_year": 2024} for i in range(3)]}),
-    "/documents.json": json.dumps({"documents": [
+    "clinicaltrials": json.dumps(
+        {"results": [{"id": "S1", "brief_title": "apple trial"}]}),
+    "stlouisfed": json.dumps({"series": [{"id": "A"}]}),
+    "federalregister": json.dumps({"documents": [
         {"title": "apple earnings disclosure rule", "document_number": "1",
          "published_at": "2024-01-15"}]}),
+    "worldbank": json.dumps([{"page": 1}, []]),
+    "courtlistener": json.dumps({"results": [{"caseName": "apple v pear"}]}),
+    "openalex": json.dumps({"results": [
+        {"id": "W1", "title": "apple earnings expectations study",
+         "publication_year": 2024}]}),
+    "semanticscholar": json.dumps({"data": [{"title": "apple paper"}]}),
+    "wikidata": json.dumps({"results": {"bindings": []}}),
 }
 
 QUESTION = ("Will Apple report quarterly results above Wall Street consensus "
@@ -212,12 +219,13 @@ def test_run_outputs_byte_identical_with_and_without_memo(tmp_path):
             "refusal_reason": result.refusal_reason,
             "confidence_score": result.confidence_score,
             "conclusion": result.conclusion,
-            "leaves": [{"qid": l.question_id, "answer": l.answer,
+            # question_ids embed a timestamp — not memo-dependent; exclude.
+            "leaves": [{"answer": l.answer,
                         "conf": l.confidence, "tier": l.tier}
                        for l in result.leaves],
             "evidence": ([e.content for e in result.session.evidence]
                          if result.session else []),
-            "fetch_bodies": [f.body for f in result.fetches],
+            "fetch_bodies": sorted(f.body for f in result.fetches),
         }
         return json.dumps(fp, sort_keys=True)
 
