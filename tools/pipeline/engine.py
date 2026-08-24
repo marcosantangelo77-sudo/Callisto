@@ -671,10 +671,6 @@ class ResearchPipeline:
             note = result.coverage_note()
             if note:
                 result.notes.append(note)
-                # The sealed conclusion TEXT must carry the warning too —
-                # a user reading only the output sees degraded coverage
-                # without opening any debug field.
-                conclusion += "\n\n" + note
         except Exception:               # noqa: BLE001 — never block a run
             pass                        # on a health-store problem
 
@@ -695,6 +691,14 @@ class ResearchPipeline:
         for l in result.leaves:
             if l.gap_kind:
                 result.gap_kinds[l.question_id] = l.gap_kind
+        # Append the degraded-source disclosure AFTER assembly so the
+        # sealed text (session.summary.conclusion and result.conclusion)
+        # carries it — a user reading only the output must see that the
+        # conclusion was drawn while planned sources were down.
+        if result.source_coverage:
+            note = result.coverage_note()
+            if note:
+                conclusion += "\n\n" + note
         best_leaf = max(answered, key=lambda l: l.confidence)
         proposed = best_leaf.confidence
         # The parent's DIRECTION comes from the same leaf as its magnitude.
