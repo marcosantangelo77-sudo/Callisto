@@ -58,7 +58,13 @@ class FredAdapter:
                             start: str = "", end: str = "",
                             limit: int = 0) -> dict:
         """Observations for one series, oldest-first. Returns dict with the
-        fetch record attached under '_fetch'."""
+        fetch record attached under '_fetch'.
+
+        The series TITLE (e.g. 'Unemployment Rate') is attached under
+        '_series_title'. Without it the observations body carries only
+        dates and numeric values — no word of the question's topic — so
+        the relevance gate scored FRED 0% on exactly the questions it is
+        the best source for (live e2e run 2026-08-24, break log B2b)."""
         params = {"series_id": series_id.upper()}
         if start:
             params["observation_start"] = start
@@ -68,6 +74,14 @@ class FredAdapter:
             params["limit"] = int(limit)
         url = self._url("/series/observations", params)
         data, rec = self.source.get_json(url)
+        try:
+            info_url = self._url("/series", {"series_id": series_id.upper()})
+            info, _ = self.source.get_json(info_url)
+            seriess = info.get("seriess") or []
+            if seriess and seriess[0].get("title"):
+                data["_series_title"] = seriess[0]["title"]
+        except Exception:  # noqa: BLE001 — title is enrichment; a metadata
+            pass          # failure must not fail the observation fetch
         data["_fetch"] = {"url": rec.url, "sha256": rec.content_sha256,
                           "fetched_at": rec.fetched_at}
         return data
