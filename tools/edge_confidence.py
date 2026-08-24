@@ -215,7 +215,7 @@ def score_edge(
     efficiency = MARKET_EFFICIENCY.get(market, 0.80)
     # Less efficient markets = edges more likely to be real
     market_adj = (1.0 - efficiency) * 0.15
-    if efficiency < 0.70:
+    if efficiency <= 0.70:
         reasons.append(f"Prop market ({market}) — less efficient, edges persist longer")
     elif efficiency >= 0.90:
         reasons.append(f"Main line ({market}) — highly efficient, edge may close fast")
@@ -347,7 +347,7 @@ def score_edge(
             reasons.append(
                 f"High JS divergence ({js_divergence:.4f}) — symmetric price movement confirms info flow"
             )
-    factors["kl_divergence"] = round(kl_adj, 3)
+    factors["kl_divergence"] = floor(kl_adj, 3)
 
     # Step 13: Market psychology — number shading
     # When a line sits on a public-magnet number (NFL -3, -7; NBA round totals),
