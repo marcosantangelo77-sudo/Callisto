@@ -44,13 +44,30 @@ Quote = Union[int, float]
 
 
 def _raw_implied(price: Quote) -> float:
-    """Raw implied probability from any accepted price representation."""
+    """Raw implied probability from any accepted price representation.
+
+    AUTO-KIND RULE (unit confusion, Family 4): an integer in [2, 99] reads
+    as a cent-quoted CONTRACT PRICE (Kalshi/Polymarket convention), NOT as
+    decimal odds. Reading 47 as decimal odds implies 1/47 ≈ 2.1% when the
+    contract says 47% — a ~22x error whose direction depends on which side
+    you back. Callers quoting genuine integer decimal odds in 2..99 must
+    declare kind='decimal'. Integers with |v| >= 100 are American odds by
+    market convention.
+    """
     if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price):
         raise ValueError(f"price must be a finite number, got {price!r}")
 
-    if isinstance(price, int) and price != 0 and abs(price) >= 100:
-        # American odds are integers with |value| >= 100 by convention.
-        return _american_to_implied(price)
+    if isinstance(price, int) and price != 0:
+        if abs(price) >= 100:
+            # American odds are integers with |value| >= 100 by convention.
+            return _american_to_implied(price)
+        if price >= 2:
+            # Cent-quoted contract: 47 means $0.47.
+            return price / 100.0
+        raise ValueError(
+            f"integer price {price} has no unambiguous reading under "
+            f"kind='auto'; declare kind explicitly"
+        )
     return _continuous_to_prob(float(price))
 
 
@@ -114,6 +131,28 @@ class MarketQuote:
         result = devig_market(
             [1.0 / raw, 1.0 / counter.implied_probability()]
         )
+        # Overround sanity gate: a real two-way book carries positive but
+        # bounded hold. overround <= 0 means the two sides cannot belong to
+        # one live book (crossed/stale mix — a free lunch); > 0.5 means no
+        # real book holds 50 points. Either way there is no honest fair
+        # price to devig to, so refuse rather than manufacture one.
+        if result["overround"] <= MIN_OVERROUND or result["overround"] > MAX_OVERROUND:
+            # The book is invalid, but the devigged number is still RETURNED
+            # (flagged) so downstream code can measure against it — while
+            # the error field marks it unusable for SIZING. assess_edge
+            # zeroes Kelly/EV/actionable on any audit with an error.
+            fair = result["fair_probabilities"][0]
+            return fair, {
+                "devigged": True,
+                "method": "refused",
+                "error": (
+                    f"book rejected for sizing: overround {result['overround']} "
+                    f"outside ({MIN_OVERROUND}, {MAX_OVERROUND}] — sides are "
+                    f"crossed, stale-mixed or not one market"
+                ),
+                "overround": result["overround"],
+                "raw_implied": raw,
+            }
         fair = result["fair_probabilities"][0]
         return fair, {
             "devigged": True,
@@ -121,6 +160,15 @@ class MarketQuote:
             "overround": result["overround"],
             "raw_implied": raw,
         }
+
+
+# Overround sanity bounds (M1c). A real two-way book carries positive but
+# bounded hold: <= 0 means the sides cannot both be live asks of one market
+# (crossed/stale mix — an apparent free lunch); > MAX_OVERROUND means no
+# real book holds that much. Books outside the window are refused, never
+# devigged into a "fair" price.
+MIN_OVERROUND = 0.0
+MAX_OVERROUND = 0.60
 
 
 def _to_decimal(price: Quote) -> float:
@@ -159,15 +207,27 @@ class EdgeAssessment:
     notes: list[str] = field(default_factory=list)
 
     def summary(self) -> dict:
+        def _round_never_up(x: float, nd: int = 6) -> float:
+            """Reporting quantiser: may only round DOWN in magnitude.
+
+            Family 6 — round() half-up can move a reported edge UP by up
+            to 5e-7, and an automated actor reading its own report must
+            never see a bigger edge than was computed. Ties and truncation
+            both go toward zero (the information-losing direction).
+            """
+            if x == 0.0:
+                return 0.0
+            return math.trunc(x * 10.0 ** nd) / 10.0 ** nd
+
         return {
             "claim_id": self.claim_id,
-            "calibrated_prob": round(self.calibrated_prob, 6),
-            "market_prob_raw": round(self.market_prob_raw, 6),
-            "market_prob_fair": round(self.market_prob_fair, 6),
-            "edge": round(self.edge, 6),
-            "kelly_full": round(self.kelly_fraction_full, 6),
-            "kelly_quarter": round(self.kelly_fraction_quarter, 6),
-            "ev_per_unit": round(self.ev_per_unit, 6),
+            "calibrated_prob": _round_never_up(self.calibrated_prob),
+            "market_prob_raw": _round_never_up(self.market_prob_raw),
+            "market_prob_fair": _round_never_up(self.market_prob_fair),
+            "edge": _round_never_up(self.edge),
+            "kelly_full": _round_never_up(self.kelly_fraction_full),
+            "kelly_quarter": _round_never_up(self.kelly_fraction_quarter),
+            "ev_per_unit": _round_never_up(self.ev_per_unit),
             "actionable": self.actionable,
             "quote": {
                 "source": self.quote.source,
@@ -200,23 +260,58 @@ def assess_edge(
     market_raw = quote.implied_probability()
 
     edge = calibrated_prob - market_fair
-    notes = []
-    if not audit.get("devigged"):
-        notes.append(
-            "single-sided quote: market probability is RAW IMPLIED, not "
-            "devigged — edge may include up to the full vig as phantom"
-        )
+    notes: list[str] = []
 
     # Decimal payout available at the quoted price.
     decimal = _to_decimal(quote.price)
     b = decimal - 1.0
-    q = 1.0 - calibrated_prob
-    kelly_full_frac = max(0.0, (b * calibrated_prob - q) / b)
+
+    # ONE price, one copy (Family 2): edge is measured against the DEVIGGED
+    # market probability, so Kelly and EV must be computed with the same
+    # p. Sizing at the raw implied payout while claiming a devigged edge
+    # lets an assessment report positive Kelly on a NEGATIVE edge — the
+    # raw implied hides the vig that the edge definition already charged.
+    # When no devig exists at all (single-sided quote) the conservative p
+    # is the raw implied: sizing then demands beating the vig head-on.
+    p_win = calibrated_prob if audit.get("devigged") else market_raw
+    q = 1.0 - p_win
+    kelly_full_frac = max(0.0, (b * p_win - q) / b)
+    ev_per_unit = p_win * b - q      # stake 1, win b*p - q expectation
+
+    # A refused (crossed/stale-mixed) book has no honest price to size
+    # against: Kelly/EV/actionable are zeroed outright — measured edge is
+    # still reported for research, but nothing sizes off it.
+    if audit.get("error") or audit.get("method") == "refused":
+        notes.append(audit.get("error", "book rejected by overround gate"))
+        if kelly_full_frac > 0 or ev_per_unit > 0:
+            notes.append("invalid book: Kelly, EV and actionability zeroed")
+        kelly_full_frac = 0.0
+        ev_per_unit = 0.0
+    elif not audit.get("devigged"):
+        notes.append(
+            "single-sided quote: market probability is RAW IMPLIED, not "
+            "devigged — edge may include up to the full vig as phantom; "
+            "sizing gated to the raw price"
+        )
+        if ev_per_unit > 0:
+            notes.append(
+                "EV computed against RAW implied (no counter-quote): treat "
+                "as upper bound carrying up to the full vig"
+            )
+    elif edge < 0:
+        notes.append(
+            "negative edge vs devigged market: no bet"
+        )
+
     kelly_full_capped = min(kelly_full_frac, MAX_FRACTION_FULL_KELLY)
 
-    ev_per_unit = calibrated_prob * b - q      # stake 1, win b*p - q expectation
-
-    actionable = edge >= min_edge and ev_per_unit > 0
+    actionable = (
+        edge >= min_edge
+        and ev_per_unit > 0
+        and kelly_full_frac > 0
+        and audit.get("devigged", False)
+        and not audit.get("error")
+    )
     if kelly_full_frac > MAX_FRACTION_FULL_KELLY:
         notes.append(
             f"full Kelly {kelly_full_frac:.4f} capped at "
@@ -254,8 +349,14 @@ def clv_points(claim_quote: MarketQuote, close_quote: MarketQuote) -> Optional[f
     """
     f_claim, a_claim = claim_quote.fair_probability()
     f_close, a_close = close_quote.fair_probability()
-    if not (a_claim.get("devigged") and a_close.get("devigged")):
-        return None
+    # Both sides must be genuinely devigged AND from books that passed the
+    # overround gate. A crossed/stale-mixed book is "devigged" by a naive
+    # check; method == 'refused' marks one that was rejected. Scoring CLV
+    # against an invalid book feeds phantom track-record data downstream.
+    for side, audit in (("claim", a_claim), ("close", a_close)):
+        if not audit.get("devigged") or audit.get("method") in ("refused", None) \
+                or audit.get("error"):
+            return None
     return f_close - f_claim
 
 
