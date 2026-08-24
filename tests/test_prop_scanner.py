@@ -7,7 +7,12 @@ from tools.prop_scanner import scan_props_ev
 
 
 def _mock_props_response():
-    """Simulate a 2-book prop response with known edges."""
+    """Simulate a 3-book prop response with known edges.
+
+    prop_scanner's MIN_BOOKS=2 counts NON-TARGET books — DraftKings is the
+    target, so we need at least 2 other books (FanDuel + BetMGM) to satisfy
+    the reliable-consensus gate.
+    """
     return {
         "bookmakers": [
             {
@@ -26,16 +31,31 @@ def _mock_props_response():
                 ],
             },
             {
+                "key": "betmgm",
+                "title": "BetMGM",
+                "markets": [
+                    {
+                        "key": "player_points",
+                        "outcomes": [
+                            {"description": "Player A", "name": "Over", "point": 20.5, "price": -140},
+                            {"description": "Player A", "name": "Under", "point": 20.5, "price": 106},
+                            {"description": "Player B", "name": "Over", "point": 10.5, "price": -105},
+                            {"description": "Player B", "name": "Under", "point": 10.5, "price": -125},
+                        ],
+                    },
+                ],
+            },
+            {
                 "key": "draftkings",
                 "title": "DraftKings",
                 "markets": [
                     {
                         "key": "player_points",
                         "outcomes": [
-                            # Player A: DK agrees with FD — no edge
+                            # Player A: DK agrees with FD/BetMGM — no edge
                             {"description": "Player A", "name": "Over", "point": 20.5, "price": -135},
                             {"description": "Player A", "name": "Under", "point": 20.5, "price": 105},
-                            # Player B: DK has +110 while FD has -102 — DK is generous on Over
+                            # Player B: DK has +110 while FD/BetMGM are -102/-105 — DK is generous on Over
                             {"description": "Player B", "name": "Over", "point": 10.5, "price": 110},
                             {"description": "Player B", "name": "Under", "point": 10.5, "price": -140},
                         ],
