@@ -7,8 +7,11 @@ New behavior (findings/instance4.md mechanism 3):
    PRESENT but FAILS verification is rejected outright.
 2. Article confidence = MIN of source confidences (never the mean), so a
    compiled article can never exceed its weakest source.
-3. hermes learnings still enter at >= 0.5 but their contribution to an
-   article cannot raise it above their own value (min rule covers this).
+3. hermes learnings compile only when their CURRENT standing (read-time
+   decay applied) clears the 0.5 gate, and an INFERRED-class learning must
+   have been re-observed — a one-shot guess compiles nothing alone. Their
+   contribution to an article cannot raise it above their own value
+   (min rule covers this).
 """
 import json
 
@@ -63,7 +66,7 @@ async def db(tmp_path):
             CREATE TABLE IF NOT EXISTS hermes_learnings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE,
                 value TEXT, learned_at TEXT, confidence REAL, occurrences INTEGER,
-                source TEXT)
+                source TEXT, source_class TEXT)
         """)
         await conn.commit()
         yield conn, wiki
