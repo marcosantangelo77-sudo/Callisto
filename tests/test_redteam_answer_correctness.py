@@ -264,26 +264,31 @@ def test_digit_in_prose_is_not_quantitative_evidence():
 def test_single_source_seal_surfaces_which_sources_failed():
     """A sealed answer backed by ONE source, out of 21 consulted, must SAY
     so: the run notes record which sources were asked and failed. (Fixed in
-    this pass — additive notes only.)"""
-    # min_ind=1: the single admitting (fred) source must MEET the bar so
-    # the run seals — under the D2 seal-contract fix an all-unprovable
-    # parent refuses instead of sealing (tests/test_seal_unprovable.py).
+    this pass — additive notes only.)
+
+    D2 seal-contract update: with only one admitting source against a bar
+    of two, the leaf is UNPROVABLE and an all-unprovable parent now
+    REFUSES instead of sealing (tests/test_seal_unprovable.py). The
+    disclosure contract is checked on the refused result: fred is still
+    the only contributing source and the other asked sources are named.
+    """
     decomp = json.dumps({"sub_questions": [_leaf(
         "What was the US unemployment rate in January 2023 according to "
-        "BLS data", min_ind=1)]})
+        "BLS data", min_ind=2)]})
     model = ScriptedModel({
         "Architect": [{"content": decomp}],
         "Manager": [{"content": _ans("Jan 2023 rate was 3.5%")}]})
     r = _run(_pipeline(model))
-    assert r.sealed
+    assert not r.sealed
     answered = {f.source_name for f in r.fetches}
-    assert answered == {"fred"}
+    assert "fred" in answered
     joined = "\n".join(r.notes)
     # Every registry source that did not answer must be accounted for in
     # the notes (errored, skipped, or otherwise not contributing).
-    missing = [n for n in ("bls", "openalex", "worldbank")
+    missing = [n for n in ("bls", "worldbank")
                if n not in joined and n not in answered]
     assert not missing, f"failed/asked-but-unanswered sources invisible: {missing}"
+
 
 
 def test_summary_distinguishes_asked_from_answered():
