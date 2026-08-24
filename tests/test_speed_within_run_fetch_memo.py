@@ -44,8 +44,8 @@ def test_memo_dedupes_identical_url():
 
     m = ResearchPipeline._RunFetchMemo(inner)
     h = {"User-Agent": "ua", "Accept-Encoding": "identity"}
-    assert m("http://x/1", h) == ("200", "BODY")
-    assert m("http://x/1", h) == ("200", "BODY")
+    assert m("http://x/1", h) == (200, "BODY")
+    assert m("http://x/1", h) == (200, "BODY")
     assert len(calls) == 1
     assert m.hits == 1
 
