@@ -184,7 +184,11 @@ def kelly_full(edge: float, odds: int | float) -> float:
         return 0.0
 
     fraction = (b * p - q) / b
-    return max(0.0, round(fraction, 6))
+    # Quantise DOWNWARD (floor at 6dp), never round. round() raises the
+    # fraction in ~37% of cases (18,622/50,000 sweep) — an automated actor
+    # increasing a stake size. Same direction rule as agp.thresholds.floor_conf.
+    import math as _math
+    return max(0.0, _math.floor(fraction * 1e6) / 1e6)
 
 
 # =========================================================================
@@ -212,7 +216,10 @@ def kelly_fractional(
         Reduced fraction of bankroll to wager.
     """
     full = kelly_full(edge, odds)
-    return round(full * fraction, 6)
+    # Floor, not round — same direction rule as kelly_full: quantisation may
+    # never raise the stake fraction (family 6).
+    import math as _math
+    return _math.floor(full * fraction * 1e6) / 1e6
 
 
 # =========================================================================
