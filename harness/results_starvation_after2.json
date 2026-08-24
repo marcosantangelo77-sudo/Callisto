@@ -752,5 +752,70 @@
     ],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q19",
+    "question": "According to Wikidata, was Albert Einstein born in Ulm, Germany?",
+    "category": "yes-checkable",
+    "expected_stance": "AFFIRMS",
+    "gt": "P19 birthplace = Q3012 = Ulm.",
+    "verified_by": "wikidata Q937 P19 \u2192 Q3012 (Ulm)",
+    "elapsed_s": 205.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What does Wikidata record as Albert Einstein's place of birth?",
+        "answer": "No evidence was provided, so the answer cannot be determined from the given items.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "The evidence list is empty and the sole pipeline item is [UNVERIFIED 0.00] with an explicit honest_null GAP. There is no Wikidata item, QID, or P19 (place of birth) statement anywhere in this record, so nothing in the evidence can support 'according to Wikidata, Einstein was born in Ulm' \u2014 the conclusion asserts what a source says while citing a source-reading that returned null.",
+      "The most likely artifact is answer contamination from world knowledge rather than the named source: 'Einstein born in Ulm' is common-knowledge trivia, so a null retrieval (API timeout, rate limit, malformed SPARQL response) could be papered over with background knowledge and reported as if it came 'from Wikidata'. The 0.00-confidence honest_null marker shows the pipeline itself found nothing; any ",
+      "Even granting the underlying fact, a null result here has mundane non-substantive explanations that leave the question genuinely undetermined by this run: network failure to wikidata.org, an expired or missing User-Agent header rejected by the Wikidata API, a query keyed on the wrong entity ID (e.g., a disambiguation page instead of Q937), or a parser that failed on the P19 qualifier structure \u2014 e",
+      "If this conclusion is being promoted despite the null, the selection mechanism is obvious: questions whose true answers are famous trivia get affirmed from prior knowledge when retrieval fails, while obscure questions correctly return 'cannot be determined' \u2014 producing a spuriously high accuracy rate for well-known facts and zero evidential difference between 'Wikidata confirms' and 'I already kne"
+    ],
+    "notes": [
+      "leaf 'What does Wikidata record as Albert Einstein's place of birt': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: albert, birth, data, einstein, p19, place, q937, record), fdic (content covers 20% of the question's topical words (need 25%); missing: birth, data, p19, place, q937, record, structured, wikidata), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: albert, birth, data, einstein, p19, place, q937, record), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 10% of the question's topical words (need 25%); missing: albert, birth, data, einstein, p19, place, q937, record); answer rests on NO sources",
+      "leaf 'What does Wikidata record as Albert Einstein's place of birt': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: albert, birth, data, einstein, p19, place, q937, record; [fdic] content covers 20% of the question's topical words (need 25%); missing: birth, data, p19, place, q937, record, structured, wikidata; [fred] content covers 0% of the question's topical words (need 25%); missing: albert, birth, data, einstein, p19, place, q937, record; [wikidata] content covers 10% of the question's topical words (need 25%); missing: albert, birth, data, einstein, p19, place, q937, record"
+    ],
+    "gap_kinds": {
+      "fe057373b6194c24": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q20",
+    "question": "Did Napoleon die before the United States Civil War began?",
+    "category": "multi-hop/temporal",
+    "expected_stance": "AFFIRMS",
+    "gt": "Napoleon died 1821-05-05, before April 1861.",
+    "verified_by": "wikidata Q517 P570 = 1821-05-05; civil war start 1861 (common knowledge anchor)",
+    "elapsed_s": 17.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
