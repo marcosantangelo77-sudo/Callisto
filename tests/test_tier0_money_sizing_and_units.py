@@ -52,11 +52,22 @@ class TestKellyBinary:
 
 
 class TestKellyWithPush:
-    def test_docstring_verified_value(self):
+    def test_exact_kelly_push_value(self):
         # p_win=.54 p_push=.04 odds=1.90909...: b=.909091, p_loss=.42
-        # f=(.909091*.54-.42)/.909091 = .078
+        # Exact 3-outcome Kelly: f=(b*pw-pl)/(b*(pw+pl)) = .08125
+        # (numeric argmax of ln-utility confirms; the old value .078 was the
+        # binary formula missing the (pw+pl) denominator).
         assert kelly_with_push(0.54, 0.04, 1.9090909090909092) == pytest.approx(
-            0.078, abs=1e-6)
+            0.08125, abs=1e-5)
+
+    def test_matches_numeric_argmax_of_log_utility(self):
+        import math as _m
+        b, pw, pp = 10 / 11, 0.54, 0.04
+        pl = 1 - pw - pp
+        U = lambda f: pw * _m.log(1 + b * f) + pl * _m.log(1 - f)
+        best_f, best_u = max(((f / 1e6, U(f / 1e6)) for f in range(0, 500_000)),
+                             key=lambda t: t[1])
+        assert kelly_with_push(pw, pp, 1 + b) == pytest.approx(best_f, abs=1e-5)
 
     def test_ignoring_push_misstates_the_fraction_both_ways(self):
         b = 1.9090909090909092
@@ -65,7 +76,7 @@ class TestKellyWithPush:
         as_loss = kelly_binary(0.54, b)
         # Treating pushes as WINS (p=.58) overstates:
         as_win = kelly_binary(0.58, b)
-        assert push_aware == pytest.approx(0.078, abs=1e-6)
+        assert push_aware == pytest.approx(0.08125, abs=1e-5)
         assert as_loss < push_aware < as_win
         # The sizing.py docstring's direction ("ignoring push HALVES") matches
         # the loss-treatment error: push_aware/as_loss ≈ 1.5x
@@ -118,7 +129,7 @@ class TestBetSize:
     def test_push_path(self):
         r = bet_size(bankroll=10000, fair_prob=0.54, decimal_odds=1.9090909090909092,
                      confidence="medium", p_push=0.04)
-        assert r["kelly_full"] == pytest.approx(0.078, abs=1e-4)
+        assert r["kelly_full"] == pytest.approx(0.08125, abs=1e-4)
 
     def test_american_wrapper_agrees_with_decimal(self):
         a = bet_size_american(bankroll=5000, fair_prob=0.55,
