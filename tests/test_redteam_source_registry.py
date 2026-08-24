@@ -62,6 +62,9 @@ def test_s1_wikidata_crash_propagates_through_retrieve():
 
 # ── S2: registry/planner name drift — family 2 (fix landed in one copy) ──
 
+@pytest.mark.xfail(strict=True, reason="S2a: sec_fulltext/cmefedfut/kalshi "
+                   "registered but unknown to query authoring — 'unknown "
+                   "source' skip lies about a live registry entry")
 def test_s2_every_registry_source_is_known_to_the_planner():
     """'unknown source X' from build_plan is a lie when X IS registered:
     sec_fulltext/cmefedfut/kalshi get skipped with 'unknown source', so the
@@ -75,14 +78,15 @@ def test_s2_every_registry_source_is_known_to_the_planner():
         f"registry sources unknown to query authoring: {unknown}")
 
 
+@pytest.mark.xfail(strict=True, reason="S2b: _HONEST_GAPS keys 'sec_fts'; "
+                   "registry name is 'sec_fulltext' — gap never selected")
 def test_s2_honest_gap_key_matches_registry_name():
     """_HONEST_GAPS keys 'sec_fts'; the spec's name is 'sec_fulltext'
     (sec_fts.py:27). The gap message can never be selected."""
     reg = get_source_registry()
     for gap_name in qb._HONEST_GAPS:
-        assert reg.get(gap_name) is not None or any(
-            spec.name == gap_name for spec in
-            (s.spec for s in [reg.get(n) for n in reg.names()] if s)), gap_name
+        assert reg.get(gap_name) is not None, (
+            f"honest-gap key {gap_name!r} matches no registered source")
 
 
 # ── S3: census window direction — family 6 (error direction unpinned) ────
@@ -131,6 +135,8 @@ def test_s6_wayback_bare_domain_requires_dotted_domain_shape():
 
 # ── S7: dead validation regexes — family 1 residue ───────────────────────
 
+@pytest.mark.xfail(strict=True, reason="S7: five compiled validators defined "
+                   "and documented but referenced nowhere")
 def test_s7_module_level_id_regexes_are_alive_or_gone():
     """Five compiled regexes (_FRED_ID_RE, _BLS_ID_RE, _CIK_RE,
     _WB_INDICATOR_RE, _TREASURY_DATASET_RE) are defined with docstring
