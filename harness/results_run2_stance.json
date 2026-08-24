@@ -90,5 +90,80 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q05",
+    "question": "Did U.S. nonfarm payrolls fall by more than 15 million between February 2020 and April 2020?",
+    "category": "comparison+arithmetic",
+    "expected_stance": "AFFIRMS",
+    "gt": "Feb 2020 = 152,293k, Apr 2020 = 130,426k; drop = 21,867k \u2248 21.9M > 15M.",
+    "verified_by": "fredgraph.csv PAYEMS 2020-02..04",
+    "elapsed_s": 255.6,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "Did U.S. nonfarm payrolls fall by more than 15 million between February 2020 and April 2020?\n\n- [SPECULATIVE 0.54] What was the official U.S. nonfarm payrolls employment level in February 2020 and in April 2020 according to the BLS Current Employment Statistics survey?: The provided evidence does not contain the BLS Current Employment Statistics nonfarm payrolls employment levels for February 2020 or April 2020 \u2014 it is a World Bank indicator search result about fertilizer and land indicators, unrelated to BLS payrolls data.  [GAP: unprovable]",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.34,
+    "confidence_tier": "SPECULATIVE",
+    "n_fetches": 2,
+    "sources": [
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What was the official U.S. nonfarm payrolls employment level in February 2020 and in April 2020 according to the BLS Current Employment Statistics survey?",
+        "answer": "The provided evidence does not contain the BLS Current Employment Statistics nonfarm payrolls employment levels for February 2020 or April 2020 \u2014 it is a World Bank indicator search result about fertilizer and land indicators, unrelated to BLS payrolls data.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "Does subtracting the April 2020 level from the February 2020 level yield a decline exceeding 15 million jobs?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "The evidence set contains zero observations of U.S. nonfarm payrolls at any date. Both records are World Bank source=2 indicator-name listings (fertilizer consumption, arable land) that do not measure U.S. employment in February or April 2020 at all. A single fetch of the BLS CES series (CEU0000000001, e.g. FRED series PAYEMS: ~152.5M Feb 2020 vs ~130.3M Apr 2020) would settle the >15M question de",
+      "Both 'independent' fetches carry an identical sha256 (bd377215dd...) despite different query strings, and both return identical row lists with total=1498 \u2014 the World Bank /indicator search endpoint does not rank results by query relevance to the question, it returns the same paginated indicator catalog regardless. This is a retrieval artifact masquerading as two corroborating searches; nothing abo",
+      "Querying a development-indicator catalog (World Bank WDI) for a U.S. monthly labor statistic guarantees null results by construction \u2014 the target dataset is not in the searched corpus. The observed 'no supporting evidence' pattern is fully produced by searching the wrong source, not by any property of the payroll claim.",
+      "The SPECULATIVE 0.54 score implies residual probability the claim is true, but the correct mechanism-free explanation is that the pipeline failed at retrieval, not that the payroll decline is uncertain. Well-documented BLS CES benchmarks (Feb 2020 \u2248 152.5M, Apr 2020 \u2248 130.3M, a ~22.2M drop) exist and were one API call away; the 0.54 reflects evidence-pipeline failure, not genuine epistemic uncerta"
+    ],
+    "notes": [
+      "leaf 'What was the official U.S. nonfarm payrolls employment level': 4 fetch(s) rejected at ingestion: [bls] content covers 11% of the question's topical words (need 25%); missing: 2020, according, april, ces, current, employment, february, level; [fdic] content covers 17% of the question's topical words (need 25%); missing: 2020, according, april, bls, ces, february, government, level; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, according, april, bls, ces, current, employment, february; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, according, april, bls, ces, current, employment, february",
+      "leaf 'Does subtracting the April 2020 level from the February 2020': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, decline, exceeding, february, jobs; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, decline, exceeding, jobs, level; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, decline, exceeding, february, jobs"
+    ],
+    "gap_kinds": {
+      "3ac4202faa01438c": "unprovable"
+    },
+    "verdict": "undetermined-sealed"
+  },
+  {
+    "id": "Q06",
+    "question": "Was the federal funds effective rate above 5 percent in June 2007?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "FEDFUNDS June 2007 = 5.25%.",
+    "verified_by": "fredgraph.csv FEDFUNDS 2007-06",
+    "elapsed_s": 71.8,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
