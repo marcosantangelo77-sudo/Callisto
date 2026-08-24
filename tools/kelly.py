@@ -304,7 +304,7 @@ def kelly_dynamic(
         "hard_cap_applied": adjusted_fraction > hard_cap,
         "reasoning": " | ".join(reasons),
         "components": {
-            "edge": floor(edge, 5),
+            "edge": round(edge, 5),
             "odds": odds,
             "confidence_score": round(confidence_score, 3),
             "variance_estimate": round(variance_estimate, 5),
@@ -434,7 +434,7 @@ def kelly_portfolio(bets: list[dict]) -> list[dict]:
         "bet_count": n,
         "avg_correlation": round(avg_correlation, 4),
         "diversification_ratio": round(diversification_ratio, 4),
-        "correlation_penalty": round(correlation_penalty, 4),
+        "correlation_penalty": round(correlation_penalty, 5),
         "raw_total_allocation": round(raw_total, 6),
         "final_total_allocation": round(total_allocated, 6),
         "final_total_pct": round(total_allocated * 100, 3),
