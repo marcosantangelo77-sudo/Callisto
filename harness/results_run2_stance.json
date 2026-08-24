@@ -1,0 +1,869 @@
+[
+  {
+    "id": "Q01",
+    "question": "Was the U.S. unemployment rate lower in January 2026 than in January 2023?",
+    "category": "comparison",
+    "expected_stance": "DENIES",
+    "gt": "Jan 2023 = 3.5%, Jan 2026 = 4.3% \u2014 unemployment was HIGHER in Jan 2026.",
+    "verified_by": "fredgraph.csv UNRATE 2023-01 and 2026-01",
+    "elapsed_s": 111.7,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q02",
+    "question": "Did the U.S. unemployment rate exceed 4.0 percent at any point in the first half of 2026?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "Jan\u2013Jun 2026 monthly rates were 4.3/4.4/4.3/4.3/4.3/4.2.",
+    "verified_by": "fredgraph.csv UNRATE 2026-01..06",
+    "elapsed_s": 85.5,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q03",
+    "question": "Was the U.S. national debt on March 31, 2020 higher than $23 trillion?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "$23,686,870,812,640.08 on 2020-03-31.",
+    "verified_by": "fiscaldata.treasury.gov debt_to_penny record_date=2020-03-31",
+    "elapsed_s": 79.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q04",
+    "question": "Was the U.S. total public debt lower on January 31, 2023 than $30 trillion?",
+    "category": "negation",
+    "expected_stance": "DENIES",
+    "gt": "$31,454,982,227,739.16 \u2014 higher than $30T.",
+    "verified_by": "debt_to_penny record_date=2023-01-31",
+    "elapsed_s": 96.5,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q05",
+    "question": "Did U.S. nonfarm payrolls fall by more than 15 million between February 2020 and April 2020?",
+    "category": "comparison+arithmetic",
+    "expected_stance": "AFFIRMS",
+    "gt": "Feb 2020 = 152,293k, Apr 2020 = 130,426k; drop = 21,867k \u2248 21.9M > 15M.",
+    "verified_by": "fredgraph.csv PAYEMS 2020-02..04",
+    "elapsed_s": 255.6,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "Did U.S. nonfarm payrolls fall by more than 15 million between February 2020 and April 2020?\n\n- [SPECULATIVE 0.54] What was the official U.S. nonfarm payrolls employment level in February 2020 and in April 2020 according to the BLS Current Employment Statistics survey?: The provided evidence does not contain the BLS Current Employment Statistics nonfarm payrolls employment levels for February 2020 or April 2020 \u2014 it is a World Bank indicator search result about fertilizer and land indicators, unrelated to BLS payrolls data.  [GAP: unprovable]",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.34,
+    "confidence_tier": "SPECULATIVE",
+    "n_fetches": 2,
+    "sources": [
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What was the official U.S. nonfarm payrolls employment level in February 2020 and in April 2020 according to the BLS Current Employment Statistics survey?",
+        "answer": "The provided evidence does not contain the BLS Current Employment Statistics nonfarm payrolls employment levels for February 2020 or April 2020 \u2014 it is a World Bank indicator search result about fertilizer and land indicators, unrelated to BLS payrolls data.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "Does subtracting the April 2020 level from the February 2020 level yield a decline exceeding 15 million jobs?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "The evidence set contains zero observations of U.S. nonfarm payrolls at any date. Both records are World Bank source=2 indicator-name listings (fertilizer consumption, arable land) that do not measure U.S. employment in February or April 2020 at all. A single fetch of the BLS CES series (CEU0000000001, e.g. FRED series PAYEMS: ~152.5M Feb 2020 vs ~130.3M Apr 2020) would settle the >15M question de",
+      "Both 'independent' fetches carry an identical sha256 (bd377215dd...) despite different query strings, and both return identical row lists with total=1498 \u2014 the World Bank /indicator search endpoint does not rank results by query relevance to the question, it returns the same paginated indicator catalog regardless. This is a retrieval artifact masquerading as two corroborating searches; nothing abo",
+      "Querying a development-indicator catalog (World Bank WDI) for a U.S. monthly labor statistic guarantees null results by construction \u2014 the target dataset is not in the searched corpus. The observed 'no supporting evidence' pattern is fully produced by searching the wrong source, not by any property of the payroll claim.",
+      "The SPECULATIVE 0.54 score implies residual probability the claim is true, but the correct mechanism-free explanation is that the pipeline failed at retrieval, not that the payroll decline is uncertain. Well-documented BLS CES benchmarks (Feb 2020 \u2248 152.5M, Apr 2020 \u2248 130.3M, a ~22.2M drop) exist and were one API call away; the 0.54 reflects evidence-pipeline failure, not genuine epistemic uncerta"
+    ],
+    "notes": [
+      "leaf 'What was the official U.S. nonfarm payrolls employment level': 4 fetch(s) rejected at ingestion: [bls] content covers 11% of the question's topical words (need 25%); missing: 2020, according, april, ces, current, employment, february, level; [fdic] content covers 17% of the question's topical words (need 25%); missing: 2020, according, april, bls, ces, february, government, level; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, according, april, bls, ces, current, employment, february; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, according, april, bls, ces, current, employment, february",
+      "leaf 'Does subtracting the April 2020 level from the February 2020': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, decline, exceeding, february, jobs; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, decline, exceeding, jobs, level; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, decline, exceeding, february, jobs"
+    ],
+    "gap_kinds": {
+      "3ac4202faa01438c": "unprovable"
+    },
+    "verdict": "undetermined-sealed"
+  },
+  {
+    "id": "Q06",
+    "question": "Was the federal funds effective rate above 5 percent in June 2007?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "FEDFUNDS June 2007 = 5.25%.",
+    "verified_by": "fredgraph.csv FEDFUNDS 2007-06",
+    "elapsed_s": 71.8,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q07",
+    "question": "Did any FDIC-insured banks fail during calendar year 2021?",
+    "category": "no-answer (answer is NO)",
+    "expected_stance": "DENIES",
+    "gt": "FDIC recorded ZERO bank failures in 2021.",
+    "verified_by": "banks.data.fdic.gov failures FAILYR=2021 \u2192 0 rows",
+    "elapsed_s": 350.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 4,
+    "sources": [
+      "fdic",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "Which FDIC-insured banks were officially declared failed by the FDIC during calendar year 2021, per the FDIC's Failed Bank List?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "How many FDIC-insured institution failures did the FDIC report in its official 2021 annual banking statistics (e.g., Quarterly Banking Profile)?",
+        "answer": "The provided evidence contains no information about FDIC-insured institution failures in 2021 \u2014 it is an unrelated World Bank indicator search result. The widely reported figure is zero failures, but the evidence given does not support asserting it.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.05,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "Do independent contemporaneous news or industry reports corroborate the count and identities of any 2021 FDIC-insured bank failures recorded by the FDIC?",
+        "answer": "The evidence does not answer the question. Evidence [0] is an FDIC failed-bank listing but contains only 1930s\u20131980s entries with no 2021 failures, and evidence [1] is an irrelevant World Bank indicator search result. No independent contemporaneous news or industry reports are present in the evidence.",
+        "tier": "VERIFIED",
+        "confidence": 0.95,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'Which FDIC-insured banks were officially declared failed by ': 2 fetch(s) rejected at ingestion: [fdic] content covers 20% of the question's topical words (need 25%); missing: 2021, calendar, declared, during, failed, insured, list, officially; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic",
+      "leaf 'How many FDIC-insured institution failures did the FDIC repo': 3 fetch(s) rejected at ingestion: [fdic] content covers 20% of the question's topical words (need 25%); missing: 2021, aggregate, annual, institution, insured, many, official, profile; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, aggregate, annual, banking, failures, fdic, institution, insured; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, aggregate, annual, banking, failures, fdic, institution, insured",
+      "leaf 'Do independent contemporaneous news or industry reports corr': 1 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, any, bank, contemporaneous, corroborate, count, failures, fdic"
+    ],
+    "gap_kinds": {
+      "8dc2f710dbd344c0": "unprovable"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q08",
+    "question": "Is Paris the capital of France according to Wikidata?",
+    "category": "checkable-yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "Wikidata Q142 P36 = Q90 = Paris.",
+    "verified_by": "wikidata wbgetclaims Q142 P36 \u2192 Q90 (Paris)",
+    "elapsed_s": 192.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "wikidata"
+    ],
+    "leaves": [
+      {
+        "text": "What does the Wikidata entry for Paris (Q90) list as its 'capital of' (P1376) or 'country' (P17) property value?",
+        "answer": "No evidence items were provided, so the Wikidata P1376/P17 values for Paris (Q90) cannot be determined from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Does Wikidata identify France (Q142) with a 'capital' (P36) property whose value is Paris?",
+        "answer": "The provided evidence does not contain any statement about France (Q142) or a P36 'capital' property; the SPARQL results returned unrelated Wikidata/WikiProject items. The evidence therefore does not establish whether Q142 has P36 = Paris.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What does the Wikidata entry for Paris (Q90) list as its 'ca': 5 fetch(s) rejected at ingestion: [bls] content covers 0% of the question's topical words (need 25%); missing: capital, country, entity, entry, list, p1376, p17, paris; [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: capital, country, entity, entry, list, p1376, p17, paris; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: capital, country, entity, entry, list, p1376, p17, paris; [fdic] content covers 8% of the question's topical words (need 25%); missing: capital, country, entity, entry, list, p1376, p17, paris; [worldbank] content covers 15% of the question's topical words (need 25%); missing: capital, entity, entry, list, p1376, p17, paris, property",
+      "leaf 'Does Wikidata identify France (Q142) with a 'capital' (P36) ': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: capital, entity, france, identify, p36, paris, property, q142; [fdic] content covers 8% of the question's topical words (need 25%); missing: capital, entity, france, identify, p36, paris, property, q142; [worldbank] content covers 17% of the question's topical words (need 25%); missing: capital, entity, identify, p36, paris, property, query, value"
+    ],
+    "gap_kinds": {
+      "f49034e0b79543c4": "honest_null",
+      "9d2f8e8acd4a4946": "unprovable"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q09",
+    "question": "Did the Supreme Court decide Loper Bright Enterprises v. Raimondo before 2024?",
+    "category": "multi-hop/negation",
+    "expected_stance": "DENIES",
+    "gt": "dateFiled = 2024-06-28 \u2014 not before 2024.",
+    "verified_by": "courtlistener search API caseName/dateFiled",
+    "elapsed_s": 398.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 3,
+    "sources": [
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "On what date did the Supreme Court decide Loper Bright Enterprises v. Raimondo?",
+        "answer": "UNDETERMINED \u2014 the only evidence item is a World Bank indicator search result that contains no information about Loper Bright Enterprises v. Raimondo or its decision date.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "Was the Supreme Court's decision in Loper Bright Enterprises v. Raimondo issued before January 1, 2024?",
+        "answer": "The provided evidence is a World Bank indicator search result (fertilizer/agricultural land indicators) and contains no information about Loper Bright Enterprises v. Raimondo or its decision date, so the evidence cannot settle whether the decision was issued before January 1, 2024.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "What procedural milestones (grant of certiorari, oral argument, final judgment) occurred for Loper Bright Enterprises v. Raimondo, and on which dates?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'On what date did the Supreme Court decide Loper Bright Enter': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official; [fdic] content covers 23% of the question's topical words (need 25%); missing: court, date, decide, docket, official, opinion, raimondo, records; [fred] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official; [fred] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official",
+      "leaf 'Was the Supreme Court's decision in Loper Bright Enterprises': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2024, before, bright, court, courtlistener, databases, decision, enterprises; [fdic] content covers 17% of the question's topical words (need 25%); missing: 2024, before, court, courtlistener, databases, decision, issued, january; [fred] content covers 0% of the question's topical words (need 25%); missing: 2024, before, bright, court, courtlistener, databases, decision, enterprises; [fred] content covers 0% of the question's topical words (need 25%); missing: 2024, before, bright, court, courtlistener, databases, decision, enterprises",
+      "leaf 'What procedural milestones (grant of certiorari, oral argume': 3 fetch(s) rejected at ingestion: [fdic] content covers 14% of the question's topical words (need 25%); missing: argument, certiorari, contemporaneous, court, dates, docket, entries, final; [fred] content covers 0% of the question's topical words (need 25%); missing: argument, bright, certiorari, contemporaneous, court, dates, docket, enterprises; [fred] content covers 0% of the question's topical words (need 25%); missing: argument, bright, certiorari, contemporaneous, court, dates, docket, enterprises"
+    ],
+    "gap_kinds": {
+      "0c5b2c07cd704693": "unprovable",
+      "4aa55a66e2e6490e": "unprovable"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q10",
+    "question": "Was the World Bank estimate of U.S. population in 2020 greater than 330 million?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "331,578,104.",
+    "verified_by": "api.worldbank.org SP.POP.TOTL USA 2020",
+    "elapsed_s": 280.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 2,
+    "sources": [
+      "fdic",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What is the World Bank's published estimate of the United States resident population for 2020?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "How does the World Bank's 2020 U.S. population figure compare numerically to the 330 million threshold?",
+        "answer": "The provided evidence contains no World Bank U.S. population figure for 2020 \u2014 the only item is an FDIC bank-institution record matching 'World Bank' as a bank name filter. No comparison to the 330 million threshold can be made from this evidence.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What is the World Bank's published estimate of the United St': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, bank, dataset, development, estimate, indicators, official, population; [fdic] content covers 15% of the question's topical words (need 25%); missing: 2020, bank, dataset, development, estimate, indicators, official, population; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, bank, dataset, development, estimate, indicators, official, population; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, bank, dataset, development, estimate, indicators, official, population",
+      "leaf 'How does the World Bank's 2020 U.S. population figure compar': 6 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, 330, bank, compare, comparison, direct, figure, million; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, 330, bank, compare, comparison, direct, figure, million; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, 330, bank, compare, comparison, direct, figure, million; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, 330, bank, compare, comparison, direct, figure, million; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, 330, bank, compare, comparison, direct, figure, million; [worldbank] content covers 20% of the question's topical words (need 25%); missing: 330, bank, compare, comparison, direct, figure, million, numerically"
+    ],
+    "gap_kinds": {
+      "8cd67dd1ca1a4db8": "unprovable"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q11",
+    "question": "Did Silicon Valley Bank fail in March 2023?",
+    "category": "yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "SILICON VALLEY BANK, FAILDATE 3/10/2023.",
+    "verified_by": "FDIC failures FAILDATE 3/10/2023",
+    "elapsed_s": 393.7,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 5,
+    "sources": [
+      "fdic",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "Was Silicon Valley Bank placed into receivership by the FDIC in March 2023?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Did the California Department of Financial Protection and Innovation close Silicon Valley Bank on March 10, 2023?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "What was the magnitude of SVB's losses and deposit run preceding its closure, as reported in regulatory filings and financial disclosures?",
+        "answer": "The provided evidence contains no information about Silicon Valley Bank's losses or deposit run \u2014 it is an unrelated World Bank API indicator search returning agricultural indicators. No regulatory filings or financial disclosures about SVB are present in the evidence, so the magnitude cannot be determined from the evidence given.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "How did contemporaneous major news outlets report the failure of SVB in mid-March 2023?",
+        "answer": "The evidence provided does not contain any contemporaneous news reporting on the failure of Silicon Valley Bank. Evidence [0] is a World Bank indicator API search result listing agricultural indicators (fertilizer consumption, arable land, etc.), which is unrelated to SVB or news coverage of its March 2023 collapse. No evidence item addresses the question.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'Was Silicon Valley Bank placed into receivership by the FDIC': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, announcements, bank, fdic, filing, march, placed, receivership; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, announcements, bank, fdic, filing, march, placed, receivership; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, announcements, bank, fdic, filing, march, placed, receivership",
+      "leaf 'Did the California Department of Financial Protection and In': 2 fetch(s) rejected at ingestion: [fdic] content covers 13% of the question's topical words (need 25%); missing: 2023, bank, close, financial, government, innovation, march, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, california, close, department, financial, government, innovation",
+      "leaf 'What was the magnitude of SVB's losses and deposit run prece': 2 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: closure, deposit, disclosures, filings, financial, losses, magnitude, preceding; [wikidata] content covers 7% of the question's topical words (need 25%); missing: closure, deposit, disclosures, filings, financial, losses, preceding, regulatory",
+      "leaf 'How did contemporaneous major news outlets report the failur': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, contemporaneous, coverage, failure, mainstream, major, march; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2023, archived, contemporaneous, coverage, failure, mainstream, major, mid; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, contemporaneous, coverage, failure, mainstream, major, march; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, contemporaneous, coverage, failure, mainstream, major, march; [wikidata] content covers 7% of the question's topical words (need 25%); missing: 2023, archived, coverage, failure, mainstream, major, march, mid"
+    ],
+    "gap_kinds": {
+      "f837a6b558744fa4": "unprovable",
+      "5b55534a6eaa4272": "unprovable"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q12",
+    "question": "Did exactly four FDIC-insured banks fail during 2023?",
+    "category": "negation (answer: no, five)",
+    "expected_stance": "DENIES",
+    "gt": "Five failures: SVB, Signature, First Republic, Heartland Tri-State, Citizens Bank (11/3).",
+    "verified_by": "FDIC failures FAILYR=2023 \u2192 5 rows",
+    "elapsed_s": 64.3,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q13",
+    "question": "What will the U.S. unemployment rate be in January 2027?",
+    "category": "unknowable-future",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Unknowable; correct output is refusal or UNDETERMINED.",
+    "verified_by": "definitionally unobservable",
+    "elapsed_s": 374.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 3,
+    "sources": [
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What is the current U.S. unemployment rate and recent monthly trend as of the latest BLS release before January 2027?",
+        "answer": "The provided evidence does not contain any BLS unemployment data. The only evidence item is a World Bank indicator search result (fertilizer consumption, agricultural land, etc.) that is unrelated to U.S. unemployment. No evidence establishes the current U.S. unemployment rate or its monthly trend.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "What do leading labor-market indicators (initial jobless claims, JOLTS openings/hires, payroll growth, labor force participation) imply about unemployment momentum heading into late 2026?",
+        "answer": "The evidence provided does not address the question: item [0] is a World Bank indicator search that returned only an unrelated indicator list (agricultural land/fertilizer codes), with no data on initial jobless claims, JOLTS openings/hires, payroll growth, or labor force participation. No leading labor-market indicators are present, so unemployment momentum heading into late 2026 cannot be assessed.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "What macroeconomic conditions (GDP growth, Fed policy path, fiscal policy, tariffs/immigration policy) are forecast to affect labor demand through January 2027?",
+        "answer": "No evidence was provided, so no macroeconomic forecast for labor demand through January 2027 can be established from the given items.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "What point forecasts for the U.S. unemployment rate in January 2027 do professional forecasters (Blue Chip, SPF, Fed SEP) publish?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What is the current U.S. unemployment rate and recent monthl': 5 fetch(s) rejected at ingestion: [bls] content covers 6% of the question's topical words (need 25%); missing: 2027, before, current, january, labor, latest, monthly, official; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2027, before, bls, current, january, labor, latest, monthly; [fdic] content covers 6% of the question's topical words (need 25%); missing: 2027, before, bls, current, labor, latest, monthly, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2027, before, bls, current, january, labor, latest, monthly; [fred] content covers 0% of the question's topical words (need 25%); missing: 2027, before, bls, current, january, labor, latest, monthly",
+      "leaf 'What do leading labor-market indicators (initial jobless cla': 3 fetch(s) rejected at ingestion: [bls] content covers 15% of the question's topical words (need 25%); missing: claims, dol, frequency, growth, heading, high, hires, imply; [fred] content covers 4% of the question's topical words (need 25%); missing: bls, claims, data, dol, force, frequency, growth, heading; [fred] content covers 4% of the question's topical words (need 25%); missing: bls, claims, data, dol, force, frequency, growth, heading",
+      "leaf 'What macroeconomic conditions (GDP growth, Fed policy path, ': 4 fetch(s) rejected at ingestion: [bea] content covers 4% of the question's topical words (need 25%); missing: affect, analysis, cbo, conditions, demand, fed, fiscal, forecast; [fdic] content covers 9% of the question's topical words (need 25%); missing: 2027, affect, analysis, cbo, conditions, demand, fed, fiscal; [fred] content covers 4% of the question's topical words (need 25%); missing: 2027, affect, analysis, cbo, conditions, demand, fed, fiscal; [worldbank] content covers 4% of the question's topical words (need 25%); missing: 2027, affect, analysis, cbo, conditions, demand, fed, fiscal",
+      "leaf 'What point forecasts for the U.S. unemployment rate in Janua': 4 fetch(s) rejected at ingestion: [bls] content covers 12% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, economic, fed, january, point; [fdic] content covers 12% of the question's topical words (need 25%); missing: 2027, consensus, economic, fed, forecasters, forecasts, january, point; [fred] content covers 0% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, economic, fed, forecasters, forecasts; [fred] content covers 0% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, economic, fed, forecasters, forecasts"
+    ],
+    "gap_kinds": {
+      "c140031825aa4c30": "unprovable",
+      "e5e45d2aa65a4e03": "unprovable",
+      "3070208a59fa4c25": "honest_null"
+    },
+    "verdict": "correct"
+  },
+  {
+    "id": "Q14",
+    "question": "How many U.S. households owned a pet hamster in July 2019?",
+    "category": "unknowable-source-gap",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Not available from fred/treasury/fdic/courtlistener/gdelt/kalshi/openalex/wayback/wikidata/worldbank/census.",
+    "verified_by": "not collected by any working source adapter",
+    "elapsed_s": 387.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 5,
+    "sources": [
+      "fdic",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What percentage or count of U.S. households owned a hamster as a pet in 2019, per industry surveys (e.g., APPA National Pet Owners Survey)?",
+        "answer": "None",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "How many total U.S. households existed in July 2019, per Census Bureau estimates?",
+        "answer": "The provided evidence does not contain U.S. household counts for July 2019; the World Bank indicator search returned only unrelated agricultural indicators, so no Census Bureau estimate can be cited from this evidence.",
+        "tier": "VERIFIED",
+        "confidence": 0.95,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "How many pet hamsters were owned in the U.S. around 2019 and what is the average number of hamsters per owning household?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Do independent estimates (APPA, Statista, AVMA) agree on the 2019 hamster-owning household figure within a reasonable margin?",
+        "answer": "The evidence provided is irrelevant: it is a World Bank indicator search result (agricultural land/fertilizer indicators) containing no figures from APPA, Statista, or AVMA about 2019 hamster-owning households. No comparison can be made.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.05,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What percentage or count of U.S. households owned a hamster ': 1 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, appa, count, hamster, households, industry, national, owned",
+      "leaf 'How many total U.S. households existed in July 2019, per Cen': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2019, bureau, census, data, estimates, existed, government, households; [fdic] content covers 17% of the question's topical words (need 25%); missing: 2019, data, estimates, existed, government, households, july, many; [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, bureau, census, data, estimates, existed, government, households",
+      "leaf 'How many pet hamsters were owned in the U.S. around 2019 and': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2019, around, average, hamsters, household, many, market, number; [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, around, average, hamsters, household, many, market, number; [wikidata] content covers 7% of the question's topical words (need 25%); missing: 2019, around, average, hamsters, household, many, market, number",
+      "leaf 'Do independent estimates (APPA, Statista, AVMA) agree on the': 3 fetch(s) rejected at ingestion: [fdic] content covers 6% of the question's topical words (need 25%); missing: 2019, agree, appa, avma, comparison, cross, estimates, figure; [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, agree, appa, avma, comparison, cross, estimates, figure; [fred] content covers 0% of the question's topical words (need 25%); missing: 2019, agree, appa, avma, comparison, cross, estimates, figure"
+    ],
+    "gap_kinds": {
+      "b50ef94dfff74c8b": "unprovable",
+      "a5c6faa34ff7474a": "unprovable"
+    },
+    "verdict": "correct"
+  },
+  {
+    "id": "Q15",
+    "question": "What did the Kalshi market price for the 2032 U.S. presidential election winner close at yesterday?",
+    "category": "unknowable-market",
+    "expected_stance": "UNDETERMINED",
+    "gt": "No 2032 presidential market exists; correct output is refusal/UNDETERMINED.",
+    "verified_by": "no such market exists yet",
+    "elapsed_s": 256.7,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "What did the Kalshi market price for the 2032 U.S. presidential election winner close at yesterday?\n\n- [VERIFIED 0.95] Which Kalshi market contracts cover the winner of the 2032 U.S. presidential election, and what are their ticker identifiers?: The evidence does not address Kalshi market contracts or ticker identifiers. The single evidence item is a World Bank indicator search result (agricultural indicators) that is unrelated to the question, so the 2032 U.S. presidential election winner contracts and their tickers cannot be identified from the provided evidence.\n- [SPECULATIVE 0.54] Do independent records (news reports or market-data aggregators) corroborate the same closing prices for those 2032 election contracts yesterday?: No. The only evidence provided is a World Bank indicator search result (fertilizer/agricultural land indicators), which contains no information about 2032 election contracts or closing prices from news reports or market-data aggregators. No independent record corroborates any closing price.  [GAP: unprovable]",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.35,
+    "confidence_tier": "PROBABLE",
+    "n_fetches": 3,
+    "sources": [
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "Which Kalshi market contracts cover the winner of the 2032 U.S. presidential election, and what are their ticker identifiers?",
+        "answer": "The evidence does not address Kalshi market contracts or ticker identifiers. The single evidence item is a World Bank indicator search result (agricultural indicators) that is unrelated to the question, so the 2032 U.S. presidential election winner contracts and their tickers cannot be identified from the provided evidence.",
+        "tier": "VERIFIED",
+        "confidence": 0.95,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "What was the official daily closing price of each 2032 U.S. presidential election winner contract on Kalshi yesterday?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Do independent records (news reports or market-data aggregators) corroborate the same closing prices for those 2032 election contracts yesterday?",
+        "answer": "No. The only evidence provided is a World Bank indicator search result (fertilizer/agricultural land indicators), which contains no information about 2032 election contracts or closing prices from news reports or market-data aggregators. No independent record corroborates any closing price.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "There is no conclusion to verify: all three evidence items are World Bank agricultural-indicator listings (fertilizer consumption, arable land) fetched from api.worldbank.org, which by construction contain zero information about Kalshi election contracts or any closing prices. The pipeline's own VERIFIED-0.95 item explicitly states 'the evidence does not address Kalshi market contracts or ticker i",
+      "The [VERIFIED 0.95] label on the first sub-item is itself the artifact: a retrieval step searched the wrong API entirely (World Bank indicators endpoint queried with free-text Kalshi/election phrases), got back generic indicator rows for every query (all three fetches return identical sha256 bd377215... and near-identical rows regardless of query), and this empty-but-well-formed response may have ",
+      "Even the negative corroboration finding ([SPECULATIVE 0.54], GAP: unprovable) rests only on the same broken World Bank fetches; absence of news/aggregator confirmation in this evidence says nothing about whether independent records exist. The observed pattern (no supporting evidence found) is fully explained by querying a source that cannot possibly contain the target data, not by non-existence or",
+      "Source selection bias: every query was routed to one domain-insensitive API whose /indicator search matches only its own indicator catalog (total=1498 agricultural/development indicators), guaranteeing irrelevant hits for any query text. This process produces plausible-looking fetched-evidence objects for arbitrary questions without ever touching Kalshi, news wires, or market-data aggregators \u2014 th"
+    ],
+    "notes": [
+      "leaf 'Which Kalshi market contracts cover the winner of the 2032 U': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2032, api, contracts, cover, docs, election, exchange, identifiers; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2032, api, contracts, cover, docs, election, exchange, identifiers; [fred] content covers 0% of the question's topical words (need 25%); missing: 2032, api, contracts, cover, docs, election, exchange, identifiers",
+      "leaf 'What was the official daily closing price of each 2032 U.S. ': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2032, api, candlestick, close, closing, contract, daily, data; [fdic] content covers 6% of the question's topical words (need 25%); missing: 2032, api, candlestick, close, closing, contract, daily, data; [fred] content covers 0% of the question's topical words (need 25%); missing: 2032, api, candlestick, close, closing, contract, daily, data; [fred] content covers 0% of the question's topical words (need 25%); missing: 2032, api, candlestick, close, closing, contract, daily, data",
+      "leaf 'Do independent records (news reports or market-data aggregat': 2 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: 2032, aggregators, closing, contracts, corroborate, data, election, independent; [wikidata] content covers 17% of the question's topical words (need 25%); missing: 2032, aggregators, closing, contracts, corroborate, data, election, market"
+    ],
+    "gap_kinds": {
+      "483142d02e744c44": "unprovable"
+    },
+    "verdict": "correct"
+  },
+  {
+    "id": "Q16",
+    "question": "Did the U.S. total public debt reach $30 trillion before the unemployment rate fell to its January 2023 level?",
+    "category": "multi-hop",
+    "expected_stance": "AFFIRMS",
+    "gt": "Debt first exceeded $30T around 31 Jan 2022 ($30.01T), before Jan 2023.",
+    "verified_by": "debt_to_penny series + UNRATE series",
+    "elapsed_s": 62.2,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q17",
+    "question": "Were there more FDIC-listed bank failures in 2023 than in 2020?",
+    "category": "multi-hop/comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "2023 = 5 failures; 2020 = 4 failures.",
+    "verified_by": "FDIC failures by FAILYR",
+    "elapsed_s": 62.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q18",
+    "question": "Is the average of the U.S. unemployment rates for January through June 2026 greater than 4.25 percent?",
+    "category": "arithmetic-comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "Mean = 4.283\u2026 > 4.25.",
+    "verified_by": "fredgraph.csv UNRATE + arithmetic",
+    "elapsed_s": 342.8,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 2,
+    "sources": [
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What was the U.S. unemployment rate (seasonally adjusted, BLS Current Population Survey) in each month from January through June 2026?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Is the arithmetic mean of the six monthly unemployment rates for January-June 2026 greater than 4.25 percent?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Have any of the January-June 2026 monthly unemployment figures been revised by BLS benchmark or annual revisions as of the measurement date, and does the revised average still exceed 4.25 percent?",
+        "answer": "The provided evidence contains no BLS unemployment data \u2014 item [0] is a World Bank indicator-name search result (fertilizer, land area indicators) with no monthly US unemployment figures, revision records, or benchmark data. It neither shows any January-June 2026 revisions nor supports computing a revised average. The question cannot be settled from this evidence.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What was the U.S. unemployment rate (seasonally adjusted, BL': 4 fetch(s) rejected at ingestion: [bls] content covers 14% of the question's topical words (need 25%); missing: adjusted, cps, current, each, january, june, labor, month; [fdic] content covers 19% of the question's topical words (need 25%); missing: adjusted, bls, cps, each, government, january, june, labor; [fred] content covers 5% of the question's topical words (need 25%); missing: adjusted, bls, cps, current, each, government, january, june; [worldbank] content covers 10% of the question's topical words (need 25%); missing: adjusted, bls, cps, current, each, government, january, june",
+      "leaf 'Is the arithmetic mean of the six monthly unemployment rates': 3 fetch(s) rejected at ingestion: [bls] content covers 11% of the question's topical words (need 25%); missing: arithmetic, computed, derived, greater, january, june, mean, monthly; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2026, arithmetic, bls, computed, derived, greater, january, june; [fred] content covers 11% of the question's topical words (need 25%); missing: arithmetic, bls, computed, derived, greater, january, june, mean",
+      "leaf 'Have any of the January-June 2026 monthly unemployment figur': 4 fetch(s) rejected at ingestion: [bls] content covers 13% of the question's topical words (need 25%); missing: announcements, annual, any, average, benchmark, date, exceed, figures; [fdic] content covers 9% of the question's topical words (need 25%); missing: announcements, annual, any, average, benchmark, bls, data, date; [fred] content covers 13% of the question's topical words (need 25%); missing: announcements, annual, any, average, benchmark, bls, data, exceed; [fred] content covers 13% of the question's topical words (need 25%); missing: announcements, annual, any, average, benchmark, bls, data, exceed"
+    ],
+    "gap_kinds": {
+      "95f70b7ef04045b5": "honest_null",
+      "e105a94392bc4635": "unprovable"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q19",
+    "question": "According to Wikidata, was Albert Einstein born in Ulm, Germany?",
+    "category": "yes-checkable",
+    "expected_stance": "AFFIRMS",
+    "gt": "P19 birthplace = Q3012 = Ulm.",
+    "verified_by": "wikidata Q937 P19 \u2192 Q3012 (Ulm)",
+    "elapsed_s": 67.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What does Wikidata's entry for Albert Einstein (Q937) list as his place of birth?",
+        "answer": "No evidence was provided, so the question cannot be answered from the given items.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "The UNVERIFIED verdict rests on zero retrieved evidence, but Wikidata Q937's place of birth (P19) is a trivially retrievable, heavily cached triple ('Ulm'). The most likely artifact is not that evidence is unavailable but that the fetch failed or was never attempted \u2014 the 'honest null' is indistinguishable from a broken pipeline, so labeling the question unanswerable is likely a tooling false posi",
+      "An alternative mechanism explains the same facts at least as well: a network timeout, rate limit, API schema mismatch, or query-string error in the Wikidata lookup produced an empty result set. The gap marked 'honest_null' could equally be 'failed_fetch'; without distinguishing these (HTTP status, retry log), the null carries no evidential weight about what Wikidata actually states.",
+      "Direct refutation is one GET away: https://www.wikidata.org/wiki/Special:EntityData/Q937.json contains claims.P19 = Q3012 (Ulm). The conclusion 'cannot be answered' is contradicted by publicly available, machine-readable evidence whose existence was never checked \u2014 the objection stands on the concrete fact that the primary source was queried zero times in this run.",
+      "Selection effect: a pipeline that emits 'no evidence provided' for any item where retrieval silently fails will accumulate a corpus of UNVERIFIED entries skewed toward exactly the queries that are easiest to answer (famous entities with saturated coverage). The observed pattern \u2014 a maximally well-documented fact scored 0.00 with no evidence \u2014 is precisely what retrieval failure plus a no-fabricati"
+    ],
+    "notes": [
+      "leaf 'What does Wikidata's entry for Albert Einstein (Q937) list a': 5 fetch(s) rejected at ingestion: [bls] content covers 8% of the question's topical words (need 25%); missing: albert, birth, einstein, entry, his, list, place, q937; [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: albert, birth, data, einstein, entry, his, list, place; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: albert, birth, data, einstein, entry, his, list, place; [fdic] content covers 17% of the question's topical words (need 25%); missing: birth, data, entry, his, list, place, q937, query; [worldbank] content covers 8% of the question's topical words (need 25%); missing: albert, birth, data, einstein, entry, his, list, place"
+    ],
+    "gap_kinds": {
+      "e713d2c1719b4817": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q20",
+    "question": "Did Napoleon die before the United States Civil War began?",
+    "category": "multi-hop/temporal",
+    "expected_stance": "AFFIRMS",
+    "gt": "Napoleon died 1821-05-05, before April 1861.",
+    "verified_by": "wikidata Q517 P570 = 1821-05-05; civil war start 1861 (common knowledge anchor)",
+    "elapsed_s": 356.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 3,
+    "sources": [
+      "clinicaltrials",
+      "fdic"
+    ],
+    "leaves": [
+      {
+        "text": "In what year did Napoleon Bonaparte die?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "On what date did the United States Civil War begin?",
+        "answer": "The evidence provided does not contain any information about when the United States Civil War began. Evidence [0] is a clinical trial record for Crohn's disease (filgotinib), and evidence [1] is an empty search result (0 records) for 'United States Civil War'. No evidence addresses the question.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'In what year did Napoleon Bonaparte die?': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bonaparte, death, die, historical, napoleon, records, year; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bonaparte, death, die, historical, napoleon, records, year; [fred] content covers 0% of the question's topical words (need 25%); missing: bonaparte, death, die, historical, napoleon, records, year; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bonaparte, death, die, historical, napoleon, records, year; [fred] content covers 0% of the question's topical words (need 25%); missing: bonaparte, death, die, historical, napoleon, records, year"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
+  }
+]

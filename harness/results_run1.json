@@ -1,0 +1,779 @@
+[
+  {
+    "id": "Q01",
+    "question": "Was the U.S. unemployment rate lower in January 2026 than in January 2023?",
+    "category": "comparison",
+    "expected_stance": "DENIES",
+    "gt": "Jan 2023 = 3.5%, Jan 2026 = 4.3% \u2014 unemployment was HIGHER in Jan 2026.",
+    "verified_by": "fredgraph.csv UNRATE 2023-01 and 2026-01",
+    "elapsed_s": 248.1,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "Was the U.S. unemployment rate lower in January 2026 than in January 2023?\n\n- [UNVERIFIED 0.00] What was the U.S. unemployment rate in January 2026 as published by the BLS?: None  [GAP: unprovable]\n- [CORROBORATED 0.85] Are the two reported rates directly comparable (i.e., no major benchmark revision or methodological change altering the series between the two observations)?: The evidence provided does not identify which two reported rates are in question, nor does it contain any documentation of benchmark revisions or methodological changes for any specific statistical series. The evidence items are generic keyword-search results (World Bank indicator listing, court opinion search, OpenAlex works search) that do not address the comparability of any two observations. Without evidence about the specific series, its source, and any documented revisions or methodology changes between the two observation dates, comparability cannot be established.",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.4,
+    "confidence_tier": "PROBABLE",
+    "n_fetches": 6,
+    "sources": [
+      "courtlistener",
+      "openalex",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What was the U.S. unemployment rate in January 2023 as published by the BLS?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "What was the U.S. unemployment rate in January 2026 as published by the BLS?",
+        "answer": "None",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "Are the two reported rates directly comparable (i.e., no major benchmark revision or methodological change altering the series between the two observations)?",
+        "answer": "The evidence provided does not identify which two reported rates are in question, nor does it contain any documentation of benchmark revisions or methodological changes for any specific statistical series. The evidence items are generic keyword-search results (World Bank indicator listing, court opinion search, OpenAlex works search) that do not address the comparability of any two observations. Without evidence about the specific series, its source, and any documented revisions or methodology c",
+        "tier": "CORROBORATED",
+        "confidence": 0.85,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "The January 2026 leaf is UNVERIFIED 0.00 with value None \u2014 no BLS rate for either month was ever retrieved. The World Bank API calls returned fertilizer and land indicators (source=2 is WDI, not BLS monthly labor data), so there is zero direct measurement of the unemployment rate in either period. Any answer to the comparative question is unsupported by the evidence; the correct conclusion is UNDE",
+      "The three World Bank 'search' responses are byte-identical (same sha256 bd377215...) despite different query strings \u2014 the API ignored the search terms entirely and returned a generic indicator listing. The pipeline appears to treat these irrelevant fetches as if they addressed the question; the entire evidence base for this claim is an API parameter failure plus court-opinion and OpenAlex full-te",
+      "The corroborated 0.85 comparability leaf's justification explicitly states it cannot identify which two rates are in question and that the evidence does not address comparability \u2014 yet it is scored CORROBORATED. A plausible mechanism for the observed scores: the scorer graded the absence of contradicting documentation as corroboration of the null ('no known revision'), which would explain high con"
+    ],
+    "notes": [
+      "leaf 'What was the U.S. unemployment rate in January 2023 as publi': 5 fetch(s) rejected at ingestion: [bls] content covers 14% of the question's topical words (need 25%); missing: 2023, current, january, labor, official, population, published, rate; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bls, current, government, january, labor, official, population; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2023, bls, current, government, labor, official, population, published; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bls, current, government, january, labor, official, population; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bls, current, government, january, labor, official, population",
+      "leaf 'What was the U.S. unemployment rate in January 2026 as publi': 6 fetch(s) rejected at ingestion: [bls] content covers 21% of the question's topical words (need 25%); missing: current, january, labor, official, population, published, rate, release; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2026, bls, current, government, january, labor, official, population; [fdic] content covers 14% of the question's topical words (need 25%); missing: bls, current, government, labor, official, population, published, rate; [fred] content covers 7% of the question's topical words (need 25%); missing: bls, current, government, january, labor, official, population, published; [fred] content covers 7% of the question's topical words (need 25%); missing: bls, current, government, january, labor, official, population, published; [courtlistener] content covers 21% of the question's topical words (need 25%); missing: bls, current, january, labor, official, population, rate, release",
+      "leaf 'Are the two reported rates directly comparable (i.e., no maj': 1 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: adjustments, agency, altering, annual, benchmark, bls, change, comparable"
+    ],
+    "gap_kinds": {
+      "f066f0c9407149cd": "unprovable"
+    },
+    "verdict": "undetermined-sealed"
+  },
+  {
+    "id": "Q08",
+    "question": "Is Paris the capital of France according to Wikidata?",
+    "category": "checkable-yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "Wikidata Q142 P36 = Q90 = Paris.",
+    "verified_by": "wikidata wbgetclaims Q142 P36 \u2192 Q90 (Paris)",
+    "elapsed_s": 108.1,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "Is Paris the capital of France according to Wikidata?\n\n- [SPECULATIVE 0.54] Does the Wikidata entity for Paris (Q90) assert it is the capital of France, and does the France (Q142) entity list Paris as its capital?: The provided evidence does not address the question: the only evidence item is a full-text search result from OpenAlex returning a paper about LexO, a terminological-ontological lexicon editor, with no content about Wikidata entities Q90 (Paris) or Q142 (France) or capital-of claims. Therefore whether Q90 asserts it is the capital of France and whether Q142 lists Paris as its capital cannot be determined from the given evidence.  [GAP: unprovable]",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.54,
+    "confidence_tier": "SPECULATIVE",
+    "n_fetches": 1,
+    "sources": [
+      "openalex"
+    ],
+    "leaves": [
+      {
+        "text": "Does the Wikidata entity for Paris (Q90) assert it is the capital of France, and does the France (Q142) entity list Paris as its capital?",
+        "answer": "The provided evidence does not address the question: the only evidence item is a full-text search result from OpenAlex returning a paper about LexO, a terminological-ontological lexicon editor, with no content about Wikidata entities Q90 (Paris) or Q142 (France) or capital-of claims. Therefore whether Q90 asserts it is the capital of France and whether Q142 lists Paris as its capital cannot be determined from the given evidence.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'Does the Wikidata entity for Paris (Q90) assert it is the ca': 4 fetch(s) rejected at ingestion: [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: assert, capital, data, entity, france, list, p1376, p31; [fdic] content covers 7% of the question's topical words (need 25%); missing: assert, capital, data, entity, france, list, p1376, p31; [worldbank] content covers 13% of the question's topical words (need 25%); missing: assert, capital, data, entity, list, p1376, p31, p36; [courtlistener] content covers 0% of the question's topical words (need 25%); missing: assert, capital, data, entity, france, list, p1376, p31"
+    ],
+    "gap_kinds": {
+      "3f4f7406441f44df": "unprovable"
+    },
+    "verdict": "undetermined-sealed"
+  },
+  {
+    "id": "Q02",
+    "question": "Did the U.S. unemployment rate exceed 4.0 percent at any point in the first half of 2026?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "Jan\u2013Jun 2026 monthly rates were 4.3/4.4/4.3/4.3/4.3/4.2.",
+    "verified_by": "fredgraph.csv UNRATE 2026-01..06",
+    "elapsed_s": 78.2,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q03",
+    "question": "Was the U.S. national debt on March 31, 2020 higher than $23 trillion?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "$23,686,870,812,640.08 on 2020-03-31.",
+    "verified_by": "fiscaldata.treasury.gov debt_to_penny record_date=2020-03-31",
+    "elapsed_s": 84.2,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q04",
+    "question": "Was the U.S. total public debt lower on January 31, 2023 than $30 trillion?",
+    "category": "negation",
+    "expected_stance": "DENIES",
+    "gt": "$31,454,982,227,739.16 \u2014 higher than $30T.",
+    "verified_by": "debt_to_penny record_date=2023-01-31",
+    "elapsed_s": 70.2,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "Was the U.S. total public debt lower on January 31, 2023 than $30 trillion?\n\n- [SPECULATIVE 0.54] What was the U.S. total public debt outstanding as of January 31, 2023, per the U.S. Treasury's Debt to the Penny dataset?: The provided evidence does not contain the U.S. total public debt outstanding as of January 31, 2023 from the Treasury's Debt to the Penny dataset. Evidence [0] is a court opinion search result and evidence [1] is a scholarly works search about European bond markets; neither cites the Treasury figure.  [GAP: unprovable]",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.34,
+    "confidence_tier": "SPECULATIVE",
+    "n_fetches": 2,
+    "sources": [
+      "courtlistener",
+      "openalex"
+    ],
+    "leaves": [
+      {
+        "text": "What was the U.S. total public debt outstanding as of January 31, 2023, per the U.S. Treasury's Debt to the Penny dataset?",
+        "answer": "The provided evidence does not contain the U.S. total public debt outstanding as of January 31, 2023 from the Treasury's Debt to the Penny dataset. Evidence [0] is a court opinion search result and evidence [1] is a scholarly works search about European bond markets; neither cites the Treasury figure.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "The evidence set contains no Treasury Debt to the Penny data at all \u2014 the two retrieved sources are a 2025 Texas court opinion and an OpenAlex work on European bond-market microstructure, both irrelevant. The claim is marked SPECULATIVE 0.54 rather than UNDETERMINED despite a self-declared [GAP: unprovable]; with zero supporting observations, even a sub-0.5 confidence score is unearned \u2014 the corre",
+      "The retrieval failure has a simpler explanation than 'the answer is hard to know': the queries were malformed for the task. The CourtListener search returns case law (BM25 scores on litigation text) and the OpenAlex OQL searched full text of scholarly works for a phrasing ('per Treasury's Debt Penny dataset') that would never appear in prose \u2014 both searches were guaranteed to miss the primary sour",
+      "The evidence is the output of exactly two domain-mismatched search endpoints (court opinions, academic works), so the pattern 'no evidence contains the figure' is fully produced by the source-selection process itself; nothing in the corpus could have contained Treasury data even in principle. Inferring anything from this evidence set about the debt value is survivorship over a filtered sample.",
+      "Most likely artifact: the residual confidence (0.54) leaks prior knowledge \u2014 the widely reported fact that the U.S. debt ceiling was breached and total public debt crossed $31 trillion around January 2023 \u2014 into what is presented as an evidence-grounded assessment. A model answering from parametric memory while citing unrelated court-opinion JSON as its 'evidence' produces a confident-looking numb"
+    ],
+    "notes": [
+      "leaf 'What was the U.S. total public debt outstanding as of Januar': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, daily, data, dataset, debt, fiscal, government, january; [fdic] content covers 6% of the question's topical words (need 25%); missing: 2023, daily, data, dataset, debt, fiscal, government, january; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, daily, data, dataset, debt, fiscal, government, january; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, daily, data, dataset, debt, fiscal, government, january"
+    ],
+    "gap_kinds": {
+      "82f39e98db0f4fc7": "unprovable"
+    },
+    "verdict": "undetermined-sealed"
+  },
+  {
+    "id": "Q05",
+    "question": "Did U.S. nonfarm payrolls fall by more than 15 million between February 2020 and April 2020?",
+    "category": "comparison+arithmetic",
+    "expected_stance": "AFFIRMS",
+    "gt": "Feb 2020 = 152,293k, Apr 2020 = 130,426k; drop = 21,867k \u2248 21.9M > 15M.",
+    "verified_by": "fredgraph.csv PAYEMS 2020-02..04",
+    "elapsed_s": 207.7,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 5,
+    "sources": [
+      "openalex",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What was the official BLS seasonally adjusted U.S. nonfarm payroll employment level in February 2020?",
+        "answer": "The provided evidence is irrelevant \u2014 it shows a World Bank indicator search for agricultural metrics and contains no BLS nonfarm payroll data, so the question cannot be answered from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "What was the official BLS seasonally adjusted U.S. nonfarm payroll employment level in April 2020?",
+        "answer": "None",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "Does the difference between the February 2020 and April 2020 nonfarm payroll levels exceed 15 million jobs?",
+        "answer": "The provided evidence does not contain February 2020 or April 2020 nonfarm payroll level figures \u2014 item [0] is an unrelated World Bank indicator listing and item [1] is a literature-search result without the data. No determination can be made from this evidence.",
+        "tier": "VERIFIED",
+        "confidence": 0.9,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "How do subsequent benchmark revisions to the February-April 2020 payrolls affect the size of that decline?",
+        "answer": "The evidence provided does not address the question: the single item is a World Bank indicator search result (agriculture indicators) with no data on US payrolls or benchmark revisions. It cannot be used to say how subsequent revisions changed the size of the February\u2013April 2020 payroll decline.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.05,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What was the official BLS seasonally adjusted U.S. nonfarm p': 3 fetch(s) rejected at ingestion: [bls] content covers 14% of the question's topical words (need 25%); missing: 2020, adjusted, current, employment, february, labor, level, nonfarm; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, adjusted, bls, current, employment, february, government, labor; [courtlistener] content covers 7% of the question's topical words (need 25%); missing: 2020, adjusted, bls, current, employment, february, labor, level",
+      "leaf 'What was the official BLS seasonally adjusted U.S. nonfarm p': 3 fetch(s) rejected at ingestion: [bls] content covers 14% of the question's topical words (need 25%); missing: 2020, adjusted, april, current, employment, labor, level, nonfarm; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, adjusted, april, bls, current, employment, government, labor; [courtlistener] content covers 7% of the question's topical words (need 25%); missing: 2020, adjusted, april, bls, current, employment, labor, level",
+      "leaf 'Does the difference between the February 2020 and April 2020': 6 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, difference, exceed, february, government; [fdic] content covers 6% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, difference, exceed, government, jobs; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, difference, exceed, february, government; [courtlistener] content covers 6% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, difference, exceed, february, jobs; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, difference, exceed, february, government; [courtlistener] content covers 6% of the question's topical words (need 25%); missing: 2020, april, arithmetic, comparison, difference, exceed, february, jobs",
+      "leaf 'How do subsequent benchmark revisions to the February-April ': 6 fetch(s) rejected at ingestion: [bls] content covers 7% of the question's topical words (need 25%); missing: 2020, affect, annual, april, benchmark, decline, february, historical; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2020, affect, annual, april, benchmark, bls, decline, historical; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, affect, annual, april, benchmark, bls, decline, february; [courtlistener] content covers 13% of the question's topical words (need 25%); missing: affect, annual, april, benchmark, bls, decline, february, payrolls; [courtlistener] content covers 13% of the question's topical words (need 25%); missing: affect, annual, april, benchmark, bls, decline, february, payrolls; [wikidata] content covers 13% of the question's topical words (need 25%); missing: 2020, affect, annual, april, benchmark, bls, decline, february"
+    ],
+    "gap_kinds": {
+      "fa3b08504a3f4d7b": "unprovable",
+      "fa67cd461b0f4377": "unprovable",
+      "44fbcc44e6f440e8": "unprovable"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q06",
+    "question": "Was the federal funds effective rate above 5 percent in June 2007?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "FEDFUNDS June 2007 = 5.25%.",
+    "verified_by": "fredgraph.csv FEDFUNDS 2007-06",
+    "elapsed_s": 316.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 4,
+    "sources": [
+      "courtlistener",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What was the federal funds effective rate in June 2007 as published by the Federal Reserve H.15 release?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Did the Fed's target range/target for the federal funds rate during June 2007 (5.25%) imply an effective rate above 5 percent for that month?",
+        "answer": "The provided evidence items are irrelevant to the question: [0] is a World Bank indicator search returning agricultural indicators, and [1] is CourtListener case-law results. Neither contains any data on the Fed's federal funds rate target or effective rate for June 2007, so the question cannot be answered from this evidence.",
+        "tier": "VERIFIED",
+        "confidence": 0.95,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What was the federal funds effective rate in June 2007 as pu': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2007, bank, central, effective, fed, federal, funds, june; [fdic] content covers 20% of the question's topical words (need 25%); missing: 2007, bank, central, effective, funds, june, monthly, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2007, bank, central, effective, fed, federal, funds, june",
+      "leaf 'Did the Fed's target range/target for the federal funds rate': 2 fetch(s) rejected at ingestion: [fdic] content covers 5% of the question's topical words (need 25%); missing: 2007, above, during, effective, fed, federal, fomc, funds; [fred] content covers 0% of the question's topical words (need 25%); missing: 2007, above, during, effective, fed, federal, fomc, funds"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q07",
+    "question": "Did any FDIC-insured banks fail during calendar year 2021?",
+    "category": "no-answer (answer is NO)",
+    "expected_stance": "DENIES",
+    "gt": "FDIC recorded ZERO bank failures in 2021.",
+    "verified_by": "banks.data.fdic.gov failures FAILYR=2021 \u2192 0 rows",
+    "elapsed_s": 135.0,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 7,
+    "sources": [
+      "courtlistener",
+      "openalex",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "How many FDIC-insured banks failed (were closed by regulators) during calendar year 2021, per the FDIC's official failed bank list?",
+        "answer": "The provided evidence does not contain the FDIC's official failed bank list or any count of FDIC-insured bank failures in 2021 (the World Bank indicator search and OpenAlex paper results are irrelevant to this question), so no count can be cited from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "What are the names, dates, and failure circumstances of any individual FDIC-insured institutions closed in 2021?",
+        "answer": "The provided evidence does not identify any FDIC-insured institutions closed in 2021. Evidence [0] is a World Bank indicator search returning agricultural indicators; evidence [1] is CourtListener case law (a 2014 WAMU/FDIC opinion and a 2021 Pennsylvania trust-case opinion) with no bank-failure data; evidence [2] is an OpenAlex paper about FDIC failed-bank auctions generally, naming no specific 2021 closures, dates, or failure circumstances. No institution names, closure dates, or failure circu",
+        "tier": "VERIFIED",
+        "confidence": 0.9,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Did any 2021 bank closures that might be cited as failures fall outside the FDIC's definition of 'failure' (e.g., voluntary liquidations or assisted mergers without closure), and does that change the answer?",
+        "answer": "The evidence provided does not address the question. Item [0] is an unrelated World Bank indicator search (fertilizer/agricultural land metrics) and item [1] is an empty OpenAlex result set. Neither contains information about 2021 US bank closures, the FDIC's definition of 'failure', or any specific closures that might fall outside it (e.g., voluntary liquidations or assisted mergers). Therefore, whether any 2021 bank closures cited as failures fall outside the FDIC's definition \u2014 and whether th",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'How many FDIC-insured banks failed (were closed by regulator': 5 fetch(s) rejected at ingestion: [fdic] content covers 18% of the question's topical words (need 25%); missing: 2021, calendar, closed, during, failed, insured, list, many; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, closed, during, failed, fdic; [courtlistener] content covers 18% of the question's topical words (need 25%); missing: 2021, calendar, closed, during, failed, fdic, insured, list; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, closed, during, failed, fdic; [courtlistener] content covers 18% of the question's topical words (need 25%); missing: 2021, calendar, closed, during, failed, fdic, insured, list",
+      "leaf 'What are the names, dates, and failure circumstances of any ': 2 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2021, announcements, any, circumstances, closed, dates, failure, fdic; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, announcements, any, circumstances, closed, dates, failure, fdic",
+      "leaf 'Did any 2021 bank closures that might be cited as failures f': 5 fetch(s) rejected at ingestion: [fdic] content covers 20% of the question's topical words (need 25%); missing: 2021, answer, any, assisted, change, cited, closure, closures; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, answer, any, assisted, bank, banking, change, cited; [courtlistener] content covers 0% of the question's topical words (need 25%); missing: 2021, answer, any, assisted, bank, banking, change, cited; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, answer, any, assisted, bank, banking, change, cited; [courtlistener] content covers 0% of the question's topical words (need 25%); missing: 2021, answer, any, assisted, bank, banking, change, cited"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q09",
+    "question": "Did the Supreme Court decide Loper Bright Enterprises v. Raimondo before 2024?",
+    "category": "multi-hop/negation",
+    "expected_stance": "DENIES",
+    "gt": "dateFiled = 2024-06-28 \u2014 not before 2024.",
+    "verified_by": "courtlistener search API caseName/dateFiled",
+    "elapsed_s": 68.8,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q10",
+    "question": "Was the World Bank estimate of U.S. population in 2020 greater than 330 million?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "331,578,104.",
+    "verified_by": "api.worldbank.org SP.POP.TOTL USA 2020",
+    "elapsed_s": 62.5,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q11",
+    "question": "Did Silicon Valley Bank fail in March 2023?",
+    "category": "yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "SILICON VALLEY BANK, FAILDATE 3/10/2023.",
+    "verified_by": "FDIC failures FAILDATE 3/10/2023",
+    "elapsed_s": 228.7,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "Did Silicon Valley Bank fail in March 2023?\n\n- [PROBABLE 0.70] Was Silicon Valley Bank placed into FDIC receivership in March 2023?: The FDIC institutions record for Silicon Valley Bank (CERT 24735) shows ACTIVE=0 / INACTIVE=1 with an end date of 2023-03-10 (ENDEFYMD/EFFDATE '03/10/2023', DATEUPDT/PROCDATE '03/13/2023') and a successor certificate (NEWCERT 59331), consistent with the bank being closed and placed into FDIC resolution on March 10, 2023. However, the word 'receivership' itself does not appear in either item; item [1] is an irrelevant World Bank indicator search.\n- [UNVERIFIED 0.00] Did the California Department of Financial Protection and Innovation close SVB and appoint the FDIC as receiver on March 10, 2023?: The provided evidence does not address the question. Evidence [0] is a World Bank indicator search returning unrelated agricultural indicators, and evidence [1] is an OpenAlex result about FDIC deposit insurance reform with only a generic abstract mentioning the FDIC \u2014 neither states that the California DFPI closed SVB and appointed the FDIC as receiver on March 10, 2023.\n- [PROBABLE 0.55] Did SVB experience a bank run with deposit withdrawals exceeding ~$40 billion in the days before its closure in March 2023?: The evidence supports that SVB experienced a bank run in March 2023: item [1] (Cipriani, Eisenbach, Kovner et al., Federal Reserve Bank of New York, using high-frequency payments data) states SVB 'experienced a deposit run\u2014significantly more' than other failed banks, though fewer than many banks that survived, and attributes runs to weak fundamentals rather than depositor coordination, concentrated among institutional depositors. However, neither item quantifies the withdrawal amount; item [0] is an irrelevant World Bank indicator listing and item [1] contains no dollar figures. The specific claim of withdrawals exceeding ~$40 billion is therefore not settled by the provided evidence.\n- [UNVERIFIED 0.10] Do major financial news archives from March 2023 report SVB's collapse as one of the largest US bank failures?: The evidence provided does not settle this. Evidence [0] is an irrelevant World Bank indicator search (fertilizer/agricultural indicators, no SVB content). Evidence [1] is an OpenAlex result for a 2025 academic working paper (Kelly & Rose) reviewing the 2023 banking crisis \u2014 it is not a March 2023 financial news archive and its truncated abstract does not state that news archives reported SVB's collapse as one of the largest US bank failures. No evidence item actually shows what major financial news archives from March 2023 reported.  [GAP: unprovable]",
+    "stance": "AFFIRMS",
+    "confidence_score": 0.35,
+    "confidence_tier": "PROBABLE",
+    "n_fetches": 8,
+    "sources": [
+      "fdic",
+      "openalex",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "Was Silicon Valley Bank placed into FDIC receivership in March 2023?",
+        "answer": "The FDIC institutions record for Silicon Valley Bank (CERT 24735) shows ACTIVE=0 / INACTIVE=1 with an end date of 2023-03-10 (ENDEFYMD/EFFDATE '03/10/2023', DATEUPDT/PROCDATE '03/13/2023') and a successor certificate (NEWCERT 59331), consistent with the bank being closed and placed into FDIC resolution on March 10, 2023. However, the word 'receivership' itself does not appear in either item; item [1] is an irrelevant World Bank indicator search.",
+        "tier": "PROBABLE",
+        "confidence": 0.7,
+        "stance": "AFFIRMS",
+        "gap_kind": ""
+      },
+      {
+        "text": "Did the California Department of Financial Protection and Innovation close SVB and appoint the FDIC as receiver on March 10, 2023?",
+        "answer": "The provided evidence does not address the question. Evidence [0] is a World Bank indicator search returning unrelated agricultural indicators, and evidence [1] is an OpenAlex result about FDIC deposit insurance reform with only a generic abstract mentioning the FDIC \u2014 neither states that the California DFPI closed SVB and appointed the FDIC as receiver on March 10, 2023.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Did SVB experience a bank run with deposit withdrawals exceeding ~$40 billion in the days before its closure in March 2023?",
+        "answer": "The evidence supports that SVB experienced a bank run in March 2023: item [1] (Cipriani, Eisenbach, Kovner et al., Federal Reserve Bank of New York, using high-frequency payments data) states SVB 'experienced a deposit run\u2014significantly more' than other failed banks, though fewer than many banks that survived, and attributes runs to weak fundamentals rather than depositor coordination, concentrated among institutional depositors. However, neither item quantifies the withdrawal amount; item [0] i",
+        "tier": "PROBABLE",
+        "confidence": 0.55,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Do major financial news archives from March 2023 report SVB's collapse as one of the largest US bank failures?",
+        "answer": "The evidence provided does not settle this. Evidence [0] is an irrelevant World Bank indicator search (fertilizer/agricultural indicators, no SVB content). Evidence [1] is an OpenAlex result for a 2025 academic working paper (Kelly & Rose) reviewing the 2023 banking crisis \u2014 it is not a March 2023 financial news archive and its truncated abstract does not state that news archives reported SVB's collapse as one of the largest US bank failures. No evidence item actually shows what major financial ",
+        "tier": "UNVERIFIED",
+        "confidence": 0.1,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "The FDIC institutions record shows only that CERT 24735 became inactive on 2023-03-10 with a successor certificate (NEWCERT 59331). An INACTIVE=1 / ENDEFYMD entry with a NEWCERT also occurs when a healthy bank is acquired or merged into another institution \u2014 the record contains no failure flag, no receivership designation, and no 'failed bank' field. The same data shape would be produced by a volu",
+      "NEWCERT 59331 corresponds to Silicon Valley Bridge Bank, N.A., an FDIC-operated bridge institution. Under the bridge-bank mechanism the original charter is terminated and a new national-bank charter is created, which mechanically produces exactly this ACTIVE=0/INACTIVE=1 + successor-cert pattern in the institutions file without any additional inference about 'failure'. The conclusion's stated conf",
+      "The FDIC API call used filters 'NAME:Was Silicon Valley Bank' \u2014 the full question text, not the bank's name. That it still returned exactly one matching record for Silicon Valley Bank means the search pipeline retrieved the target despite a malformed query (likely fuzzy/partial matching), so the retrieval step is not trustworthy as constructed and its provenance cannot be audited: a different malf",
+      "Four of the six evidence items are identical World Bank indicator listings (same sha256 across all three fetches) that have zero bearing on any sub-question, and both OpenAlex hits are post-hoc academic papers (2023 St. Louis Fed synopsis, 2025 Kelly & Rose working paper), not contemporaneous records. The entire evidentiary weight of the top-level conclusion therefore hangs on one database row fet"
+    ],
+    "notes": [
+      "leaf 'Was Silicon Valley Bank placed into FDIC receivership in Mar': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, announcements, bank, fdic, filing, filings, march, official; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, announcements, bank, fdic, filing, filings, march, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, announcements, bank, fdic, filing, filings, march, official",
+      "leaf 'Did the California Department of Financial Protection and In': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, appoint, california, close, contemporaneous, department, fdic, financial; [fdic] content covers 11% of the question's topical words (need 25%); missing: 2023, appoint, close, contemporaneous, fdic, financial, innovation, march; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, appoint, california, close, contemporaneous, department, fdic, financial; [courtlistener] content covers 0% of the question's topical words (need 25%); missing: 2023, appoint, california, close, contemporaneous, department, fdic, financial; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, appoint, california, close, contemporaneous, department, fdic, financial",
+      "leaf 'Did SVB experience a bank run with deposit withdrawals excee': 4 fetch(s) rejected at ingestion: [fdic] content covers 5% of the question's topical words (need 25%); missing: 2023, bank, before, billion, closure, days, deposit, disclosures; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, before, billion, closure, days, deposit, disclosures; [courtlistener] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, before, billion, closure, days, deposit, disclosures; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, before, billion, closure, days, deposit, disclosures",
+      "leaf 'Do major financial news archives from March 2023 report SVB'': 4 fetch(s) rejected at ingestion: [fdic] content covers 16% of the question's topical words (need 25%); missing: 2023, archived, archives, collapse, coverage, event, financial, largest; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, archives, bank, collapse, coverage, event, failures; [courtlistener] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, archives, bank, collapse, coverage, event, failures; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, archives, bank, collapse, coverage, event, failures"
+    ],
+    "gap_kinds": {
+      "b3ef338493ea496c": "unprovable"
+    },
+    "verdict": "correct"
+  },
+  {
+    "id": "Q12",
+    "question": "Did exactly four FDIC-insured banks fail during 2023?",
+    "category": "negation (answer: no, five)",
+    "expected_stance": "DENIES",
+    "gt": "Five failures: SVB, Signature, First Republic, Heartland Tri-State, Citizens Bank (11/3).",
+    "verified_by": "FDIC failures FAILYR=2023 \u2192 5 rows",
+    "elapsed_s": 63.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q13",
+    "question": "What will the U.S. unemployment rate be in January 2027?",
+    "category": "unknowable-future",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Unknowable; correct output is refusal or UNDETERMINED.",
+    "verified_by": "definitionally unobservable",
+    "elapsed_s": 374.8,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 7,
+    "sources": [
+      "fdic",
+      "openalex",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What is the U.S. unemployment rate as of the most recent BLS Current Population Survey release?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "What has been the historical trend and volatility of monthly changes in the U.S. unemployment rate over the past 24 months?",
+        "answer": "The evidence provided does not contain U.S. unemployment rate data: item [0] is a World Bank indicator search returning unrelated agricultural indicators (fertilizer consumption, arable land), and item [1] is an OpenAlex full-text search returning an academic abstract about wage bargaining persistence. Neither gives monthly unemployment figures for the past 24 months, so no historical trend or volatility of month-over-month changes can be established from this evidence.",
+        "tier": "VERIFIED",
+        "confidence": 0.9,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "What do professional forecasters (e.g., FOMC Summary of Economic Projections, Blue Chip, SPF) project the U.S. unemployment rate to be in late 2026 / January 2027?",
+        "answer": "The evidence provided does not contain any professional forecasts of the U.S. unemployment rate for late 2026 / January 2027. Evidence [0] is an unrelated World Bank indicator search (fertilizer/agricultural indicators), and evidence [1] is an OpenAlex work about AI and labor-market forecasts with no usable 2026 unemployment projection values. No SEP, Blue Chip, or SPF figures are present.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "How do leading labor-market indicators (initial jobless claims trend, job openings/quits rates, payroll growth) currently compare to levels historically associated with rising vs. stable unemployment?",
+        "answer": "The evidence provided does not contain any current values for initial jobless claims, job openings, quits rates, or payroll growth \u2014 item [0] is a World Bank indicator search returning unrelated agricultural indicators, and item [1] is an OpenAlex full-text keyword search returning academic paper metadata (e.g., Elsby et al. on long-term unemployment after 2007-2009) with no present-day readings or historical thresholds. Therefore the comparison of current labor-market indicators to levels histo",
+        "tier": "VERIFIED",
+        "confidence": 0.9,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What is the U.S. unemployment rate as of the most recent BLS': 5 fetch(s) rejected at ingestion: [bls] content covers 8% of the question's topical words (need 25%); missing: current, household, labor, most, official, population, rate, release; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bls, current, household, labor, most, official, population, rate; [fred] content covers 0% of the question's topical words (need 25%); missing: bls, current, household, labor, most, official, population, rate; [fred] content covers 0% of the question's topical words (need 25%); missing: bls, current, household, labor, most, official, population, rate; [worldbank] content covers 8% of the question's topical words (need 25%); missing: bls, current, household, labor, most, official, rate, release",
+      "leaf 'What has been the historical trend and volatility of monthly': 4 fetch(s) rejected at ingestion: [bls] content covers 18% of the question's topical words (need 25%); missing: changes, fred, historical, labor, monthly, months, official, over; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bls, changes, data, fred, historical, labor, monthly, months; [fred] content covers 12% of the question's topical words (need 25%); missing: bls, changes, data, historical, labor, monthly, months, official; [fred] content covers 12% of the question's topical words (need 25%); missing: bls, changes, data, historical, labor, monthly, months, official",
+      "leaf 'What do professional forecasters (e.g., FOMC Summary of Econ': 4 fetch(s) rejected at ingestion: [bls] content covers 14% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, economic, fed, fomc, january; [fdic] content covers 19% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, fed, fomc, forecasters, forecasts; [fred] content covers 5% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, economic, fed, fomc, forecasters; [fred] content covers 5% of the question's topical words (need 25%); missing: 2027, blue, chip, consensus, economic, fed, fomc, forecasters",
+      "leaf 'How do leading labor-market indicators (initial jobless clai': 3 fetch(s) rejected at ingestion: [bls] content covers 0% of the question's topical words (need 25%); missing: associated, ces, claims, compare, currently, dol, frequency, growth; [fred] content covers 0% of the question's topical words (need 25%); missing: associated, ces, claims, compare, currently, dol, frequency, growth; [fred] content covers 0% of the question's topical words (need 25%); missing: associated, ces, claims, compare, currently, dol, frequency, growth"
+    ],
+    "gap_kinds": {
+      "d70cd6d0562b4c0d": "unprovable"
+    },
+    "verdict": "correct"
+  },
+  {
+    "id": "Q14",
+    "question": "How many U.S. households owned a pet hamster in July 2019?",
+    "category": "unknowable-source-gap",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Not available from fred/treasury/fdic/courtlistener/gdelt/kalshi/openalex/wayback/wikidata/worldbank/census.",
+    "verified_by": "not collected by any working source adapter",
+    "elapsed_s": 88.2,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "correct"
+  },
+  {
+    "id": "Q15",
+    "question": "What did the Kalshi market price for the 2032 U.S. presidential election winner close at yesterday?",
+    "category": "unknowable-market",
+    "expected_stance": "UNDETERMINED",
+    "gt": "No 2032 presidential market exists; correct output is refusal/UNDETERMINED.",
+    "verified_by": "no such market exists yet",
+    "elapsed_s": 69.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "correct"
+  },
+  {
+    "id": "Q16",
+    "question": "Did the U.S. total public debt reach $30 trillion before the unemployment rate fell to its January 2023 level?",
+    "category": "multi-hop",
+    "expected_stance": "AFFIRMS",
+    "gt": "Debt first exceeded $30T around 31 Jan 2022 ($30.01T), before Jan 2023.",
+    "verified_by": "debt_to_penny series + UNRATE series",
+    "elapsed_s": 498.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 2,
+    "sources": [
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "On what date did the U.S. total public debt first reach or exceed $30 trillion?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "What was the U.S. unemployment rate in January 2023, and on what date was it first published?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "In which month did the U.S. unemployment rate first fall to its January 2023 value after that value was published?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Comparing the dates from the two series, did the $30 trillion public debt threshold occur before the unemployment rate reached its January 2023 level?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'On what date did the U.S. total public debt first reach or e': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: daily, date, debt, exceed, first, official, penny, public; [fred] content covers 0% of the question's topical words (need 25%); missing: daily, date, debt, exceed, first, official, penny, public; [wikidata] content covers 15% of the question's topical words (need 25%); missing: daily, debt, exceed, first, official, penny, reach, records",
+      "leaf 'What was the U.S. unemployment rate in January 2023, and on ': 5 fetch(s) rejected at ingestion: [bls] content covers 7% of the question's topical words (need 25%); missing: 2023, current, date, employment, first, january, population, published; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bls, current, date, employment, first, january, population; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2023, bls, current, date, employment, first, population, published; [fred] content covers 7% of the question's topical words (need 25%); missing: 2023, bls, current, employment, first, january, population, published; [fred] content covers 7% of the question's topical words (need 25%); missing: 2023, bls, current, employment, first, january, population, published",
+      "leaf 'In which month did the U.S. unemployment rate first fall to ': 5 fetch(s) rejected at ingestion: [bls] content covers 18% of the question's topical words (need 25%); missing: 2023, after, fall, first, january, month, monthly, published; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, after, bls, data, fall, first, january, month; [fdic] content covers 6% of the question's topical words (need 25%); missing: 2023, after, bls, data, fall, first, month, monthly; [fred] content covers 6% of the question's topical words (need 25%); missing: 2023, after, bls, data, fall, first, january, month; [fred] content covers 6% of the question's topical words (need 25%); missing: 2023, after, bls, data, fall, first, january, month",
+      "leaf 'Comparing the dates from the two series, did the $30 trillio': 3 fetch(s) rejected at ingestion: [bls] content covers 21% of the question's topical words (need 25%); missing: 2023, before, chronological, comparing, comparison, dates, debt, direct; [fdic] content covers 4% of the question's topical words (need 25%); missing: 2023, before, bls, chronological, comparison, data, datasets, dates; [fred] content covers 7% of the question's topical words (need 25%); missing: 2023, before, bls, chronological, comparing, comparison, data, datasets"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q17",
+    "question": "Were there more FDIC-listed bank failures in 2023 than in 2020?",
+    "category": "multi-hop/comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "2023 = 5 failures; 2020 = 4 failures.",
+    "verified_by": "FDIC failures by FAILYR",
+    "elapsed_s": 73.5,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q18",
+    "question": "Is the average of the U.S. unemployment rates for January through June 2026 greater than 4.25 percent?",
+    "category": "arithmetic-comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "Mean = 4.283\u2026 > 4.25.",
+    "verified_by": "fredgraph.csv UNRATE + arithmetic",
+    "elapsed_s": 59.3,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q19",
+    "question": "According to Wikidata, was Albert Einstein born in Ulm, Germany?",
+    "category": "yes-checkable",
+    "expected_stance": "AFFIRMS",
+    "gt": "P19 birthplace = Q3012 = Ulm.",
+    "verified_by": "wikidata Q937 P19 \u2192 Q3012 (Ulm)",
+    "elapsed_s": 56.8,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q20",
+    "question": "Did Napoleon die before the United States Civil War began?",
+    "category": "multi-hop/temporal",
+    "expected_stance": "AFFIRMS",
+    "gt": "Napoleon died 1821-05-05, before April 1861.",
+    "verified_by": "wikidata Q517 P570 = 1821-05-05; civil war start 1861 (common knowledge anchor)",
+    "elapsed_s": 102.7,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  }
+]
