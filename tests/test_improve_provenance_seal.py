@@ -126,16 +126,14 @@ def test_sealed_session_payload_carries_engine_artifact_refs():
         def __init__(self):
             self.calls = {}
 
-        async def complete(self, task_class, messages, schema=None):
-            self.calls.setdefault(task_class, 0)
-            self.calls[task_class] += 1
+        async def complete(self, task_class, messages, schema=None, **kw):
             if task_class == "Architect":
                 return {"parsed_json": json.loads(_decompose()),
                         "model": "stub"}
             return {"parsed_json": json.loads(answer), "model": "stub"}
 
     class _Quiet:
-        async def complete(self, task_class, messages, schema=None):
+        async def complete(self, task_class, messages, schema=None, **kw):
             return {"parsed_json": {"objections": []}, "model": "stub"}
 
     tmp = Path(tempfile.mkdtemp())

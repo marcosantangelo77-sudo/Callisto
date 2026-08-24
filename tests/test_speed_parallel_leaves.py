@@ -116,9 +116,14 @@ def _fingerprint(result, ledger) -> dict:
             AGPSession.verify_seal(result.session.to_dict())
             if result.sealed and result.session else None),
         "ledger_observations": len(ledger._by_hash),
+        # Hashes whose bytes still verify as PRIMARY via the public query
+        # API — not raw _by_hash contents, which retain superseded
+        # observations for audit (a gate rejection at one URL must not
+        # erase a sibling fetch of identical bytes, improve 2026-08-24).
         "ledger_primary": sorted(
             h for h, obs in ledger._by_hash.items()
-            if any(o.primary for o in obs)),
+            if any(o.primary for o in obs)
+            and not ledger._fully_rejected(h)),
     }
     return fp
 
