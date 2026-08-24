@@ -65,29 +65,30 @@ Run: `python3 scripts/event_study_powell_btc.py`
 
 - GDELT coverage timeline for `"Jerome Powell" speech`, 709 daily points,
   2024-08-25 → 2026-08-24 (cached to `data/event_study/gdelt_timeline.json`).
-- Coverage spikes (z > +3): 2024-08-26 (z=5.4), 2025-04-17 (z=3.5),
-  2025-08-02 (z=3.2), 2025-08-23 (z=7.6), 2025-09-23 (z=3.3).
-- Proof gate: only **2024-08-26** carries a wayback capture of the Fed
-  speeches index strictly before it (capture 2024-08-24). The other four are
-  excluded fail-closed (nearest captures postdate the events). Admitted n=1.
-- FRED CBBTCUSD outcomes from that single admitted event:
+- Coverage spikes (z > +2, the loosest threshold with a usable n; z > +3
+  gives only 5 candidates): 2024-08-25 (z=2.3), 2024-09-18 (z=2.3),
+  2025-04-04 (z=2.8), 2025-07-17 (z=2.1), 2025-08-18 (z=3.1),
+  2025-09-23 (z=3.3), 2026-01-13 (z=3.0) — after 21-day collapsing.
+- Proof gate: **4 of 7 admitted**, each via a wayback capture of the Fed
+  speeches index strictly before the event date:
+  - 2024-08-25 ← capture 2024-08-24 · 2024-09-18 ← capture 2024-09-17
+  - 2025-07-17 ← capture 2025-07-13 · 2026-01-13 ← capture 2026-01-12
+  Excluded fail-closed (nearest capture postdates event): 2025-04-04,
+  2025-08-18, 2025-09-23.
+- FRED CBBTCUSD forward log-returns vs 32 regime-matched random controls:
 
-| horizon | event return |
-|---|---|
-| +1 week | −6.1% |
-| +4 weeks | +2.3% |
-| +12 weeks | +38.6% |
+| horizon | events median | events IQR | controls median | controls IQR | p (sign-flip) |
+|---|---|---|---|---|---|
+| +1 wk  | −3.6% | [−8.0%, +0.6%]   | +0.8% | [−1.8%, +3.6%]  | 0.064 |
+| +4 wks | −1.0% | [−9.1%, +1.3%]   | +2.4% | [−3.0%, +13.3%] | 0.621 |
+| +12 wks| +14.9%| [−10.3%, +37.2%] | +6.2% | [−16.0%, +23.0%]| 0.585 |
 
-- Controls could not be drawn for a one-event set under the ±21-day
-  exclusion window within a 90-day span; the sign-flip test reports
-  insufficient data rather than pretending otherwise.
-
-**Honest reading:** with n=1 there is no distribution and therefore no
-finding. This IS the product working as designed: the harness refused to
-narrate a "+38.6% after Powell spoke!" story that a chatbot would happily
-produce, because (a) one observation proves nothing, (b) Bitcoin rose over
-almost every 12-week window in that period — which is exactly what the
-regime-matched controls exist to expose once n allows drawing them.
+**Honest reading:** this happened 4 times; at +12 weeks the median was
++14.9% — but random dates in the same period median +6.2%, and the spread is
+indistinguishable from noise (p = 0.59). At no horizon is the post-event
+distribution distinguishable from random-date returns. That null IS the
+product: a chatbot would have narrated "+15% after Powell spoke!" from the
+same four data points.
 
 The GDELT DOC API rate-limits aggressively (HTTP 429 beyond roughly one
 request per 5s even when self-limited; bursts penalize for many minutes),

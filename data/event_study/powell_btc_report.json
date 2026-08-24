@@ -1,93 +1,120 @@
 {
   "events": [
     {
-      "label": "POWELL-COVERAGE-2024-08-26",
-      "event_date": "2024-08-26",
-      "w1": -0.060651078855824096,
-      "w4": 0.022569808619444128,
-      "w12": 0.3859465844992278
+      "label": "POWELL-COVERAGE-2024-08-25",
+      "date": "2024-08-25",
+      "w1": -0.11422680171278694,
+      "w4": -0.014856677259389425,
+      "w12": 0.34221825696115543
+    },
+    {
+      "label": "POWELL-COVERAGE-2024-09-18",
+      "date": "2024-09-18",
+      "w1": 0.034608040211275684,
+      "w4": 0.06817775931295071,
+      "w12": 0.46297301183574496
+    },
+    {
+      "label": "POWELL-COVERAGE-2025-07-17",
+      "date": "2025-07-17",
+      "w1": -0.0033080407557170345,
+      "w4": -0.004978265399955055,
+      "w12": -0.04366665416374971
+    },
+    {
+      "label": "POWELL-COVERAGE-2026-01-13",
+      "date": "2026-01-13",
+      "w1": -0.06852602999185597,
+      "w4": -0.31894296734075367,
+      "w12": -0.281331043091098
     }
   ],
-  "controls_count": 0,
+  "n_controls": 32,
   "report": {
     "series": "CBBTCUSD",
     "horizons": {
       "w1": {
         "events": {
-          "n": 1,
-          "median": -0.060651078855824096,
-          "q25": -0.060651078855824096,
-          "q75": -0.060651078855824096,
-          "mean": -0.060651078855824096,
-          "min": -0.060651078855824096,
-          "max": -0.060651078855824096
+          "n": 4,
+          "median": -0.0359170353737865,
+          "q25": -0.07995122292208871,
+          "q75": 0.006170979486031145,
+          "mean": -0.037863208062271066,
+          "min": -0.11422680171278694,
+          "max": 0.034608040211275684
         },
         "controls": {
-          "n": 0,
-          "median": null,
-          "q25": null,
-          "q75": null,
-          "mean": null,
-          "min": null,
-          "max": null
+          "n": 32,
+          "median": 0.008368342121337502,
+          "q25": -0.017718378732470515,
+          "q75": 0.036233954545046715,
+          "mean": 0.010214838587435732,
+          "min": -0.08150646333533829,
+          "max": 0.10081602390582704
         },
         "sign_flip": {
-          "p_value": null,
-          "reason": "insufficient data (events n=1, controls n=0)"
+          "p_value": 0.0635,
+          "delta_median": -0.044285377495124005,
+          "n_event": 4,
+          "n_control": 32
         },
-        "reading": "n=1, median -6.1%, IQR [-6.1%, -6.1%] vs controls median n/a; indistinguishable from random"
+        "reading": "n=4, median -3.6%, IQR [-8.0%, +0.6%] vs controls median +0.8%; indistinguishable from random"
       },
       "w4": {
         "events": {
-          "n": 1,
-          "median": 0.022569808619444128,
-          "q25": 0.022569808619444128,
-          "q75": 0.022569808619444128,
-          "mean": 0.022569808619444128,
-          "min": 0.022569808619444128,
-          "max": 0.022569808619444128
+          "n": 4,
+          "median": -0.00991747132967224,
+          "q25": -0.09087824977973048,
+          "q75": 0.013310740778271386,
+          "mean": -0.06765003767178686,
+          "min": -0.31894296734075367,
+          "max": 0.06817775931295071
         },
         "controls": {
-          "n": 0,
-          "median": null,
-          "q25": null,
-          "q75": null,
-          "mean": null,
-          "min": null,
-          "max": null
+          "n": 32,
+          "median": 0.02416956975006561,
+          "q25": -0.0298743866610029,
+          "q75": 0.1330702694416751,
+          "mean": 0.04823780648776117,
+          "min": -0.18210034190379942,
+          "max": 0.32988955238431783
         },
         "sign_flip": {
-          "p_value": null,
-          "reason": "insufficient data (events n=1, controls n=0)"
+          "p_value": 0.6213,
+          "delta_median": -0.03408704107973785,
+          "n_event": 4,
+          "n_control": 32
         },
-        "reading": "n=1, median +2.3%, IQR [+2.3%, +2.3%] vs controls median n/a; indistinguishable from random"
+        "reading": "n=4, median -1.0%, IQR [-9.1%, +1.3%] vs controls median +2.4%; indistinguishable from random"
       },
       "w12": {
         "events": {
-          "n": 1,
-          "median": 0.3859465844992278,
-          "q25": 0.3859465844992278,
-          "q75": 0.3859465844992278,
-          "mean": 0.3859465844992278,
-          "min": 0.3859465844992278,
-          "max": 0.3859465844992278
+          "n": 4,
+          "median": 0.14927580139870286,
+          "q25": -0.10308275139558679,
+          "q75": 0.3724069456798028,
+          "mean": 0.12004839288551317,
+          "min": -0.281331043091098,
+          "max": 0.46297301183574496
         },
         "controls": {
-          "n": 0,
-          "median": null,
-          "q25": null,
-          "q75": null,
-          "mean": null,
-          "min": null,
-          "max": null
+          "n": 32,
+          "median": 0.062307311128135895,
+          "q25": -0.159871255880722,
+          "q75": 0.2304256038505439,
+          "mean": 0.06015057369925861,
+          "min": -0.3081331416162414,
+          "max": 0.4508929568352436
         },
         "sign_flip": {
-          "p_value": null,
-          "reason": "insufficient data (events n=1, controls n=0)"
+          "p_value": 0.5845,
+          "delta_median": 0.08696849027056697,
+          "n_event": 4,
+          "n_control": 32
         },
-        "reading": "n=1, median +38.6%, IQR [+38.6%, +38.6%] vs controls median n/a; indistinguishable from random"
+        "reading": "n=4, median +14.9%, IQR [-10.3%, +37.2%] vs controls median +6.2%; indistinguishable from random"
       }
     },
-    "n_events_requested": 1
+    "n_events_requested": 4
   }
 }
