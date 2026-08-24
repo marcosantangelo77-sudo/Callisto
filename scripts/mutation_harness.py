@@ -63,7 +63,7 @@ PY = sys.executable
 
 def run_tests(tests):
     cmd = [PY, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider",
-           "--no-summary"] + list(tests)
+           "-rf", "--no-header"] + list(tests)
     # start_new_session so we can kill the whole pytest process group on hang
     p = subprocess.Popen(cmd, cwd=REPO, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, text=True, start_new_session=True)
