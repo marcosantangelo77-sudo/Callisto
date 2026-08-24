@@ -1,7 +1,9 @@
 # Triage: tests/test_backtest_e2e.py — 11 long-standing failures
 
-Date: 2026-08-23. Worktree: gate (branch build/source-health at start; triage
-landed from there). Baseline at session start: **34 failures** suite-wide, of
+Date: 2026-08-23. Worktree: gate. The work landed via the autosave daemon
+commit `d646c88` on `perf/standing-speed-0823-200744` (the worktree was
+reassigned mid-session; the daemon committed my in-flight files there), pushed
+and mirrored to branch `build/backtest-triage-0823`. Baseline at session start: **34 failures** suite-wide, of
 which these 11 were the oldest unexplained red.
 
 ## TL;DR
