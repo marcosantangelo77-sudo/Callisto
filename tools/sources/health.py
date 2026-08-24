@@ -91,11 +91,22 @@ def _finish(res: ProbeResult, data: Any, count_of: Callable[[Any], int],
 # data, then validates the exact keys downstream parsing relies on.
 
 def _build(name: str):
-    """(source, adapter) for a registered source, or None if unregistered."""
+    """(source, adapter) for a registered source, or None if unregistered.
+
+    Probe keys are module names; the spec.name a source registered under
+    can differ (cftc -> 'cftc_cot', sec_fts -> 'sec_fulltext',
+    semantic_scholar -> 'semanticscholar'), so fall back to scanning.
+    """
     from tools.sources.base import RestSource
     from tools.sources.registry import get_source_registry
     reg = get_source_registry()
     entry = reg.get(name)
+    if entry is None:
+        for cand in reg.names():
+            e2 = reg.get(cand)
+            if e2 is not None and e2.spec.name == name:
+                entry = e2
+                break
     if entry is None:
         return None
     src = RestSource(entry.spec)
@@ -249,19 +260,26 @@ def _gdelt() -> ProbeResult:
                 lambda d: len(d.get("articles", [])), shape)
 
 
-@probe("sec_fts")
+@probe("sec_fulltext")
 def _sec_fts() -> ProbeResult:
-    r = ProbeResult("sec_fts")
-    src, ad = _build("sec_fts")
+    r = ProbeResult("sec_fulltext")
+    src, ad = _build("sec_fulltext")
     r.url = src.build_url("/search-index", {"q": "\"annual report\""})
     def shape(d):
-        hits = ((d.get("hits") or {}).get("hits")) or []
-        return "" if hits else "hits.hits empty"
+        hits = d.get("hits")
+        if not isinstance(hits, list):
+            return f"expected normalized hits[]; keys={sorted(d)[:10]}"
+        if hits and "cik" not in hits[0]:
+            return f"hit keys changed: {sorted(hits[0])[:12]}"
+        return ""
     out = _run(lambda: ad.search("\"annual report\"", limit=5), r,
-               lambda d: len(((d.get("hits") or {}).get("hits")) or []),
-               shape)
-    # search() normalizes into 'results'; empty normalized output with raw
-    # hits present would still be caught by the count above.
+               lambda d: len(d.get("hits", []) or []), shape)
+    # NOTE: a 200 with total>0 but zero NORMALIZED hits is exactly the
+    # silent-empty failure mode — count_of checks the normalized list, so
+    # it reports DEGRADED rather than OK.
+    if out.verdict == DEGRADED:
+        out.evidence.append("raw endpoint returned data but the adapter "
+                            "normalized it to zero hits")
     return out
 
 
@@ -368,7 +386,7 @@ def _fdic() -> ProbeResult:
                 r, count, shape)
 
 
-@probe("cftc")
+@probe("cftc_cot")
 def _cftc() -> ProbeResult:
     # Historical defect: wrong Socrata dataset id.
     from tools.sources.cftc import LEGACY_FUTURES_ONLY
@@ -402,10 +420,10 @@ def _worldbank() -> ProbeResult:
                 lambda d: len(d.get("rows", [])), shape)
 
 
-@probe("semantic_scholar")
+@probe("semanticscholar")
 def _semantic_scholar() -> ProbeResult:
-    r = ProbeResult("semantic_scholar")
-    src, ad = _build("semantic_scholar")
+    r = ProbeResult("semanticscholar")
+    src, ad = _build("semanticscholar")
     r.url = src.build_url("/paper/search",
                           {"query": "attention is all you need", "limit": 5})
     def shape(d):
