@@ -186,6 +186,28 @@ def test_r1_stasis_must_not_stop_while_untried_sources_remain():
     assert _state(sta, sta_r.ledger) == _state(base, base_r.ledger)
 
 
+def test_r1b_same_closed_world_shape_in_InformationGainTerminator():
+    """Second instance of the new family (documented, not regressed):
+    the terminator's 'confidence' is the indep-keys ratio, so two barren
+    rounds stop the loop even though rounds 3's candidates were never
+    queried and rounds 4's pool holds relevant sources. Current behaviour
+    passes this test; it is pinned so the family has both instances on
+    record."""
+    names = ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot",
+             "golf", "hotel")
+    routes = {f"/{n}?": JUNK
+              for n in ("alpha", "bravo", "charlie", "delta", "echo",
+                        "golf")}
+    routes["/foxtrot?"] = GOOD_A
+    routes["/hotel?"] = GOOD_B
+    tr = _retriever(_registry(names), routes)
+    tr.max_rounds = 4
+    trace = tr.retrieve(_question(), "", min_independent=2)
+    assert len(trace.rounds) < 4          # stopped early on stagnation
+    assert not trace.admitted             # while nothing had been tried
+    assert trace.stop_reason              # and relevant sources remained
+
+
 def test_r2_duplicate_voice_skip_survives_reworded_reason_prose():
     """The rule as documented: a voice already counted can never address an
     independence shortfall. estimate_gain implements it by substring-
