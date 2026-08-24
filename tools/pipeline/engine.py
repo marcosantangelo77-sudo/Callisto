@@ -161,7 +161,10 @@ class PipelineResult:
             "n_leaves": len(self.leaves),
             "n_fetches": len(self.fetches),
             "gap_kinds": dict(self.gap_kinds),
-            "artifacts": [r.sha256[:12] for r in self.artifact_refs],
+            # A20: full sha256 ids — a truncated 12-hex id cannot be
+            # resolved back to the stored object, so citing it vouches for
+            # nothing a human (or verifier) can check.
+            "artifacts": [r.sha256 for r in self.artifact_refs],
             "objections": [getattr(o, "text", str(o)) for o in self.objections],
         }
 

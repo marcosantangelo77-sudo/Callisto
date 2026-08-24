@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import os
 import shutil
 import tempfile
@@ -124,6 +125,9 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+
+
 @dataclass
 class ArtifactRef:
     """A reference a conclusion carries. The dict form is what a seal covers."""
@@ -155,6 +159,19 @@ class ArtifactRef:
             data_refs=list(d.get("data_refs", [])),
             meta=dict(d.get("meta", {})),
         )
+
+    def __post_init__(self) -> None:
+        # A18: a ref id IS a sha256 digest; anything else (path fragments,
+        # truncated ids, junk) must never become a citable reference. This
+        # also closes from_dict(), which previously accepted any string.
+        if not _HEX64.fullmatch(self.sha256):
+            raise ValueError(
+                f"sha256 must be 64 hex chars, got {self.sha256!r}"
+            )
+        if self.code_sha256 and not _HEX64.fullmatch(self.code_sha256):
+            raise ValueError(
+                f"code_sha256 must be 64 hex chars or empty, got {self.code_sha256!r}"
+            )
 
 
 class ArtifactStore:
@@ -239,9 +256,17 @@ class ArtifactStore:
     # -- integrity --------------------------------------------------------
 
     def verify_artifacts(self, refs: list[ArtifactRef]) -> dict:
-        """Re-hash every referenced artifact. Used before sealing and after
-        any restore; a single mismatch means tampering or corruption."""
-        report = {"verified": 0, "missing": [], "corrupt": []}
+        """Re-hash every referenced artifact AND check the ref's declared
+        metadata against the store's index. Used before sealing and after
+        any restore; a single mismatch means tampering or corruption.
+
+        A18: re-hashing bytes alone vouches for bytes only. A seal covers
+        the CLAIM too — "this artifact is a png produced by code X". A ref
+        whose declared kind or code_sha256 contradicts the stored index
+        entry fails verification even when its bytes are intact.
+        """
+        report = {"verified": 0, "missing": [], "corrupt": [], "lying": []}
+        idx = self._load_index()
         for ref in refs:
             if not self.exists(ref.sha256):
                 report["missing"].append(ref.sha256)
@@ -249,9 +274,20 @@ class ArtifactStore:
             actual = sha256_bytes(self.get_bytes(ref.sha256))
             if actual != ref.sha256:
                 report["corrupt"].append(ref.sha256)
-            else:
-                report["verified"] += 1
-        report["ok"] = not report["missing"] and not report["corrupt"]
+                continue
+            # Bind declared metadata to what the store recorded at put time.
+            entry = idx.get(ref.sha256) or {}
+            if ref.kind and entry.get("kind") and ref.kind != entry["kind"]:
+                report["lying"].append(ref.sha256)
+                continue
+            if ref.code_sha256 and entry.get("code_sha256") \
+                    and ref.code_sha256 != entry["code_sha256"]:
+                report["lying"].append(ref.sha256)
+                continue
+            report["verified"] += 1
+        report["ok"] = not (
+            report["missing"] or report["corrupt"] or report["lying"]
+        )
         return report
 
     def gc(self, *, allow_rebuild: bool = False) -> list[str]:
@@ -293,12 +329,37 @@ class ArtifactStore:
     # -- persistence of refs ----------------------------------------------
 
     def export_ref(self, ref: ArtifactRef, dest_dir: Path) -> Path:
-        """Copy an artifact to a human-accessible path (delivery surface)."""
-        dest_dir = Path(dest_dir)
+        """Copy an artifact to a human-accessible path (delivery surface).
+
+        A4/A17: ref.name is attacker/model-writable text, and this is a WRITE
+        surface. Two rules, fail-closed:
+          - the resolved destination must stay inside dest_dir (no `..`, no
+            absolute names, no symlink escape) — anything else is arbitrary
+            file write;
+          - never overwrite: an existing file at the destination is a
+            collision with something we did not write, so refuse rather
+            than silently replace it.
+        """
+        import re as _re
+
+        dest_dir = Path(dest_dir).resolve()
         dest_dir.mkdir(parents=True, exist_ok=True)
         suffix = f".{ref.kind}" if ref.kind else ""
         base = ref.name or ref.sha256[:12]
+        # Allow only plain path-safe characters; reject separators, dots
+        # that form traversal segments, and control characters outright.
+        if not _re.fullmatch(r"[A-Za-z0-9._][A-Za-z0-9._ -]{0,128}", base) \
+                or ".." in base or base.startswith("."):
+            raise ValueError(
+                f"refusing unsafe artifact name for export: {base!r}"
+            )
         dest = dest_dir / f"{base}{suffix}"
+        if not dest.resolve().parent == dest_dir:
+            raise ValueError(f"export escaped dest_dir: {dest}")
+        if dest.exists() or dest.is_symlink():
+            raise FileExistsError(
+                f"refusing to overwrite existing file at delivery path: {dest}"
+            )
         shutil.copyfile(self.get_path(ref.sha256), dest)
         return dest
 
@@ -344,20 +405,22 @@ class ArtifactStore:
         with _index_lock(self.root):
             idx = self._load_index()
             existing = idx.get(ref.sha256, {})
+            if existing:
+                # A3/A9: the bytes are immutable and so are the claims about
+                # them. First-seen provenance wins in EVERY field; a later
+                # put of identical bytes contributes nothing but a timestamp
+                # check. This closes both directions of the takeover:
+                #  - A3: later put overwriting non-empty data_refs / meta
+                #  - A9: later put with a code argument adopting an entry
+                #    that was stored (or index-rebuilt) without provenance —
+                #    empty stays empty; absence is not an invitation.
+                idx[ref.sha256] = dict(existing)
+                self._write_index(idx)
+                return
             merged = ref.to_dict()
-            merged["created_at"] = existing.get("created_at") or time.strftime(
+            merged["created_at"] = time.strftime(
                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
             )
-            # First-seen provenance wins: an artifact's origin does not change
-            # because someone later re-put identical bytes.
-            if existing:
-                for key in ("code_sha256", "name"):
-                    if not (existing.get(key) or ""):
-                        continue
-                    merged[key] = existing[key]
-                if existing.get("data_refs") and not merged["data_refs"]:
-                    merged["data_refs"] = existing["data_refs"]
-                merged["created_at"] = existing.get("created_at")
             idx[ref.sha256] = merged
             self._write_index(idx)
 
@@ -391,13 +454,35 @@ class ArtifactStore:
 
 
 def _sniff_kind(data: bytes) -> str:
+    """A12: kind from magic-prefix + structural checks, not substrings.
+
+    A zip is not an xlsx (xlsx requires [Content_Types].xml); `<svg` inside
+    HTML does not make the bytes SVG (an SVG document STARTS with the svg
+    tag after optional whitespace/XML declaration). Misclassification feeds
+    delivery suffixes and downstream interpretation, so ambiguity resolves
+    to the more conservative kind."""
     if data.startswith(b"\x89PNG"):
         return "png"
     if data.lstrip()[:1] == b"{" and data.rstrip().endswith(b"}"):
         return "json"
     if data.startswith(b"PK\x03\x04"):
-        return "xlsx"
-    if b"<svg" in data[:512]:
+        # xlsx IS a zip; a bare zip that lacks the OOXML content-types part
+        # must not be labelled xlsx.
+        try:
+            import io
+            import zipfile
+
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                names = set(zf.namelist())
+            if "[Content_Types].xml" in names:
+                return "xlsx"
+        except Exception:
+            pass
+        return "txt"
+    head = data[:256].lstrip()
+    if head.startswith(b"<?xml") and b"<svg" in data[:512]:
+        return "svg"
+    if head.startswith(b"<svg") or head.startswith(b"<!DOCTYPE svg"):
         return "svg"
     return "txt"
 
