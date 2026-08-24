@@ -213,6 +213,41 @@ class TestProvenancePersistsRoundTrip(unittest.TestCase):
         ).fetchone()
         self.assertEqual(stored[0], "INFERRED")
 
+    def test_write_coordinator_path_also_persists_class(self):
+        """Production runs a single-writer coordinator; the upsert SQL on that
+        path carries the provenance columns too."""
+
+        class _FakeCoord:
+            def __init__(self):
+                self.last_sql = None
+                self.last_params = None
+
+            async def execute(self, sql, params):
+                self.last_sql = sql
+                self.last_params = params
+
+        import tools.hermes_memory as hmod
+
+        async def run():
+            hm = self._hm()
+            coord = _FakeCoord()
+            orig = hmod.get_writer_if_running if hasattr(hmod, "get_writer_if_running") else None
+            import tools.db_writer as dw
+            saved = dw.get_writer_if_running
+            dw.get_writer_if_running = lambda _p: coord
+            try:
+                hm._db_initialized = True  # tables exist in this fixture
+                await hm.record_learning("coord_key", "value", confidence=0.7)
+            finally:
+                dw.get_writer_if_running = saved
+            return coord
+
+        coord = asyncio_run(run())
+        self.assertIsNotNone(coord.last_sql)
+        self.assertIn("source_class", coord.last_sql)
+        self.assertIn("provenance_seal", coord.last_sql)
+        self.assertEqual(coord.last_params[5], "INFERRED")
+
 
 class TestWikiLearningAdmission(unittest.TestCase):
     """Fix D: the wiki compiles learnings whose CURRENT standing clears the
