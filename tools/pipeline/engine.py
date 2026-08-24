@@ -258,7 +258,6 @@ class ResearchPipeline:
                  registry=None,
                  descendant_resolutions: Optional[list] = None,
                  checkpointer: Optional[ckpt.FileCheckpointer] = None,
-                 checkpointer: Optional[ckpt.FileCheckpointer] = None,
                  crossrun_store=None,
                  max_concurrent_leaves: int = 8,
                  max_concurrent_fetches: int = 8):

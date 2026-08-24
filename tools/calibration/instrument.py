@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 """Instrument one pipeline run end to end and attribute every point.
 
 The engine's chain (tools/pipeline/engine.py, run()) is, in order:
@@ -408,39 +407,20 @@ class InstrumentedRun:
             if self.parent_trace else None,
             "mechanism_points_removed": self.attribution_table(),
         }
-=======
-"""Instrumentation: capture the RAW model estimate before it is clamped.
 
-Finding #1 of the underconfidence investigation: engine._answer_leaf reads
-`proposed_confidence` from the model's parsed proposal (tools/pipeline/
-engine.py:379), immediately clamps it, and DISCARDS the raw value — the one
-number calibration needs to be scored on does not survive the run. The
-smoke5 batch therefore cannot be rescored on estimates; only reconstructed.
 
-This module recovers the number WITHOUT editing tools/pipeline/ or
-agp/ (owned concurrently by other instances): wrap_model(model) returns a
-proxy whose complete() sniffs `proposed_confidence` out of each response —
-the exact same parse the engine runs, applied to the same response object —
-and appends it to a caller-supplied log. Stock behaviour is otherwise
-untouched; unwrapping restores byte-identical behaviour.
-
-Usage:
-    from tools.calibration.instrument import wrap_model
-    raw_log: list[dict] = []
-    model = wrap_model(HermesCliModel(...), raw_log)
-    researcher = PipelineResearcher(model=model, ...)
-"""
-from __future__ import annotations
-
+# ── Raw-estimate capture (ported from build/dd-decomposition-diversity) ───
+#
+# The smoke5 batch could not be rescored on estimates because engine._answer_leaf
+# clamps `proposed_confidence` and DISCARDS the raw value. wrap_model fixes that
+# for every FUTURE run: a proxy around the model sniffs the raw estimate out of
+# each response — the same parse the engine runs, on the same response object —
+# and appends it to a caller-supplied log. Measurement must never break a run,
+# so any parse failure is swallowed; unwrapping restores stock behaviour.
 
 def _sniff(resp, raw_log: list) -> None:
-    """Extract proposed_confidence from a model response, if present.
-
-    Uses tools.pipeline.model.parse_model_json — the SAME parser the engine
-    uses — so what we record is exactly what the engine saw.
-    """
+    """Extract proposed_confidence from a model response, if present."""
     try:
-        from tools.pipeline.model import parse_model_json
         proposal = parse_model_json(resp if isinstance(resp, dict) else {})
         if proposal and "proposed_confidence" in proposal:
             raw_log.append({"raw_estimate":
@@ -461,4 +441,3 @@ def wrap_model(model, raw_log: list):
     inst = _Instrumented.__new__(_Instrumented)
     inst.__dict__.update(model.__dict__)
     return inst
->>>>>>> origin/build/dd-decomposition-diversity
