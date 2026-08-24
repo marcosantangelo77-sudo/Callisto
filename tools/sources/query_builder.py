@@ -475,11 +475,17 @@ def _plan_fred(question: str) -> PlanResult:
     core = core_query(question)
     if "series_id" in resolved:
         sid = resolved["series_id"]
-        kw: dict = {"series_id": sid, "limit": 120}
+        kw: dict = {"series_id": sid, "limit": 120,
+                    "sort_order": "desc"}
         yrs = _years_in(question)
         if yrs:
             # window from the question: Jan 1 of the earliest named year;
             # cap at Dec 31 of the latest only when it is in the past.
+            # With sort_order=desc (most recent first) a limit cut can no
+            # longer silently drop the RECENT end of the window: live run
+            # 2026-08-24, two leaves asked for UNRATE over overlapping
+            # windows; the ascending default + limit=120 truncated leaf 3's
+            # body so it saw no 2026 values at all while leaf 2 saw them all.
             kw["start"] = f"{min(yrs)}-01-01"
             latest = max(yrs)
             if latest < datetime.date.today().year:
