@@ -39,6 +39,8 @@ from tools.resolvers.betting import BettingOutcomeResolver
 from tools.resolvers.generic import (
     GenericPredictionResolver,
     InMemoryOutcomeResolver,
+    PredictionJournal,
+    PredictionJournalError,
     SqlitePredictionResolver,
 )
 
@@ -50,6 +52,8 @@ __all__ = [
     "GenericPredictionResolver",
     "InMemoryOutcomeResolver",
     "SqlitePredictionResolver",
+    "PredictionJournal",
+    "PredictionJournalError",
     "STAGE_SEMANTICS",
     "BETTING_OUTCOME_MAP",
     "OUTCOME_POSITIVE",
