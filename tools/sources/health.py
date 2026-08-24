@@ -390,8 +390,8 @@ def _fdic() -> ProbeResult:
 def _cftc() -> ProbeResult:
     # Historical defect: wrong Socrata dataset id.
     from tools.sources.cftc import LEGACY_FUTURES_ONLY
-    r = ProbeResult("cftc")
-    src, ad = _build("cftc")
+    r = ProbeResult("cftc_cot")
+    src, ad = _build("cftc_cot")
     where = "cftc_contract_market_code='088691'"
     r.url = src.build_url(f"/{LEGACY_FUTURES_ONLY}.json",
                           {"$where": where, "$limit": 5})
