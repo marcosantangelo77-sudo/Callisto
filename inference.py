@@ -1670,7 +1670,9 @@ def _retry_after_seconds(response: httpx.Response) -> float:
         return _429_DEFAULT_BACKOFF_S
     if val < 0:
         return _429_DEFAULT_BACKOFF_S
-    return min(val, _429_MAX_TOTAL_WAIT_S)
+    # SPEED run 9: clamp at the patience ceiling, not the old 10s cap —
+    # Portal capacity 429s carry Retry-After: 30 and are worth waiting out.
+    return min(val, _429_PATIENCE_S)
 
 
 def get_router() -> ProviderRouter:

@@ -89,8 +89,11 @@ def test_429_exhaustion_propagates_to_failover():
 
 
 def test_retry_after_capped_and_defaulted():
+    # SPEED run 9: the cap moved from _429_MAX_TOTAL_WAIT_S (10) to
+    # _429_PATIENCE_S (35) — Portal's real Retry-After is 30 and must be
+    # honoured rather than triggering failover. See test_speed_429_patience.py.
     assert inference._retry_after_seconds(
-        _ErrResp(429, "120")) == inference._429_MAX_TOTAL_WAIT_S
+        _ErrResp(429, "120")) == inference._429_PATIENCE_S
     assert inference._retry_after_seconds(
         _ErrResp(429)) == inference._429_DEFAULT_BACKOFF_S
     assert inference._retry_after_seconds(
