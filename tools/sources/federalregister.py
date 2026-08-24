@@ -40,8 +40,18 @@ class FederalRegisterAdapter:
     def __init__(self, source: RestSource):
         self.source = source
 
-    FIELDS = ("title,type,abstract,action,published_at,effective_on,"
-              "docket_ids,citation,document_number,html_url,agencies")
+    # tuple, not a comma-joined string: build_url() urlencodes with
+    # doseq=True so each field becomes its own repeated fields[] param.
+    # The FR API 400s on a single comma-joined fields[] value (the defect
+    # documented in the Task-61 health run and never fixed until now).
+    # Also 2026-08: the API renamed 'published_at' -> 'publication_date'
+    # ("field 'published_at' not valid", live-verified); keep our normalized
+    # key name via _FIELD_RENAME below.
+    FIELDS = ("title", "type", "abstract", "action", "publication_date",
+              "effective_on", "docket_ids", "citation", "document_number",
+              "html_url", "agencies")
+    # API field name -> key we expose (old adapter contract preserved)
+    _FIELD_RENAME = {"publication_date": "published_at"}
 
     def search(self, conditions: str = "", query_term: str = "",
                order: str = "newest", limit: int = 20,
@@ -58,10 +68,22 @@ class FederalRegisterAdapter:
             params["conditions"] = query_term
         params.update(extra_params or {})
         url = self.source.build_url("/documents.json", params)
-        return self.source.get_json(url)[0]
+        return self._rename(self.source.get_json(url)[0])
 
     def document(self, document_number: str) -> dict:
         url = self.source.build_url(
             f"/documents/{document_number}.json",
             {"fields[]": self.FIELDS})
-        return self.source.get_json(url)[0]
+        return self._rename(self.source.get_json(url)[0])
+
+    @classmethod
+    def _rename(cls, payload: dict) -> dict:
+        """Map renamed API fields back to the keys this adapter always
+        exposed (publication_date -> published_at)."""
+        docs = payload.get("documents")
+        if isinstance(docs, list):
+            for d in docs:
+                for api_name, our_name in cls._FIELD_RENAME.items():
+                    if api_name in d:
+                        d[our_name] = d.pop(api_name)
+        return payload

@@ -167,6 +167,16 @@ class RestSource:
                 self._ssl_ctx = ssl.create_default_context(cafile=certifi.where())
             except ImportError:
                 self._ssl_ctx = ssl.create_default_context()
+            # ClinicalTrials.gov's edge (istio-envoy + WAF) 403s the default
+            # OpenSSL ClientHello: with X25519 first in the groups list every
+            # request gets a bare "403 Forbidden" HTML page while the same
+            # URL+headers via curl (P-256 only) returns 200. Pinning one
+            # NIST curve matches the curl fingerprint and clears it
+            # (verified live 2026-08-23). Servers we hit all support P-256.
+            try:
+                self._ssl_ctx.set_ecdh_curve("prime256v1")
+            except (ValueError, AttributeError):  # pragma: no cover
+                pass
 
     # ── headers ──────────────────────────────────────────────────────────
 
@@ -322,7 +332,10 @@ class RestSource:
     def build_url(self, path: str = "", params: Optional[dict] = None) -> str:
         url = self.spec.base_url.rstrip("/") + "/" + path.lstrip("/")
         if params:
-            url += "?" + urllib.parse.urlencode(params)
+            # doseq: repeated keys for list values (e.g. fields[]=a,
+            # fields[]=b) — the Federal Register API 400s on comma-joined
+            # field lists.
+            url += "?" + urllib.parse.urlencode(params, doseq=True)
         return url
 
 

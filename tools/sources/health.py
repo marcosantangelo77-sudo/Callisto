@@ -91,13 +91,26 @@ def _finish(res: ProbeResult, data: Any, count_of: Callable[[Any], int],
 # data, then validates the exact keys downstream parsing relies on.
 
 def _build(name: str):
-    """(source, adapter) for a registered source, or None if unregistered."""
+    """(source, adapter) for a registered source.
+
+    Probes may pass either a module filename ('sec_fts') or the registry
+    spec name ('sec_fulltext'); both resolve. An unknown name raises
+    instead of returning None — an unpack of None once masked three dead
+    probes as one mysterious TypeError.
+    """
     from tools.sources.base import RestSource
     from tools.sources.registry import get_source_registry
     reg = get_source_registry()
     entry = reg.get(name)
     if entry is None:
-        return None
+        # tolerate module-filename aliases for registry spec names
+        for cand in reg.names():
+            if cand.replace("_", "") == name.replace("_", ""):
+                entry = reg.get(cand)
+                break
+    if entry is None:
+        raise KeyError(f"source '{name}' is not registered "
+                       f"(registered: {', '.join(reg.names())})")
     src = RestSource(entry.spec)
     return src, entry.make_adapter(src)
 
