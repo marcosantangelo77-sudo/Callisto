@@ -16,9 +16,18 @@ state & metro personal income.
 Cannot answer: monthly sub-NIPA firm data, forecasts (BEA publishes
 estimates + revisions, not projections), real-time intraday anything;
 revisions mean the latest vintage is NOT what was known historically.
-"""
+    LIVE PROOF (2026-08-24): the root key is 'BEAAPI' (singular). Older
+    code parsed 'BEAAPIs' — a fixture-shaped phantom that made every real
+    response read as zero rows. Also: BEA returns HTTP 200 with an Error
+    object inside Results (e.g. APIErrorCode 4 'This UserId is not
+    active'); we raise on it rather than silently returning an empty
+    result, because a 200-with-zero-results is a failure mode this repo
+    has been burned by before (FDIC filters=/search=, ClinicalTrials).
+    """
 
 from __future__ import annotations
+
+import re
 
 from tools.sources.base import RestSource, SourceError, SourceSpec
 
