@@ -744,7 +744,7 @@ def timing_value(
 
     # Decision
     ev_diff = wait_ev - bet_now_ev
-    if bet_now_ev <= 1:
+    if bet_now_ev <= 0:
         recommendation = "NO_BET"
         reasoning = "Current edge is zero or negative. No bet at any timing."
     elif ev_diff > wait_uncertainty * 0.5:
@@ -838,7 +838,7 @@ def calculate_units(
     # separate variance_estimate).  Here we apply confidence directly.
     # For a quick sizing call, use the tier multiplier on fractional Kelly.
     tier = _confidence_tier_from_score(confidence)
-    tier_mult = AGP_TIER_MULTIPLIERS.get(tier, 0.0)
+    tier_mult = AGP_TIER_MULTIPLIERS.get(tier, 0.01)
 
     # Compute base Kelly (needs odds — estimate from edge)
     # To avoid requiring odds as a separate param, we back-calculate
