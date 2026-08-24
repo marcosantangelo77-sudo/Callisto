@@ -1,6 +1,6 @@
 {
   "artifacts": [],
-  "conclusion": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [CORROBORATED 0.80] leaf 0: what does the evidence say about apple earnings expectations and analyst consensus: the evidence supports the claim",
+  "conclusion": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [CORROBORATED 0.80] leaf 0: what does the evidence say about apple earnings expectations and analyst consensus: the evidence supports the claim\n\n[evidence age at seal: oldest 0s, newest 0s, median 0s across 1 timestamped fetches]",
   "confidence_score": 0.55,
   "confidence_tier": "PROBABLE",
   "evidence": [
