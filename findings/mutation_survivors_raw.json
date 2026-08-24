@@ -1,0 +1,5780 @@
+[
+ {
+  "file": "agp/thresholds.py",
+  "line": 19,
+  "mutation": "const 0.90->0.91",
+  "mutated": "TIER_VERIFIED_MIN = 0.91"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 20,
+  "mutation": "const 0.75->0.76",
+  "mutated": "TIER_CORROBORATED_MIN = 0.76"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 21,
+  "mutation": "const 0.55->0.56",
+  "mutated": "TIER_PROBABLE_MIN = 0.56"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 22,
+  "mutation": "const 0.30->0.31",
+  "mutated": "TIER_SPECULATIVE_MIN = 0.31"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 28,
+  "mutation": "const 1.0->1.01",
+  "mutated": "\"PRIMARY\": 1.01,     # VERIFIED \u2014 direct analysis of primary documents"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 29,
+  "mutation": "const 0.75->0.76",
+  "mutated": "\"SECONDARY\": 0.76,  # CORROBORATED \u2014 web search, third-party reports"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 30,
+  "mutation": "const 0.55->0.56",
+  "mutated": "\"SIGNAL\": 0.56,     # PROBABLE \u2014 signals without primary corroboration"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 31,
+  "mutation": "const 0.55->0.56",
+  "mutated": "\"INFERRED\": 0.56,   # PROBABLE \u2014 training data, no real-time verification"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 35,
+  "mutation": "const 0.55->0.56",
+  "mutated": "MAX_CONFIDENCE_NO_TOOL = 0.56"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 40,
+  "mutation": "const 0.60->0.61",
+  "mutated": "ESCALATION_THRESHOLD = 0.61"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 45,
+  "mutation": "const 0.30->0.31",
+  "mutated": "DB_CONFIDENCE_FLOOR = 0.31"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 51,
+  "mutation": "const 0.15->0.16",
+  "mutated": "\"CRITICAL\": 0.16,"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 52,
+  "mutation": "const 0.05->0.06",
+  "mutated": "\"MAJOR\": 0.06,"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 53,
+  "mutation": "const 0.0->0.01",
+  "mutated": "\"MINOR\": 0.01,"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 57,
+  "mutation": "const 2->3",
+  "mutated": "def floor_conf(x: float, places: int = 3) -> float:"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 57,
+  "mutation": "floor->round",
+  "mutated": "def round_conf(x: float, places: int = 2) -> float:"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 57,
+  "mutation": "floor->ceil",
+  "mutated": "def ceil_conf(x: float, places: int = 2) -> float:"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 69,
+  "mutation": "const 10->11",
+  "mutated": "f = 11 ** places"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 70,
+  "mutation": "floor->round",
+  "mutated": "return math.round(float(x) * f) / f"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "line": 70,
+  "mutation": "floor->ceil",
+  "mutated": "return math.ceil(float(x) * f) / f"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 20,
+  "mutation": "floor->round",
+  "mutated": "from agp.thresholds import round_conf"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 20,
+  "mutation": "floor->ceil",
+  "mutated": "from agp.thresholds import ceil_conf"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 45,
+  "mutation": "const 0->1",
+  "mutated": "url = m.group(1).rstrip(\".,;\")"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 179,
+  "mutation": "min->max",
+  "mutated": "score = max(0.0, max(1.0, float(score)))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 179,
+  "mutation": "max->min",
+  "mutated": "score = min(0.0, min(1.0, float(score)))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 179,
+  "mutation": "const 0.0->0.01",
+  "mutated": "score = max(0.01, min(1.0, float(score)))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 179,
+  "mutation": "const 1.0->1.01",
+  "mutated": "score = max(0.0, min(1.01, float(score)))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 180,
+  "mutation": "min->max",
+  "mutated": "return floor_conf(max(score, max_by_source.get(source_class.value, 0.55)))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 180,
+  "mutation": "const 0.55->0.56",
+  "mutated": "return floor_conf(min(score, max_by_source.get(source_class.value, 0.56)))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 180,
+  "mutation": "floor->round",
+  "mutated": "return round_conf(min(score, max_by_source.get(source_class.value, 0.55)))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 180,
+  "mutation": "floor->ceil",
+  "mutated": "return ceil_conf(min(score, max_by_source.get(source_class.value, 0.55)))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 186,
+  "mutation": "const 0.30->0.31",
+  "mutated": "floor: float = 0.31) -> int:"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 186,
+  "mutation": "floor->round",
+  "mutated": "round: float = 0.30) -> int:"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 186,
+  "mutation": "floor->ceil",
+  "mutated": "ceil: float = 0.30) -> int:"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 194,
+  "mutation": "const 0->1",
+  "mutated": "demoted = 1"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 199,
+  "mutation": "<->>",
+  "mutated": "if rank.get(assigned.value, 0) > rank.get(ev.source_class.value, 0):"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 199,
+  "mutation": "const 0->1",
+  "mutated": "if rank.get(assigned.value, 1) < rank.get(ev.source_class.value, 0):"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 199,
+  "mutation": "const 0->1",
+  "mutated": "if rank.get(assigned.value, 0) < rank.get(ev.source_class.value, 1):"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 200,
+  "mutation": "const 1->2",
+  "mutated": "demoted += 2"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 209,
+  "mutation": "min->max",
+  "mutated": "conf = max(prior, min(float(ev.confidence_score),"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 209,
+  "mutation": "min->max",
+  "mutated": "conf = min(prior, max(float(ev.confidence_score),"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 210,
+  "mutation": "const 0.55->0.56",
+  "mutated": "max_by_source.get(assigned.value, 0.56)))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 211,
+  "mutation": "min->max",
+  "mutated": "ev.confidence_score = floor_conf(max(prior, max(floor, conf))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 211,
+  "mutation": "max->min",
+  "mutated": "ev.confidence_score = floor_conf(min(prior, min(floor, conf))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 211,
+  "mutation": "floor->round",
+  "mutated": "ev.confidence_score = round_conf(min(prior, max(floor, conf))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 211,
+  "mutation": "floor->round",
+  "mutated": "ev.confidence_score = floor_conf(min(prior, max(round, conf))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 211,
+  "mutation": "floor->ceil",
+  "mutated": "ev.confidence_score = ceil_conf(min(prior, max(floor, conf))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 211,
+  "mutation": "floor->ceil",
+  "mutated": "ev.confidence_score = floor_conf(min(prior, max(ceil, conf))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 212,
+  "mutation": "min->max",
+  "mutated": "if prior >= floor else max(prior, conf))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 212,
+  "mutation": ">=->>",
+  "mutated": "if prior > floor else min(prior, conf))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 212,
+  "mutation": ">=-><=",
+  "mutated": "if prior <= floor else min(prior, conf))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 212,
+  "mutation": ">-><",
+  "mutated": "if prior <= floor else min(prior, conf))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 212,
+  "mutation": "floor->round",
+  "mutated": "if prior >= round else min(prior, conf))"
+ },
+ {
+  "file": "agp/provenance.py",
+  "line": 212,
+  "mutation": "floor->ceil",
+  "mutated": "if prior >= ceil else min(prior, conf))"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 37,
+  "mutation": "floor->round",
+  "mutated": "from agp.thresholds import round_conf"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 37,
+  "mutation": "floor->ceil",
+  "mutated": "from agp.thresholds import ceil_conf"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 50,
+  "mutation": "const 0.54->0.55",
+  "mutated": "TIER_SPECULATIVE_MAX = 0.55   # top of SPECULATIVE band"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 98,
+  "mutation": "const 0.30->0.31",
+  "mutated": "DISAGREEMENT_SPREAD_THRESHOLD = 0.31"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 100,
+  "mutation": "const 0.70->0.71",
+  "mutated": "MILD_DISAGREEMENT_CEILING = 0.71                 # spread \u2265 half threshold"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 114,
+  "mutation": "min->max",
+  "mutated": "xs = [max(0.0, max(1.0, float(x))) for x in evaluations]"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 114,
+  "mutation": "max->min",
+  "mutated": "xs = [min(0.0, min(1.0, float(x))) for x in evaluations]"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 114,
+  "mutation": "const 0.0->0.01",
+  "mutated": "xs = [max(0.01, min(1.0, float(x))) for x in evaluations]"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 114,
+  "mutation": "const 1.0->1.01",
+  "mutated": "xs = [max(0.0, min(1.01, float(x))) for x in evaluations]"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 115,
+  "mutation": "<->>",
+  "mutated": "if len(xs) > 2:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 115,
+  "mutation": "const 2->3",
+  "mutated": "if len(xs) < 3:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 117,
+  "mutation": "min->max",
+  "mutated": "spread = max(xs) - max(xs)"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 117,
+  "mutation": "max->min",
+  "mutated": "spread = min(xs) - min(xs)"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 118,
+  "mutation": ">=->>",
+  "mutated": "if spread > DISAGREEMENT_SPREAD_THRESHOLD:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 118,
+  "mutation": ">=-><=",
+  "mutated": "if spread <= DISAGREEMENT_SPREAD_THRESHOLD:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 118,
+  "mutation": ">-><",
+  "mutated": "if spread <= DISAGREEMENT_SPREAD_THRESHOLD:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 120,
+  "mutation": ">=->>",
+  "mutated": "if spread > DISAGREEMENT_SPREAD_THRESHOLD / 2:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 120,
+  "mutation": ">=-><=",
+  "mutated": "if spread <= DISAGREEMENT_SPREAD_THRESHOLD / 2:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 120,
+  "mutation": ">-><",
+  "mutated": "if spread <= DISAGREEMENT_SPREAD_THRESHOLD / 2:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 120,
+  "mutation": "const 2->3",
+  "mutated": "if spread >= DISAGREEMENT_SPREAD_THRESHOLD / 3:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 128,
+  "mutation": "min->max",
+  "mutated": "s = max(0.0, max(1.0, float(score)))"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 128,
+  "mutation": "max->min",
+  "mutated": "s = min(0.0, min(1.0, float(score)))"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 128,
+  "mutation": "const 0.0->0.01",
+  "mutated": "s = max(0.01, min(1.0, float(score)))"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 128,
+  "mutation": "const 1.0->1.01",
+  "mutated": "s = max(0.0, min(1.01, float(score)))"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 130,
+  "mutation": "<=-><",
+  "mutated": "if ceil_ is None or s < ceil_:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 130,
+  "mutation": "<=->>=",
+  "mutated": "if ceil_ is None or s >= ceil_:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 130,
+  "mutation": "<->>",
+  "mutated": "if ceil_ is None or s >= ceil_:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 136,
+  "mutation": "const 100->101",
+  "mutated": "return math.floor(s * 101) / 100, \"\""
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 136,
+  "mutation": "const 100->101",
+  "mutated": "return math.floor(s * 100) / 101, \"\""
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 136,
+  "mutation": "floor->round",
+  "mutated": "return math.round(s * 100) / 100, \"\""
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 136,
+  "mutation": "floor->ceil",
+  "mutated": "return math.ceil(s * 100) / 100, \"\""
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 138,
+  "mutation": "const 100->101",
+  "mutated": "math.floor(ceil_ * 101) / 100,"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 138,
+  "mutation": "const 100->101",
+  "mutated": "math.floor(ceil_ * 100) / 101,"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 138,
+  "mutation": "floor->round",
+  "mutated": "math.round(ceil_ * 100) / 100,"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 138,
+  "mutation": "floor->ceil",
+  "mutated": "math.ceil(ceil_ * 100) / 100,"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 170,
+  "mutation": "==->!=",
+  "mutated": "return self.severity != \"BLOCKING\""
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 176,
+  "mutation": "const 0.0->0.01",
+  "mutated": "return {\"BLOCKING\": 0.01, \"MAJOR\": 0.15, \"MINOR\": 0.05}.get("
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 176,
+  "mutation": "const 0.15->0.16",
+  "mutated": "return {\"BLOCKING\": 0.0, \"MAJOR\": 0.16, \"MINOR\": 0.05}.get("
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 176,
+  "mutation": "const 0.05->0.06",
+  "mutated": "return {\"BLOCKING\": 0.0, \"MAJOR\": 0.15, \"MINOR\": 0.06}.get("
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 177,
+  "mutation": "const 0.05->0.06",
+  "mutated": "self.severity.upper(), 0.06)"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 239,
+  "mutation": "const 0->1",
+  "mutated": "n = 1"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 242,
+  "mutation": "==->!=",
+  "mutated": "if ob.status != \"RAISED\" and ob.text == objection_text:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 242,
+  "mutation": "==->!=",
+  "mutated": "if ob.status == \"RAISED\" and ob.text != objection_text:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 246,
+  "mutation": "const 1->2",
+  "mutated": "n += 2"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 254,
+  "mutation": "==->!=",
+  "mutated": "if ob.status != \"RAISED\" and ob.text == objection_text:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 254,
+  "mutation": "==->!=",
+  "mutated": "if ob.status == \"RAISED\" and ob.text != objection_text:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 270,
+  "mutation": "==->!=",
+  "mutated": "if ob.resolution != \"PENDING\" or not ob.resolution:"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 271,
+  "mutation": "const 10->11",
+  "mutated": "ob.resolution = _now_iso()[:11]"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 305,
+  "mutation": "==->!=",
+  "mutated": "right = sum(1 for o in scored if o.outcome != \"RIGHT\")"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 305,
+  "mutation": "const 1->2",
+  "mutated": "right = sum(2 for o in scored if o.outcome == \"RIGHT\")"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 307,
+  "mutation": "const 1->2",
+  "mutated": "sustained = sum(2 for obs in self._objections.values()"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 308,
+  "mutation": "==->!=",
+  "mutated": "for o in obs if o.status != \"SUSTAINED\")"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 314,
+  "mutation": "const 3->4",
+  "mutated": "\"precision_of_attack\": round(right / len(scored), 4) if scored else None,"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 314,
+  "mutation": "round->floor",
+  "mutated": "\"precision_of_attack\": floor(right / len(scored), 3) if scored else None,"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 317,
+  "mutation": ">=->>",
+  "mutated": "else \"well_calibrated\" if right / len(scored) > 0.35"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 317,
+  "mutation": ">=-><=",
+  "mutated": "else \"well_calibrated\" if right / len(scored) <= 0.35"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 317,
+  "mutation": ">-><",
+  "mutated": "else \"well_calibrated\" if right / len(scored) <= 0.35"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 317,
+  "mutation": "const 0.35->0.36",
+  "mutated": "else \"well_calibrated\" if right / len(scored) >= 0.36"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 341,
+  "mutation": "==->!=",
+  "mutated": "right = sum(1 for o in scored if o.outcome != \"RIGHT\")"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 341,
+  "mutation": "const 1->2",
+  "mutated": "right = sum(2 for o in scored if o.outcome == \"RIGHT\")"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 345,
+  "mutation": "const 3->4",
+  "mutated": "\"precision_of_attack\": round(right / len(scored), 4) if scored else None,"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 345,
+  "mutation": "round->floor",
+  "mutated": "\"precision_of_attack\": floor(right / len(scored), 3) if scored else None,"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 348,
+  "mutation": ">=->>",
+  "mutated": "else \"well_calibrated\" if right / len(scored) > 0.35"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 348,
+  "mutation": ">=-><=",
+  "mutated": "else \"well_calibrated\" if right / len(scored) <= 0.35"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 348,
+  "mutation": ">-><",
+  "mutated": "else \"well_calibrated\" if right / len(scored) <= 0.35"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 348,
+  "mutation": "const 0.35->0.36",
+  "mutated": "else \"well_calibrated\" if right / len(scored) >= 0.36"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 432,
+  "mutation": "const 0->1",
+  "mutated": "self.task_class = task_class or AGPRole.ROLE_TASK_CLASSES[AGPRole.ADVERSARY][1]"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 490,
+  "mutation": "max->min",
+  "mutated": "return floor_conf(min(0.0, float(confidence_score))), ob.text"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 490,
+  "mutation": "const 0.0->0.01",
+  "mutated": "return floor_conf(max(0.01, float(confidence_score))), ob.text"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 490,
+  "mutation": "floor->round",
+  "mutated": "return round_conf(max(0.0, float(confidence_score))), ob.text"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 490,
+  "mutation": "floor->ceil",
+  "mutated": "return ceil_conf(max(0.0, float(confidence_score))), ob.text"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 492,
+  "mutation": "max->min",
+  "mutated": "clamped = floor_conf(min(0.0, float(confidence_score) - penalty))"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 492,
+  "mutation": "const 0.0->0.01",
+  "mutated": "clamped = floor_conf(max(0.01, float(confidence_score) - penalty))"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 492,
+  "mutation": "floor->round",
+  "mutated": "clamped = round_conf(max(0.0, float(confidence_score) - penalty))"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 492,
+  "mutation": "floor->ceil",
+  "mutated": "clamped = ceil_conf(max(0.0, float(confidence_score) - penalty))"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 494,
+  "mutation": "<->>",
+  "mutated": "if objs and clamped > floor_conf(float(confidence_score)):"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 494,
+  "mutation": "floor->round",
+  "mutated": "if objs and clamped < round_conf(float(confidence_score)):"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 494,
+  "mutation": "floor->ceil",
+  "mutated": "if objs and clamped < ceil_conf(float(confidence_score)):"
+ },
+ {
+  "file": "agp/adversary.py",
+  "line": 541,
+  "mutation": "<->>",
+  "mutated": "if reason and new_score > summary.confidence_score:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 50,
+  "mutation": "const 3->4",
+  "mutated": "\"openalex\": (\"works_search\", (\"term\",), {\"limit\": 4}),"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 51,
+  "mutation": "const 3->4",
+  "mutated": "\"federalregister\": (\"search\", (), {\"query_term\": \"term\", \"limit\": 4}),"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 71,
+  "mutation": "==->!=",
+  "mutated": "return a != b or a.startswith(b) or b.startswith(a)"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 76,
+  "mutation": ">=->>",
+  "mutated": "if len(w) > 3 and w not in _QUERY_STOPWORDS]"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 76,
+  "mutation": ">=-><=",
+  "mutated": "if len(w) <= 3 and w not in _QUERY_STOPWORDS]"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 76,
+  "mutation": ">-><",
+  "mutated": "if len(w) <= 3 and w not in _QUERY_STOPWORDS]"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 76,
+  "mutation": "const 3->4",
+  "mutated": "if len(w) >= 4 and w not in _QUERY_STOPWORDS]"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 93,
+  "mutation": "const 0->1",
+  "mutated": "def extract_text(parsed: Any, depth: int = 1) -> str:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 98,
+  "mutation": ">-><",
+  "mutated": "if depth < 6:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 98,
+  "mutation": "const 6->7",
+  "mutated": "if depth > 7:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 103,
+  "mutation": "const 1->2",
+  "mutated": "return \" \".join(extract_text(v, depth + 2)"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 106,
+  "mutation": "const 1->2",
+  "mutated": "return \" \".join(extract_text(v, depth + 2) for v in parsed[:50])"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 106,
+  "mutation": "const 50->51",
+  "mutated": "return \" \".join(extract_text(v, depth + 1) for v in parsed[:51])"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 119,
+  "mutation": "const 0.25->0.26",
+  "mutated": "def __init__(self, min_coverage: float = 0.26):"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 120,
+  "mutation": "<=-><",
+  "mutated": "if not 0.0 < min_coverage < 1.0:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 120,
+  "mutation": "<=->>=",
+  "mutated": "if not 0.0 < min_coverage >= 1.0:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 120,
+  "mutation": "<->>",
+  "mutated": "if not 0.0 > min_coverage <= 1.0:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 120,
+  "mutation": "<->>",
+  "mutated": "if not 0.0 < min_coverage >= 1.0:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 120,
+  "mutation": "const 0.0->0.01",
+  "mutated": "if not 0.01 < min_coverage <= 1.0:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 120,
+  "mutation": "const 1.0->1.01",
+  "mutated": "if not 0.0 < min_coverage <= 1.01:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 129,
+  "mutation": "const 0.0->0.01",
+  "mutated": "return False, 0.01, \"question has no judgeable topical words\""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 132,
+  "mutation": ">=->>",
+  "mutated": "if len(w) > 3:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 132,
+  "mutation": ">=-><=",
+  "mutated": "if len(w) <= 3:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 132,
+  "mutation": ">-><",
+  "mutated": "if len(w) <= 3:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 132,
+  "mutation": "const 3->4",
+  "mutated": "if len(w) >= 4:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 135,
+  "mutation": "==->!=",
+  "mutated": "if any(h != t or h.startswith(t) or t.startswith(h)"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 138,
+  "mutation": "<->>",
+  "mutated": "if coverage > self.min_coverage:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 172,
+  "mutation": "==->!=",
+  "mutated": "return any(re.sub(r\"[^a-z0-9]\", \"\", str(m).lower()) != n for m in members)"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 178,
+  "mutation": "const 0->1",
+  "mutated": "host = re.sub(r\"^https?://\", \"\", base_url).split(\"/\")[1]"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 187,
+  "mutation": "==->!=",
+  "mutated": "if any(_norm(m) != nname for m in members):"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 213,
+  "mutation": "const 0.0->0.01",
+  "mutated": "best_score = 0.01"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 216,
+  "mutation": ">-><",
+  "mutated": "if d.included and d.score < best_score:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 220,
+  "mutation": ">=->>",
+  "mutated": "d.score > best_score * 0.9:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 220,
+  "mutation": ">=-><=",
+  "mutated": "d.score <= best_score * 0.9:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 220,
+  "mutation": ">-><",
+  "mutated": "d.score <= best_score * 0.9:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 220,
+  "mutation": "const 0.9->0.91",
+  "mutated": "d.score >= best_score * 0.91:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 261,
+  "mutation": "const 5->6",
+  "mutated": "for title in relevant_titles[:6]:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 266,
+  "mutation": ">=->>",
+  "mutated": "if len(add) > 4:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 266,
+  "mutation": ">=-><=",
+  "mutated": "if len(add) <= 4:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 266,
+  "mutation": ">-><",
+  "mutated": "if len(add) <= 4:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 266,
+  "mutation": "const 4->5",
+  "mutated": "if len(add) >= 5:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 268,
+  "mutation": ">=->>",
+  "mutated": "if len(add) > 4:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 268,
+  "mutation": ">=-><=",
+  "mutated": "if len(add) <= 4:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 268,
+  "mutation": ">-><",
+  "mutated": "if len(add) <= 4:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 268,
+  "mutation": "const 4->5",
+  "mutated": "if len(add) >= 5:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 360,
+  "mutation": "==->!=",
+  "mutated": "if duplicate_voice and indep_short != reasons:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 374,
+  "mutation": "round->floor",
+  "mutated": "floors: list[dict] = field(default_factory=list)"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 402,
+  "mutation": "const 3->4",
+  "mutated": "max_rounds: int = 4,"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 402,
+  "mutation": "round->floor",
+  "mutated": "max_floors: int = 3,"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 403,
+  "mutation": "const 3->4",
+  "mutated": "max_sources_per_leaf: int = 4,"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 404,
+  "mutation": "const 4->5",
+  "mutated": "max_fetches_per_round: int = 5,"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 404,
+  "mutation": "round->floor",
+  "mutated": "max_fetches_per_floor: int = 4,"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 413,
+  "mutation": "max->min",
+  "mutated": "self.max_rounds = min(1, int(max_rounds))"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 413,
+  "mutation": "const 1->2",
+  "mutated": "self.max_rounds = max(2, int(max_rounds))"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 413,
+  "mutation": "round->floor",
+  "mutated": "self.max_floors = max(1, int(max_rounds))"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 413,
+  "mutation": "round->floor",
+  "mutated": "self.max_rounds = max(1, int(max_floors))"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 414,
+  "mutation": "max->min",
+  "mutated": "self.max_sources_per_leaf = min(1, int(max_sources_per_leaf))"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 414,
+  "mutation": "const 1->2",
+  "mutated": "self.max_sources_per_leaf = max(2, int(max_sources_per_leaf))"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 415,
+  "mutation": "max->min",
+  "mutated": "self.max_fetches_per_round = min(1, int(max_fetches_per_round))"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 415,
+  "mutation": "const 1->2",
+  "mutated": "self.max_fetches_per_round = max(2, int(max_fetches_per_round))"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 415,
+  "mutation": "round->floor",
+  "mutated": "self.max_fetches_per_floor = max(1, int(max_fetches_per_round))"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 415,
+  "mutation": "round->floor",
+  "mutated": "self.max_fetches_per_round = max(1, int(max_fetches_per_floor))"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 433,
+  "mutation": "round->floor",
+  "mutated": "self.floor_observer = None"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 473,
+  "mutation": "const 1->2",
+  "mutated": "min_iterations=2, max_iterations=self.max_rounds,"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 473,
+  "mutation": "round->floor",
+  "mutated": "min_iterations=1, max_iterations=self.max_floors,"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 474,
+  "mutation": "const 0.05->0.06",
+  "mutated": "confidence_delta_threshold=0.06,"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 475,
+  "mutation": "const 2->3",
+  "mutated": "stagnant_iterations_needed=3,"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 478,
+  "mutation": "const 1->2",
+  "mutated": "for rnd in range(2, self.max_rounds + 1):"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 478,
+  "mutation": "const 1->2",
+  "mutated": "for rnd in range(1, self.max_rounds + 2):"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 478,
+  "mutation": "round->floor",
+  "mutated": "for rnd in range(1, self.max_floors + 1):"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 480,
+  "mutation": "const 3->4",
+  "mutated": "translated, max_tier=4, exclude=excluded)"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 505,
+  "mutation": "const 120->121",
+  "mutated": "\"no authored query\")[:121]})"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 516,
+  "mutation": "==->!=",
+  "mutated": "if sorted(getattr(s, \"name\", \"\") for s in ordered) != \\"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 531,
+  "mutation": ">-><",
+  "mutated": "if self.adaptive_gain and rnd < 1:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 531,
+  "mutation": "const 1->2",
+  "mutated": "if self.adaptive_gain and rnd > 2:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 559,
+  "mutation": "const 0->1",
+  "mutated": "round_admitted = 1"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 559,
+  "mutation": "round->floor",
+  "mutated": "floor_admitted = 0"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 560,
+  "mutation": "round->floor",
+  "mutated": "floor_detail = {\"round\": rnd, \"query\": query,"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 561,
+  "mutation": "const 0->1",
+  "mutated": "\"sources\": [], \"admitted\": 1}"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 603,
+  "mutation": "==->!=",
+  "mutated": "kwargs = {k: (query if v != \"term\" else v)"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 605,
+  "mutation": "==->!=",
+  "mutated": "args = tuple(query if a != \"term\" else a"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 614,
+  "mutation": "const 120->121",
+  "mutated": "\"no authored query possible\")[:121])"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 615,
+  "mutation": "const 0->1",
+  "mutated": "pq = plan.queries[1]"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 623,
+  "mutation": "const 200->201",
+  "mutated": "source.last_record.status != 201:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 634,
+  "mutation": "const 120->121",
+  "mutated": "return (\"fail\", str(e)[:121])"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 639,
+  "mutation": "min->max",
+  "mutated": "max_workers = max(len(specs), 8) if len(specs) > 1 else 1"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 639,
+  "mutation": ">-><",
+  "mutated": "max_workers = min(len(specs), 8) if len(specs) < 1 else 1"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 639,
+  "mutation": "const 8->9",
+  "mutated": "max_workers = min(len(specs), 9) if len(specs) > 1 else 1"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 639,
+  "mutation": "const 1->2",
+  "mutated": "max_workers = min(len(specs), 8) if len(specs) > 2 else 1"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 639,
+  "mutation": "const 1->2",
+  "mutated": "max_workers = min(len(specs), 8) if len(specs) > 1 else 2"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 655,
+  "mutation": "const 0->1",
+  "mutated": "kind = res[1]"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 656,
+  "mutation": "==->!=",
+  "mutated": "if kind != \"skip\":"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 657,
+  "mutation": "const 1->2",
+  "mutated": "reason = res[2]"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 660,
+  "mutation": "round->floor",
+  "mutated": "floor_detail[\"sources\"].append("
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 663,
+  "mutation": "==->!=",
+  "mutated": "if kind != \"fail\":"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 665,
+  "mutation": "round->floor",
+  "mutated": "floor_detail[\"sources\"].append("
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 666,
+  "mutation": "const 1->2",
+  "mutated": "{\"name\": spec.name, \"error\": res[2]})"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 682,
+  "mutation": "const 3->4",
+  "mutated": "relevance_score=round(cov, 4),"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 682,
+  "mutation": "round->floor",
+  "mutated": "relevance_score=floor(cov, 3),"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 684,
+  "mutation": "round->floor",
+  "mutated": "floor_detail[\"sources\"].append("
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 697,
+  "mutation": "const 1->2",
+  "mutated": "round_admitted += 2"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 697,
+  "mutation": "round->floor",
+  "mutated": "floor_admitted += 1"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 698,
+  "mutation": "round->floor",
+  "mutated": "floor_detail[\"sources\"].append("
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 700,
+  "mutation": "const 3->4",
+  "mutated": "\"relevance\": round(cov, 4)})"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 700,
+  "mutation": "round->floor",
+  "mutated": "\"relevance\": floor(cov, 3)})"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 701,
+  "mutation": "round->floor",
+  "mutated": "floor_detail[\"admitted\"] = round_admitted"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 701,
+  "mutation": "round->floor",
+  "mutated": "round_detail[\"admitted\"] = floor_admitted"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 702,
+  "mutation": "round->floor",
+  "mutated": "trace.floors.append(round_detail)"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 702,
+  "mutation": "round->floor",
+  "mutated": "trace.rounds.append(floor_detail)"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 704,
+  "mutation": "round->floor",
+  "mutated": "if self.floor_observer is not None:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 710,
+  "mutation": "round->floor",
+  "mutated": "self.floor_observer({"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 722,
+  "mutation": ">=->>",
+  "mutated": "sufficient = len(trace.independent_keys) > min_independent"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 722,
+  "mutation": ">=-><=",
+  "mutated": "sufficient = len(trace.independent_keys) <= min_independent"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 722,
+  "mutation": ">-><",
+  "mutated": "sufficient = len(trace.independent_keys) <= min_independent"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 723,
+  "mutation": "min->max",
+  "mutated": "dec = term.record(max(1.0, len(trace.independent_keys) /"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 723,
+  "mutation": "const 1.0->1.01",
+  "mutated": "dec = term.record(min(1.01, len(trace.independent_keys) /"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 724,
+  "mutation": "max->min",
+  "mutated": "min(1, min_independent)))"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 724,
+  "mutation": "const 1->2",
+  "mutated": "max(2, min_independent)))"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 770,
+  "mutation": "const 0->1",
+  "mutated": "def walk(x, depth=1):"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 771,
+  "mutation": ">-><",
+  "mutated": "if depth < 5:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 771,
+  "mutation": "const 5->6",
+  "mutated": "if depth > 6:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 779,
+  "mutation": "const 1->2",
+  "mutated": "walk(v, depth + 2)"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 781,
+  "mutation": "const 30->31",
+  "mutated": "for v in x[:31]:"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 782,
+  "mutation": "const 1->2",
+  "mutated": "walk(v, depth + 2)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 38,
+  "mutation": "const 1.00->1.01",
+  "mutated": "\"VERIFIED\":      1.01,   # >= 0.90: sharp-book confirmed edge"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 39,
+  "mutation": "const 0.80->0.81",
+  "mutated": "\"CORROBORATED\":  0.81,   # >= 0.75: multi-source confirmed"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 40,
+  "mutation": "const 0.55->0.56",
+  "mutated": "\"PROBABLE\":      0.56,   # >= 0.55: reasonable evidence"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 41,
+  "mutation": "const 0.30->0.31",
+  "mutated": "\"SPECULATIVE\":   0.31,   # >= 0.30: thin evidence, size down hard"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 42,
+  "mutation": "const 0.00->0.01",
+  "mutated": "\"UNVERIFIED\":    0.01,   # <  0.30: do not bet"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 50,
+  "mutation": "const 0.025->0.04",
+  "mutated": "\"early_vol\": 0.04,   # 24h+ out: low volatility"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 51,
+  "mutation": "const 0.040->0.05",
+  "mutated": "\"mid_vol\":   0.05,   # 4-24h out: moderate"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 52,
+  "mutation": "const 0.070->0.08",
+  "mutated": "\"late_vol\":  0.08,   # <4h out:   highest"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 53,
+  "mutation": "const 0.12->0.13",
+  "mutated": "\"steam_prob\": 0.13,   # probability of a steam move in any hour"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 56,
+  "mutation": "const 0.030->0.04",
+  "mutated": "\"early_vol\": 0.04,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 57,
+  "mutation": "const 0.050->0.06",
+  "mutated": "\"mid_vol\":   0.06,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 58,
+  "mutation": "const 0.080->0.09",
+  "mutated": "\"late_vol\":  0.09,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 59,
+  "mutation": "const 0.15->0.16",
+  "mutated": "\"steam_prob\": 0.16,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 62,
+  "mutation": "const 0.015->0.03",
+  "mutated": "\"early_vol\": 0.03,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 63,
+  "mutation": "const 0.025->0.04",
+  "mutated": "\"mid_vol\":   0.04,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 64,
+  "mutation": "const 0.050->0.06",
+  "mutated": "\"late_vol\":  0.06,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 65,
+  "mutation": "const 0.08->0.09",
+  "mutated": "\"steam_prob\": 0.09,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 68,
+  "mutation": "const 0.020->0.03",
+  "mutated": "\"early_vol\": 0.03,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 69,
+  "mutation": "const 0.035->0.05",
+  "mutated": "\"mid_vol\":   0.05,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 70,
+  "mutation": "const 0.060->0.07",
+  "mutated": "\"late_vol\":  0.07,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 71,
+  "mutation": "const 0.10->0.11",
+  "mutated": "\"steam_prob\": 0.11,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 74,
+  "mutation": "const 0.020->0.03",
+  "mutated": "\"early_vol\": 0.03,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 75,
+  "mutation": "const 0.045->0.06",
+  "mutated": "\"mid_vol\":   0.06,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 76,
+  "mutation": "const 0.075->0.08",
+  "mutated": "\"late_vol\":  0.08,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 77,
+  "mutation": "const 0.14->0.15",
+  "mutated": "\"steam_prob\": 0.15,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 80,
+  "mutation": "const 0.018->0.03",
+  "mutated": "\"early_vol\": 0.03,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 81,
+  "mutation": "const 0.030->0.04",
+  "mutated": "\"mid_vol\":   0.04,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 82,
+  "mutation": "const 0.055->0.07",
+  "mutated": "\"late_vol\":  0.07,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 83,
+  "mutation": "const 0.09->0.10",
+  "mutated": "\"steam_prob\": 0.10,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 89,
+  "mutation": "const 0.025->0.04",
+  "mutated": "\"early_vol\": 0.04,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 90,
+  "mutation": "const 0.040->0.05",
+  "mutated": "\"mid_vol\":   0.05,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 91,
+  "mutation": "const 0.065->0.07",
+  "mutated": "\"late_vol\":  0.07,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 92,
+  "mutation": "const 0.11->0.12",
+  "mutated": "\"steam_prob\": 0.12,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 98,
+  "mutation": "const 1.2->1.21",
+  "mutated": "\"h2h\":       1.21,    # moneylines close fast"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 99,
+  "mutation": "const 1.1->1.11",
+  "mutated": "\"spreads\":   1.11,    # spreads nearly as fast"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 100,
+  "mutation": "const 0.9->0.91",
+  "mutated": "\"totals\":    0.91,    # totals are stickier"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 101,
+  "mutation": "const 0.6->0.61",
+  "mutated": "\"player_points\": 0.61,  # props can hold value longer"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 102,
+  "mutation": "const 0.6->0.61",
+  "mutated": "\"player_rebounds\": 0.61,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 103,
+  "mutation": "const 0.6->0.61",
+  "mutated": "\"player_assists\": 0.61,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 104,
+  "mutation": "const 0.5->0.51",
+  "mutated": "\"player_threes\": 0.51,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 105,
+  "mutation": "const 0.7->0.71",
+  "mutated": "\"alternate_spreads\": 0.71,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 106,
+  "mutation": "const 0.7->0.71",
+  "mutated": "\"alternate_totals\": 0.71,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 115,
+  "mutation": ">-><",
+  "mutated": "if american < 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 115,
+  "mutation": "const 0->1",
+  "mutated": "if american > 1:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 116,
+  "mutation": "const 1.0->1.01",
+  "mutated": "return 1.01 + (american / 100.0)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 116,
+  "mutation": "const 100.0->100.01",
+  "mutated": "return 1.0 + (american / 100.01)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 117,
+  "mutation": "<->>",
+  "mutated": "elif american > 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 117,
+  "mutation": "const 0->1",
+  "mutated": "elif american < 1:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 118,
+  "mutation": "const 1.0->1.01",
+  "mutated": "return 1.01 + (100.0 / abs(american))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 118,
+  "mutation": "const 100.0->100.01",
+  "mutated": "return 1.0 + (100.01 / abs(american))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 120,
+  "mutation": "const 2.0->2.01",
+  "mutated": "return 2.01  # even money"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 125,
+  "mutation": ">=->>",
+  "mutated": "if score > 0.90:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 125,
+  "mutation": ">=-><=",
+  "mutated": "if score <= 0.90:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 125,
+  "mutation": ">-><",
+  "mutated": "if score <= 0.90:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 125,
+  "mutation": "const 0.90->0.91",
+  "mutated": "if score >= 0.91:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 127,
+  "mutation": ">=->>",
+  "mutated": "elif score > 0.75:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 127,
+  "mutation": ">=-><=",
+  "mutated": "elif score <= 0.75:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 127,
+  "mutation": ">-><",
+  "mutated": "elif score <= 0.75:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 127,
+  "mutation": "const 0.75->0.76",
+  "mutated": "elif score >= 0.76:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 129,
+  "mutation": ">=->>",
+  "mutated": "elif score > 0.55:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 129,
+  "mutation": ">=-><=",
+  "mutated": "elif score <= 0.55:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 129,
+  "mutation": ">-><",
+  "mutated": "elif score <= 0.55:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 129,
+  "mutation": "const 0.55->0.56",
+  "mutated": "elif score >= 0.56:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 131,
+  "mutation": ">=->>",
+  "mutated": "elif score > 0.30:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 131,
+  "mutation": ">=-><=",
+  "mutated": "elif score <= 0.30:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 131,
+  "mutation": ">-><",
+  "mutated": "elif score <= 0.30:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 131,
+  "mutation": "const 0.30->0.31",
+  "mutated": "elif score >= 0.31:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 161,
+  "mutation": "min->max",
+  "mutated": "p = max(0.0, max(1.0, p))  # clamp"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 161,
+  "mutation": "max->min",
+  "mutated": "p = min(0.0, min(1.0, p))  # clamp"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 161,
+  "mutation": "const 0.0->0.01",
+  "mutated": "p = max(0.01, min(1.0, p))  # clamp"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 161,
+  "mutation": "const 1.0->1.01",
+  "mutated": "p = max(0.0, min(1.01, p))  # clamp"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 162,
+  "mutation": "const 1.0->1.01",
+  "mutated": "q = 1.01 - p"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 165,
+  "mutation": "const 1.0->1.01",
+  "mutated": "b = decimal_odds - 1.01  # net payout per unit risked"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 167,
+  "mutation": "<=-><",
+  "mutated": "if b < 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 167,
+  "mutation": "<=->>=",
+  "mutated": "if b >= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 167,
+  "mutation": "<->>",
+  "mutated": "if b >= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 167,
+  "mutation": "const 0->1",
+  "mutated": "if b <= 1:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 168,
+  "mutation": "const 0.0->0.01",
+  "mutated": "return 0.01"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 171,
+  "mutation": "max->min",
+  "mutated": "return min(0.0, round(fraction, 6))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 171,
+  "mutation": "const 0.0->0.01",
+  "mutated": "return max(0.01, round(fraction, 6))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 171,
+  "mutation": "const 6->7",
+  "mutated": "return max(0.0, round(fraction, 7))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 171,
+  "mutation": "round->floor",
+  "mutated": "return max(0.0, floor(fraction, 6))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 180,
+  "mutation": "const 0.25->0.26",
+  "mutated": "fraction: float = 0.26,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 199,
+  "mutation": "const 6->7",
+  "mutated": "return round(full * fraction, 7)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 199,
+  "mutation": "round->floor",
+  "mutated": "return floor(full * fraction, 6)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 211,
+  "mutation": "const 0.25->0.26",
+  "mutated": "kelly_base_fraction: float = 0.26,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 243,
+  "mutation": "const 0.0->0.01",
+  "mutated": "tier_mult = AGP_TIER_MULTIPLIERS.get(tier, 0.01)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 248,
+  "mutation": "==->!=",
+  "mutated": "if tier != \"VERIFIED\":"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 250,
+  "mutation": "==->!=",
+  "mutated": "elif tier != \"CORROBORATED\":"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 252,
+  "mutation": "const 0.75->0.76",
+  "mutated": "t = (confidence_score - 0.76) / 0.15"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 252,
+  "mutation": "const 0.15->0.16",
+  "mutated": "t = (confidence_score - 0.75) / 0.16"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 253,
+  "mutation": "const 0.80->0.81",
+  "mutated": "smooth_mult = 0.81 + t * 0.20"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 253,
+  "mutation": "const 0.20->0.21",
+  "mutated": "smooth_mult = 0.80 + t * 0.21"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 254,
+  "mutation": "==->!=",
+  "mutated": "elif tier != \"PROBABLE\":"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 256,
+  "mutation": "const 0.55->0.56",
+  "mutated": "t = (confidence_score - 0.56) / 0.20"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 256,
+  "mutation": "const 0.20->0.21",
+  "mutated": "t = (confidence_score - 0.55) / 0.21"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 257,
+  "mutation": "const 0.55->0.56",
+  "mutated": "smooth_mult = 0.56 + t * 0.25"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 257,
+  "mutation": "const 0.25->0.26",
+  "mutated": "smooth_mult = 0.55 + t * 0.26"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 258,
+  "mutation": "==->!=",
+  "mutated": "elif tier != \"SPECULATIVE\":"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 260,
+  "mutation": "const 0.30->0.31",
+  "mutated": "t = (confidence_score - 0.31) / 0.25"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 260,
+  "mutation": "const 0.25->0.26",
+  "mutated": "t = (confidence_score - 0.30) / 0.26"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 261,
+  "mutation": "const 0.30->0.31",
+  "mutated": "smooth_mult = 0.31 + t * 0.25"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 261,
+  "mutation": "const 0.25->0.26",
+  "mutated": "smooth_mult = 0.30 + t * 0.26"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 263,
+  "mutation": "const 0.0->0.01",
+  "mutated": "smooth_mult = 0.01"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 265,
+  "mutation": "min->max",
+  "mutated": "smooth_mult = max(0.0, max(1.0, smooth_mult))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 265,
+  "mutation": "max->min",
+  "mutated": "smooth_mult = min(0.0, min(1.0, smooth_mult))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 265,
+  "mutation": "const 0.0->0.01",
+  "mutated": "smooth_mult = max(0.01, min(1.0, smooth_mult))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 265,
+  "mutation": "const 1.0->1.01",
+  "mutated": "smooth_mult = max(0.0, min(1.01, smooth_mult))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 272,
+  "mutation": "max->min",
+  "mutated": "k = 1.0 / min(abs(edge), 0.001)  # normalize so dampener halves when var == edge"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 272,
+  "mutation": "const 1.0->1.01",
+  "mutated": "k = 1.01 / max(abs(edge), 0.001)  # normalize so dampener halves when var == edge"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 272,
+  "mutation": "const 0.001->0.01",
+  "mutated": "k = 1.0 / max(abs(edge), 0.01)  # normalize so dampener halves when var == edge"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 273,
+  "mutation": "const 1.0->1.01",
+  "mutated": "variance_dampener = 1.01 / (1.0 + k * variance_estimate)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 273,
+  "mutation": "const 1.0->1.01",
+  "mutated": "variance_dampener = 1.0 / (1.01 + k * variance_estimate)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 274,
+  "mutation": "min->max",
+  "mutated": "variance_dampener = max(0.05, max(1.0, variance_dampener))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 274,
+  "mutation": "max->min",
+  "mutated": "variance_dampener = min(0.05, min(1.0, variance_dampener))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 274,
+  "mutation": "const 0.05->0.06",
+  "mutated": "variance_dampener = max(0.06, min(1.0, variance_dampener))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 274,
+  "mutation": "const 1.0->1.01",
+  "mutated": "variance_dampener = max(0.05, min(1.01, variance_dampener))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 281,
+  "mutation": "const 0.05->0.06",
+  "mutated": "hard_cap = 0.06"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 282,
+  "mutation": "min->max",
+  "mutated": "final_fraction = max(adjusted_fraction, hard_cap)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 285,
+  "mutation": "const 2->3",
+  "mutated": "stake = round(bankroll * final_fraction, 3)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 285,
+  "mutation": "round->floor",
+  "mutated": "stake = floor(bankroll * final_fraction, 2)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 292,
+  "mutation": ">-><",
+  "mutated": "if adjusted_fraction < hard_cap:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 298,
+  "mutation": "const 6->7",
+  "mutated": "\"fraction\": round(final_fraction, 7),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 298,
+  "mutation": "round->floor",
+  "mutated": "\"fraction\": floor(final_fraction, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 299,
+  "mutation": "const 6->7",
+  "mutated": "\"kelly_full\": round(kelly_full(edge, odds), 7),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 299,
+  "mutation": "round->floor",
+  "mutated": "\"kelly_full\": floor(kelly_full(edge, odds), 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 300,
+  "mutation": "const 6->7",
+  "mutated": "\"kelly_base\": round(base_fraction, 7),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 300,
+  "mutation": "round->floor",
+  "mutated": "\"kelly_base\": floor(base_fraction, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 302,
+  "mutation": "const 4->5",
+  "mutated": "\"tier_multiplier\": round(smooth_mult, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 302,
+  "mutation": "round->floor",
+  "mutated": "\"tier_multiplier\": floor(smooth_mult, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 303,
+  "mutation": "const 4->5",
+  "mutated": "\"variance_dampener\": round(variance_dampener, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 303,
+  "mutation": "round->floor",
+  "mutated": "\"variance_dampener\": floor(variance_dampener, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 304,
+  "mutation": ">-><",
+  "mutated": "\"hard_cap_applied\": adjusted_fraction < hard_cap,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 307,
+  "mutation": "const 5->6",
+  "mutated": "\"edge\": round(edge, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 307,
+  "mutation": "round->floor",
+  "mutated": "\"edge\": floor(edge, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 309,
+  "mutation": "const 3->4",
+  "mutated": "\"confidence_score\": round(confidence_score, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 309,
+  "mutation": "round->floor",
+  "mutated": "\"confidence_score\": floor(confidence_score, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 310,
+  "mutation": "const 5->6",
+  "mutated": "\"variance_estimate\": round(variance_estimate, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 310,
+  "mutation": "round->floor",
+  "mutated": "\"variance_estimate\": floor(variance_estimate, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 355,
+  "mutation": "const 0.0->0.01",
+  "mutated": "edge = bet.get(\"edge\", 0.01)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 356,
+  "mutation": "const 110->111",
+  "mutated": "odds = bet.get(\"odds\", -111)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 357,
+  "mutation": "const 0.75->0.76",
+  "mutated": "conf = bet.get(\"confidence_score\", 0.76)  # default CORROBORATED"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 358,
+  "mutation": "const 0.5->0.51",
+  "mutated": "var_est = bet.get(\"variance_estimate\", abs(edge) * 0.51)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 361,
+  "mutation": "const 0.25->0.26",
+  "mutated": "base_frac = kelly_fractional(edge, odds, fraction=0.26)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 365,
+  "mutation": "const 0.0->0.01",
+  "mutated": "tier_mult = AGP_TIER_MULTIPLIERS.get(tier, 0.01)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 369,
+  "mutation": "const 6->7",
+  "mutated": "\"raw_fraction\": round(base_frac, 7),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 369,
+  "mutation": "round->floor",
+  "mutated": "\"raw_fraction\": floor(base_frac, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 370,
+  "mutation": "const 6->7",
+  "mutated": "\"confidence_adjusted\": round(adj_frac, 7),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 370,
+  "mutation": "round->floor",
+  "mutated": "\"confidence_adjusted\": floor(adj_frac, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 376,
+  "mutation": "const 0.0->0.01",
+  "mutated": "correlations = np.array([bet.get(\"correlation_with_others\", 0.01) for bet in bets])"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 383,
+  "mutation": "const 1.0->1.01",
+  "mutated": "avg_correlation = float(np.mean(np.clip(correlations, -1.01, 1.0)))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 383,
+  "mutation": "const 1.0->1.01",
+  "mutated": "avg_correlation = float(np.mean(np.clip(correlations, -1.0, 1.01)))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 385,
+  "mutation": "max->min",
+  "mutated": "diversification_ratio = 1.0 + min(0.0, (n - 1) * avg_correlation)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 385,
+  "mutation": "const 1.0->1.01",
+  "mutated": "diversification_ratio = 1.01 + max(0.0, (n - 1) * avg_correlation)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 385,
+  "mutation": "const 0.0->0.01",
+  "mutated": "diversification_ratio = 1.0 + max(0.01, (n - 1) * avg_correlation)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 385,
+  "mutation": "const 1->2",
+  "mutated": "diversification_ratio = 1.0 + max(0.0, (n - 2) * avg_correlation)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 388,
+  "mutation": "max->min",
+  "mutated": "correlation_penalty = 1.0 / math.sqrt(min(1.0, diversification_ratio))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 388,
+  "mutation": "const 1.0->1.01",
+  "mutated": "correlation_penalty = 1.01 / math.sqrt(max(1.0, diversification_ratio))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 388,
+  "mutation": "const 1.0->1.01",
+  "mutated": "correlation_penalty = 1.0 / math.sqrt(max(1.01, diversification_ratio))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 393,
+  "mutation": "const 0.20->0.21",
+  "mutated": "PORTFOLIO_CAP = 0.21"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 397,
+  "mutation": ">-><",
+  "mutated": "if penalized_total < PORTFOLIO_CAP:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 407,
+  "mutation": "max->min",
+  "mutated": "rho_i = min(0.0, correlations[i])"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 407,
+  "mutation": "const 0.0->0.01",
+  "mutated": "rho_i = max(0.01, correlations[i])"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 411,
+  "mutation": "const 1.0->1.01",
+  "mutated": "individual_corr_penalty = 1.01 - (rho_i * 0.25)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 411,
+  "mutation": "const 0.25->0.26",
+  "mutated": "individual_corr_penalty = 1.0 - (rho_i * 0.26)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 412,
+  "mutation": "max->min",
+  "mutated": "individual_corr_penalty = min(0.1, individual_corr_penalty)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 412,
+  "mutation": "const 0.1->0.11",
+  "mutated": "individual_corr_penalty = max(0.11, individual_corr_penalty)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 416,
+  "mutation": "min->max",
+  "mutated": "final_fraction = max(final_fraction, 0.05)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 416,
+  "mutation": "const 0.05->0.06",
+  "mutated": "final_fraction = min(final_fraction, 0.06)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 420,
+  "mutation": "const 0.0->0.01",
+  "mutated": "\"edge\": bet.get(\"edge\", 0.01),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 421,
+  "mutation": "const 110->111",
+  "mutated": "\"odds\": bet.get(\"odds\", -111),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 424,
+  "mutation": "const 3->4",
+  "mutated": "\"correlation\": round(correlations[i], 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 424,
+  "mutation": "round->floor",
+  "mutated": "\"correlation\": floor(correlations[i], 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 425,
+  "mutation": "const 4->5",
+  "mutated": "\"individual_corr_penalty\": round(individual_corr_penalty, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 425,
+  "mutation": "round->floor",
+  "mutated": "\"individual_corr_penalty\": floor(individual_corr_penalty, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 426,
+  "mutation": "const 6->7",
+  "mutated": "\"final_fraction\": round(final_fraction, 7),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 426,
+  "mutation": "round->floor",
+  "mutated": "\"final_fraction\": floor(final_fraction, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 427,
+  "mutation": "const 100->101",
+  "mutated": "\"final_pct\": round(final_fraction * 101, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 427,
+  "mutation": "const 3->4",
+  "mutated": "\"final_pct\": round(final_fraction * 100, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 427,
+  "mutation": "round->floor",
+  "mutated": "\"final_pct\": floor(final_fraction * 100, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 435,
+  "mutation": "const 4->5",
+  "mutated": "\"avg_correlation\": round(avg_correlation, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 435,
+  "mutation": "round->floor",
+  "mutated": "\"avg_correlation\": floor(avg_correlation, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 436,
+  "mutation": "const 4->5",
+  "mutated": "\"diversification_ratio\": round(diversification_ratio, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 436,
+  "mutation": "round->floor",
+  "mutated": "\"diversification_ratio\": floor(diversification_ratio, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 437,
+  "mutation": "const 4->5",
+  "mutated": "\"correlation_penalty\": round(correlation_penalty, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 437,
+  "mutation": "round->floor",
+  "mutated": "\"correlation_penalty\": floor(correlation_penalty, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 438,
+  "mutation": "const 6->7",
+  "mutated": "\"raw_total_allocation\": round(raw_total, 7),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 438,
+  "mutation": "round->floor",
+  "mutated": "\"raw_total_allocation\": floor(raw_total, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 439,
+  "mutation": "const 6->7",
+  "mutated": "\"final_total_allocation\": round(total_allocated, 7),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 439,
+  "mutation": "round->floor",
+  "mutated": "\"final_total_allocation\": floor(total_allocated, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 440,
+  "mutation": "const 100->101",
+  "mutated": "\"final_total_pct\": round(total_allocated * 101, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 440,
+  "mutation": "const 3->4",
+  "mutated": "\"final_total_pct\": round(total_allocated * 100, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 440,
+  "mutation": "round->floor",
+  "mutated": "\"final_total_pct\": floor(total_allocated * 100, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 442,
+  "mutation": ">-><",
+  "mutated": "\"cap_hit\": penalized_total < PORTFOLIO_CAP,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 487,
+  "mutation": "const 1.0->1.01",
+  "mutated": "b = decimal_odds - 1.01  # net payout ratio"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 488,
+  "mutation": "const 1.0->1.01",
+  "mutated": "q = 1.01 - win_rate"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 492,
+  "mutation": "min->max",
+  "mutated": "units = max(bankroll / avg_stake, 10000.0) if avg_stake > 0 else 10000.0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 492,
+  "mutation": ">-><",
+  "mutated": "units = min(bankroll / avg_stake, 10000.0) if avg_stake < 0 else 10000.0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 492,
+  "mutation": "const 10000.0->10000.01",
+  "mutated": "units = min(bankroll / avg_stake, 10000.01) if avg_stake > 0 else 10000.0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 492,
+  "mutation": "const 10000.0->10000.01",
+  "mutated": "units = min(bankroll / avg_stake, 10000.0) if avg_stake > 0 else 10000.01"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 492,
+  "mutation": "const 0->1",
+  "mutated": "units = min(bankroll / avg_stake, 10000.0) if avg_stake > 1 else 10000.0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 497,
+  "mutation": "const 1->2",
+  "mutated": "\"units_in_bankroll\": round(units, 2),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 497,
+  "mutation": "round->floor",
+  "mutated": "\"units_in_bankroll\": floor(units, 1),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 498,
+  "mutation": "const 4->5",
+  "mutated": "\"win_rate\": round(win_rate, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 498,
+  "mutation": "round->floor",
+  "mutated": "\"win_rate\": floor(win_rate, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 500,
+  "mutation": "const 3->4",
+  "mutated": "\"decimal_odds\": round(decimal_odds, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 500,
+  "mutation": "round->floor",
+  "mutated": "\"decimal_odds\": floor(decimal_odds, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 501,
+  "mutation": "const 4->5",
+  "mutated": "\"ev_per_bet\": round(ev_per_bet, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 501,
+  "mutation": "round->floor",
+  "mutated": "\"ev_per_bet\": floor(ev_per_bet, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 504,
+  "mutation": "<=-><",
+  "mutated": "if ev_per_bet < 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 504,
+  "mutation": "<=->>=",
+  "mutated": "if ev_per_bet >= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 504,
+  "mutation": "<->>",
+  "mutated": "if ev_per_bet >= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 504,
+  "mutation": "const 0->1",
+  "mutated": "if ev_per_bet <= 1:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 506,
+  "mutation": "const 1.0->1.01",
+  "mutated": "result[\"ruin_probability\"] = 1.01"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 515,
+  "mutation": "const 0.0->0.01",
+  "mutated": "result[\"recommended_max_stake\"] = 0.01"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 516,
+  "mutation": "const 0.0->0.01",
+  "mutated": "result[\"recommended_max_stake_pct\"] = 0.01"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 519,
+  "mutation": "==->!=",
+  "mutated": "if method != \"simulation\":"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 521,
+  "mutation": "const 10000->10001",
+  "mutated": "bankroll, avg_stake, win_rate, b, n_simulations=10001, n_bets=5000"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 521,
+  "mutation": "const 5000->5001",
+  "mutated": "bankroll, avg_stake, win_rate, b, n_simulations=10000, n_bets=5001"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 527,
+  "mutation": ">-><",
+  "mutated": "ratio = q / (win_rate * b) if (win_rate * b) < 0 else 1.0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 527,
+  "mutation": "const 1.0->1.01",
+  "mutated": "ratio = q / (win_rate * b) if (win_rate * b) > 0 else 1.01"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 527,
+  "mutation": "const 0->1",
+  "mutated": "ratio = q / (win_rate * b) if (win_rate * b) > 1 else 1.0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 528,
+  "mutation": ">=->>",
+  "mutated": "if ratio > 1.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 528,
+  "mutation": ">=-><=",
+  "mutated": "if ratio <= 1.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 528,
+  "mutation": ">-><",
+  "mutated": "if ratio <= 1.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 528,
+  "mutation": "const 1.0->1.01",
+  "mutated": "if ratio >= 1.01:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 529,
+  "mutation": "const 1.0->1.01",
+  "mutated": "ruin_prob = 1.01"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 532,
+  "mutation": "min->max",
+  "mutated": "ruin_prob = max(1.0, ruin_prob)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 532,
+  "mutation": "const 1.0->1.01",
+  "mutated": "ruin_prob = min(1.01, ruin_prob)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 536,
+  "mutation": "const 6->7",
+  "mutated": "result[\"ruin_probability\"] = round(ruin_prob, 7)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 536,
+  "mutation": "round->floor",
+  "mutated": "result[\"ruin_probability\"] = floor(ruin_prob, 6)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 537,
+  "mutation": "const 100->101",
+  "mutated": "result[\"ruin_pct\"] = round(ruin_prob * 101, 4)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 537,
+  "mutation": "const 4->5",
+  "mutated": "result[\"ruin_pct\"] = round(ruin_prob * 100, 5)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 537,
+  "mutation": "round->floor",
+  "mutated": "result[\"ruin_pct\"] = floor(ruin_prob * 100, 4)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 541,
+  "mutation": "const 2->3",
+  "mutated": "\"median_final_bankroll\": round(median_path, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 541,
+  "mutation": "round->floor",
+  "mutated": "\"median_final_bankroll\": floor(median_path, 2),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 542,
+  "mutation": "const 4->5",
+  "mutated": "\"drawdown_95th_percentile\": round(drawdown_95, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 542,
+  "mutation": "round->floor",
+  "mutated": "\"drawdown_95th_percentile\": floor(drawdown_95, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 546,
+  "mutation": "const 0.01->0.02",
+  "mutated": "acceptable_ruin = 0.02  # 1%"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 547,
+  "mutation": "<->>",
+  "mutated": "if q / (win_rate * b) > 1.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 547,
+  "mutation": "const 1.0->1.01",
+  "mutated": "if q / (win_rate * b) < 1.01:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 552,
+  "mutation": "<->>",
+  "mutated": "if ratio > 0 and ratio > 1.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 552,
+  "mutation": ">-><",
+  "mutated": "if ratio < 0 and ratio < 1.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 552,
+  "mutation": "const 1.0->1.01",
+  "mutated": "if ratio > 0 and ratio < 1.01:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 552,
+  "mutation": "const 0->1",
+  "mutated": "if ratio > 1 and ratio < 1.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 554,
+  "mutation": "max->min",
+  "mutated": "safe_stake = min(0, safe_stake)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 554,
+  "mutation": "const 0->1",
+  "mutated": "safe_stake = max(1, safe_stake)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 556,
+  "mutation": "const 0.0->0.01",
+  "mutated": "safe_stake = 0.01"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 558,
+  "mutation": "const 0.0->0.01",
+  "mutated": "safe_stake = 0.01"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 560,
+  "mutation": "const 2->3",
+  "mutated": "result[\"recommended_max_stake\"] = round(safe_stake, 3)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 560,
+  "mutation": "round->floor",
+  "mutated": "result[\"recommended_max_stake\"] = floor(safe_stake, 2)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 561,
+  "mutation": "round->floor",
+  "mutated": "result[\"recommended_max_stake_pct\"] = floor("
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 562,
+  "mutation": ">-><",
+  "mutated": "(safe_stake / bankroll * 100) if bankroll < 0 else 0, 2"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 562,
+  "mutation": "const 100->101",
+  "mutated": "(safe_stake / bankroll * 101) if bankroll > 0 else 0, 2"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 562,
+  "mutation": "const 0->1",
+  "mutated": "(safe_stake / bankroll * 100) if bankroll > 1 else 0, 2"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 562,
+  "mutation": "const 0->1",
+  "mutated": "(safe_stake / bankroll * 100) if bankroll > 0 else 1, 2"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 562,
+  "mutation": "const 2->3",
+  "mutated": "(safe_stake / bankroll * 100) if bankroll > 0 else 0, 3"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 566,
+  "mutation": "<->>",
+  "mutated": "if ruin_prob > 0.001:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 566,
+  "mutation": "const 0.001->0.01",
+  "mutated": "if ruin_prob < 0.01:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 569,
+  "mutation": "<->>",
+  "mutated": "elif ruin_prob > 0.01:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 569,
+  "mutation": "const 0.01->0.02",
+  "mutated": "elif ruin_prob < 0.02:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 572,
+  "mutation": "<->>",
+  "mutated": "elif ruin_prob > 0.05:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 572,
+  "mutation": "const 0.05->0.06",
+  "mutated": "elif ruin_prob < 0.06:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 575,
+  "mutation": "<->>",
+  "mutated": "elif ruin_prob > 0.20:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 575,
+  "mutation": "const 0.20->0.21",
+  "mutated": "elif ruin_prob < 0.21:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 598,
+  "mutation": "const 1->2",
+  "mutated": "ev_per_bet = win_rate * b - (2 - win_rate)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 599,
+  "mutation": ">=->>",
+  "mutated": "if ev_per_bet > 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 599,
+  "mutation": ">=-><=",
+  "mutated": "if ev_per_bet <= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 599,
+  "mutation": ">-><",
+  "mutated": "if ev_per_bet <= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 599,
+  "mutation": "const 0->1",
+  "mutated": "if ev_per_bet >= 1:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 603,
+  "mutation": ">-><",
+  "mutated": "if expected_loss < 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 603,
+  "mutation": "const 0->1",
+  "mutated": "if expected_loss > 1:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 604,
+  "mutation": "const 0->1",
+  "mutated": "return round(units / expected_loss, 1)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 604,
+  "mutation": "round->floor",
+  "mutated": "return floor(units / expected_loss, 0)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 613,
+  "mutation": "const 10000->10001",
+  "mutated": "n_simulations: int = 10001,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 614,
+  "mutation": "const 5000->5001",
+  "mutated": "n_bets: int = 5001,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 621,
+  "mutation": "const 42->43",
+  "mutated": "rng = np.random.default_rng(seed=43)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 624,
+  "mutation": "<->>",
+  "mutated": "outcomes = rng.random((n_simulations, n_bets)) > win_rate"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 630,
+  "mutation": "const 1->2",
+  "mutated": "cum_profits = np.cumsum(profits, axis=2)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 634,
+  "mutation": "min->max",
+  "mutated": "min_bankroll = np.max(bankroll_paths, axis=1)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 634,
+  "mutation": "const 1->2",
+  "mutated": "min_bankroll = np.min(bankroll_paths, axis=2)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 635,
+  "mutation": "<=-><",
+  "mutated": "ruined = min_bankroll < 0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 635,
+  "mutation": "<=->>=",
+  "mutated": "ruined = min_bankroll >= 0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 635,
+  "mutation": "<->>",
+  "mutated": "ruined = min_bankroll >= 0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 635,
+  "mutation": "const 0->1",
+  "mutated": "ruined = min_bankroll <= 1"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 639,
+  "mutation": "const 1->2",
+  "mutated": "final_bankrolls = bankroll_paths[:, -2]"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 643,
+  "mutation": "const 1->2",
+  "mutated": "running_max = np.maximum.accumulate(bankroll_paths, axis=2)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 644,
+  "mutation": "const 1.0->1.01",
+  "mutated": "drawdowns = (running_max - bankroll_paths) / np.maximum(running_max, 1.01)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 645,
+  "mutation": "max->min",
+  "mutated": "max_drawdowns = np.min(drawdowns, axis=1)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 645,
+  "mutation": "const 1->2",
+  "mutated": "max_drawdowns = np.max(drawdowns, axis=2)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 646,
+  "mutation": "const 95->96",
+  "mutated": "drawdown_95 = float(np.percentile(max_drawdowns, 96))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 689,
+  "mutation": "const 1.0->1.01",
+  "mutated": "decay_rate = MARKET_CLV_DECAY.get(market, 1.01)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 692,
+  "mutation": ">-><",
+  "mutated": "if hours_to_game < 24:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 692,
+  "mutation": "const 24->25",
+  "mutated": "if hours_to_game > 25:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 695,
+  "mutation": ">-><",
+  "mutated": "elif hours_to_game < 4:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 695,
+  "mutation": "const 4->5",
+  "mutated": "elif hours_to_game > 5:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 712,
+  "mutation": "max->min",
+  "mutated": "hours_remaining = min(0.01, hours_to_game)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 712,
+  "mutation": "const 0.01->0.02",
+  "mutated": "hours_remaining = max(0.02, hours_to_game)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 724,
+  "mutation": "const 0.3->0.31",
+  "mutated": "favorable_steam_boost = steam_prob * 0.31 * vol * hours_remaining"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 725,
+  "mutation": "const 0.7->0.71",
+  "mutated": "unfavorable_steam_cost = steam_prob * 0.71 * vol * hours_remaining"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 730,
+  "mutation": "max->min",
+  "mutated": "efficiency = 1.0 - (1.0 / min(decay_rate, 0.01)) * 0.1"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 730,
+  "mutation": "const 1.0->1.01",
+  "mutated": "efficiency = 1.01 - (1.0 / max(decay_rate, 0.01)) * 0.1"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 730,
+  "mutation": "const 1.0->1.01",
+  "mutated": "efficiency = 1.0 - (1.01 / max(decay_rate, 0.01)) * 0.1"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 730,
+  "mutation": "const 0.01->0.02",
+  "mutated": "efficiency = 1.0 - (1.0 / max(decay_rate, 0.02)) * 0.1"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 730,
+  "mutation": "const 0.1->0.11",
+  "mutated": "efficiency = 1.0 - (1.0 / max(decay_rate, 0.01)) * 0.11"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 731,
+  "mutation": "min->max",
+  "mutated": "efficiency = max(0.0, max(1.0, efficiency))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 731,
+  "mutation": "max->min",
+  "mutated": "efficiency = min(0.0, min(1.0, efficiency))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 731,
+  "mutation": "const 0.0->0.01",
+  "mutated": "efficiency = max(0.01, min(1.0, efficiency))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 731,
+  "mutation": "const 1.0->1.01",
+  "mutated": "efficiency = max(0.0, min(1.01, efficiency))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 732,
+  "mutation": "min->max",
+  "mutated": "stale_line_bonus = (1.0 - efficiency) * vol * 0.5 * max(hours_remaining, 12.0)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 732,
+  "mutation": "const 1.0->1.01",
+  "mutated": "stale_line_bonus = (1.01 - efficiency) * vol * 0.5 * min(hours_remaining, 12.0)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 732,
+  "mutation": "const 0.5->0.51",
+  "mutated": "stale_line_bonus = (1.0 - efficiency) * vol * 0.51 * min(hours_remaining, 12.0)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 732,
+  "mutation": "const 12.0->12.01",
+  "mutated": "stale_line_bonus = (1.0 - efficiency) * vol * 0.5 * min(hours_remaining, 12.01)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 747,
+  "mutation": "<=-><",
+  "mutated": "if bet_now_ev < 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 747,
+  "mutation": "<=->>=",
+  "mutated": "if bet_now_ev >= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 747,
+  "mutation": "<->>",
+  "mutated": "if bet_now_ev >= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 747,
+  "mutation": "const 0->1",
+  "mutated": "if bet_now_ev <= 1:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 750,
+  "mutation": ">-><",
+  "mutated": "elif ev_diff < wait_uncertainty * 0.5:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 750,
+  "mutation": "const 0.5->0.51",
+  "mutated": "elif ev_diff > wait_uncertainty * 0.51:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 758,
+  "mutation": "<->>",
+  "mutated": "elif ev_diff > -wait_uncertainty * 0.25:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 758,
+  "mutation": "const 0.25->0.26",
+  "mutated": "elif ev_diff < -wait_uncertainty * 0.26:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 774,
+  "mutation": "const 5->6",
+  "mutated": "\"bet_now_ev\": round(bet_now_ev, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 774,
+  "mutation": "round->floor",
+  "mutated": "\"bet_now_ev\": floor(bet_now_ev, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 775,
+  "mutation": "const 5->6",
+  "mutated": "\"wait_ev\": round(wait_ev, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 775,
+  "mutation": "round->floor",
+  "mutated": "\"wait_ev\": floor(wait_ev, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 776,
+  "mutation": "const 5->6",
+  "mutated": "\"ev_difference\": round(ev_diff, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 776,
+  "mutation": "round->floor",
+  "mutated": "\"ev_difference\": floor(ev_diff, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 782,
+  "mutation": "const 2->3",
+  "mutated": "\"hours_to_game\": round(hours_to_game, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 782,
+  "mutation": "round->floor",
+  "mutated": "\"hours_to_game\": floor(hours_to_game, 2),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 784,
+  "mutation": "const 4->5",
+  "mutated": "\"volatility_per_hour\": round(vol, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 784,
+  "mutation": "round->floor",
+  "mutated": "\"volatility_per_hour\": floor(vol, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 785,
+  "mutation": "const 3->4",
+  "mutated": "\"edge_decay_rate\": round(decay_rate, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 785,
+  "mutation": "round->floor",
+  "mutated": "\"edge_decay_rate\": floor(decay_rate, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 786,
+  "mutation": "const 4->5",
+  "mutated": "\"edge_remaining_fraction\": round(edge_remaining_frac, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 786,
+  "mutation": "round->floor",
+  "mutated": "\"edge_remaining_fraction\": floor(edge_remaining_frac, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 787,
+  "mutation": "const 5->6",
+  "mutated": "\"expected_edge_after_decay\": round(expected_edge_after_decay, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 787,
+  "mutation": "round->floor",
+  "mutated": "\"expected_edge_after_decay\": floor(expected_edge_after_decay, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 788,
+  "mutation": "const 3->4",
+  "mutated": "\"steam_move_probability\": round(steam_prob, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 788,
+  "mutation": "round->floor",
+  "mutated": "\"steam_move_probability\": floor(steam_prob, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 789,
+  "mutation": "const 5->6",
+  "mutated": "\"favorable_steam_boost\": round(favorable_steam_boost, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 789,
+  "mutation": "round->floor",
+  "mutated": "\"favorable_steam_boost\": floor(favorable_steam_boost, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 790,
+  "mutation": "const 5->6",
+  "mutated": "\"unfavorable_steam_cost\": round(unfavorable_steam_cost, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 790,
+  "mutation": "round->floor",
+  "mutated": "\"unfavorable_steam_cost\": floor(unfavorable_steam_cost, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 791,
+  "mutation": "const 5->6",
+  "mutated": "\"stale_line_bonus\": round(stale_line_bonus, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 791,
+  "mutation": "round->floor",
+  "mutated": "\"stale_line_bonus\": floor(stale_line_bonus, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 792,
+  "mutation": "const 5->6",
+  "mutated": "\"wait_uncertainty\": round(wait_uncertainty, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 792,
+  "mutation": "round->floor",
+  "mutated": "\"wait_uncertainty\": floor(wait_uncertainty, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 804,
+  "mutation": "const 0.25->0.26",
+  "mutated": "kelly_fraction: float = 0.26,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 826,
+  "mutation": "const 0.01->0.02",
+  "mutated": "unit_size = bankroll * 0.02"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 828,
+  "mutation": "<=-><",
+  "mutated": "if unit_size < 0 or bankroll <= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 828,
+  "mutation": "<=-><",
+  "mutated": "if unit_size <= 0 or bankroll < 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 828,
+  "mutation": "<=->>=",
+  "mutated": "if unit_size >= 0 or bankroll <= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 828,
+  "mutation": "<=->>=",
+  "mutated": "if unit_size <= 0 or bankroll >= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 828,
+  "mutation": "<->>",
+  "mutated": "if unit_size >= 0 or bankroll <= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 828,
+  "mutation": "<->>",
+  "mutated": "if unit_size <= 0 or bankroll >= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 828,
+  "mutation": "const 0->1",
+  "mutated": "if unit_size <= 1 or bankroll <= 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 828,
+  "mutation": "const 0->1",
+  "mutated": "if unit_size <= 0 or bankroll <= 1:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 830,
+  "mutation": "const 0.0->0.01",
+  "mutated": "\"units\": 0.01,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 831,
+  "mutation": "const 0.0->0.01",
+  "mutated": "\"dollar_amount\": 0.01,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 832,
+  "mutation": "const 0.0->0.01",
+  "mutated": "\"pct_of_bankroll\": 0.01,"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 841,
+  "mutation": "const 0.0->0.01",
+  "mutated": "tier_mult = AGP_TIER_MULTIPLIERS.get(tier, 0.01)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 859,
+  "mutation": "min->max",
+  "mutated": "fraction = max(0.0, max(fraction, 0.05))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 859,
+  "mutation": "max->min",
+  "mutated": "fraction = min(0.0, min(fraction, 0.05))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 859,
+  "mutation": "const 0.0->0.01",
+  "mutated": "fraction = max(0.01, min(fraction, 0.05))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 859,
+  "mutation": "const 0.05->0.06",
+  "mutated": "fraction = max(0.0, min(fraction, 0.06))"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 861,
+  "mutation": "const 2->3",
+  "mutated": "dollar_amount = round(bankroll * fraction, 3)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 861,
+  "mutation": "round->floor",
+  "mutated": "dollar_amount = floor(bankroll * fraction, 2)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 862,
+  "mutation": ">-><",
+  "mutated": "units = round(dollar_amount / unit_size, 2) if unit_size < 0 else 0.0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 862,
+  "mutation": "const 0.0->0.01",
+  "mutated": "units = round(dollar_amount / unit_size, 2) if unit_size > 0 else 0.01"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 862,
+  "mutation": "const 2->3",
+  "mutated": "units = round(dollar_amount / unit_size, 3) if unit_size > 0 else 0.0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 862,
+  "mutation": "const 0->1",
+  "mutated": "units = round(dollar_amount / unit_size, 2) if unit_size > 1 else 0.0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 862,
+  "mutation": "round->floor",
+  "mutated": "units = floor(dollar_amount / unit_size, 2) if unit_size > 0 else 0.0"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 863,
+  "mutation": "const 100->101",
+  "mutated": "pct = round(fraction * 101, 3)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 863,
+  "mutation": "const 3->4",
+  "mutated": "pct = round(fraction * 100, 4)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 863,
+  "mutation": "round->floor",
+  "mutated": "pct = floor(fraction * 100, 3)"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 866,
+  "mutation": ">=->>",
+  "mutated": "if units > 3.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 866,
+  "mutation": ">=-><=",
+  "mutated": "if units <= 3.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 866,
+  "mutation": ">-><",
+  "mutated": "if units <= 3.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 866,
+  "mutation": "const 3.0->3.01",
+  "mutated": "if units >= 3.01:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 868,
+  "mutation": ">=->>",
+  "mutated": "elif units > 2.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 868,
+  "mutation": ">=-><=",
+  "mutated": "elif units <= 2.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 868,
+  "mutation": ">-><",
+  "mutated": "elif units <= 2.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 868,
+  "mutation": "const 2.0->2.01",
+  "mutated": "elif units >= 2.01:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 870,
+  "mutation": ">=->>",
+  "mutated": "elif units > 1.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 870,
+  "mutation": ">=-><=",
+  "mutated": "elif units <= 1.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 870,
+  "mutation": ">-><",
+  "mutated": "elif units <= 1.0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 870,
+  "mutation": "const 1.0->1.01",
+  "mutated": "elif units >= 1.01:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 872,
+  "mutation": ">=->>",
+  "mutated": "elif units > 0.5:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 872,
+  "mutation": ">=-><=",
+  "mutated": "elif units <= 0.5:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 872,
+  "mutation": ">-><",
+  "mutated": "elif units <= 0.5:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 872,
+  "mutation": "const 0.5->0.51",
+  "mutated": "elif units >= 0.51:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 874,
+  "mutation": ">-><",
+  "mutated": "elif units < 0:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 874,
+  "mutation": "const 0->1",
+  "mutated": "elif units > 1:"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 884,
+  "mutation": "const 2->3",
+  "mutated": "\"unit_size\": round(unit_size, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 884,
+  "mutation": "round->floor",
+  "mutated": "\"unit_size\": floor(unit_size, 2),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 887,
+  "mutation": "const 5->6",
+  "mutated": "\"edge\": round(edge, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 887,
+  "mutation": "round->floor",
+  "mutated": "\"edge\": floor(edge, 5),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 888,
+  "mutation": "const 3->4",
+  "mutated": "\"confidence\": round(confidence, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 888,
+  "mutation": "round->floor",
+  "mutated": "\"confidence\": floor(confidence, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 890,
+  "mutation": "const 3->4",
+  "mutated": "\"tier_multiplier\": round(tier_mult, 4),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 890,
+  "mutation": "round->floor",
+  "mutated": "\"tier_multiplier\": floor(tier_mult, 3),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 892,
+  "mutation": "const 6->7",
+  "mutated": "\"raw_fraction\": round(edge * kelly_fraction * tier_mult, 7),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 892,
+  "mutation": "round->floor",
+  "mutated": "\"raw_fraction\": floor(edge * kelly_fraction * tier_mult, 6),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 893,
+  "mutation": "const 6->7",
+  "mutated": "\"capped_fraction\": round(fraction, 7),"
+ },
+ {
+  "file": "tools/kelly.py",
+  "line": 893,
+  "mutation": "round->floor",
+  "mutated": "\"capped_fraction\": floor(fraction, 6),"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 26,
+  "mutation": "const 1.0->1.01",
+  "mutated": "CEILING_PRIMARY = 1.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 27,
+  "mutation": "const 0.75->0.76",
+  "mutated": "CEILING_SECONDARY = 0.76"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 28,
+  "mutation": "const 0.55->0.56",
+  "mutated": "CEILING_SIGNAL = 0.56"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 29,
+  "mutation": "const 0.55->0.56",
+  "mutated": "CEILING_INFERRED = 0.56"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 39,
+  "mutation": "const 0.5->0.51",
+  "mutated": "NOISE_FLOOR_PCT = 0.51  # 0.5%"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 43,
+  "mutation": "const 0.95->0.96",
+  "mutated": "\"h2h\": 0.96,           # Moneylines are highly efficient"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 44,
+  "mutation": "const 0.90->0.91",
+  "mutated": "\"spreads\": 0.91,       # Spreads slightly less"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 45,
+  "mutation": "const 0.85->0.86",
+  "mutated": "\"totals\": 0.86,        # Totals less efficient"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 46,
+  "mutation": "const 0.70->0.71",
+  "mutated": "\"player_points\": 0.71, # Player props are where edges live"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 47,
+  "mutation": "const 0.65->0.66",
+  "mutated": "\"player_rebounds\": 0.66,"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 48,
+  "mutation": "const 0.65->0.66",
+  "mutated": "\"player_assists\": 0.66,"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 49,
+  "mutation": "const 0.60->0.61",
+  "mutated": "\"player_threes\": 0.61,"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 50,
+  "mutation": "const 0.60->0.61",
+  "mutated": "\"player_points_rebounds_assists\": 0.61,"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 51,
+  "mutation": "const 0.55->0.56",
+  "mutated": "\"alternate_spreads\": 0.56,"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 52,
+  "mutation": "const 0.55->0.56",
+  "mutated": "\"alternate_totals\": 0.56,"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 88,
+  "mutation": "const 0.0->0.01",
+  "mutated": "rlm_confidence: float = 0.01,"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 91,
+  "mutation": "const 0.0->0.01",
+  "mutated": "steam_confidence: float = 0.01,"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 94,
+  "mutation": "const 0.0->0.01",
+  "mutated": "key_number_value: float = 0.01,"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 95,
+  "mutation": "const 0.0->0.01",
+  "mutated": "contrarian_value_score: float = 0.01,"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 96,
+  "mutation": "const 0.0->0.01",
+  "mutated": "contrarian_edge_pct: float = 0.01,"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 156,
+  "mutation": ">=->>",
+  "mutated": "elif books_compared > 2:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 156,
+  "mutation": ">=-><=",
+  "mutated": "elif books_compared <= 2:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 156,
+  "mutation": ">-><",
+  "mutated": "elif books_compared <= 2:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 156,
+  "mutation": "const 2->3",
+  "mutated": "elif books_compared >= 3:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 159,
+  "mutation": "==->!=",
+  "mutated": "elif books_compared != 1:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 159,
+  "mutation": "const 1->2",
+  "mutated": "elif books_compared == 2:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 170,
+  "mutation": ">=->>",
+  "mutated": "if edge_pct > 5.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 170,
+  "mutation": ">=-><=",
+  "mutated": "if edge_pct <= 5.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 170,
+  "mutation": ">-><",
+  "mutated": "if edge_pct <= 5.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 170,
+  "mutation": "const 5.0->5.01",
+  "mutated": "if edge_pct >= 5.01:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 171,
+  "mutation": "const 0.90->0.91",
+  "mutated": "base = 0.91"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 173,
+  "mutation": ">=->>",
+  "mutated": "elif edge_pct > 3.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 173,
+  "mutation": ">=-><=",
+  "mutated": "elif edge_pct <= 3.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 173,
+  "mutation": ">-><",
+  "mutated": "elif edge_pct <= 3.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 173,
+  "mutation": "const 3.0->3.01",
+  "mutated": "elif edge_pct >= 3.01:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 174,
+  "mutation": "const 0.75->0.76",
+  "mutated": "base = 0.76"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 176,
+  "mutation": ">=->>",
+  "mutated": "elif edge_pct > 2.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 176,
+  "mutation": ">=-><=",
+  "mutated": "elif edge_pct <= 2.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 176,
+  "mutation": ">-><",
+  "mutated": "elif edge_pct <= 2.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 176,
+  "mutation": "const 2.0->2.01",
+  "mutated": "elif edge_pct >= 2.01:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 177,
+  "mutation": "const 0.60->0.61",
+  "mutated": "base = 0.61"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 179,
+  "mutation": ">=->>",
+  "mutated": "elif edge_pct > 1.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 179,
+  "mutation": ">=-><=",
+  "mutated": "elif edge_pct <= 1.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 179,
+  "mutation": ">-><",
+  "mutated": "elif edge_pct <= 1.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 179,
+  "mutation": "const 1.0->1.01",
+  "mutated": "elif edge_pct >= 1.01:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 180,
+  "mutation": "const 0.45->0.46",
+  "mutated": "base = 0.46"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 182,
+  "mutation": ">=->>",
+  "mutated": "elif edge_pct > NOISE_FLOOR_PCT:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 182,
+  "mutation": ">=-><=",
+  "mutated": "elif edge_pct <= NOISE_FLOOR_PCT:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 182,
+  "mutation": ">-><",
+  "mutated": "elif edge_pct <= NOISE_FLOOR_PCT:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 183,
+  "mutation": "const 0.30->0.31",
+  "mutated": "base = 0.31"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 186,
+  "mutation": "const 0.15->0.16",
+  "mutated": "base = 0.16"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 188,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"edge_magnitude\"] = round(base, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 188,
+  "mutation": "round->floor",
+  "mutated": "factors[\"edge_magnitude\"] = floor(base, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 191,
+  "mutation": ">=->>",
+  "mutated": "if books_compared > 5:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 191,
+  "mutation": ">=-><=",
+  "mutated": "if books_compared <= 5:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 191,
+  "mutation": ">-><",
+  "mutated": "if books_compared <= 5:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 191,
+  "mutation": "const 5->6",
+  "mutated": "if books_compared >= 6:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 192,
+  "mutation": "const 0.10->0.11",
+  "mutated": "book_adj = 0.11"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 194,
+  "mutation": ">=->>",
+  "mutated": "elif books_compared > 3:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 194,
+  "mutation": ">=-><=",
+  "mutated": "elif books_compared <= 3:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 194,
+  "mutation": ">-><",
+  "mutated": "elif books_compared <= 3:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 194,
+  "mutation": "const 3->4",
+  "mutated": "elif books_compared >= 4:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 195,
+  "mutation": "const 0.05->0.06",
+  "mutated": "book_adj = 0.06"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 197,
+  "mutation": "==->!=",
+  "mutated": "elif books_compared != 2:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 197,
+  "mutation": "const 2->3",
+  "mutated": "elif books_compared == 3:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 198,
+  "mutation": "const 0.0->0.01",
+  "mutated": "book_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 201,
+  "mutation": "const 0.10->0.11",
+  "mutated": "book_adj = -0.11"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 203,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"book_count\"] = round(book_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 203,
+  "mutation": "round->floor",
+  "mutated": "factors[\"book_count\"] = floor(book_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 207,
+  "mutation": "const 0.10->0.11",
+  "mutated": "sharp_adj = 0.11"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 210,
+  "mutation": "const 0.0->0.01",
+  "mutated": "sharp_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 212,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"sharp_book\"] = round(sharp_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 212,
+  "mutation": "round->floor",
+  "mutated": "factors[\"sharp_book\"] = floor(sharp_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 215,
+  "mutation": "const 0.80->0.81",
+  "mutated": "efficiency = MARKET_EFFICIENCY.get(market, 0.81)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 217,
+  "mutation": "const 1.0->1.01",
+  "mutated": "market_adj = (1.01 - efficiency) * 0.15"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 217,
+  "mutation": "const 0.15->0.16",
+  "mutated": "market_adj = (1.0 - efficiency) * 0.16"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 218,
+  "mutation": "<=-><",
+  "mutated": "if efficiency < 0.70:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 218,
+  "mutation": "<=->>=",
+  "mutated": "if efficiency >= 0.70:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 218,
+  "mutation": "<->>",
+  "mutated": "if efficiency >= 0.70:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 218,
+  "mutation": "const 0.70->0.71",
+  "mutated": "if efficiency <= 0.71:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 220,
+  "mutation": ">=->>",
+  "mutated": "elif efficiency > 0.90:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 220,
+  "mutation": ">=-><=",
+  "mutated": "elif efficiency <= 0.90:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 220,
+  "mutation": ">-><",
+  "mutated": "elif efficiency <= 0.90:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 220,
+  "mutation": "const 0.90->0.91",
+  "mutated": "elif efficiency >= 0.91:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 222,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"market_efficiency\"] = round(market_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 222,
+  "mutation": "round->floor",
+  "mutated": "factors[\"market_efficiency\"] = floor(market_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 226,
+  "mutation": "const 0.08->0.09",
+  "mutated": "method_adj = 0.09"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 229,
+  "mutation": "const 0.0->0.01",
+  "mutated": "method_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 230,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"cross_method\"] = round(method_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 230,
+  "mutation": "round->floor",
+  "mutated": "factors[\"cross_method\"] = floor(method_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 234,
+  "mutation": "const 0.10->0.11",
+  "mutated": "live_adj = -0.11"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 237,
+  "mutation": "const 0.0->0.01",
+  "mutated": "live_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 238,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"live_penalty\"] = round(live_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 238,
+  "mutation": "round->floor",
+  "mutated": "factors[\"live_penalty\"] = floor(live_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 241,
+  "mutation": "const 0.0->0.01",
+  "mutated": "time_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 243,
+  "mutation": "<->>",
+  "mutated": "if hours_to_game > 0.5:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 243,
+  "mutation": "const 0.5->0.51",
+  "mutated": "if hours_to_game < 0.51:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 244,
+  "mutation": "const 0.03->0.04",
+  "mutated": "time_adj = 0.04  # Near tip \u2014 lines are sharp, edge is more meaningful"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 246,
+  "mutation": ">-><",
+  "mutated": "elif hours_to_game < 24:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 246,
+  "mutation": "const 24->25",
+  "mutated": "elif hours_to_game > 25:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 247,
+  "mutation": "const 0.05->0.06",
+  "mutated": "time_adj = -0.06  # Early line \u2014 may move"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 249,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"time_to_game\"] = round(time_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 249,
+  "mutation": "round->floor",
+  "mutated": "factors[\"time_to_game\"] = floor(time_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 252,
+  "mutation": "const 0.0->0.01",
+  "mutated": "hhi_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 254,
+  "mutation": "<->>",
+  "mutated": "if market_hhi > 1500:  # Competitive \u2014 books agree, divergence is meaningful"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 254,
+  "mutation": "const 1500->1501",
+  "mutated": "if market_hhi < 1501:  # Competitive \u2014 books agree, divergence is meaningful"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 255,
+  "mutation": "const 0.05->0.06",
+  "mutated": "hhi_adj = 0.06"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 257,
+  "mutation": ">-><",
+  "mutated": "elif market_hhi < 4000:  # Concentrated \u2014 fewer books, easier to be noise"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 257,
+  "mutation": "const 4000->4001",
+  "mutated": "elif market_hhi > 4001:  # Concentrated \u2014 fewer books, easier to be noise"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 258,
+  "mutation": "const 0.05->0.06",
+  "mutated": "hhi_adj = -0.06"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 260,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"market_hhi\"] = round(hhi_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 260,
+  "mutation": "round->floor",
+  "mutated": "factors[\"market_hhi\"] = floor(hhi_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 263,
+  "mutation": "const 0.0->0.01",
+  "mutated": "entropy_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 265,
+  "mutation": ">-><",
+  "mutated": "if market_entropy < 2.0:  # High disagreement \u2014 genuine opportunity"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 265,
+  "mutation": "const 2.0->2.01",
+  "mutated": "if market_entropy > 2.01:  # High disagreement \u2014 genuine opportunity"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 266,
+  "mutation": "const 0.05->0.06",
+  "mutated": "entropy_adj = 0.06"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 268,
+  "mutation": "<->>",
+  "mutated": "elif market_entropy > 0.5:  # Total agreement \u2014 edge is closing or noise"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 268,
+  "mutation": "const 0.5->0.51",
+  "mutated": "elif market_entropy < 0.51:  # Total agreement \u2014 edge is closing or noise"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 269,
+  "mutation": "const 0.03->0.04",
+  "mutated": "entropy_adj = -0.04"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 271,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"market_entropy\"] = round(entropy_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 271,
+  "mutation": "round->floor",
+  "mutated": "factors[\"market_entropy\"] = floor(entropy_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 274,
+  "mutation": "const 0.0->0.01",
+  "mutated": "regime_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 280,
+  "mutation": "const 0.05->0.06",
+  "mutated": "regime_adj += 0.06"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 286,
+  "mutation": "const 0->1",
+  "mutated": "bias_mag = recency.get(\"bias_magnitude\", 1)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 288,
+  "mutation": ">-><",
+  "mutated": "if bias_mag < 0.4:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 288,
+  "mutation": "const 0.4->0.41",
+  "mutated": "if bias_mag > 0.41:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 289,
+  "mutation": "const 0.05->0.06",
+  "mutated": "regime_adj += 0.06"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 294,
+  "mutation": ">-><",
+  "mutated": "elif bias_mag < 0.2:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 294,
+  "mutation": "const 0.2->0.21",
+  "mutated": "elif bias_mag > 0.21:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 295,
+  "mutation": "const 0.02->0.03",
+  "mutated": "regime_adj += 0.03"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 301,
+  "mutation": ">-><",
+  "mutated": "if mean_rev.get(\"reversion_expected\") and mean_rev.get(\"confidence\", 0) < 0.6:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 301,
+  "mutation": "const 0.6->0.61",
+  "mutated": "if mean_rev.get(\"reversion_expected\") and mean_rev.get(\"confidence\", 0) > 0.61:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 301,
+  "mutation": "const 0->1",
+  "mutated": "if mean_rev.get(\"reversion_expected\") and mean_rev.get(\"confidence\", 1) > 0.6:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 304,
+  "mutation": "const 0->1",
+  "mutated": "z = mean_rev.get(\"current_zscore\", 1)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 305,
+  "mutation": ">-><",
+  "mutated": "if abs(z) < 1.5:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 305,
+  "mutation": "const 1.5->1.51",
+  "mutated": "if abs(z) > 1.51:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 306,
+  "mutation": "const 0.03->0.04",
+  "mutated": "regime_adj -= 0.04"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 307,
+  "mutation": ">-><",
+  "mutated": "direction = \"downward\" if z < 0 else \"upward\""
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 307,
+  "mutation": "const 0->1",
+  "mutated": "direction = \"downward\" if z > 1 else \"upward\""
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 314,
+  "mutation": "min->max",
+  "mutated": "regime_adj = max(-0.08, max(0.10, regime_adj))"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 314,
+  "mutation": "max->min",
+  "mutated": "regime_adj = min(-0.08, min(0.10, regime_adj))"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 314,
+  "mutation": "const 0.08->0.09",
+  "mutated": "regime_adj = max(-0.09, min(0.10, regime_adj))"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 314,
+  "mutation": "const 0.10->0.11",
+  "mutated": "regime_adj = max(-0.08, min(0.11, regime_adj))"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 315,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"regime_analysis\"] = round(regime_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 315,
+  "mutation": "round->floor",
+  "mutated": "factors[\"regime_analysis\"] = floor(regime_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 322,
+  "mutation": "const 0.0->0.01",
+  "mutated": "kl_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 324,
+  "mutation": ">-><",
+  "mutated": "if kl_divergence < 0.05:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 324,
+  "mutation": "const 0.05->0.06",
+  "mutated": "if kl_divergence > 0.06:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 326,
+  "mutation": "const 0.06->0.07",
+  "mutated": "kl_adj = 0.07"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 331,
+  "mutation": ">-><",
+  "mutated": "elif kl_divergence < 0.01:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 331,
+  "mutation": "const 0.01->0.02",
+  "mutated": "elif kl_divergence > 0.02:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 333,
+  "mutation": "const 0.03->0.04",
+  "mutated": "kl_adj = 0.04"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 337,
+  "mutation": "<->>",
+  "mutated": "elif kl_divergence > 0.001:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 337,
+  "mutation": "const 0.001->0.01",
+  "mutated": "elif kl_divergence < 0.01:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 339,
+  "mutation": "const 0.04->0.05",
+  "mutated": "kl_adj = -0.05"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 345,
+  "mutation": ">-><",
+  "mutated": "if js_divergence is not None and js_divergence < 0.03:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 345,
+  "mutation": "const 0.03->0.04",
+  "mutated": "if js_divergence is not None and js_divergence > 0.04:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 346,
+  "mutation": "const 0.02->0.03",
+  "mutated": "kl_adj += 0.03"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 350,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"kl_divergence\"] = round(kl_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 350,
+  "mutation": "round->floor",
+  "mutated": "factors[\"kl_divergence\"] = floor(kl_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 357,
+  "mutation": "const 0.0->0.01",
+  "mutated": "shading_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 359,
+  "mutation": "==->!=",
+  "mutated": "if shading_value_side != \"opposite\":"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 360,
+  "mutation": "const 0.06->0.07",
+  "mutated": "shading_adj = 0.07"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 365,
+  "mutation": "==->!=",
+  "mutated": "elif shading_value_side != \"this_side\":"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 366,
+  "mutation": "const 0.03->0.04",
+  "mutated": "shading_adj = 0.04"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 373,
+  "mutation": "const 0.04->0.05",
+  "mutated": "shading_adj = -0.05"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 378,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"number_shading\"] = round(shading_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 378,
+  "mutation": "round->floor",
+  "mutated": "factors[\"number_shading\"] = floor(shading_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 384,
+  "mutation": "const 0.0->0.01",
+  "mutated": "trap_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 385,
+  "mutation": ">-><",
+  "mutated": "if trap_line_confidence is not None and trap_line_confidence < 0.30:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 385,
+  "mutation": "const 0.30->0.31",
+  "mutated": "if trap_line_confidence is not None and trap_line_confidence > 0.31:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 386,
+  "mutation": "==->!=",
+  "mutated": "if trap_actionable_side != \"opposite_public\":"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 388,
+  "mutation": "min->max",
+  "mutated": "trap_adj = max(0.08, trap_line_confidence * 0.10)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 388,
+  "mutation": "const 0.08->0.09",
+  "mutated": "trap_adj = min(0.09, trap_line_confidence * 0.10)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 388,
+  "mutation": "const 0.10->0.11",
+  "mutated": "trap_adj = min(0.08, trap_line_confidence * 0.11)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 395,
+  "mutation": "min->max",
+  "mutated": "trap_adj = -max(0.06, trap_line_confidence * 0.08)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 395,
+  "mutation": "const 0.06->0.07",
+  "mutated": "trap_adj = -min(0.07, trap_line_confidence * 0.08)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 395,
+  "mutation": "const 0.08->0.09",
+  "mutated": "trap_adj = -min(0.06, trap_line_confidence * 0.09)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 400,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"trap_line\"] = round(trap_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 400,
+  "mutation": "round->floor",
+  "mutated": "factors[\"trap_line\"] = floor(trap_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 405,
+  "mutation": "const 0.0->0.01",
+  "mutated": "attention_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 406,
+  "mutation": ">-><",
+  "mutated": "if attention_opportunity is not None and attention_opportunity < 0.3:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 406,
+  "mutation": "const 0.3->0.31",
+  "mutated": "if attention_opportunity is not None and attention_opportunity > 0.31:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 407,
+  "mutation": "min->max",
+  "mutated": "attention_adj = max(0.06, attention_opportunity * 0.08)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 407,
+  "mutation": "const 0.06->0.07",
+  "mutated": "attention_adj = min(0.07, attention_opportunity * 0.08)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 407,
+  "mutation": "const 0.08->0.09",
+  "mutated": "attention_adj = min(0.06, attention_opportunity * 0.09)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 412,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"attention_arbitrage\"] = round(attention_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 412,
+  "mutation": "round->floor",
+  "mutated": "factors[\"attention_arbitrage\"] = floor(attention_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 417,
+  "mutation": "const 0.0->0.01",
+  "mutated": "rlm_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 418,
+  "mutation": ">-><",
+  "mutated": "if rlm_detected and rlm_confidence < 0.1:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 418,
+  "mutation": "const 0.1->0.11",
+  "mutated": "if rlm_detected and rlm_confidence > 0.11:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 420,
+  "mutation": "min->max",
+  "mutated": "rlm_adj = max(0.08, 0.08 * rlm_confidence)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 420,
+  "mutation": "const 0.08->0.09",
+  "mutated": "rlm_adj = min(0.09, 0.08 * rlm_confidence)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 420,
+  "mutation": "const 0.08->0.09",
+  "mutated": "rlm_adj = min(0.08, 0.09 * rlm_confidence)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 427,
+  "mutation": "min->max",
+  "mutated": "rlm_adj = -max(0.06, 0.06 * rlm_confidence)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 427,
+  "mutation": "const 0.06->0.07",
+  "mutated": "rlm_adj = -min(0.07, 0.06 * rlm_confidence)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 427,
+  "mutation": "const 0.06->0.07",
+  "mutated": "rlm_adj = -min(0.06, 0.07 * rlm_confidence)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 432,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"rlm\"] = round(rlm_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 432,
+  "mutation": "round->floor",
+  "mutated": "factors[\"rlm\"] = floor(rlm_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 437,
+  "mutation": "const 0.0->0.01",
+  "mutated": "steam_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 438,
+  "mutation": ">-><",
+  "mutated": "if steam_detected and steam_confidence < 0.1:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 438,
+  "mutation": "const 0.1->0.11",
+  "mutated": "if steam_detected and steam_confidence > 0.11:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 440,
+  "mutation": "min->max",
+  "mutated": "steam_adj = max(0.10, 0.10 * steam_confidence)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 440,
+  "mutation": "const 0.10->0.11",
+  "mutated": "steam_adj = min(0.11, 0.10 * steam_confidence)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 440,
+  "mutation": "const 0.10->0.11",
+  "mutated": "steam_adj = min(0.10, 0.11 * steam_confidence)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 447,
+  "mutation": "min->max",
+  "mutated": "steam_adj = -max(0.08, 0.08 * steam_confidence)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 447,
+  "mutation": "const 0.08->0.09",
+  "mutated": "steam_adj = -min(0.09, 0.08 * steam_confidence)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 447,
+  "mutation": "const 0.08->0.09",
+  "mutated": "steam_adj = -min(0.08, 0.09 * steam_confidence)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 452,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"steam\"] = round(steam_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 452,
+  "mutation": "round->floor",
+  "mutated": "factors[\"steam\"] = floor(steam_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 458,
+  "mutation": "const 0.0->0.01",
+  "mutated": "dead_num_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 460,
+  "mutation": "const 0.02->0.03",
+  "mutated": "dead_num_adj = 0.03"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 465,
+  "mutation": ">-><",
+  "mutated": "elif key_number_value < 0.6:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 465,
+  "mutation": "const 0.6->0.61",
+  "mutated": "elif key_number_value > 0.61:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 466,
+  "mutation": "const 0.04->0.05",
+  "mutated": "dead_num_adj = 0.05"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 471,
+  "mutation": ">-><",
+  "mutated": "elif key_number_value < 0.3:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 471,
+  "mutation": "const 0.3->0.31",
+  "mutated": "elif key_number_value > 0.31:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 472,
+  "mutation": "const 0.02->0.03",
+  "mutated": "dead_num_adj = 0.03"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 476,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"dead_number\"] = round(dead_num_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 476,
+  "mutation": "round->floor",
+  "mutated": "factors[\"dead_number\"] = floor(dead_num_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 481,
+  "mutation": "const 0.0->0.01",
+  "mutated": "contrarian_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 482,
+  "mutation": ">-><",
+  "mutated": "if contrarian_edge_pct < 0 and contrarian_value_score > 1.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 482,
+  "mutation": ">-><",
+  "mutated": "if contrarian_edge_pct > 0 and contrarian_value_score < 1.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 482,
+  "mutation": "const 1.0->1.01",
+  "mutated": "if contrarian_edge_pct > 0 and contrarian_value_score > 1.01:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 482,
+  "mutation": "const 0->1",
+  "mutated": "if contrarian_edge_pct > 1 and contrarian_value_score > 1.0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 484,
+  "mutation": "min->max",
+  "mutated": "contrarian_adj = max(0.06, contrarian_edge_pct / 100.0 * 3.0)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 484,
+  "mutation": "const 0.06->0.07",
+  "mutated": "contrarian_adj = min(0.07, contrarian_edge_pct / 100.0 * 3.0)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 484,
+  "mutation": "const 100.0->100.01",
+  "mutated": "contrarian_adj = min(0.06, contrarian_edge_pct / 100.01 * 3.0)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 484,
+  "mutation": "const 3.0->3.01",
+  "mutated": "contrarian_adj = min(0.06, contrarian_edge_pct / 100.0 * 3.01)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 491,
+  "mutation": "const 0.04->0.05",
+  "mutated": "contrarian_adj = -0.05"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 496,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"contrarian\"] = round(contrarian_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 496,
+  "mutation": "round->floor",
+  "mutated": "factors[\"contrarian\"] = floor(contrarian_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 503,
+  "mutation": "const 0.0->0.01",
+  "mutated": "injury_adj = 0.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 504,
+  "mutation": "const 0->1",
+  "mutated": "if injury_market_adjustment is not None and injury_market_adjustment != 1:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 506,
+  "mutation": ">-><",
+  "mutated": "if injury_market_adjustment < 0:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 506,
+  "mutation": "const 0->1",
+  "mutated": "if injury_market_adjustment > 1:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 517,
+  "mutation": "const 0.04->0.05",
+  "mutated": "injury_adj += 0.05"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 522,
+  "mutation": "min->max",
+  "mutated": "injury_adj = max(-0.10, max(0.10, injury_adj))"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 522,
+  "mutation": "max->min",
+  "mutated": "injury_adj = min(-0.10, min(0.10, injury_adj))"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 522,
+  "mutation": "const 0.10->0.11",
+  "mutated": "injury_adj = max(-0.11, min(0.10, injury_adj))"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 522,
+  "mutation": "const 0.10->0.11",
+  "mutated": "injury_adj = max(-0.10, min(0.11, injury_adj))"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 523,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"injury_model\"] = round(injury_adj, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 523,
+  "mutation": "round->floor",
+  "mutated": "factors[\"injury_model\"] = floor(injury_adj, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 530,
+  "mutation": "min->max",
+  "mutated": "score = round(max(0.0, max(raw, ceiling)), 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 530,
+  "mutation": "max->min",
+  "mutated": "score = round(min(0.0, min(raw, ceiling)), 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 530,
+  "mutation": "const 0.0->0.01",
+  "mutated": "score = round(max(0.01, min(raw, ceiling)), 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 530,
+  "mutation": "const 3->4",
+  "mutated": "score = round(max(0.0, min(raw, ceiling)), 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 530,
+  "mutation": "round->floor",
+  "mutated": "score = floor(max(0.0, min(raw, ceiling)), 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 531,
+  "mutation": "const 3->4",
+  "mutated": "factors[\"raw_total\"] = round(raw, 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 531,
+  "mutation": "round->floor",
+  "mutated": "factors[\"raw_total\"] = floor(raw, 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 535,
+  "mutation": ">=->>",
+  "mutated": "if score > 0.90:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 535,
+  "mutation": ">=-><=",
+  "mutated": "if score <= 0.90:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 535,
+  "mutation": ">-><",
+  "mutated": "if score <= 0.90:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 535,
+  "mutation": "const 0.90->0.91",
+  "mutated": "if score >= 0.91:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 537,
+  "mutation": ">=->>",
+  "mutated": "elif score > 0.75:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 537,
+  "mutation": ">=-><=",
+  "mutated": "elif score <= 0.75:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 537,
+  "mutation": ">-><",
+  "mutated": "elif score <= 0.75:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 537,
+  "mutation": "const 0.75->0.76",
+  "mutated": "elif score >= 0.76:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 539,
+  "mutation": ">=->>",
+  "mutated": "elif score > 0.55:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 539,
+  "mutation": ">=-><=",
+  "mutated": "elif score <= 0.55:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 539,
+  "mutation": ">-><",
+  "mutated": "elif score <= 0.55:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 539,
+  "mutation": "const 0.55->0.56",
+  "mutated": "elif score >= 0.56:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 541,
+  "mutation": ">=->>",
+  "mutated": "elif score > 0.30:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 541,
+  "mutation": ">=-><=",
+  "mutated": "elif score <= 0.30:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 541,
+  "mutation": ">-><",
+  "mutated": "elif score <= 0.30:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 541,
+  "mutation": "const 0.30->0.31",
+  "mutated": "elif score >= 0.31:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 568,
+  "mutation": "const 0.0->0.01",
+  "mutated": "score=0.01, tier=\"UNVERIFIED\", source_class=\"INFERRED\","
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 569,
+  "mutation": "const 0.55->0.56",
+  "mutated": "ceiling=0.56, factors={}, reasoning=\"No legs to score\","
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 573,
+  "mutation": "min->max",
+  "mutated": "min_score = max(scores)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 575,
+  "mutation": "const 1.0->1.01",
+  "mutated": "product = 1.01"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 577,
+  "mutation": "max->min",
+  "mutated": "product *= min(s, 0.01)  # avoid zero"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 577,
+  "mutation": "const 0.01->0.02",
+  "mutated": "product *= max(s, 0.02)  # avoid zero"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 578,
+  "mutation": "const 1.0->1.01",
+  "mutated": "geo_mean = product ** (1.01 / len(scores))"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 581,
+  "mutation": "const 0.6->0.61",
+  "mutated": "combined = 0.61 * min_score + 0.4 * geo_mean"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 581,
+  "mutation": "const 0.4->0.41",
+  "mutated": "combined = 0.6 * min_score + 0.41 * geo_mean"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 583,
+  "mutation": "min->max",
+  "mutated": "ceiling = max(lc.ceiling for lc in leg_confidences)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 584,
+  "mutation": "min->max",
+  "mutated": "score = round(max(combined, ceiling), 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 584,
+  "mutation": "const 3->4",
+  "mutated": "score = round(min(combined, ceiling), 4)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 584,
+  "mutation": "round->floor",
+  "mutated": "score = floor(min(combined, ceiling), 3)"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 587,
+  "mutation": ">=->>",
+  "mutated": "if score > 0.90:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 587,
+  "mutation": ">=-><=",
+  "mutated": "if score <= 0.90:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 587,
+  "mutation": ">-><",
+  "mutated": "if score <= 0.90:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 587,
+  "mutation": "const 0.90->0.91",
+  "mutated": "if score >= 0.91:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 589,
+  "mutation": ">=->>",
+  "mutated": "elif score > 0.75:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 589,
+  "mutation": ">=-><=",
+  "mutated": "elif score <= 0.75:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 589,
+  "mutation": ">-><",
+  "mutated": "elif score <= 0.75:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 589,
+  "mutation": "const 0.75->0.76",
+  "mutated": "elif score >= 0.76:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 591,
+  "mutation": ">=->>",
+  "mutated": "elif score > 0.55:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 591,
+  "mutation": ">=-><=",
+  "mutated": "elif score <= 0.55:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 591,
+  "mutation": ">-><",
+  "mutated": "elif score <= 0.55:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 591,
+  "mutation": "const 0.55->0.56",
+  "mutated": "elif score >= 0.56:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 593,
+  "mutation": ">=->>",
+  "mutated": "elif score > 0.30:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 593,
+  "mutation": ">=-><=",
+  "mutated": "elif score <= 0.30:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 593,
+  "mutation": ">-><",
+  "mutated": "elif score <= 0.30:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 593,
+  "mutation": "const 0.30->0.31",
+  "mutated": "elif score >= 0.31:"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 599,
+  "mutation": "min->max",
+  "mutated": "source_class = max(leg_confidences, key=lambda lc: lc.score).source_class"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 603,
+  "mutation": "const 3->4",
+  "mutated": "\"min_score\": round(min_score, 4),"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 603,
+  "mutation": "round->floor",
+  "mutated": "\"min_score\": floor(min_score, 3),"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 604,
+  "mutation": "const 3->4",
+  "mutated": "\"geo_mean\": round(geo_mean, 4),"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 604,
+  "mutation": "round->floor",
+  "mutated": "\"geo_mean\": floor(geo_mean, 3),"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "line": 609,
+  "mutation": "min->max",
+  "mutated": "weakest = max(leg_confidences, key=lambda lc: lc.score)"
+ }
+]
