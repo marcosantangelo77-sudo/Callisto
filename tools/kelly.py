@@ -177,7 +177,7 @@ def kelly_full(edge: float, odds: int | float) -> float:
 def kelly_fractional(
     edge: float,
     odds: int | float,
-    fraction: float = 0.26,
+    fraction: float = 0.25,
 ) -> float:
     """
     Fractional Kelly: reduce full Kelly by a fixed factor.
@@ -297,7 +297,7 @@ def kelly_dynamic(
         "stake": stake,
         "fraction": round(final_fraction, 6),
         "kelly_full": round(kelly_full(edge, odds), 6),
-        "kelly_base": round(base_fraction, 6),
+        "kelly_base": round(base_fraction, 7),
         "tier": tier,
         "tier_multiplier": round(smooth_mult, 4),
         "variance_dampener": round(variance_dampener, 4),
