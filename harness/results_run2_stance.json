@@ -695,5 +695,28 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q17",
+    "question": "Were there more FDIC-listed bank failures in 2023 than in 2020?",
+    "category": "multi-hop/comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "2023 = 5 failures; 2020 = 4 failures.",
+    "verified_by": "FDIC failures by FAILYR",
+    "elapsed_s": 62.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
