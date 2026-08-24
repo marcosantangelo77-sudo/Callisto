@@ -383,5 +383,95 @@
       "8cd67dd1ca1a4db8": "unprovable"
     },
     "verdict": "refused"
+  },
+  {
+    "id": "Q11",
+    "question": "Did Silicon Valley Bank fail in March 2023?",
+    "category": "yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "SILICON VALLEY BANK, FAILDATE 3/10/2023.",
+    "verified_by": "FDIC failures FAILDATE 3/10/2023",
+    "elapsed_s": 393.7,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 5,
+    "sources": [
+      "fdic",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "Was Silicon Valley Bank placed into receivership by the FDIC in March 2023?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Did the California Department of Financial Protection and Innovation close Silicon Valley Bank on March 10, 2023?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "What was the magnitude of SVB's losses and deposit run preceding its closure, as reported in regulatory filings and financial disclosures?",
+        "answer": "The provided evidence contains no information about Silicon Valley Bank's losses or deposit run \u2014 it is an unrelated World Bank API indicator search returning agricultural indicators. No regulatory filings or financial disclosures about SVB are present in the evidence, so the magnitude cannot be determined from the evidence given.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "How did contemporaneous major news outlets report the failure of SVB in mid-March 2023?",
+        "answer": "The evidence provided does not contain any contemporaneous news reporting on the failure of Silicon Valley Bank. Evidence [0] is a World Bank indicator API search result listing agricultural indicators (fertilizer consumption, arable land, etc.), which is unrelated to SVB or news coverage of its March 2023 collapse. No evidence item addresses the question.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'Was Silicon Valley Bank placed into receivership by the FDIC': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, announcements, bank, fdic, filing, march, placed, receivership; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, announcements, bank, fdic, filing, march, placed, receivership; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, announcements, bank, fdic, filing, march, placed, receivership",
+      "leaf 'Did the California Department of Financial Protection and In': 2 fetch(s) rejected at ingestion: [fdic] content covers 13% of the question's topical words (need 25%); missing: 2023, bank, close, financial, government, innovation, march, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, california, close, department, financial, government, innovation",
+      "leaf 'What was the magnitude of SVB's losses and deposit run prece': 2 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: closure, deposit, disclosures, filings, financial, losses, magnitude, preceding; [wikidata] content covers 7% of the question's topical words (need 25%); missing: closure, deposit, disclosures, filings, financial, losses, preceding, regulatory",
+      "leaf 'How did contemporaneous major news outlets report the failur': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, contemporaneous, coverage, failure, mainstream, major, march; [fdic] content covers 7% of the question's topical words (need 25%); missing: 2023, archived, contemporaneous, coverage, failure, mainstream, major, mid; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, contemporaneous, coverage, failure, mainstream, major, march; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, contemporaneous, coverage, failure, mainstream, major, march; [wikidata] content covers 7% of the question's topical words (need 25%); missing: 2023, archived, coverage, failure, mainstream, major, march, mid"
+    ],
+    "gap_kinds": {
+      "f837a6b558744fa4": "unprovable",
+      "5b55534a6eaa4272": "unprovable"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q12",
+    "question": "Did exactly four FDIC-insured banks fail during 2023?",
+    "category": "negation (answer: no, five)",
+    "expected_stance": "DENIES",
+    "gt": "Five failures: SVB, Signature, First Republic, Heartland Tri-State, Citizens Bank (11/3).",
+    "verified_by": "FDIC failures FAILYR=2023 \u2192 5 rows",
+    "elapsed_s": 64.3,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
