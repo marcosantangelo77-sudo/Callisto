@@ -531,10 +531,46 @@ def classify_null_kind(trace: Any) -> tuple[str, str]:
             "it as 'the literature does not address this': " + " | ".join(why))
 
     # Rounds ran, nothing was rejected with reasons and nothing admitted:
-    # the sources were reached and simply held nothing relevant.
+    # the sources were reached and simply held nothing relevant — UNLESS
+    # one of them has a health history that says otherwise. A source with
+    # a record of good results that suddenly returns nothing is the exact
+    # signature of eleven past live-API defects; its silence is evidence
+    # of breakage, not of absence. Evidence-based amendment only: sources
+    # with no history or no successful history do NOT flip the verdict.
+    try:
+        from tools.sources.staleness import amend_null_classification
+        touched = [s.get("name", "") for r in rounds
+                   for s in r.get("sources", [])]
+        kind, expl2 = amend_null_classification(
+            NullKind.HONEST_NULL.value, "", [t for t in touched if t])
+        if kind != NullKind.HONEST_NULL.value:
+            return NullKind.RETRIEVAL_FAILURE.value, (
+                f"sources were queried but returned nothing, and at least "
+                f"one has a recent history of good results — {expl2}")
+    except Exception:
+        # The classifier must keep working even where the staleness module
+        # is unavailable or its store is unreadable. Default stays honest.
+        pass
     return NullKind.HONEST_NULL.value, (
         f"sources were queried; no relevant material returned "
         f"(0 rejected): stop reason '{stop or 'search exhausted'}'")
+
+
+def source_names_from_trace(trace: Any) -> list[str]:
+    """Registry names a leaf's retrieval actually touched (tried sources,
+    including skipped ones) — the set whose health history is relevant to
+    judging that leaf's null."""
+    names: list[str] = []
+    for r in getattr(trace, "rounds", None) or []:
+        for s in r.get("sources", []):
+            n = s.get("name")
+            if n and n not in names:
+                names.append(n)
+    for d in (getattr(trace, "skipped_sources", None) or []):
+        n = d.get("name")
+        if n and n not in names:
+            names.append(n)
+    return names
 
 
 # ── Report over a whole run ─────────────────────────────────────────────────

@@ -499,6 +499,15 @@ def main(argv: list[str]) -> int:
     args = [a for a in argv if not a.startswith("-")]
     as_json = "--json" in argv
     results = run_all(args or None)
+    # Persist every observation — a probe that is not recorded rots
+    # the day after it runs. History is what lets the null classifier
+    # tell 'silent source' from 'silent literature' later.
+    if os.environ.get("CALLISTO_SOURCE_HEALTH_NO_PERSIST") != "1":
+        try:
+            from tools.sources.staleness import HealthStore
+            HealthStore().record_all(results)
+        except OSError as exc:      # unwritable state dir must not
+            print(f"warning: could not persist health history: {exc}")
     if as_json:
         print(json.dumps([r.to_dict() for r in results], indent=2))
     else:
