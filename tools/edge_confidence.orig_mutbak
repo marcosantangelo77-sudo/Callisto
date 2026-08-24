@@ -262,7 +262,7 @@ def score_edge(
     # Step 10: Market entropy
     entropy_adj = 0.0
     if market_entropy is not None:
-        if market_entropy >= 2.0:  # High disagreement — genuine opportunity
+        if market_entropy > 2.0:  # High disagreement — genuine opportunity
             entropy_adj = 0.05
             reasons.append(f"High book disagreement (entropy={market_entropy:.2f}) — opportunity window")
         elif market_entropy < 0.5:  # Total agreement — edge is closing or noise
