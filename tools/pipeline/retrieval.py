@@ -67,6 +67,10 @@ _QUERY_STOPWORDS = {
 }
 
 
+def _prefix_hit(a: str, b: str) -> bool:
+    return a == b or a.startswith(b) or b.startswith(a)
+
+
 def _tokens(text: str) -> list[str]:
     return [w for w in _WORD_RE.findall(text.lower())
             if len(w) >= 3 and w not in _QUERY_STOPWORDS]
@@ -374,6 +378,9 @@ class RetrievalTrace:
     #: sources the planner could not serve, with its honest reason
     skipped_sources: list[dict] = field(default_factory=list)
     independent_keys: set[str] = field(default_factory=set)
+    #: sources skipped BEFORE fetching because no result they could return
+    #: would satisfy an unmet declared requirement (expected-gain gate)
+    gain_skipped: list[dict] = field(default_factory=list)
     stop_reason: str = ""
 
     @property
@@ -501,7 +508,7 @@ class IterativeRetriever:
                             {"round": rnd, "source": s.name,
                              "reason": why})
                         logger.info("gain-skip %s r%d: %s",
-                                    spec_key := s.name, rnd, why)
+                                    s.name, rnd, why)
                 if not kept:
                     trace.stop_reason = (
                         "no candidate fetch could satisfy any unmet "
