@@ -183,7 +183,10 @@ def test_f4_answered_leaf_unmet_requirements_marked_unprovable():
     result, _ = _run(pipe, reg, calls, adaptive_gain=True, max_rounds=2,
                      max_spq=2, gate_cov=0.25)
     leaf = result.leaves[0]
-    assert result.sealed
+    # D2 seal-contract fix: an all-unprovable parent now REFUSES instead of
+    # sealing a non-answer — see tests/test_seal_unprovable.py.
+    assert not result.sealed
+    assert "unprovable" in result.refusal_reason
     assert leaf.gap_kind == "unprovable", (leaf.gap_kind,
                                            leaf.requirement_reasons)
 
@@ -203,7 +206,9 @@ def test_f4_gap_classification_skipped_when_answer_empty_but_fetches_exist():
     leaf = result.leaves[0]
     assert not result.sealed
     assert leaf.gap_kind == "", leaf.gap_kind   # <- the hole
-    assert result.refusal_reason == "every leaf came back unanswered"
+    # D2 fix: the refusal now names the structured gap-kind breakdown.
+    assert result.refusal_reason.startswith("every leaf came back unanswered")
+    assert "no gap verdict" in result.refusal_reason
 
 
 def test_f4_control_empty_answer_zero_admitted_gets_classification():
@@ -215,7 +220,10 @@ def test_f4_control_empty_answer_zero_admitted_gets_classification():
     mdl = _model(DECOMPOSE_ONE, answer="")
     pipe, _, _ = _pipeline((reg, calls), routes, model=mdl)
     result, _ = _run(pipe, reg, calls, adaptive_gain=True)
-    assert result.refusal_reason == "every leaf came back unanswered"
+    # D2 fix: refusal names the structured kinds.
+    assert result.refusal_reason.startswith("every leaf came back unanswered (")
+    assert "honest_null" in result.refusal_reason or \
+        "retrieval_failure" in result.refusal_reason
     for leaf in result.leaves:
         assert leaf.gap_kind != "", leaf.gap_kind
 

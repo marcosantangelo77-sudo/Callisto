@@ -43,6 +43,7 @@ from agp import (
     SessionSummary,
     SourceClass,
 )
+from agp.ensemble import SELF_REVIEW_CEILING
 from agp.provenance import ProvenanceLedger
 from agp.research_program import (
     EvidenceRequirement,
@@ -1004,7 +1005,15 @@ class ResearchPipeline:
         session.advance_to(SessionStep.SYNTHESIS)
 
         if not any(l.answer for l in result.leaves):
-            result.refusal_reason = "every leaf came back unanswered"
+            # Name the STRUCTURED gap kinds when they exist: "unanswered"
+            # alone hides whether we could not look, found nothing, or
+            # could not meet our own bar.
+            from collections import Counter
+            counts = Counter(l.gap_kind or "(no gap verdict)" for l in result.leaves)
+            breakdown = ", ".join(
+                f"{kind} x{n}" for kind, n in sorted(counts.items()))
+            result.refusal_reason = (
+                f"every leaf came back unanswered ({breakdown})")
             return result
 
         # 6. Assemble parent conclusion; confidence derived from provenance.
@@ -1020,7 +1029,37 @@ class ResearchPipeline:
         for l in result.leaves:
             if l.gap_kind:
                 result.gap_kinds[l.question_id] = l.gap_kind
-        best_leaf = max(answered, key=lambda l: l.confidence)
+
+        # ── SEAL CONTRACT: a seal is a claim that something was PROVEN. ────
+        # A leaf carrying a gap_kind verdict (unprovable / honest_null /
+        # retrieval_failure) proves NOTHING, regardless of whether a model
+        # wrote words into its answer field. The parent may therefore stand
+        # only on PROVABLE leaves: answered AND gap-free. This reads the
+        # STRUCTURED gap_kind set during answering — never the conclusion
+        # prose (parsing prose for meaning is the forecast-sign defect
+        # class). Two consequences, deliberately:
+        #
+        #   ALL leaves gapped -> REFUSE, naming the gap kinds, so the caller
+        #     learns WHICH kind of nothing it got instead of receiving a
+        #     sealed non-answer indistinguishable from a sealed answer.
+        #   MIXED (some provable, some gapped) -> SEAL, but standing only on
+        #     the provable leaves and with the parent ceiling CAPPED AT
+        #     SPECULATIVE: a parent with unanswered siblings is a weaker
+        #     claim than one standing on five proven legs, and the cap says
+        #     so numerically. Only ever refuses or LOWERS — never raises.
+        provable = [l for l in result.leaves if l.answer and not l.gap_kind]
+        if not provable:
+            from collections import Counter
+            counts = Counter(l.gap_kind or "(no gap verdict)" for l in result.leaves)
+            breakdown = ", ".join(
+                f"{kind} x{n}" for kind, n in sorted(counts.items()))
+            result.refusal_reason = (
+                f"no provable leaf: every leaf is gap-classified "
+                f"({breakdown}) — nothing was established, so there is "
+                f"nothing to seal")
+            return result
+
+        best_leaf = max(provable, key=lambda l: l.confidence)
         proposed = best_leaf.confidence
         # The parent's DIRECTION comes from the same leaf as its magnitude.
         parent_stance = best_leaf.stance
@@ -1028,6 +1067,16 @@ class ResearchPipeline:
         # Inheritance rule: zero/weak resolved descendants cap at SPECULATIVE.
         clamped, tier = clamp_parent_confidence(
             proposed, self.descendant_resolutions)
+
+        # Mixed decomposition: partial proof caps the parent at SPECULATIVE.
+        # Applied AFTER the inheritance clamp so it can only subtract.
+        if len(provable) < len(result.leaves):
+            clamped = min(clamped, SELF_REVIEW_CEILING)
+            tier = ConfidenceTier.from_score(max(0.0, clamped)).value
+            result.notes.append(
+                f"parent sealed on {len(provable)} of {len(result.leaves)} "
+                f"leaves (rest gap-classified: "
+                f"{sorted(result.gap_kinds.values())}); ceiling capped")
 
         # 7. Adversary. When no dedicated router was injected, the author's
         # own model attacks — recorded honestly as self-review in the notes.
