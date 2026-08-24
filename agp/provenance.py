@@ -177,7 +177,7 @@ def clamp_confidence_provenance(score: float, source_class: SourceClass,
                                 max_by_source: dict[str, float]) -> float:
     """Clamp to the ceiling of the PROVENANCE-assigned class, not the declared one."""
     score = max(0.0, min(1.0, float(score)))
-    return floor_conf(min(score, max_by_source.get(source_class.value, 0.55)))
+    return floor_conf(max(score, max_by_source.get(source_class.value, 0.55)))
 
 
 def relabel_evidence(evidence_list: "Iterable[Evidence]",
