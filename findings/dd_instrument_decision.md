@@ -89,3 +89,39 @@ whose honest answer is retirement.
    in this file.
 3. Run the 19 money red-team tests (exist only on the branch).
 4. tests/test_lifecycle_claim.py: expect 2 master failures resolved.
+
+
+## FINAL RESULTS (post-merge, this branch)
+
+Merge landed. Full suite: 76 failed / 11,567 passed / 8 skipped
+(xgboost/ml collection errors excluded — environmental; master baseline 30-34
+failures on the same exclusions).
+
+### The 19 money red-team test files: RUNNING for the first time
+17 branch-only money/red-team files (197 tests): 163 pass, 34 fail.
+Classification of the 34:
+- ~27 fail identically on origin/build/dd-decomposition-diversity itself
+  (pre-existing repros pinning still-open defects).
+- 3 K1 calib-scoring failures are GOOD NEWS: they pin the ground-truth
+  fabrication in _implied_outcome that MASTER already fixed (fail-closed,
+  unknown = excluded). Repros now stale.
+- 3 retr_selection_nulls failures: master's single membership rule classifies
+  mixed error+rejection as honest_null WITH partial-coverage disclosure;
+  branch pinned fail-closed RETRIEVAL_FAILURE. Genuine semantic collision,
+  resolved toward master's disclosed-mixed rule. Needs owner sign-off.
+- 1 forged-amendment failure is INTENTIONAL: score()'s default basis is now
+  the sealed ORIGINALS (per preregistration.py's own contract); amendments
+  apply only when explicitly passed. The forged-amendment attack is dead on
+  the default path.
+
+### Lifecycle claim tests: 2 failures -> 0 (verified)
+- amendment default-basis fix in agp/preregistration.py
+- content-bound journal chain in agp/claims.py (also converts two C2
+  forged-chain repros to fix-pins)
+
+### Other resolutions
+- engine.py: concurrent leaves + crossrun memory + full-gate checkpoints +
+  admissible-checkpoint replay combined; lost result.fetches.extend restored.
+- synthesis.py: per-class corroboration accounting kept (F5/F4c).
+- retro.answer(): handles running-loop and no-loop callers.
+- instrument decision executed as specified above.
