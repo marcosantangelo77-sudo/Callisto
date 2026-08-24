@@ -1,0 +1,514 @@
+[
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 50,
+  "mutation": "constant 3 -> 4",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.29s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 51,
+  "mutation": "constant 3 -> 4",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.29s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 71,
+  "mutation": "compare op #1 -> !=",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.24s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 76,
+  "mutation": "compare op #1 -> <",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 76,
+  "mutation": "constant 3 -> 4",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.24s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 76,
+  "mutation": "compare op #1 -> in",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 98,
+  "mutation": "compare op #1 -> <=",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 98,
+  "mutation": "constant 6 -> 7",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.21s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 103,
+  "mutation": "constant 1 -> 2",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.24s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 106,
+  "mutation": "constant 1 -> 2",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.21s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 106,
+  "mutation": "constant 50 -> 51",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.22s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 119,
+  "mutation": "constant 0.25 -> 0.275",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.23s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 120,
+  "mutation": "compare op #1 -> >=",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 120,
+  "mutation": "compare op #2 -> >",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 120,
+  "mutation": "constant 1.0 -> 1.1",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.22s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 132,
+  "mutation": "compare op #1 -> <",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 132,
+  "mutation": "constant 3 -> 4",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.37s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 135,
+  "mutation": "compare op #1 -> !=",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 138,
+  "mutation": "compare op #1 -> >=",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 143,
+  "mutation": "constant 8 -> 9",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.22s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 172,
+  "mutation": "compare op #1 -> !=",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.22s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 187,
+  "mutation": "compare op #1 -> !=",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 216,
+  "mutation": "compare op #1 -> <=",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 220,
+  "mutation": "compare op #1 -> <",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.33s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 220,
+  "mutation": "constant 0.9 -> 0.99",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.25s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 261,
+  "mutation": "constant 5 -> 6",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.22s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 266,
+  "mutation": "compare op #1 -> <",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.20s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 266,
+  "mutation": "constant 4 -> 5",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.21s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 268,
+  "mutation": "compare op #1 -> <",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.21s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 268,
+  "mutation": "constant 4 -> 5",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.23s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 347,
+  "mutation": "or -> and",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.23s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 359,
+  "mutation": "compare op #1 -> not in",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.23s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 360,
+  "mutation": "compare op #1 -> !=",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.19s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 402,
+  "mutation": "constant 3 -> 4",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.21s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 403,
+  "mutation": "constant 3 -> 4",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.25s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 404,
+  "mutation": "constant 4 -> 5",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.23s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 412,
+  "mutation": "max -> min",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 412,
+  "mutation": "constant 1 -> 2",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.24s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 413,
+  "mutation": "max -> min",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 413,
+  "mutation": "constant 1 -> 2",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 414,
+  "mutation": "max -> min",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.23s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 414,
+  "mutation": "constant 1 -> 2",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.25s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 464,
+  "mutation": "constant 1 -> 2",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.22s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 465,
+  "mutation": "constant 0.05 -> 0.055",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.29s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 466,
+  "mutation": "constant 2 -> 3",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.23s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 469,
+  "mutation": "constant 1 -> 2",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.21s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 469,
+  "mutation": "constant 1 -> 2",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.21s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 471,
+  "mutation": "constant 3 -> 4",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.32s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 496,
+  "mutation": "constant 120 -> 121",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.23s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 508,
+  "mutation": "compare op #1 -> <=",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.22s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 508,
+  "mutation": "constant 1 -> 2",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.28s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 548,
+  "mutation": "compare op #1 -> !=",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.30s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 550,
+  "mutation": "compare op #1 -> !=",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.25s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 560,
+  "mutation": "constant 120 -> 121",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.26s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 571,
+  "mutation": "compare op #1 -> ==",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 571,
+  "mutation": "constant 200 -> 201",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 580,
+  "mutation": "constant 120 -> 121",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.31s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 592,
+  "mutation": "round -> floor",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 592,
+  "mutation": "constant 3 -> 4",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.25s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 607,
+  "mutation": "constant 1 -> 2",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.26s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 610,
+  "mutation": "round -> floor",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 610,
+  "mutation": "constant 3 -> 4",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 632,
+  "mutation": "compare op #1 -> <",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 633,
+  "mutation": "min -> max",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.22s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 633,
+  "mutation": "constant 1.0 -> 1.1",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.25s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 634,
+  "mutation": "max -> min",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.21s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 634,
+  "mutation": "constant 1 -> 2",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.20s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 681,
+  "mutation": "compare op #1 -> <=",
+  "status": "KILLED",
+  "pytest_tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 681,
+  "mutation": "constant 5 -> 6",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.21s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 689,
+  "mutation": "constant 1 -> 2",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.26s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 691,
+  "mutation": "constant 30 -> 31",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.27s\n"
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "line": 692,
+  "mutation": "constant 1 -> 2",
+  "status": "SURVIVED",
+  "pytest_tail": "...........................                                              [100%]\n27 passed, 6 deselected in 1.25s\n"
+ },
+ {
+  "file": "tools/kelly.py",
+  "error": "baseline failing rc=1"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "error": "baseline failing rc=1"
+ }
+]
