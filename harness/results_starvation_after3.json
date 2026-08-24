@@ -704,5 +704,52 @@
     "elapsed_s": 106.4,
     "error": "TypeError: bad operand type for unary -: 'str'",
     "verdict": "error"
+  },
+  {
+    "id": "Q20",
+    "question": "Did Napoleon die before the United States Civil War began?",
+    "category": "multi-hop/temporal",
+    "expected_stance": "AFFIRMS",
+    "gt": "Napoleon died 1821-05-05, before April 1861.",
+    "verified_by": "wikidata Q517 P570 = 1821-05-05; civil war start 1861 (common knowledge anchor)",
+    "elapsed_s": 253.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 2,
+    "sources": [
+      "fdic"
+    ],
+    "leaves": [
+      {
+        "text": "On what date did Napoleon Bonaparte die?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "On what date did the United States Civil War begin?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'On what date did Napoleon Bonaparte die?': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: biographical, bonaparte, date, die, historical, napoleon, records, reference), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: biographical, bonaparte, date, die, historical, napoleon, records, reference), fred (content covers 0% of the question's topical words (need 25%); missing: biographical, bonaparte, date, die, historical, napoleon, records, reference), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: biographical, bonaparte, date, die, historical, napoleon, records, reference), fred (content covers 0% of the question's topical words (need 25%); missing: biographical, bonaparte, date, die, historical, napoleon, records, reference), openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['fdic']",
+      "leaf 'On what date did Napoleon Bonaparte die?': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: biographical, bonaparte, date, die, historical, napoleon, records, reference; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: biographical, bonaparte, date, die, historical, napoleon, records, reference; [fred] content covers 0% of the question's topical words (need 25%); missing: biographical, bonaparte, date, die, historical, napoleon, records, reference; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: biographical, bonaparte, date, die, historical, napoleon, records, reference; [fred] content covers 0% of the question's topical words (need 25%); missing: biographical, bonaparte, date, die, historical, napoleon, records, reference",
+      "leaf 'On what date did the United States Civil War begin?': sources asked but NOT contributing evidence: clinicaltrials (content covers 20% of the question's topical words (need 25%); missing: authoritative, begin, civil, date, historical, history, records, war), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 20% of the question's topical words (need 25%); missing: authoritative, begin, civil, date, historical, history, records, war), fred (content covers 0% of the question's topical words (need 25%); missing: authoritative, begin, civil, date, historical, history, records, states), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, clinicaltrials (content covers 20% of the question's topical words (need 25%); missing: authoritative, begin, civil, date, historical, history, records, war), fred (content covers 0% of the question's topical words (need 25%); missing: authoritative, begin, civil, date, historical, history, records, states), openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['fdic']",
+      "leaf 'On what date did the United States Civil War begin?': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 20% of the question's topical words (need 25%); missing: authoritative, begin, civil, date, historical, history, records, war; [clinicaltrials] content covers 20% of the question's topical words (need 25%); missing: authoritative, begin, civil, date, historical, history, records, war; [fred] content covers 0% of the question's topical words (need 25%); missing: authoritative, begin, civil, date, historical, history, records, states; [clinicaltrials] content covers 20% of the question's topical words (need 25%); missing: authoritative, begin, civil, date, historical, history, records, war; [fred] content covers 0% of the question's topical words (need 25%); missing: authoritative, begin, civil, date, historical, history, records, states"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
