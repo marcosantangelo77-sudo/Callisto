@@ -1,0 +1,25 @@
+[
+  {
+    "id": "Q01",
+    "question": "Was the U.S. unemployment rate lower in January 2026 than in January 2023?",
+    "category": "comparison",
+    "expected_stance": "DENIES",
+    "gt": "Jan 2023 = 3.5%, Jan 2026 = 4.3% \u2014 unemployment was HIGHER in Jan 2026.",
+    "verified_by": "fredgraph.csv UNRATE 2023-01 and 2026-01",
+    "elapsed_s": 63.8,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  }
+]
