@@ -419,11 +419,19 @@ class ResearchPipeline:
             return f.body[:4000]
 
         for f in fetches:
-            ev = Evidence(
-                content=_evidence_text(f), source_class=SourceClass.INFERRED,
+            # Provenance is assigned against the FULL canonical body (the
+            # exact bytes the ledger recorded) — never against the digest,
+            # which would silently demote every fetched item (caught by the
+            # run-13 golden regression before it shipped).
+            provenance_probe = Evidence(
+                content=f.body, source_class=SourceClass.INFERRED,
                 confidence_score=0.30, domain=session.domain or Domain.GENERAL,
                 origin_agent="pipeline", source_name=f.source_name)
-            assigned = self.ledger.assign_source_class(ev)
+            assigned = self.ledger.assign_source_class(provenance_probe)
+            ev = Evidence(
+                content=_evidence_text(f), source_class=assigned,
+                confidence_score=0.30, domain=session.domain or Domain.GENERAL,
+                origin_agent="pipeline", source_name=f.source_name)
             ev.source_class = assigned
             ceiling = MAX_CONFIDENCE_BY_SOURCE.get(assigned.value, 0.55)
             ev.confidence_score = round(min(0.45, ceiling), 2) \

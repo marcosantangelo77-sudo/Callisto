@@ -6,7 +6,7 @@
   "confidence_score": 0.55,
   "confidence_tier": "PROBABLE",
   "evidence": [
-    "{\"results\": [{\"cited_by_count\": 12, \"id\": \"W1\", \"publication_year\": 2024, \"title\": \"Scholarly study on apple earnings expectations: analyst consensus and quarterly results\"}]}",
+    "W1 Scholarly study on apple earnings expectations: analyst consensus and quarterly results",
     "sandbox code:\nresult = {'mean': sum([1.0, 2.0, 3.0]) / 3}\nstdout:\n"
   ],
   "fetches": [

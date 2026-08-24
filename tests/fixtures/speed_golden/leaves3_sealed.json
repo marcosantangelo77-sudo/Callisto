@@ -4,9 +4,9 @@
   "confidence_score": 0.55,
   "confidence_tier": "PROBABLE",
   "evidence": [
-    "{\"results\": [{\"cited_by_count\": 12, \"id\": \"W1\", \"publication_year\": 2024, \"title\": \"Scholarly study on apple earnings expectations: analyst consensus and quarterly results\"}]}",
-    "{\"documents\": [{\"agency\": \"government agency\", \"document_number\": \"2024-12345\", \"published_at\": \"2024-01-15\", \"title\": \"Final agency rule published by the government: proposed and final rules on apple earnings disclosure\"}]}",
-    "{\"results\": [{\"cited_by_count\": 12, \"id\": \"W1\", \"publication_year\": 2024, \"title\": \"Scholarly study on apple earnings expectations: analyst consensus and quarterly results\"}]}"
+    "W1 Scholarly study on apple earnings expectations: analyst consensus and quarterly results",
+    "Final agency rule published by the government: proposed and final rules on apple earnings disclosure 2024-12345 2024-01-15 government agency",
+    "W1 Scholarly study on apple earnings expectations: analyst consensus and quarterly results"
   ],
   "fetches": [
     {
