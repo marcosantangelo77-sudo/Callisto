@@ -88,12 +88,27 @@ class ProvenanceLedger:
         # LOWER what provenance grants, never raise it.
         self._rejected_hashes: set[str] = set()
         self._rejected_urls: set[str] = set()
+        # Content hashes and URLs the relevance gate ADMITTED (red team
+        # R4/R4b, second half): promotion is a GATE VERDICT, not a side
+        # effect of recording bytes. A fetch that was merely recorded —
+        # before any gate ran, or by a code path that never gates — cannot
+        # mint PRIMARY/SECONDARY for later model text. Absence of a verdict
+        # must fail CLOSED (family #3): unjudged bytes stay INFERRED until
+        # mark_admitted() binds the gate's accept to them.
+        self._admitted_hashes: set[str] = set()
+        self._admitted_urls: set[str] = set()
 
     def record_tool_result(
         self, tool_name: str, content: str, *, primary: bool = False,
         urls: Optional[Iterable[str]] = None,
     ) -> ToolObservation:
-        """Record one real tool return. Call from the executor only."""
+        """Record one real tool return. Call from the executor only.
+
+        Recording alone does NOT make the bytes promotion-grade: until the
+        relevance gate admits them (mark_admitted), they cannot raise later
+        model text above INFERRED. This is the fail-closed direction — an
+        ungated observation simply carries no promotion power.
+        """
         obs = ToolObservation(
             tool_name=tool_name,
             content_hash=_content_hash(content or ""),
@@ -111,6 +126,24 @@ class ProvenanceLedger:
                 self._urls.setdefault(u, obs)
         return obs
 
+    def mark_admitted(self, content: str,
+                      urls: Optional[Iterable[str]] = None) -> None:
+        """Bind the relevance gate's ACCEPT verdict to these bytes/URLs.
+
+        Call AFTER the gate passes, alongside record_tool_result. Only
+        admitted material may promote later evidence (PRIMARY via exact
+        hash, SECONDARY via citation). Never call this for a fetch the
+        gate rejected — record_gate_rejection is that path, and the two
+        are mutually exclusive by construction.
+        """
+        h = _content_hash(content or "")
+        if h in self._rejected_hashes:
+            return  # a rejection can never be converted into an admit
+        self._admitted_hashes.add(h)
+        for u in urls or ():
+            if u and u not in self._rejected_urls:
+                self._admitted_urls.add(u)
+
     def record_gate_rejection(self, content: str,
                               urls: Optional[Iterable[str]] = None) -> None:
         """Bind the relevance gate's REJECT verdict to these bytes/URLs.
@@ -123,9 +156,11 @@ class ProvenanceLedger:
         h = _content_hash(content or "")
         self._rejected_hashes.add(h)
         self._by_hash.pop(h, None)
+        self._admitted_hashes.discard(h)
         for u in urls or ():
             self._rejected_urls.add(u)
             self._urls.pop(u, None)
+            self._admitted_urls.discard(u)
 
     def superseded(self, content: str = "", url: str = "") -> bool:
         """True iff these bytes/URL were fetched but then gate-rejected."""
@@ -147,27 +182,53 @@ class ProvenanceLedger:
                 return True
         return False
 
+    def _promotion_grade(self, content: str, urls: set[str]) -> bool:
+        """True iff these bytes/URLs carry the gate's ACCEPT verdict.
+
+        The gate's verdict — not the mere existence of a tool observation —
+        is what lets material raise later evidence above INFERRED (red team
+        R4/R4b). Fail closed: unjudged bytes promote nothing.
+        """
+        if _content_hash(content or "") in self._admitted_hashes:
+            return True
+        return any(u in self._admitted_urls for u in urls)
+
     def cites_verified_url(self, text: str) -> bool:
-        """True iff *text* contains at least one URL the session fetched.
+        """True iff *text* contains at least one URL the session fetched
+        AND the relevance gate admitted.
 
         This is the replacement for orchestrator._response_cites_urls's bare
-        substring check: fabricated URLs fail, and 'http://' as a literal
-        string fails because it does not parse as a URL present in the
-        ledger.
+        substring check: fabricated URLs fail, 'http://' as a literal string
+        fails because it does not parse as a URL present in the ledger, and
+        a URL from a fetch the gate REJECTED (or never judged) fails too —
+        citing irrelevant bytes cannot ground a claim as SECONDARY.
         """
-        return any(u in self._urls for u in extract_urls(text))
+        found = {u for u in extract_urls(text) if u in self._urls}
+        return any(u in self._admitted_urls for u in found)
 
     # ── assignment ──
 
     def assign_source_class(self, evidence: Evidence) -> SourceClass:
         """Provenance-derived class for one evidence item. Never reads
-        evidence.source_class — that field is model-declared and untrusted."""
+        evidence.source_class — that field is model-declared and untrusted.
+
+        Promotion requires GATE-ADMITTED material: exact-hash PRIMARY only
+        when these bytes were admitted; SECONDARY via citation only when the
+        cited URL was admitted. Ungated observations still register (they
+        are real tool returns) but confer no promotion power.
+        """
         content = evidence.content or ""
+        text_urls = extract_urls(content)
+        if not self._promotion_grade(content, text_urls):
+            # Nothing gate-admitted backs this item — even an exact echo of
+            # ungated bytes stays INFERRED (R4), and a rejected/unjudged URL
+            # verifies nothing (R4b).
+            return SourceClass.INFERRED
         if self.is_primary_bytes(content):
             return SourceClass.PRIMARY
         if self.has_observation(content):
             return SourceClass.SECONDARY
-        # Citing a genuinely-fetched URL grounds the claim as SECONDARY.
+        # Citing a genuinely-fetched-and-admitted URL grounds the claim.
         if self.cites_verified_url(content):
             return SourceClass.SECONDARY
         return SourceClass.INFERRED

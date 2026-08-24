@@ -447,11 +447,22 @@ class ResearchPipeline:
         # now reflects ACTUAL source diversity (distinct hosts / declared
         # overlap families), not the number of API calls that returned.
         achieved = SourceClassRank(best_class.value)
-        if trace is not None and trace.independent_keys:
+        # Red team r3b/r3: the independence count must come from THE
+        # declared-family rule (retrieval.independence_key), never from a
+        # name-set fallback, and computation is NOT a source: sandbox output
+        # is the pipeline agreeing with itself, so it can never add an
+        # independent voice. When the trace is missing or predates
+        # independent_keys, derive keys from the fetches themselves with the
+        # same rule instead of counting raw source names.
+        if trace is not None and getattr(trace, "independent_keys", None):
             n_indep = len(trace.independent_keys)
         else:
-            n_indep = len({f.source_name for f in fetches}) + (
-                1 if out.sandbox_status == "ok" else 0)
+            try:
+                from tools.pipeline.retrieval import independence_key as _ik
+                n_indep = len({_ik(f.source_name, f.url)
+                               for f in fetches})
+            except Exception:  # noqa: BLE001 — degraded counting still
+                n_indep = len({f.source_name for f in fetches})  # counts DOWN
         reasons = q.evidence_requirements.unmet_reasons(
             achieved, n_indep,
             produced_quant=out.sandbox_status == "ok" or

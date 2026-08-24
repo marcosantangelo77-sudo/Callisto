@@ -407,6 +407,14 @@ def replay_ledger(ledger, checkpoints: list[Checkpoint]) -> dict:
                 rec.get("tool_name") or f"{rec.get('source_name', 'source')}_fetch",
                 body, primary=bool(rec.get("primary", True)),
                 urls=[rec["url"]] if rec.get("url") else None)
+            # A replayed fetch record passed the relevance gate when it was
+            # first ingested (only ADMITTED bodies enter the checkpoint
+            # payload), so the replay binds that ACCEPT verdict too — a
+            # resumed run must not silently lose promotion power (red team
+            # R4/R4b: un-admitted bytes promote nothing, but these were).
+            if hasattr(ledger, "mark_admitted"):
+                ledger.mark_admitted(
+                    body, [rec["url"]] if rec.get("url") else None)
             replayed += 1
     return {"replayed": replayed, "skipped_duplicates": skipped,
             "integrity_failures": failures}

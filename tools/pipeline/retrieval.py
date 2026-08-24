@@ -627,9 +627,15 @@ class IterativeRetriever:
                 # Every result lands in the ledger exactly once as
                 # primary bytes (RestSource already recorded the raw body;
                 # this is the canonical sorted-JSON form the pipeline
-                # carries forward, so it is registered too).
+                # carries forward, so it is registered too). mark_admitted
+                # binds the gate's ACCEPT to these bytes/URL — without it
+                # they would carry no promotion power and even the engine's
+                # own fetch evidence would read INFERRED (red team R4/R4b:
+                # promotion is a gate verdict, not a recording side effect).
                 self.ledger.record_tool_result(
                     f"{spec.name}_fetch", body, primary=True, urls=[fr.url])
+                if hasattr(self.ledger, "mark_admitted"):
+                    self.ledger.mark_admitted(body, [fr.url])
                 trace.admitted.append(fr)
                 trace.independent_keys.add(
                     independence_key(spec.name, spec.base_url))
