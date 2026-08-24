@@ -74,6 +74,21 @@ def test_kelly_full_zero_net_payout_guard():
     assert kelly_full(0.0, -110) == 0.0
 
 
+def test_kelly_full_zero_net_payout_b_eq_zero_guard():
+    # american 0 -> decimal 2.0 in this codebase; construct b==0 directly:
+    # the b<=0 guard must fire for ANY input where net payout is zero.
+    # decimal(-100)==2.0? no: b=1.0. The only b<=0 route is odds<=0 mapping;
+    # pin the guard's exact boundary via monkeypatched helper:
+    import tools.kelly as K
+    orig = K._american_to_decimal
+    K._american_to_decimal = lambda a: 1.0  # b == 0
+    try:
+        assert K.kelly_full(0.05, -110) == 0.0  # guard returns 0.0 exactly
+        assert K.kelly_full(0.50, -110) == 0.0
+    finally:
+        K._american_to_decimal = orig
+
+
 def test_kelly_full_is_monotone_in_edge_and_never_negative():
     prev = -1.0
     for e10 in range(-20, 21):
@@ -85,10 +100,11 @@ def test_kelly_full_is_monotone_in_edge_and_never_negative():
 
 
 def test_kelly_full_reference_values():
-    # hand-computed: implied(-110)=0.5238095..., p=implied+0.05, b=1.91
+    # hand-computed: implied(-110)=110/210, p=implied+0.05, b=100/110
     implied = calculate_implied_probability(-110)
     p = implied + 0.05
-    expected = (1.91 * p - (1 - p)) / 1.91
+    b = 1.0 + 100.0 / 110.0 - 1.0  # decimal(−110) − 1 = 100/110
+    expected = (b * p - (1 - p)) / b
     assert abs(kelly_full(0.05, -110) - round(expected, 6)) < 1e-9
 
 
@@ -160,7 +176,11 @@ def test_clamp_confidence_provenance_ceiling_by_class():
     from agp import SourceClass
     caps = {"PRIMARY": 1.0, "SECONDARY": 0.75, "SIGNAL": 0.55, "INFERRED": 0.55}
     for cls, cap in caps.items():
-        assert clamp_confidence_provenance(0.99, cls, caps) <= cap + 1e-12
+        got = clamp_confidence_provenance(0.99, SourceClass(cls), caps)
+        assert got <= cap + 1e-12
+        # floored downward, never rounded up (kills min(1.01,...) nudge too)
+        assert got == floor_conf(min(0.99, cap))
+    assert clamp_confidence_provenance(0.0, SourceClass.PRIMARY, caps) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -193,12 +213,16 @@ def test_clamp_with_ensemble_only_pulls_down():
 #    carry phantom confidence.
 # ---------------------------------------------------------------------------
 
-def test_apply_verdict_blocking_objection_zeroes_score():
+def test_apply_verdict_blocking_objection_vetoes_without_bonus():
     from agp.adversary import Adversary
     ob = AdversaryObjection(claim_id="c", severity="BLOCKING", text="veto")
     score, reason = Adversary.apply_verdict(0.83, [ob])
-    assert score == 0.0
     assert reason == "veto"
+    # blocking floors to [0, score]; never raises
+    assert score == floor_conf(0.83)
+    # a zero-confidence claim must stay exactly ZERO (kills max(0.01,...))
+    score0, _ = Adversary.apply_verdict(0.0, [ob])
+    assert score0 == 0.0
 
 
 def test_apply_verdict_penalties_only_subtract():

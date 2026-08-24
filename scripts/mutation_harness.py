@@ -81,6 +81,9 @@ def run_tests(tests):
     for line in (out + err).splitlines():
         if line.startswith("FAILED"):
             failed.add(line.split()[1])
+    # rc!=0 with no FAILED lines = collection/import error — that IS a kill
+    if p.returncode != 0 and not failed:
+        failed = {"<collection-error>"}
     return p.returncode != 0, sorted(failed)
 
 
