@@ -208,5 +208,53 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q10",
+    "question": "Was the World Bank estimate of U.S. population in 2020 greater than 330 million?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "331,578,104.",
+    "verified_by": "api.worldbank.org SP.POP.TOTL USA 2020",
+    "elapsed_s": 340.7,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 2,
+    "sources": [
+      "fdic",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What is the World Bank's official estimate of the U.S. population in 2020?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Does that World Bank estimate exceed 330 million?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'What is the World Bank's official estimate of the U.S. popul': sources asked but NOT contributing evidence: census (error: HTTP 404 for https://api.census.gov/data/timeseries/timeseries/international/pop, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2020, bank, data, development, estimate, indicators, official, population), fdic (content covers 22% of the question's topical words (need 25%); missing: 2020, data, development, estimate, indicators, official, population), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2020, bank, data, development, estimate, indicators, official, population), fred (content covers 0% of the question's topical words (need 25%); missing: 2020, bank, data, development, estimate, indicators, official, population), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['worldbank']",
+      "leaf 'What is the World Bank's official estimate of the U.S. popul': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2020, bank, data, development, estimate, indicators, official, population; [fdic] content covers 22% of the question's topical words (need 25%); missing: 2020, data, development, estimate, indicators, official, population; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, bank, data, development, estimate, indicators, official, population; [fred] content covers 0% of the question's topical words (need 25%); missing: 2020, bank, data, development, estimate, indicators, official, population",
+      "leaf 'Does that World Bank estimate exceed 330 million?': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 330, against, bank, comparison, direct, estimate, exceed, figure), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 330, against, bank, comparison, direct, estimate, exceed, figure), fred (content covers 0% of the question's topical words (need 25%); missing: 330, against, bank, comparison, direct, estimate, exceed, figure), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 330, against, bank, comparison, direct, estimate, exceed, figure), fred (content covers 0% of the question's topical words (need 25%); missing: 330, against, bank, comparison, direct, estimate, exceed, figure), openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['fdic']",
+      "leaf 'Does that World Bank estimate exceed 330 million?': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 330, against, bank, comparison, direct, estimate, exceed, figure; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 330, against, bank, comparison, direct, estimate, exceed, figure; [fred] content covers 0% of the question's topical words (need 25%); missing: 330, against, bank, comparison, direct, estimate, exceed, figure; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 330, against, bank, comparison, direct, estimate, exceed, figure; [fred] content covers 0% of the question's topical words (need 25%); missing: 330, against, bank, comparison, direct, estimate, exceed, figure"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
