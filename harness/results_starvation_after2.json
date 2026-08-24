@@ -280,5 +280,42 @@
       "5c930d107abc4b90": "honest_null"
     },
     "verdict": "refused"
+  },
+  {
+    "id": "Q09",
+    "question": "Did the Supreme Court decide Loper Bright Enterprises v. Raimondo before 2024?",
+    "category": "multi-hop/negation",
+    "expected_stance": "DENIES",
+    "gt": "dateFiled = 2024-06-28 \u2014 not before 2024.",
+    "verified_by": "courtlistener search API caseName/dateFiled",
+    "elapsed_s": 217.2,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "fdic"
+    ],
+    "leaves": [
+      {
+        "text": "On what date did the Supreme Court issue its decision in Loper Bright Enterprises v. Raimondo?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'On what date did the Supreme Court issue its decision in Lop': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official), fred (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official), fred (content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official), openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['fdic']",
+      "leaf 'On what date did the Supreme Court issue its decision in Lop': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official; [fred] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official; [fred] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decision, enterprises, issue, loper, official"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
