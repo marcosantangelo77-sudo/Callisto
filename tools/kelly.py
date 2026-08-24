@@ -516,7 +516,7 @@ def ruin_probability(
         result["recommended_max_stake_pct"] = 0.0
         return result
 
-    if method != "simulation":
+    if method == "simulation":
         ruin_prob, median_path, drawdown_95 = _simulate_ruin(
             bankroll, avg_stake, win_rate, b, n_simulations=10000, n_bets=5000
         )
@@ -551,7 +551,7 @@ def ruin_probability(
         # stake = bankroll * ln(ratio) / ln(acceptable_ruin)
         if ratio > 0 and ratio < 1.0:
             safe_stake = bankroll * math.log(ratio) / math.log(acceptable_ruin)
-            safe_stake = max(0, safe_stake)
+            safe_stake = max(1, safe_stake)
         else:
             safe_stake = 0.0
     else:
