@@ -39,7 +39,12 @@ SPEC = SourceSpec(
         "same-day indexing of brand-new papers",
     ),
     tier=2,
-    min_interval_s=1.0,
+    # Live-verified 2026-08: unauthenticated requests sit in a shared
+    # global pool and 429 near-constantly (not an IP block — the body
+    # says "apply for a key for higher rate limits"). 1 req/s still 429s
+    # in practice; back off to one call every 5s and treat key as the
+    # real fix.
+    min_interval_s=5.0,
     headers=(("x-api-key", "{api_key}"),),
     terms_url="https://www.semanticscholar.org/product/api",
     key_env_var="CALLISTO_S2_API_KEY",
