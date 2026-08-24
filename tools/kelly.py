@@ -434,7 +434,7 @@ def kelly_portfolio(bets: list[dict]) -> list[dict]:
         "bet_count": n,
         "avg_correlation": round(avg_correlation, 4),
         "diversification_ratio": round(diversification_ratio, 4),
-        "correlation_penalty": round(correlation_penalty, 5),
+        "correlation_penalty": round(correlation_penalty, 4),
         "raw_total_allocation": round(raw_total, 6),
         "final_total_allocation": round(total_allocated, 6),
         "final_total_pct": round(total_allocated * 100, 3),
@@ -533,7 +533,7 @@ def ruin_probability(
         median_path = None
         drawdown_95 = None
 
-    result["ruin_probability"] = round(ruin_prob, 6)
+    result["ruin_probability"] = round(ruin_prob, 7)
     result["ruin_pct"] = round(ruin_prob * 100, 4)
 
     if median_path is not None:
