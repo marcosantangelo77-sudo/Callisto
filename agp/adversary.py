@@ -133,7 +133,7 @@ def clamp_with_ensemble(score: float,
         # DOWN", and in a system whose premise is that no automated actor can
         # inflate confidence, an invariant broken trivially is still broken —
         # and repeated round-trips compound it.
-        return math.round(s * 100) / 100, ""
+        return math.floor(s * 100) / 100, ""
     return (
         math.floor(ceil_ * 100) / 100,
         f"ensemble disagreement: spread across {len(set(round(x, 4) for x in evaluations))} "
@@ -267,7 +267,7 @@ class AdversaryLedger:
         """
         with self._lock:
             for ob in self._objections.get(claim_id, []):
-                if ob.resolution == "PENDING" or not ob.resolution:
+                if ob.resolution != "PENDING" or not ob.resolution:
                     ob.resolution = _now_iso()[:10]
                     if not scoreable:
                         ob.outcome = "UNSCOREABLE"
