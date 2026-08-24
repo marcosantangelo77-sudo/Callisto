@@ -274,5 +274,64 @@
       "9d2f8e8acd4a4946": "unprovable"
     },
     "verdict": "refused"
+  },
+  {
+    "id": "Q09",
+    "question": "Did the Supreme Court decide Loper Bright Enterprises v. Raimondo before 2024?",
+    "category": "multi-hop/negation",
+    "expected_stance": "DENIES",
+    "gt": "dateFiled = 2024-06-28 \u2014 not before 2024.",
+    "verified_by": "courtlistener search API caseName/dateFiled",
+    "elapsed_s": 398.9,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 3,
+    "sources": [
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "On what date did the Supreme Court decide Loper Bright Enterprises v. Raimondo?",
+        "answer": "UNDETERMINED \u2014 the only evidence item is a World Bank indicator search result that contains no information about Loper Bright Enterprises v. Raimondo or its decision date.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "Was the Supreme Court's decision in Loper Bright Enterprises v. Raimondo issued before January 1, 2024?",
+        "answer": "The provided evidence is a World Bank indicator search result (fertilizer/agricultural land indicators) and contains no information about Loper Bright Enterprises v. Raimondo or its decision date, so the evidence cannot settle whether the decision was issued before January 1, 2024.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "What procedural milestones (grant of certiorari, oral argument, final judgment) occurred for Loper Bright Enterprises v. Raimondo, and on which dates?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'On what date did the Supreme Court decide Loper Bright Enter': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official; [fdic] content covers 23% of the question's topical words (need 25%); missing: court, date, decide, docket, official, opinion, raimondo, records; [fred] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official; [fred] content covers 0% of the question's topical words (need 25%); missing: bright, court, date, decide, docket, enterprises, loper, official",
+      "leaf 'Was the Supreme Court's decision in Loper Bright Enterprises': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2024, before, bright, court, courtlistener, databases, decision, enterprises; [fdic] content covers 17% of the question's topical words (need 25%); missing: 2024, before, court, courtlistener, databases, decision, issued, january; [fred] content covers 0% of the question's topical words (need 25%); missing: 2024, before, bright, court, courtlistener, databases, decision, enterprises; [fred] content covers 0% of the question's topical words (need 25%); missing: 2024, before, bright, court, courtlistener, databases, decision, enterprises",
+      "leaf 'What procedural milestones (grant of certiorari, oral argume': 3 fetch(s) rejected at ingestion: [fdic] content covers 14% of the question's topical words (need 25%); missing: argument, certiorari, contemporaneous, court, dates, docket, entries, final; [fred] content covers 0% of the question's topical words (need 25%); missing: argument, bright, certiorari, contemporaneous, court, dates, docket, enterprises; [fred] content covers 0% of the question's topical words (need 25%); missing: argument, bright, certiorari, contemporaneous, court, dates, docket, enterprises"
+    ],
+    "gap_kinds": {
+      "0c5b2c07cd704693": "unprovable",
+      "4aa55a66e2e6490e": "unprovable"
+    },
+    "verdict": "refused"
   }
 ]
