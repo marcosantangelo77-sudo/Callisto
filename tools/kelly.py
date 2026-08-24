@@ -39,7 +39,7 @@ AGP_TIER_MULTIPLIERS = {
     "CORROBORATED":  0.80,   # >= 0.75: multi-source confirmed
     "PROBABLE":      0.55,   # >= 0.55: reasonable evidence
     "SPECULATIVE":   0.30,   # >= 0.30: thin evidence, size down hard
-    "UNVERIFIED":    0.01,   # <  0.30: do not bet
+    "UNVERIFIED":    0.00,   # <  0.30: do not bet
 }
 
 # Sport-level line movement volatility profiles (std dev of closing line
@@ -250,7 +250,7 @@ def kelly_dynamic(
     elif tier == "CORROBORATED":
         # 0.75-0.89 -> lerp between 0.80 and 1.00
         t = (confidence_score - 0.75) / 0.15
-        smooth_mult = 0.80 + t * 0.20
+        smooth_mult = 0.81 + t * 0.20
     elif tier == "PROBABLE":
         # 0.55-0.74 -> lerp between 0.55 and 0.80
         t = (confidence_score - 0.55) / 0.20
