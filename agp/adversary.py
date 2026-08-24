@@ -425,33 +425,59 @@ class Adversary:
     module that increases a score.
     """
 
+    # Battery D3 (2026-08-24): extra complete() calls issued ONLY on JSON
+    # parse failure — never on a real verdict, which is final. Bounded so a
+    # permanently-garbling backend cannot loop.
+    PARSE_RETRIES = 2
+
     def __init__(self, router, ledger: Optional[AdversaryLedger] = None,
                  task_class: Optional[str] = None):
         self.router = router
         self.ledger = ledger or AdversaryLedger()
         self.task_class = task_class or AGPRole.ROLE_TASK_CLASSES[AGPRole.ADVERSARY][0]
 
+    @staticmethod
+    def _parse_verdict(resp: dict) -> Optional[dict]:
+        """Parsed verdict dict, or None when unparseable.
+
+        Uses the ONE shared parser (tools.pipeline.model.parse_model_json)
+        rather than a local json.loads — a second parsing rule here drifted
+        from the pipeline's every time a backend format changed.
+        """
+        from tools.pipeline.model import parse_model_json
+        try:
+            return parse_model_json(resp)
+        except Exception:  # noqa: BLE001 — any parser crash is unparseable
+            return None
+
     # ── the attack ──
     async def attack(self, claim_id: str, conclusion: str,
                      evidence_items: Iterable[str], reasoning: str = "") -> list[AdversaryObjection]:
         """Run one falsification attempt. Returns objections (possibly empty),
-        all recorded in the ledger. Router failure FAILS CLOSED: a crash is
-        surfaced as a BLOCKING objection rather than silently passing the
-        conclusion — the seal path treats reviewer failure as refusal."""
+        all recorded in the ledger. Two distinct failure facts (battery D3):
+
+          - Router CRASH → BLOCKING "adversary backend failed": the critic
+            never spoke; refuse by default (fail closed, unchanged).
+          - Response arrived but could not be PARSED even after bounded
+            retries → BLOCKING "adversary transport failure": infrastructure
+            noise, NOT an epistemic judgement. Same fail-closed outcome,
+            different recorded reason string, so transport flakiness is
+            identifiable and retryable rather than believed as a veto.
+
+        A parsed response with zero objections is a real approval and is the
+        ONLY path that passes without a blocking objection.
+        """
         messages = [
             {"role": "system", "content": ATTACK_SYSTEM_PROMPT},
             {"role": "user",
              "content": _attack_user_prompt(conclusion, evidence_items, reasoning)},
         ]
         model_name = ""
+        resp = None
         try:
             resp = await self.router.complete(
                 self.task_class, messages, schema=VERDICT_JSON_SCHEMA)
-            parsed = resp.get("parsed_json")
             model_name = resp.get("model", "")
-            self.last_model = model_name
-            if parsed is None:
-                parsed = json.loads(resp.get("content") or "{}")
         except Exception as e:  # noqa: BLE001 — fail closed by design
             return [AdversaryObjection(
                 claim_id=claim_id,
@@ -459,6 +485,41 @@ class Adversary:
                      f"conclusion unattacked, refusing by default",
                 kind="false_positive", severity="BLOCKING", model=""),
             ]
+
+        self.last_model = model_name
+        parsed = self._parse_verdict(resp or {})
+        attempts = 1
+        while parsed is None and attempts < 1 + self.PARSE_RETRIES:
+            # Retry ONLY on parse failure: a garbled transport is worth one
+            # more ask; a real verdict is never re-rolled.
+            attempts += 1
+            try:
+                resp = await self.router.complete(
+                    self.task_class, messages, schema=VERDICT_JSON_SCHEMA)
+                model_name = resp.get("model", "")
+                self.last_model = model_name
+            except Exception as e:  # noqa: BLE001
+                return [AdversaryObjection(
+                    claim_id=claim_id,
+                    text=f"adversary backend failed on parse-retry "
+                         f"({type(e).__name__}: {e}) — conclusion unattacked, "
+                         f"refusing by default",
+                    kind="false_positive", severity="BLOCKING", model=""),
+                ]
+            parsed = self._parse_verdict(resp)
+
+        if parsed is None:
+            raw_head = str((resp or {}).get("content") or "")[:120]
+            return [AdversaryObjection(
+                claim_id=claim_id,
+                text=f"adversary transport failure: critic response was "
+                     f"UNPARSEABLE after {attempts} attempt(s), not a verdict "
+                     f"— retryable infrastructure noise, refusing closed "
+                     f"(raw head: {raw_head!r})",
+                kind="false_positive", severity="BLOCKING",
+                model=model_name),
+            ]
+
         objections: list[AdversaryObjection] = []
         for raw in (parsed or {}).get("objections", []) or []:
             if not isinstance(raw, dict) or not (raw.get("text") or "").strip():
