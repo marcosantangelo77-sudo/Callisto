@@ -663,7 +663,7 @@ class IterativeRetriever:
                 if kind == "fail":
                     excluded.add(spec.name)
                     round_detail["sources"].append(
-                        {"name": spec.name, "error": res[1]})
+                        {"name": spec.name, "error": res[2]})
                     continue
                 _, url, body, fetched, ok, cov, reason = res
                 fr = _mk_fetch(spec.name, url, body, fetched,
