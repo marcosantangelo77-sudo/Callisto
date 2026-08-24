@@ -144,7 +144,8 @@ def dist_stats(values) -> dict:
     vals = [v for v in values if v is not None]
     n = len(vals)
     if not n:
-        return {"n": 0}
+        return {"n": 0, "median": None, "q25": None, "q75": None,
+                "mean": None, "min": None, "max": None}
     return {
         "n": n,
         "median": _median(vals),
