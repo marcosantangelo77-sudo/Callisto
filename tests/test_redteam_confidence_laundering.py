@@ -18,7 +18,7 @@ from tools.pipeline.synthesis import (
     synthesize,
     triangulate,
 )
-from tools.research_program import clamp_parent_confidence
+from tools.research_program import clamp_parent_confidence, inherited_ceiling
 
 
 def _ev(content, cls=SourceClass.INFERRED, conf=0.30):
