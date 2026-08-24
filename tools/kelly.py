@@ -102,7 +102,7 @@ MARKET_CLV_DECAY = {
     "player_rebounds": 0.6,
     "player_assists": 0.6,
     "player_threes": 0.5,
-    "alternate_spreads": 0.7,
+    "alternate_spreads": 0.71,
     "alternate_totals": 0.7,
 }
 
