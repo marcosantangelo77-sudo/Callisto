@@ -268,10 +268,13 @@ def _sec_fts() -> ProbeResult:
     src, ad = _build("sec_fulltext")
     r.url = src.build_url("/search-index", {"q": "\"annual report\""})
     def shape(d):
-        hits = ((d.get("hits") or {}).get("hits")) or []
-        return "" if hits else "hits.hits empty"
+        # search() returns the NORMALIZED envelope {total, hits: [...],
+        # _fetch} — not the raw ES response. Probing d["hits"]["hits"]
+        # crashed on the normalized list (AttributeError: list.get).
+        hits = d.get("hits") if isinstance(d, dict) else None
+        return "" if hits else "normalized hits[] empty"
     out = _run(lambda: ad.search("\"annual report\"", limit=5), r,
-               lambda d: len(((d.get("hits") or {}).get("hits")) or []),
+               lambda d: len(d.get("hits", [])) if isinstance(d, dict) else 0,
                shape)
     # search() normalizes into 'results'; empty normalized output with raw
     # hits present would still be caught by the count above.
@@ -385,8 +388,8 @@ def _fdic() -> ProbeResult:
 def _cftc() -> ProbeResult:
     # Historical defect: wrong Socrata dataset id.
     from tools.sources.cftc import LEGACY_FUTURES_ONLY
-    r = ProbeResult("cftc")
-    src, ad = _build("cftc")
+    r = ProbeResult("cftc_cot")
+    src, ad = _build("cftc_cot")
     where = "cftc_contract_market_code='088691'"
     r.url = src.build_url(f"/{LEGACY_FUTURES_ONLY}.json",
                           {"$where": where, "$limit": 5})
