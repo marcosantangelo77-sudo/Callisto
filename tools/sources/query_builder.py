@@ -225,6 +225,45 @@ _BLS_CONCEPTS: dict[str, list[Candidate]] = {
 
 _BLS_ID_RE = re.compile(r"^[A-Z]{2,3}[A-Z0-9]{6,}$")
 
+
+#: BLS API v2 error payloads. The adapter returns HTTP 200 with a status
+#: array even when the request was NOT processed — a quota/auth failure that
+#: previously surfaced as an ordinary (empty) body, failed the relevance
+#: gate, and read downstream as 'the data says nothing' instead of 'we could
+#: not fetch the data'. See findings/retrieval_starvation.md D2.
+_BLS_FAILURE_STATUSES = {
+    "REQUEST_NOT_PROCESSED": "quota or auth failure",
+    "REQUEST_FAILED": "request failure",
+}
+
+
+def classify_fetch_failure(source_name: str, parsed_body: Any) -> Optional[str]:
+    """Human-readable failure reason when a source's 200-OK payload is really
+    an ERROR ENVELOPE; None when it is (or may be) genuine data. Only BLS is
+    known to do this today; other sources return None unchanged."""
+    if source_name != "bls" or not isinstance(parsed_body, dict):
+        return None
+    statuses = parsed_body.get("status")
+    if not isinstance(statuses, list):
+        return None
+    for s in statuses:
+        if isinstance(s, str) and s.upper() in _BLS_FAILURE_STATUSES:
+            detail = ""
+            msgs = parsed_body.get("message")
+            if isinstance(msgs, list) and msgs:
+                detail = f": {msgs[0]}"
+            return f"BLS {_BLS_FAILURE_STATUSES[s.upper()]}{detail}"
+    return None
+
+
+def _years_in_question(question: str) -> list[int]:
+    """Years explicitly named in a sub-question ('January 2023',
+    'between 2020 and 2021'). D2: the BLS planner ignored these and
+    hardcoded today.year-2..today.year, so questions about named past
+    windows fetched years that did not contain the asked-about months."""
+    return sorted({int(y) for y in re.findall(r"\b((?:19|20)\d{2})\b",
+                                              question)})
+
 #: Treasury Fiscal Data datasets by topic. The catalog has ~1000 datasets;
 #: we map the ones whose names appear in ordinary questions and otherwise
 #: declare the gap.
@@ -461,10 +500,23 @@ def _plan_fred(question: str) -> PlanResult:
     core = core_query(question)
     if "series_id" in resolved:
         sid = resolved["series_id"]
+        # D1/D4 (known-answer harness): window the observations on the years
+        # the question names and sort descending. limit=120 ascending ended
+        # in 1957; without a start filter a desc cut can still drop the
+        # OLDEST end of an old window, so pin observation_start to Jan 1 of
+        # the earliest named year whenever the question names any.
+        kw: dict = {"series_id": sid, "limit": 120, "sort_order": "desc"}
+        yrs = _years_in_question(question)
+        if yrs:
+            kw["start"] = f"{min(yrs)}-01-01"
+            latest = max(yrs)
+            import datetime as _dt
+            if latest < _dt.date.today().year:
+                kw["end"] = f"{latest}-12-31"
         return PlanResult(True, queries=[PlannedQuery(
-            source="fred", method="series_observations",
-            kwargs={"series_id": sid, "limit": 120},
-            rationale=f"concept resolved to series {sid}")],
+            source="fred", method="series_observations", kwargs=kw,
+            rationale=f"concept resolved to series {sid}"
+                      + (f"; window from {kw.get('start')}" if yrs else ""))],
             resolved=resolved,
             reason=f"'{core or question}' -> {sid}")
     if "series_id" in cands:
@@ -490,13 +542,30 @@ def _plan_bls(question: str) -> PlanResult:
         sid = resolved["series_id"]
         import datetime
         end = datetime.date.today().year
+        # D2 (known-answer harness): a year NAMED in the question defines the
+        # window. The old hardcoded start_year = today.year - 2 fetched
+        # 2024-2026 for a question about January 2023 — the asked-about month
+        # was outside the fetch, so the body could not answer and the gate
+        # rejected it. Clamp to the no-key 3-year history rather than widen.
+        yrs = _years_in_question(question)
+        start_year = min(yrs) if yrs else end - 2
+        # No-key tier allows 3 calendar years per call (start..end inclusive
+        # spans max_years). When the question names an older year, anchor the
+        # window AT the named year instead of at today: a question about
+        # January 2023 must fetch 2023, even if that means today's year is
+        # outside the call. Prefer the window containing the asked-about
+        # months over the window containing the present.
+        if end - start_year > 2:
+            start_year, end = start_year, start_year + 2
         return PlanResult(True, queries=[PlannedQuery(
             source="bls", method="timeseries",
-            kwargs={"series_ids": [sid], "start_year": end - 2,
+            kwargs={"series_ids": [sid], "start_year": start_year,
                     "end_year": end},
-            rationale=f"concept resolved to BLS series {sid}; no-key tier "
-                      "caps history at 3 years")],
-            resolved=resolved, reason=f"resolved to {sid}")
+            rationale=f"concept resolved to BLS series {sid}; window "
+                      f"{start_year}-{end} (no-key tier caps history at 3 "
+                      "years)")],
+            resolved=resolved,
+            reason=f"resolved to {sid}, window {start_year}-{end}")
     if "series_id" in cands:
         return PlanResult(False, reason="ambiguous BLS concept; "
                           "disambiguate before fetching", candidates=cands)
@@ -609,11 +678,47 @@ _WORLDBANK_INDICATORS: dict[str, list[Candidate]] = {
     "energy use": [
         Candidate("EG.USE.PCAP.KG.OE", "Energy use per capita", 0.8),
     ],
+    # D1 (question battery, findings/question_battery.md): every concept
+    # below was previously reachable ONLY through the broken free-text
+    # `search` fallback, which the WB API ignores (byte-identical response
+    # regardless of query). These are real WDI codes — data edits, not
+    # guesses — so common macro questions resolve to indicator fetches.
+    "unemployment": [
+        Candidate("SL.UEM.TOTL.ZS", "Unemployment, total (% of labor "
+                  "force)", 0.9),
+    ],
+    "inflation": [
+        Candidate("FP.CPI.TOTL.ZG", "Inflation, consumer prices (annual "
+                  "%)", 0.9),
+    ],
+    "life expectancy": [
+        Candidate("SP.DYN.LE00.IN", "Life expectancy at birth, total "
+                  "(years)", 0.9),
+    ],
+    "gdp per capita": [
+        Candidate("NY.GDP.PCAP.CD", "GDP per capita (current US$)", 0.95),
+    ],
+    "exports": [
+        Candidate("NE.EXP.GNFS.CD", "Exports of goods and services (% "
+                  "of GDP)", 0.85),
+    ],
+    "imports": [
+        Candidate("NE.IMP.GNFS.CD", "Imports of goods and services (% "
+                  "of GDP)", 0.85),
+    ],
+    "co2": [
+        Candidate("EN.GHG.CO2.PC.CE.AR5", "CO2 emissions per capita",
+                  0.85),
+    ],
+    "co2 emissions": [
+        Candidate("EN.GHG.CO2.PC.CE.AR5", "CO2 emissions per capita",
+                  0.9),
+    ],
 }
 
 #: ISO3 country codes that appear as ordinary words in questions.
 _WB_COUNTRIES: dict[str, str] = {
-    "usa": "USA", "united states": "USA", "china": "CHN", "india": "IND",
+    "usa": "USA", "united states": "USA", "us": "USA", "china": "CHN", "india": "IND",
     "germany": "DEU", "japan": "JPN", "brazil": "BRA", "mexico": "MEX",
     "nigeria": "NGA", "uk": "GBR", "britain": "GBR",
     "united kingdom": "GBR", "france": "FRA", "russia": "RUS",
@@ -667,13 +772,22 @@ def _plan_worldbank(question: str) -> PlanResult:
         if not core:
             return PlanResult(False, reason="no known indicator and no "
                               "searchable core")
-        # fall back to WB's own indicator search so results carry real codes
-        return PlanResult(True, queries=[PlannedQuery(
-            source="worldbank", method="search_indicators",
-            kwargs={"query": core, "limit": 10},
-            rationale="WB indicator full-text search; results carry codes "
-                      "for a follow-up indicator fetch")],
-            reason=f"no curated indicator matched; searched as '{core}'")
+        # D1 (question battery, findings/question_battery.md): the old
+        # fallback stuffed the natural-language core into the WB API's
+        # free-text `search` parameter. The API IGNORES that parameter and
+        # returns the same default catalogue page every time — fertilizer
+        # datasets for court-case questions, byte-identical sha256 across
+        # differently-worded queries. A source that always returns junk is
+        # worse than a source that says "I cannot answer this" (precedent:
+        # kalshi's honest gap), so an unresolved concept is now an honest
+        # gap naming exactly what is missing.
+        return PlanResult(False, reason=(
+            f"World Bank WDI has no working free-text indicator search: the "
+            f"API ignores its `search` parameter and returns an unrelated "
+            f"default catalogue page (see findings/question_battery.md D1). "
+            f"No curated WDI concept matched '{core}'. Add the "
+            f"concept to _WORLDBANK_INDICATORS or supply an explicit "
+            f"indicator code like SP.POP.TOTL."))
     code = resolved_i["indicator_code"]
     kw: dict = {"code": code, "per_page": 200}
     if country:
