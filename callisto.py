@@ -479,6 +479,7 @@ def _cmd_predict(args: argparse.Namespace) -> int:
                   "(preregistered forward-testing)")
             print("next       : when ground truth arrives, "
                   "`callisto resolve`")
+            return 0
         finally:
             await db.close()
     return asyncio.run(run())
@@ -503,6 +504,7 @@ def _cmd_predictions(args: argparse.Namespace) -> int:
                       f"due {due}  [{r.get('claim_name') or r['claim_id']}]"
                       f"{mark}")
                 print(f"     {r['event_id'][:100]}")
+            return 0
         finally:
             await db.close()
     return asyncio.run(run())

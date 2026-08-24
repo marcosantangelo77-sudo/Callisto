@@ -337,8 +337,9 @@ class PredictionJournal:
         positive→hit, negative→miss, indeterminate→void, unresolved past
         its own due_at→stale, unresolved before the deadline→excluded
         (nothing has settled yet). A prediction with NO deadline can never
-        go stale — and therefore can never earn lift: without a deadline
-        the claim was not falsifiable-preregistered.
+        go stale — it simply waits excluded until an explicit outcome
+        arrives; resolution scores whenever it happens, because the number
+        was committed before ground truth either way.
         """
         await self._require_claim(claim_id)
         cur = await self._db.execute(
