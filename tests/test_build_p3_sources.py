@@ -286,6 +286,18 @@ class TestCensus:
         with pytest.raises(ValueError, match="shape"):
             cen.query("x", "y", ["a"], geo_for="us:*")
 
+    def test_missing_key_html_raises_actionable(self):
+        # Live-verified 2026-08: keyless requests 302 to
+        # data/missing_key.html; the redirect lands as 200 HTML and
+        # get_json raises "non-JSON". The adapter must translate that
+        # into an actionable missing-key error.
+        cen, _t = build("census", "CensusAdapter", {
+            "https://api.census.gov/data/x/y?get=a&for=us%3A%2A":
+                "<html><title>Missing Key</title></html>",
+        })
+        with pytest.raises(SourceError, match="key_signup"):
+            cen.query("x", "y", ["a"], geo_for="us:*")
+
     def test_timeseries_time_predicate(self, monkeypatch):
         monkeypatch.setenv("CALLISTO_CENSUS_API_KEY", "ck")
         cen, t = build("census", "CensusAdapter", {
