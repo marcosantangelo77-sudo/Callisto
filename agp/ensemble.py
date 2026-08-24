@@ -76,6 +76,28 @@ def normalize_model(name: str) -> str:
     return n.strip()
 
 
+# Suffixes that mark an endpoint as a proxy/mirror/alias of the SAME weights
+# behind the base name, not a genuinely different reviewer (F6b: distinctness
+# was judged on spelling, so a model could review its own conclusion through
+# an alias and the SELF_REVIEW_CEILING never applied). Anything sharing a base
+# name with one of these markers attached resolves to the same identity.
+_ALIAS_MARKERS = ("-proxy", "-alias", "-mirror", "-replica")
+
+
+def _same_weights(a: str, b: str) -> bool:
+    """True iff two normalized model names denote the same underlying weights.
+    Conservative: a name that is exactly the other name PLUS an alias marker
+    ('gpt-4o-proxy-alias' vs 'gpt-4o') counts as the SAME model."""
+    if a == b:
+        return True
+    shorter, longer = sorted((a, b), key=len)
+    for marker in _ALIAS_MARKERS:
+        rest = longer.split(marker, 1)[0]
+        if longer.startswith(shorter + marker) and rest == shorter:
+            return True
+    return False
+
+
 @dataclass
 class ReviewProvenance:
     """Whether the review was independent of the conclusion's author, VISIBLE
@@ -87,10 +109,18 @@ class ReviewProvenance:
     def independent(self) -> bool:
         """True iff at least one reviewer is a DIFFERENT model from the author.
         An unknown reviewer ('' after normalization) is never evidence of
-        independence — ambiguity resolves conservative."""
+        independence — ambiguity resolves conservative. Neither is an UNKNOWN
+        AUTHOR: with author_model='' nothing distinguishes the reviewer from
+        the model that wrote the conclusion, so the review counts as
+        self-review (F6a — otherwise ANY reviewer reads as independent and
+        the SELF_REVIEW_CEILING can never engage on paths that don't record
+        authorship)."""
         a = normalize_model(self.author_model)
+        if not a:
+            return False
         return any(m not in ("", "(unattributed)")
-                   and normalize_model(m) != a for m in self.reviewer_models)
+                   and not _same_weights(normalize_model(m), a)
+                   for m in self.reviewer_models)
 
     @property
     def mode(self) -> str:

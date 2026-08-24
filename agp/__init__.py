@@ -277,6 +277,19 @@ class AGPSession:
         # adds + contradiction adds). Exposed in to_dict() for debuggability.
         self.progress_events: int = 0
 
+        # A20: the quantitative artifacts a conclusion cites (charts,
+        # workbooks, sandbox outputs) are part of what the seal must cover.
+        # Empty by default — legacy callers seal exactly as before — but the
+        # field is ALWAYS present in to_dict() so the keyed-HMAC payload
+        # structurally cannot omit the artifact layer again.
+        self.artifact_refs: list = []
+
+    def add_artifacts(self, refs: list) -> None:
+        """Attach artifact refs so they are covered by the seal payload."""
+        if self._sealed:
+            raise AGPViolation("Cannot add artifacts to a sealed session")
+        self.artifact_refs.extend(refs)
+
     def _mark_progress(self, step_advance: bool = False) -> None:
         """Called internally whenever something observable changes.
 
@@ -351,6 +364,13 @@ class AGPSession:
             "current_step": self.current_step.name,
             "filtered_evidence_count": self.filtered_evidence_count,
             "progress_events": self.progress_events,
+            # A20: artifact refs ride inside the sealed payload. Serialized
+            # as full ref dicts (not truncated ids) so a seal verifier can
+            # re-hash the cited bytes against the store.
+            "artifact_refs": [
+                r.to_dict() if hasattr(r, "to_dict") else dict(r)
+                for r in self.artifact_refs
+            ],
         }
 
     def seal(self) -> str:

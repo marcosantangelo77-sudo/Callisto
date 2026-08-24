@@ -162,7 +162,10 @@ class PipelineResult:
             "n_leaves": len(self.leaves),
             "n_fetches": len(self.fetches),
             "gap_kinds": dict(self.gap_kinds),
-            "artifacts": [r.sha256[:12] for r in self.artifact_refs],
+            # A20: full sha256 ids — a truncated 12-hex id cannot be
+            # resolved back to the stored object, so citing it vouches for
+            # nothing a human (or verifier) can check.
+            "artifacts": [r.sha256 for r in self.artifact_refs],
             "objections": [getattr(o, "text", str(o)) for o in self.objections],
         }
 
@@ -238,7 +241,8 @@ class ResearchPipeline:
                  ledger: Optional[ProvenanceLedger] = None,
                  registry=None,
                  descendant_resolutions: Optional[list] = None,
-                 checkpointer: Optional[ckpt.FileCheckpointer] = None):
+                 checkpointer: Optional[ckpt.FileCheckpointer] = None,
+                 crossrun_store=None):
         self.model = model
         self.transport = transport
         self.store = store or ArtifactStore()
@@ -257,6 +261,15 @@ class ResearchPipeline:
         # self.artifact_refs in leaf order at assembly).
         self._compute_lock = asyncio.Lock()
         self._pending_artifact_refs: list[ArtifactRef] = []
+        #: CROSS-RUN MEMORY (tools.pipeline.crossrun). Optional; when set,
+        #: each run ends by persisting a per-source outcome record and each
+        #: run starts by loading the same QUESTION CLASS's records as an
+        #: ORDER-ONLY hint over retrieval fan-out. See that module's gate
+        #: rules: order and flags only — never confidence, never evidence.
+        self.crossrun_store = crossrun_store
+        self._crossrun_class = ""
+        self._crossrun_view = None
+        self._crossrun_traces: dict = {}
 
     # -- lazy components ---------------------------------------------------
 
@@ -359,7 +372,9 @@ class ResearchPipeline:
         # replaced the 4-entry GENERIC_CALLS table whose mono-source fan-out
         # kept independence at 1 in the second live run.
         retriever = IterativeRetriever(
-            registry=reg, ledger=ledger, transport=self.transport)
+            registry=reg, ledger=ledger, transport=self.transport,
+            source_order=(self._crossrun_view.order_specs
+                          if self._crossrun_view is not None else None))
         trace = retriever.retrieve(
             q, qt, min_independent=q.evidence_requirements.min_independent_sources)
         return list(trace.admitted), trace
@@ -529,6 +544,45 @@ class ResearchPipeline:
 
     async def run(self, question: str, *, domain: Domain = Domain.GENERAL,
                   today: Optional[date] = None) -> PipelineResult:
+        """One pipeline run with cross-run memory wrapped around it.
+
+        Start of run (when a crossrun_store is injected): load the records
+        for this QUESTION CLASS and expose them as an ORDER-ONLY hint to
+        retrieval. End of run: persist one structured record of what this
+        run's sources actually did — admitted vs rejected vs errored, the
+        per-leaf gap kinds, final stance and tier. Facts, not prose; never
+        evidence, never confidence (see tools.pipeline.crossrun gate rules).
+        """
+        self._crossrun_class = ""
+        self._crossrun_view = None
+        self._crossrun_traces = {}
+        if self.crossrun_store is not None:
+            try:
+                from tools.pipeline.crossrun import question_class_for, \
+                    planning_view
+                self._crossrun_class = question_class_for(question)
+                self._crossrun_view = planning_view(
+                    self.crossrun_store, self._crossrun_class)
+            except Exception as e:  # noqa: BLE001 — memory load must not
+                logger.warning("cross-run memory load failed: %s", e)
+        result = await self._run_inner(question, domain=domain, today=today)
+        if self.crossrun_store is not None:
+            try:
+                from tools.pipeline.crossrun import record_run
+                self.crossrun_store.append(
+                    record_run(result, self._crossrun_traces,
+                               self._crossrun_class or "default", question))
+                note = (self._crossrun_view.briefing()
+                        if self._crossrun_view is not None else "")
+                if note:
+                    result.notes.append(note)
+            except Exception as e:  # noqa: BLE001 — memory write must not
+                logger.warning("cross-run memory write failed: %s", e)
+        return result
+
+    async def _run_inner(self, question: str, *,
+                         domain: Domain = Domain.GENERAL,
+                         today: Optional[date] = None) -> PipelineResult:
         today = today or date.today()
         self.artifact_refs = []
         self._pending_artifact_refs = []
@@ -710,6 +764,13 @@ class ResearchPipeline:
                     # Already persisted inside _retrieve (R1 fix); just
                     # record the outcome on the trace in leaf order.
                     trace.stages.append(_fetch_saved[i])
+            # Cross-run memory: keep what this leaf's retrieval actually
+            # did (admitted/rejected/errored/skipped per source). Counts
+            # only — the record builder never sees bodies or verdicts'
+            # contents beyond tools.gaps' own classification. Recorded for
+            # BOTH branches above (fresh parallel and checkpoint restore),
+            # so a resumed run's records match a live run's.
+            self._crossrun_traces[q.question_id] = trace_q
             fetches_by_leaf.append(fetches_i)
             traces_by_leaf.append(trace_q)
             result.fetches.extend(fetches_i)

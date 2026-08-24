@@ -18,7 +18,10 @@ from tools.sources.base import RestSource, SourceError, SourceSpec
 
 SPEC = SourceSpec(
     name="bls",
-    base_url="https://api.bls.gov/public/api/v2",
+    # 2026-08: the long-documented /public/api/v2 path now serves a bare
+    # Apache "403 Forbidden" to every client (verified live, curl included);
+    # the /publicAPI/v2 path is the one that still answers.
+    base_url="https://api.bls.gov/publicAPI/v2",
     description="BLS time series: employment, CPI, payrolls, prices",
     answers=(
         "employment/payrolls/unemployment series",
@@ -69,7 +72,8 @@ class BlsAdapter:
                    "endyear": str(int(end_year))}
         url = self.source.build_url("/timeseries/data")
         if keyed:
-            url += "&registrationkey=" + self.api_key
+            url += ("&" if "?" in url else "?") + \
+                "registrationkey=" + self.api_key
         data, rec = self.source.post_json(url, payload)
         data["_fetch"] = {"url": rec.url, "sha256": rec.content_sha256,
                           "fetched_at": rec.fetched_at}
