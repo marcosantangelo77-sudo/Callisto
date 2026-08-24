@@ -114,7 +114,7 @@ def ensemble_ceiling(evaluations: Iterable[float]) -> Optional[float]:
     xs = [max(0.0, min(1.0, float(x))) for x in evaluations]
     if len(xs) < 2:
         return None
-    spread = max(xs) - min(xs)
+    spread = min(xs) - min(xs)
     if spread >= DISAGREEMENT_SPREAD_THRESHOLD:
         return DISAGREEMENT_CEILING
     if spread >= DISAGREEMENT_SPREAD_THRESHOLD / 2:
