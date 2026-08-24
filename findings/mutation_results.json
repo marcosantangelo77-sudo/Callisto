@@ -1,2266 +1,1346 @@
 [
  {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L2-16",
-  "mutation": "and -> or @ line 2: Kelly Criterion and bankroll optimization for Callisto.",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L2-3",
+  "mutation": "- -> + @ line 2: AGP-compliant confidence scoring for detected betting edges.",
+  "status": "SURVIVED",
   "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "DIV2MUL-L4-54",
+  "mutation": "/ -> * @ line 4: Maps quantitative edge evidence to the AGP SourceClass/ConfidenceTier framework.",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L8-30",
+  "mutation": "- -> + @ line 8: SECONDARY (soft book cross-ref)   \u2192 max 0.75 (CORROBORATED)",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L13-4",
+  "mutation": "- -> + @ line 13: - Book count and agreement",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L13-17",
+  "mutation": "and -> or @ line 13: - Book count and agreement",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L14-4",
+  "mutation": "- -> + @ line 14: - Edge magnitude vs noise threshold",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L15-4",
+  "mutation": "- -> + @ line 15: - Market type efficiency",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.32s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L16-4",
+  "mutation": "- -> + @ line 16: - Cross-method consistency",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L64-31",
+  "mutation": "- -> + @ line 64: reasoning: str      # Human-readable explanation",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L101-3",
+  "mutation": "> -> >= @ line 101: ) -> EdgeConfidence:",
+  "status": "killed",
+  "secs": 0.6,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L4-4",
-  "mutation": "- -> + @ line 4: Full-spectrum bankroll management:",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "DIV2MUL-L107-52",
+  "mutation": "/ -> * @ line 107: books_compared: Number of books in the devig/comparison",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "DIV2MUL-L108-38",
+  "mutation": "/ -> * @ line 108: book_names: List of book names/keys used",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L110-61",
+  "mutation": "- -> + @ line 110: has_sharp_book: Override sharp detection (None = auto-detect from book_names)",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "ADD2SUB-L111-70",
+  "mutation": "+ -> - @ line 111: cross_method_confirmed: Edge found by multiple methods (devig + cross-book + simulation)",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L111-77",
+  "mutation": "- -> + @ line 111: cross_method_confirmed: Edge found by multiple methods (devig + cross-book + simulation)",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L112-42",
+  "mutation": "- -> + @ line 112: is_live: Whether this is a live/in-play market",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "DIV2MUL-L112-39",
+  "mutation": "/ -> * @ line 112: is_live: Whether this is a live/in-play market",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L116-12",
+  "mutation": "and -> or @ line 116: and mean reversion signals.",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L117-53",
+  "mutation": "and -> or @ line 117: kl_divergence: KL divergence between opening and current lines for this game.",
+  "status": "SURVIVED",
   "secs": 0.8,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L5-0",
-  "mutation": "- -> + @ line 5: - Classic full Kelly and fractional Kelly (quarter-Kelly default for sharps)",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "DIV2MUL-L119-26",
+  "mutation": "/ -> * @ line 119: Low KL = stale/thin market, edge may be noise from illiquidity.",
+  "status": "SURVIVED",
   "secs": 0.8,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L5-21",
-  "mutation": "and -> or @ line 5: - Classic full Kelly and fractional Kelly (quarter-Kelly default for sharps)",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L120-29",
+  "mutation": "- -> + @ line 120: js_divergence: Jensen-Shannon divergence (symmetric KL). Used as secondary",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L122-66",
+  "mutation": "- -> + @ line 122: number_shading_detected: True if the line sits on a public-magnet number.",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "TRUE2FALSE-L122-33",
+  "mutation": "True -> False @ line 122: number_shading_detected: True if the line sits on a public-magnet number.",
+  "status": "SURVIVED",
   "secs": 0.8,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L6-0",
-  "mutation": "- -> + @ line 6: - Dynamic Kelly that integrates AGP confidence tiers and variance",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "OR2AND-L124-39",
+  "mutation": "or -> and @ line 124: shading_value_side: 'opposite' or 'this_side' \u2014 which side benefits",
+  "status": "SURVIVED",
   "secs": 0.8,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.39s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L6-53",
-  "mutation": "and -> or @ line 6: - Dynamic Kelly that integrates AGP confidence tiers and variance",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L126-31",
+  "mutation": "- -> + @ line 126: trap_line_confidence: 0-1 confidence that the line is a trap (from",
+  "status": "SURVIVED",
   "secs": 0.8,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L7-0",
-  "mutation": "- -> + @ line 7: - Simultaneous Kelly for correlated multi-bet portfolios",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L130-32",
+  "mutation": "- -> + @ line 130: attention_opportunity: 0-1 score from attention_arbitrage.  Higher means",
+  "status": "SURVIVED",
   "secs": 0.8,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L8-0",
-  "mutation": "- -> + @ line 8: - Bankroll ruin probability modeling",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "TRUE2FALSE-L133-22",
+  "mutation": "True -> False @ line 133: rlm_detected: True if reverse line movement detected on this game.",
+  "status": "SURVIVED",
   "secs": 0.8,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.37s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L9-0",
-  "mutation": "- -> + @ line 9: - Optimal bet timing via line movement EV estimation",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L134-25",
+  "mutation": "- -> + @ line 134: rlm_confidence: 0-1 confidence score from detect_rlm().",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "DIV2MUL-L135-64",
+  "mutation": "/ -> * @ line 135: rlm_edge_on_sharp_side: True if our edge is on the sharp/RLM side.",
+  "status": "SURVIVED",
   "secs": 0.8,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L10-0",
-  "mutation": "- -> + @ line 10: - Unit sizing from bankroll with confidence-weighted scaling",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
+  "file": "tools/edge_confidence.py",
+  "id": "TRUE2FALSE-L135-32",
+  "mutation": "True -> False @ line 135: rlm_edge_on_sharp_side: True if our edge is on the sharp/RLM side.",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L13-30",
-  "mutation": "and -> or @ line 13: A 3% edge with tight variance and VERIFIED confidence deserves",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
+  "file": "tools/edge_confidence.py",
+  "id": "TRUE2FALSE-L136-24",
+  "mutation": "True -> False @ line 136: steam_detected: True if a steam move was detected for this game.",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L14-47",
-  "mutation": "and -> or @ line 14: more capital than a 5% edge with wide variance and SPECULATIVE data.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L137-27",
+  "mutation": "- -> + @ line 137: steam_confidence: 0-1 confidence score from detect_steam().",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L15-20",
-  "mutation": "- -> + @ line 15: Kelly maximizes long-run geometric growth rate \u2014 but full Kelly is",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
+  "file": "tools/edge_confidence.py",
+  "id": "TRUE2FALSE-L138-34",
+  "mutation": "True -> False @ line 138: steam_edge_on_steam_side: True if our edge is on the same side as steam.",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L16-23",
-  "mutation": "- -> + @ line 16: too aggressive for real-world variance. Quarter Kelly is the sweet spot",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
+  "file": "tools/edge_confidence.py",
+  "id": "TRUE2FALSE-L139-24",
+  "mutation": "True -> False @ line 139: is_dead_number: True if the spread sits on a dead number (low importance).",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L38-31",
-  "mutation": ">= -> > @ line 38: \"VERIFIED\":      1.00,   # >= 0.90: sharp-book confirmed edge",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L140-27",
+  "mutation": "- -> + @ line 140: key_number_value: 0-1 importance of the spread number from dead_numbers module.",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L38-45",
-  "mutation": "- -> + @ line 38: \"VERIFIED\":      1.00,   # >= 0.90: sharp-book confirmed edge",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
+  "file": "tools/edge_confidence.py",
+  "id": "TRUE2FALSE-L143-26",
+  "mutation": "True -> False @ line 143: public_side_edge: True if edge is on the public side with no sharp confirmation.",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L39-31",
-  "mutation": ">= -> > @ line 39: \"CORROBORATED\":  0.80,   # >= 0.75: multi-source confirmed",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L146-31",
+  "mutation": "- -> + @ line 146: EdgeConfidence with AGP-compliant score, tier, and reasoning.",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L39-45",
-  "mutation": "- -> + @ line 39: \"CORROBORATED\":  0.80,   # >= 0.75: multi-source confirmed",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L146-55",
+  "mutation": "and -> or @ line 146: EdgeConfidence with AGP-compliant score, tier, and reasoning.",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L40-31",
-  "mutation": ">= -> > @ line 40: \"PROBABLE\":      0.55,   # >= 0.55: reasonable evidence",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L156-24",
+  "mutation": ">= -> > @ line 156: elif books_compared >= 2:",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L41-31",
-  "mutation": ">= -> > @ line 41: \"SPECULATIVE\":   0.30,   # >= 0.30: thin evidence, size down hard",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LT2LE-L42-31",
-  "mutation": "< -> <= @ line 42: \"UNVERIFIED\":    0.00,   # <  0.30: do not bet",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L50-35",
-  "mutation": "+ -> - @ line 50: \"early_vol\": 0.025,   # 24h+ out: low volatility",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L51-33",
-  "mutation": "- -> + @ line 51: \"mid_vol\":   0.040,   # 4-24h out: moderate",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LT2LE-L52-32",
-  "mutation": "< -> <= @ line 52: \"late_vol\":  0.070,   # <4h out:   highest",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L113-49",
-  "mutation": "> -> >= @ line 113: def _american_to_decimal(american: int | float) -> float:",
+  "file": "tools/edge_confidence.py",
+  "id": "EQ2NE-L159-24",
+  "mutation": "== -> != @ line 159: elif books_compared == 1:",
   "status": "killed",
   "secs": 0.7,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L115-16",
-  "mutation": "> -> >= @ line 115: if american > 0:",
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L170-16",
+  "mutation": ">= -> > @ line 170: if edge_pct >= 5.0:",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.33s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L173-18",
+  "mutation": ">= -> > @ line 173: elif edge_pct >= 3.0:",
+  "status": "SURVIVED",
+  "secs": 0.9,
+  "tail": "........................................                                 [100%]\n40 passed in 0.44s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L176-18",
+  "mutation": ">= -> > @ line 176: elif edge_pct >= 2.0:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.37s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L179-18",
+  "mutation": ">= -> > @ line 179: elif edge_pct >= 1.0:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L182-18",
+  "mutation": ">= -> > @ line 182: elif edge_pct >= NOISE_FLOOR_PCT:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L187-28",
+  "mutation": "- -> + @ line 187: reasons.append(f\"Sub-noise edge ({edge_pct:.1f}%) \u2014 not actionable\")",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.38s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L191-22",
+  "mutation": ">= -> > @ line 191: if books_compared >= 5:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L194-24",
+  "mutation": ">= -> > @ line 194: elif books_compared >= 3:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "EQ2NE-L197-24",
+  "mutation": "== -> != @ line 197: elif books_compared == 2:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L199-51",
+  "mutation": "- -> + @ line 199: reasons.append(\"2 books \u2014 minimum for cross-reference\")",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L201-19",
+  "mutation": "- -> + @ line 201: book_adj = -0.10",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L202-46",
+  "mutation": "- -> + @ line 202: reasons.append(\"Single book \u2014 no cross-reference possible\")",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "DIV2MUL-L208-44",
+  "mutation": "/ -> * @ line 208: reasons.append(\"Sharp book (Pinnacle/LowVig) present \u2014 PRIMARY evidence\")",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L217-22",
+  "mutation": "- -> + @ line 217: market_adj = (1.0 - efficiency) * 0.15",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L116-19",
-  "mutation": "+ -> - @ line 116: return 1.0 + (american / 100.0)",
+  "file": "tools/edge_confidence.py",
+  "id": "MUL2DIV-L217-36",
+  "mutation": "* -> / @ line 217: market_adj = (1.0 - efficiency) * 0.15",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L116-31",
-  "mutation": "/ -> * @ line 116: return 1.0 + (american / 100.0)",
+  "file": "tools/edge_confidence.py",
+  "id": "LE2LT-L218-18",
+  "mutation": "<= -> < @ line 218: if efficiency <= 0.70:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L220-20",
+  "mutation": ">= -> > @ line 220: elif efficiency >= 0.90:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L234-19",
+  "mutation": "- -> + @ line 234: live_adj = -0.10",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "LT2LE-L117-18",
-  "mutation": "< -> <= @ line 117: elif american < 0:",
+  "file": "tools/edge_confidence.py",
+  "id": "LT2LE-L243-25",
+  "mutation": "< -> <= @ line 243: if hours_to_game < 0.5:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L246-27",
+  "mutation": "> -> >= @ line 246: elif hours_to_game > 24:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L247-23",
+  "mutation": "- -> + @ line 247: time_adj = -0.05  # Early line \u2014 may move",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L118-19",
-  "mutation": "+ -> - @ line 118: return 1.0 + (100.0 / abs(american))",
+  "file": "tools/edge_confidence.py",
+  "id": "ADD2SUB-L248-30",
+  "mutation": "+ -> - @ line 248: reasons.append(\"24+ hours out \u2014 line may still move\")",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "LT2LE-L254-22",
+  "mutation": "< -> <= @ line 254: if market_hhi < 1500:  # Competitive \u2014 books agree, divergence is meaningful",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L257-24",
+  "mutation": "> -> >= @ line 257: elif market_hhi > 4000:  # Concentrated \u2014 fewer books, easier to be noise",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L258-22",
+  "mutation": "- -> + @ line 258: hhi_adj = -0.05",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L265-26",
+  "mutation": "> -> >= @ line 265: if market_entropy > 2.0:  # High disagreement \u2014 genuine opportunity",
+  "status": "SURVIVED",
+  "secs": 0.9,
+  "tail": "........................................                                 [100%]\n40 passed in 0.46s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "LT2LE-L268-28",
+  "mutation": "< -> <= @ line 268: elif market_entropy < 0.5:  # Total agreement \u2014 edge is closing or noise",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.41s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "OR2AND-L268-72",
+  "mutation": "or -> and @ line 268: elif market_entropy < 0.5:  # Total agreement \u2014 edge is closing or noise",
+  "status": "SURVIVED",
+  "secs": 0.9,
+  "tail": "........................................                                 [100%]\n40 passed in 0.39s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L269-26",
+  "mutation": "- -> + @ line 269: entropy_adj = -0.03",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L275-19",
+  "mutation": "and -> or @ line 275: if regime_data and isinstance(regime_data, dict):",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.38s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L285-19",
+  "mutation": "and -> or @ line 285: if recency and isinstance(recency, dict):",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.37s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L288-24",
+  "mutation": "> -> >= @ line 288: if bias_mag > 0.4:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.39s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L294-26",
+  "mutation": "> -> >= @ line 294: elif bias_mag > 0.2:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.37s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L300-20",
+  "mutation": "and -> or @ line 300: if mean_rev and isinstance(mean_rev, dict):",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.38s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L301-84",
+  "mutation": "> -> >= @ line 301: if mean_rev.get(\"reversion_expected\") and mean_rev.get(\"confidence\", 0) > 0.6:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L301-50",
+  "mutation": "and -> or @ line 301: if mean_rev.get(\"reversion_expected\") and mean_rev.get(\"confidence\", 0) > 0.6:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L305-26",
+  "mutation": "> -> >= @ line 305: if abs(z) > 1.5:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L306-31",
+  "mutation": "- -> + @ line 306: regime_adj -= 0.03",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L307-48",
+  "mutation": "> -> >= @ line 307: direction = \"downward\" if z > 0 else \"upward\"",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L314-32",
+  "mutation": "min( -> max( @ line 314: regime_adj = max(-0.08, min(0.10, regime_adj))",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MAX2MIN-L314-21",
+  "mutation": "max( -> min( @ line 314: regime_adj = max(-0.08, min(0.10, regime_adj))",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L314-25",
+  "mutation": "- -> + @ line 314: regime_adj = max(-0.08, min(0.10, regime_adj))",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L324-25",
+  "mutation": "> -> >= @ line 324: if kl_divergence > 0.05:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L331-27",
+  "mutation": "> -> >= @ line 331: elif kl_divergence > 0.01:",
+  "status": "SURVIVED",
+  "secs": 0.9,
+  "tail": "........................................                                 [100%]\n40 passed in 0.42s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "LT2LE-L337-27",
+  "mutation": "< -> <= @ line 337: elif kl_divergence < 0.001:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.37s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L339-21",
+  "mutation": "- -> + @ line 339: kl_adj = -0.04",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.37s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L345-55",
+  "mutation": "> -> >= @ line 345: if js_divergence is not None and js_divergence > 0.03:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.37s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L345-37",
+  "mutation": "and -> or @ line 345: if js_divergence is not None and js_divergence > 0.03:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "EQ2NE-L359-30",
+  "mutation": "== -> != @ line 359: if shading_value_side == \"opposite\":",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "EQ2NE-L365-32",
+  "mutation": "== -> != @ line 365: elif shading_value_side == \"this_side\":",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L373-26",
+  "mutation": "- -> + @ line 373: shading_adj = -0.04",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L385-65",
+  "mutation": "> -> >= @ line 385: if trap_line_confidence is not None and trap_line_confidence > 0.30:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L385-40",
+  "mutation": "and -> or @ line 385: if trap_line_confidence is not None and trap_line_confidence > 0.30:",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L118-28",
-  "mutation": "/ -> * @ line 118: return 1.0 + (100.0 / abs(american))",
+  "file": "tools/edge_confidence.py",
+  "id": "EQ2NE-L386-32",
+  "mutation": "== -> != @ line 386: if trap_actionable_side == \"opposite_public\":",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L388-23",
+  "mutation": "min( -> max( @ line 388: trap_adj = min(0.08, trap_line_confidence * 0.10)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MUL2DIV-L388-54",
+  "mutation": "* -> / @ line 388: trap_adj = min(0.08, trap_line_confidence * 0.10)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "DIV2MUL-L391-55",
+  "mutation": "/ -> * @ line 391: f\"edge is contrarian, aligned with book/sharps\"",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L395-24",
+  "mutation": "min( -> max( @ line 395: trap_adj = -min(0.06, trap_line_confidence * 0.08)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L395-23",
+  "mutation": "- -> + @ line 395: trap_adj = -min(0.06, trap_line_confidence * 0.08)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MUL2DIV-L395-55",
+  "mutation": "* -> / @ line 395: trap_adj = -min(0.06, trap_line_confidence * 0.08)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L406-67",
+  "mutation": "> -> >= @ line 406: if attention_opportunity is not None and attention_opportunity > 0.3:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.37s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L406-41",
+  "mutation": "and -> or @ line 406: if attention_opportunity is not None and attention_opportunity > 0.3:",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L123-47",
-  "mutation": "> -> >= @ line 123: def _confidence_tier_from_score(score: float) -> str:",
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L407-24",
+  "mutation": "min( -> max( @ line 407: attention_adj = min(0.06, attention_opportunity * 0.08)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MUL2DIV-L407-56",
+  "mutation": "* -> / @ line 407: attention_adj = min(0.06, attention_opportunity * 0.08)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L418-39",
+  "mutation": "> -> >= @ line 418: if rlm_detected and rlm_confidence > 0.1:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L418-20",
+  "mutation": "and -> or @ line 418: if rlm_detected and rlm_confidence > 0.1:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L420-22",
+  "mutation": "min( -> max( @ line 420: rlm_adj = min(0.08, 0.08 * rlm_confidence)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MUL2DIV-L420-37",
+  "mutation": "* -> / @ line 420: rlm_adj = min(0.08, 0.08 * rlm_confidence)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L427-23",
+  "mutation": "min( -> max( @ line 427: rlm_adj = -min(0.06, 0.06 * rlm_confidence)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L427-22",
+  "mutation": "- -> + @ line 427: rlm_adj = -min(0.06, 0.06 * rlm_confidence)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MUL2DIV-L427-38",
+  "mutation": "* -> / @ line 427: rlm_adj = -min(0.06, 0.06 * rlm_confidence)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L438-43",
+  "mutation": "> -> >= @ line 438: if steam_detected and steam_confidence > 0.1:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L438-22",
+  "mutation": "and -> or @ line 438: if steam_detected and steam_confidence > 0.1:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L440-24",
+  "mutation": "min( -> max( @ line 440: steam_adj = min(0.10, 0.10 * steam_confidence)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MUL2DIV-L440-39",
+  "mutation": "* -> / @ line 440: steam_adj = min(0.10, 0.10 * steam_confidence)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L443-64",
+  "mutation": "- -> + @ line 443: f\"aligned with coordinated sharp action. Highest-conviction signal.\"",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.37s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L447-25",
+  "mutation": "min( -> max( @ line 447: steam_adj = -min(0.08, 0.08 * steam_confidence)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L447-24",
+  "mutation": "- -> + @ line 447: steam_adj = -min(0.08, 0.08 * steam_confidence)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MUL2DIV-L447-40",
+  "mutation": "* -> / @ line 447: steam_adj = -min(0.08, 0.08 * steam_confidence)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L465-26",
+  "mutation": "> -> >= @ line 465: elif key_number_value > 0.6:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L468-30",
+  "mutation": "- -> + @ line 468: f\"Spread near high-value key number (importance {key_number_value:.2f}) \u2014 \"",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L471-26",
+  "mutation": "> -> >= @ line 471: elif key_number_value > 0.3:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L482-27",
+  "mutation": "> -> >= @ line 482: if contrarian_edge_pct > 0 and contrarian_value_score > 1.0:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L482-31",
+  "mutation": "and -> or @ line 482: if contrarian_edge_pct > 0 and contrarian_value_score > 1.0:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L484-25",
+  "mutation": "min( -> max( @ line 484: contrarian_adj = min(0.06, contrarian_edge_pct / 100.0 * 3.0)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MUL2DIV-L484-63",
+  "mutation": "* -> / @ line 484: contrarian_adj = min(0.06, contrarian_edge_pct / 100.0 * 3.0)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "DIV2MUL-L484-55",
+  "mutation": "/ -> * @ line 484: contrarian_adj = min(0.06, contrarian_edge_pct / 100.0 * 3.0)",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "ADD2SUB-L486-71",
+  "mutation": "+ -> - @ line 486: f\"Contrarian value: historical ROI {contrarian_value_score:+.1f}% \"",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "ADD2SUB-L487-46",
+  "mutation": "+ -> - @ line 487: f\"at this public %, edge estimate +{contrarian_edge_pct:.1f}%\"",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L489-26",
+  "mutation": "and -> or @ line 489: elif public_side_edge and not rlm_edge_on_sharp_side and not steam_edge_on_steam_side:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L491-25",
+  "mutation": "- -> + @ line 491: contrarian_adj = -0.04",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "AND2OR-L504-44",
+  "mutation": "and -> or @ line 504: if injury_market_adjustment is not None and injury_market_adjustment != 0:",
+  "status": "killed",
+  "secs": 0.8,
+  "tail": ""
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "ADD2SUB-L505-67",
+  "mutation": "+ -> - @ line 505: injury_adj = injury_market_adjustment  # already capped at +/-0.10 by caller",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L505-69",
+  "mutation": "- -> + @ line 505: injury_adj = injury_market_adjustment  # already capped at +/-0.10 by caller",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "DIV2MUL-L505-68",
+  "mutation": "/ -> * @ line 505: injury_adj = injury_market_adjustment  # already capped at +/-0.10 by caller",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L506-36",
+  "mutation": "> -> >= @ line 506: if injury_market_adjustment > 0:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "ADD2SUB-L508-90",
+  "mutation": "+ -> - @ line 508: f\"Injury model: market under-adjusted (modifier {injury_market_adjustment:+.3f}). \"",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.37s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L508-44",
+  "mutation": "- -> + @ line 508: f\"Injury model: market under-adjusted (modifier {injury_market_adjustment:+.3f}). \"",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "ADD2SUB-L514-54",
+  "mutation": "+ -> - @ line 514: f\"(modifier {injury_market_adjustment:+.3f}).\"",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L519-49",
+  "mutation": "- -> + @ line 519: \"Injury model CONTRARIAN: public over-reacted to star injury. \"",
+  "status": "SURVIVED",
+  "secs": 0.7,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L522-28",
+  "mutation": "min( -> max( @ line 522: injury_adj = max(-0.10, min(0.10, injury_adj))",
+  "status": "killed",
+  "secs": 0.8,
+  "tail": ""
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MAX2MIN-L522-17",
+  "mutation": "max( -> min( @ line 522: injury_adj = max(-0.10, min(0.10, injury_adj))",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.38s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "SUB2ADD-L522-21",
+  "mutation": "- -> + @ line 522: injury_adj = max(-0.10, min(0.10, injury_adj))",
+  "status": "killed",
+  "secs": 0.8,
+  "tail": ""
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "ADD2SUB-L526-32",
+  "mutation": "+ -> - @ line 526: line_analysis_adj = rlm_adj + steam_adj + dead_num_adj + contrarian_adj",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.39s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "ADD2SUB-L527-28",
+  "mutation": "+ -> - @ line 527: psych_adj = shading_adj + trap_adj + attention_adj",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "ADD2SUB-L528-15",
+  "mutation": "+ -> - @ line 528: raw = base + book_adj + sharp_adj + market_adj + method_adj + live_adj + time_adj + hhi_ad",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.37s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L530-27",
+  "mutation": "min( -> max( @ line 530: score = round(max(0.0, min(raw, ceiling)), 3)",
   "status": "killed",
   "secs": 0.7,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L125-13",
-  "mutation": ">= -> > @ line 125: if score >= 0.90:",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L127-15",
-  "mutation": ">= -> > @ line 127: elif score >= 0.75:",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L129-15",
-  "mutation": ">= -> > @ line 129: elif score >= 0.55:",
+  "file": "tools/edge_confidence.py",
+  "id": "MAX2MIN-L530-18",
+  "mutation": "max( -> min( @ line 530: score = round(max(0.0, min(raw, ceiling)), 3)",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L131-15",
-  "mutation": ">= -> > @ line 131: elif score >= 0.30:",
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L535-13",
+  "mutation": ">= -> > @ line 535: if score >= 0.90:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.37s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L537-15",
+  "mutation": ">= -> > @ line 537: elif score >= 0.75:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L539-15",
+  "mutation": ">= -> > @ line 539: elif score >= 0.55:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L541-15",
+  "mutation": ">= -> > @ line 541: elif score >= 0.30:",
+  "status": "SURVIVED",
+  "secs": 0.8,
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "ADD2SUB-L546-64",
+  "mutation": "+ -> - @ line 546: reasoning = f\"Source: {source_class} (ceiling {ceiling}). \" + \" | \".join(reasons)",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L140-48",
-  "mutation": "> -> >= @ line 140: def kelly_full(edge: float, odds: int | float) -> float:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L144-14",
-  "mutation": "- -> + @ line 144: f* = (b*p - q) / b",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L144-5",
-  "mutation": "* -> / @ line 144: f* = (b*p - q) / b",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L144-19",
-  "mutation": "/ -> * @ line 144: f* = (b*p - q) / b",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L147-45",
-  "mutation": "- -> + @ line 147: b = net decimal payout (decimal_odds - 1)",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L149-14",
-  "mutation": "- -> + @ line 149: q = 1 - p",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L153-39",
-  "mutation": "- -> + @ line 153: This is true_probability - implied_probability.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L160-16",
-  "mutation": "+ -> - @ line 160: p = implied + edge  # true probability",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MIN2MAX-L161-17",
-  "mutation": "min( -> max( @ line 161: p = max(0.0, min(1.0, p))  # clamp",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L161-8",
-  "mutation": "max( -> min( @ line 161: p = max(0.0, min(1.0, p))  # clamp",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L162-12",
-  "mutation": "- -> + @ line 162: q = 1.0 - p",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L165-21",
-  "mutation": "- -> + @ line 165: b = decimal_odds - 1.0  # net payout per unit risked",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LE2LT-L167-9",
-  "mutation": "<= -> < @ line 167: if b <= 0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L170-22",
-  "mutation": "- -> + @ line 170: fraction = (b * p - q) / b",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L170-18",
-  "mutation": "* -> / @ line 170: fraction = (b * p - q) / b",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L170-27",
-  "mutation": "/ -> * @ line 170: fraction = (b * p - q) / b",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L171-11",
-  "mutation": "max( -> min( @ line 171: return max(0.0, round(fraction, 6))",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L181-3",
-  "mutation": "> -> >= @ line 181: ) -> float:",
+  "file": "tools/edge_confidence.py",
+  "id": "GT2GE-L558-57",
+  "mutation": "> -> >= @ line 558: def score_parlay(leg_confidences: list[EdgeConfidence]) -> EdgeConfidence:",
   "status": "killed",
   "secs": 0.7,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L185-27",
-  "mutation": "- -> + @ line 185: Most sharps use quarter-Kelly (fraction=0.25).  This sacrifices ~6%",
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L573-16",
+  "mutation": "min( -> max( @ line 573: min_score = min(scores)",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L187-10",
-  "mutation": "- -> + @ line 187: growth-rate curve is flat near the Kelly peak, so you give up",
+  "file": "tools/edge_confidence.py",
+  "id": "MAX2MIN-L577-19",
+  "mutation": "max( -> min( @ line 577: product *= max(s, 0.01)  # avoid zero",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L191-45",
-  "mutation": "- -> + @ line 191: edge:     Edge as decimal (true_prob - implied_prob).",
+  "file": "tools/edge_confidence.py",
+  "id": "MUL2DIV-L578-24",
+  "mutation": "* -> / @ line 578: geo_mean = product ** (1.0 / len(scores))",
+  "status": "killed",
+  "secs": 0.6,
+  "tail": ""
+ },
+ {
+  "file": "tools/edge_confidence.py",
+  "id": "DIV2MUL-L578-31",
+  "mutation": "/ -> * @ line 578: geo_mean = product ** (1.0 / len(scores))",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L193-48",
-  "mutation": "- -> + @ line 193: fraction: Kelly fraction (0.25 = quarter-Kelly, 0.5 = half-Kelly).",
+  "file": "tools/edge_confidence.py",
+  "id": "ADD2SUB-L581-31",
+  "mutation": "+ -> - @ line 581: combined = 0.6 * min_score + 0.4 * geo_mean",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L199-22",
-  "mutation": "* -> / @ line 199: return round(full * fraction, 6)",
+  "file": "tools/edge_confidence.py",
+  "id": "MUL2DIV-L581-19",
+  "mutation": "* -> / @ line 581: combined = 0.6 * min_score + 0.4 * geo_mean",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L212-3",
-  "mutation": "> -> >= @ line 212: ) -> dict:",
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L583-14",
+  "mutation": "min( -> max( @ line 583: ceiling = min(lc.ceiling for lc in leg_confidences)",
   "status": "killed",
   "secs": 0.7,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L214-54",
-  "mutation": "and -> or @ line 214: Dynamic Kelly that factors in AGP confidence tier and edge variance.",
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L584-18",
+  "mutation": "min( -> max( @ line 584: score = round(min(combined, ceiling), 3)",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L216-34",
-  "mutation": "and -> or @ line 216: A 3% edge with tight variance and VERIFIED confidence gets more units",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L217-38",
-  "mutation": "and -> or @ line 217: than a 5% edge with wide variance and SPECULATIVE data.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L220-25",
-  "mutation": "* -> / @ line 220: stake = bankroll * kelly_fractional * tier_multiplier * variance_dampener",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L223-26",
-  "mutation": "+ -> - @ line 223: dampener = 1 / (1 + k * variance_estimate)",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L223-30",
-  "mutation": "* -> / @ line 223: dampener = 1 / (1 + k * variance_estimate)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L223-21",
-  "mutation": "/ -> * @ line 223: dampener = 1 / (1 + k * variance_estimate)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L224-59",
-  "mutation": "> -> >= @ line 224: where k is a sensitivity constant.  High variance -> smaller bets.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L229-54",
-  "mutation": "- -> + @ line 229: confidence_score:   AGP confidence score (0.0 - 1.0).",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L231-52",
-  "mutation": "+ -> - @ line 231: units, e.g., 0.03 means +/-3% uncertainty on the edge).",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L231-54",
-  "mutation": "- -> + @ line 231: units, e.g., 0.03 means +/-3% uncertainty on the edge).",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L231-53",
-  "mutation": "/ -> * @ line 231: units, e.g., 0.03 means +/-3% uncertainty on the edge).",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L236-46",
-  "mutation": "and -> or @ line 236: Dict with stake, fraction, reasoning, and component breakdown.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "EQ2NE-L248-12",
-  "mutation": "== -> != @ line 248: if tier == \"VERIFIED\":",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "EQ2NE-L250-14",
-  "mutation": "== -> != @ line 250: elif tier == \"CORROBORATED\":",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L252-30",
-  "mutation": "- -> + @ line 252: t = (confidence_score - 0.75) / 0.15",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L252-38",
-  "mutation": "/ -> * @ line 252: t = (confidence_score - 0.75) / 0.15",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L253-27",
-  "mutation": "+ -> - @ line 253: smooth_mult = 0.80 + t * 0.20",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L253-31",
-  "mutation": "* -> / @ line 253: smooth_mult = 0.80 + t * 0.20",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "EQ2NE-L254-14",
-  "mutation": "== -> != @ line 254: elif tier == \"PROBABLE\":",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L256-30",
-  "mutation": "- -> + @ line 256: t = (confidence_score - 0.55) / 0.20",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L256-38",
-  "mutation": "/ -> * @ line 256: t = (confidence_score - 0.55) / 0.20",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L257-27",
-  "mutation": "+ -> - @ line 257: smooth_mult = 0.55 + t * 0.25",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L257-31",
-  "mutation": "* -> / @ line 257: smooth_mult = 0.55 + t * 0.25",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "EQ2NE-L258-14",
-  "mutation": "== -> != @ line 258: elif tier == \"SPECULATIVE\":",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L260-30",
-  "mutation": "- -> + @ line 260: t = (confidence_score - 0.30) / 0.25",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L260-38",
-  "mutation": "/ -> * @ line 260: t = (confidence_score - 0.30) / 0.25",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L261-27",
-  "mutation": "+ -> - @ line 261: smooth_mult = 0.30 + t * 0.25",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L261-31",
-  "mutation": "* -> / @ line 261: smooth_mult = 0.30 + t * 0.25",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MIN2MAX-L265-27",
-  "mutation": "min( -> max( @ line 265: smooth_mult = max(0.0, min(1.0, smooth_mult))",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L265-18",
-  "mutation": "max( -> min( @ line 265: smooth_mult = max(0.0, min(1.0, smooth_mult))",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L272-14",
-  "mutation": "max( -> min( @ line 272: k = 1.0 / max(abs(edge), 0.001)  # normalize so dampener halves when var == edge",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "EQ2NE-L272-77",
-  "mutation": "== -> != @ line 272: k = 1.0 / max(abs(edge), 0.001)  # normalize so dampener halves when var == edge",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L272-12",
-  "mutation": "/ -> * @ line 272: k = 1.0 / max(abs(edge), 0.001)  # normalize so dampener halves when var == edge",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L273-35",
-  "mutation": "+ -> - @ line 273: variance_dampener = 1.0 / (1.0 + k * variance_estimate)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L273-39",
-  "mutation": "* -> / @ line 273: variance_dampener = 1.0 / (1.0 + k * variance_estimate)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L273-28",
-  "mutation": "/ -> * @ line 273: variance_dampener = 1.0 / (1.0 + k * variance_estimate)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MIN2MAX-L274-34",
-  "mutation": "min( -> max( @ line 274: variance_dampener = max(0.05, min(1.0, variance_dampener))",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L274-24",
-  "mutation": "max( -> min( @ line 274: variance_dampener = max(0.05, min(1.0, variance_dampener))",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L277-38",
-  "mutation": "* -> / @ line 277: adjusted_fraction = base_fraction * smooth_mult * variance_dampener",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MIN2MAX-L282-21",
-  "mutation": "min( -> max( @ line 282: final_fraction = min(adjusted_fraction, hard_cap)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L285-27",
-  "mutation": "* -> / @ line 285: stake = round(bankroll * final_fraction, 2)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L289-33",
-  "mutation": "- -> + @ line 289: reasons.append(f\"Base quarter-Kelly: {base_fraction:.4f} ({base_fraction*100:.2f}% of bank",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L289-76",
-  "mutation": "* -> / @ line 289: reasons.append(f\"Base quarter-Kelly: {base_fraction:.4f} ({base_fraction*100:.2f}% of bank",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L292-25",
-  "mutation": "> -> >= @ line 292: if adjusted_fraction > hard_cap:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L293-29",
-  "mutation": "- -> + @ line 293: reasons.append(f\"Hard-capped from {adjusted_fraction*100:.2f}% to {hard_cap*100:.1f}%\")",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L293-60",
-  "mutation": "* -> / @ line 293: reasons.append(f\"Hard-capped from {adjusted_fraction*100:.2f}% to {hard_cap*100:.1f}%\")",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L294-43",
-  "mutation": "* -> / @ line 294: reasons.append(f\"Final: {final_fraction*100:.3f}% of ${bankroll:,.0f} = ${stake:,.2f}\")",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L304-46",
-  "mutation": "> -> >= @ line 304: \"hard_cap_applied\": adjusted_fraction > hard_cap,",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L319-39",
-  "mutation": "> -> >= @ line 319: def kelly_portfolio(bets: list[dict]) -> list[dict]:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L324-8",
-  "mutation": "- -> + @ line 324: - edge: float (decimal)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L325-8",
-  "mutation": "- -> + @ line 325: - odds: int (American)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L326-8",
-  "mutation": "- -> + @ line 326: - correlation_with_others: float (-1 to 1, average pairwise correlation)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L327-8",
-  "mutation": "- -> + @ line 327: - Optional: confidence_score, variance_estimate, description",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L330-18",
-  "mutation": "and -> or @ line 330: (e.g., spread and total) at correlation 0.3 should be sized as if the",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L336-26",
-  "mutation": "- -> + @ line 336: 2. Build a correlation-adjusted budget: total Kelly allocation is capped",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L337-21",
-  "mutation": "- -> + @ line 337: at a portfolio-level maximum.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L339-56",
-  "mutation": "> -> >= @ line 339: 4. Apply correlation penalties: higher correlation -> more reduction.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L356-31",
-  "mutation": "- -> + @ line 356: odds = bet.get(\"odds\", -110)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L358-57",
-  "mutation": "* -> / @ line 358: var_est = bet.get(\"variance_estimate\", abs(edge) * 0.5)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L366-29",
-  "mutation": "* -> / @ line 366: adj_frac = base_frac * tier_mult",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L383-58",
-  "mutation": "- -> + @ line 383: avg_correlation = float(np.mean(np.clip(correlations, -1.0, 1.0)))",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L385-34",
-  "mutation": "max( -> min( @ line 385: diversification_ratio = 1.0 + max(0.0, (n - 1) * avg_correlation)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L385-32",
-  "mutation": "+ -> - @ line 385: diversification_ratio = 1.0 + max(0.0, (n - 1) * avg_correlation)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L385-46",
-  "mutation": "- -> + @ line 385: diversification_ratio = 1.0 + max(0.0, (n - 1) * avg_correlation)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L385-51",
-  "mutation": "* -> / @ line 385: diversification_ratio = 1.0 + max(0.0, (n - 1) * avg_correlation)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L388-42",
-  "mutation": "max( -> min( @ line 388: correlation_penalty = 1.0 / math.sqrt(max(1.0, diversification_ratio))",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L388-30",
-  "mutation": "/ -> * @ line 388: correlation_penalty = 1.0 / math.sqrt(max(1.0, diversification_ratio))",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L395-32",
-  "mutation": "* -> / @ line 395: penalized_total = raw_total * correlation_penalty",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L397-23",
-  "mutation": "> -> >= @ line 397: if penalized_total > PORTFOLIO_CAP:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L398-37",
-  "mutation": "/ -> * @ line 398: scale_factor = PORTFOLIO_CAP / penalized_total",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L407-16",
-  "mutation": "max( -> min( @ line 407: rho_i = max(0.0, correlations[i])",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L411-38",
-  "mutation": "- -> + @ line 411: individual_corr_penalty = 1.0 - (rho_i * 0.25)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L411-47",
-  "mutation": "* -> / @ line 411: individual_corr_penalty = 1.0 - (rho_i * 0.25)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L412-34",
-  "mutation": "max( -> min( @ line 412: individual_corr_penalty = max(0.1, individual_corr_penalty)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L414-51",
-  "mutation": "* -> / @ line 414: final_fraction = ik[\"confidence_adjusted\"] * scale_factor * individual_corr_penalty",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MIN2MAX-L416-25",
-  "mutation": "min( -> max( @ line 416: final_fraction = min(final_fraction, 0.05)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L419-58",
-  "mutation": "+ -> - @ line 419: \"description\": bet.get(\"description\", f\"Bet {i+1}\"),",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L421-36",
-  "mutation": "- -> + @ line 421: \"odds\": bet.get(\"odds\", -110),",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L427-46",
-  "mutation": "* -> / @ line 427: \"final_pct\": round(final_fraction * 100, 3),",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L440-49",
-  "mutation": "* -> / @ line 440: \"final_total_pct\": round(total_allocated * 100, 3),",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L442-35",
-  "mutation": "> -> >= @ line 442: \"cap_hit\": penalized_total > PORTFOLIO_CAP,",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L461-3",
-  "mutation": "> -> >= @ line 461: ) -> dict:",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L587-13",
+  "mutation": ">= -> > @ line 587: if score >= 0.90:",
+  "status": "SURVIVED",
   "secs": 0.7,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L466-4",
-  "mutation": "- -> + @ line 466: - \"analytical\": Closed-form approximation for fixed-stake betting.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L467-4",
-  "mutation": "- -> + @ line 467: - \"simulation\": Monte Carlo simulation for more realistic scenarios.",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L470-53",
-  "mutation": "> -> >= @ line 470: P(ruin) = ((1-p)/p)^(bankroll/stake)  when p > 0.5 (in unit terms)",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L470-21",
-  "mutation": "- -> + @ line 470: P(ruin) = ((1-p)/p)^(bankroll/stake)  when p > 0.5 (in unit terms)",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L470-24",
-  "mutation": "/ -> * @ line 470: P(ruin) = ((1-p)/p)^(bankroll/stake)  when p > 0.5 (in unit terms)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L473-65",
-  "mutation": "and -> or @ line 473: (Kelly never goes bust), but in practice discrete bet sizing and",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L479-58",
-  "mutation": "- -> + @ line 479: win_rate:   Historical or estimated win rate (0.0 - 1.0).",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "OR2AND-L479-31",
-  "mutation": "or -> and @ line 479: win_rate:   Historical or estimated win rate (0.0 - 1.0).",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "OR2AND-L481-33",
-  "mutation": "or -> and @ line 481: method:     \"analytical\" or \"simulation\".",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L484-59",
-  "mutation": "and -> or @ line 484: Dict with ruin probability, recommended max stake, and analysis.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L487-21",
-  "mutation": "- -> + @ line 487: b = decimal_odds - 1.0  # net payout ratio",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L488-12",
-  "mutation": "- -> + @ line 488: q = 1.0 - win_rate",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L491-30",
-  "mutation": "- -> + @ line 491: ev_per_bet = win_rate * b - q",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L491-26",
-  "mutation": "* -> / @ line 491: ev_per_bet = win_rate * b - q",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MIN2MAX-L492-12",
-  "mutation": "min( -> max( @ line 492: units = min(bankroll / avg_stake, 10000.0) if avg_stake > 0 else 10000.0",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L492-60",
-  "mutation": "> -> >= @ line 492: units = min(bankroll / avg_stake, 10000.0) if avg_stake > 0 else 10000.0",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L492-25",
-  "mutation": "/ -> * @ line 492: units = min(bankroll / avg_stake, 10000.0) if avg_stake > 0 else 10000.0",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LE2LT-L504-18",
-  "mutation": "<= -> < @ line 504: if ev_per_bet <= 0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L512-39",
-  "mutation": "+ -> - @ line 512: f\"EV per bet = {ev_per_bet:+.4f} units. \"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L513-34",
-  "mutation": "+ -> - @ line 513: \"Stop betting or find +EV spots.\"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "OR2AND-L513-26",
-  "mutation": "or -> and @ line 513: \"Stop betting or find +EV spots.\"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "EQ2NE-L519-14",
-  "mutation": "== -> != @ line 519: if method == \"simulation\":",
-  "status": "killed",
-  "secs": 4.0,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L527-53",
-  "mutation": "> -> >= @ line 527: ratio = q / (win_rate * b) if (win_rate * b) > 0 else 1.0",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L527-30",
-  "mutation": "* -> / @ line 527: ratio = q / (win_rate * b) if (win_rate * b) > 0 else 1.0",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L527-18",
-  "mutation": "/ -> * @ line 527: ratio = q / (win_rate * b) if (win_rate * b) > 0 else 1.0",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L528-17",
-  "mutation": ">= -> > @ line 528: if ratio >= 1.0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L531-31",
-  "mutation": "* -> / @ line 531: ruin_prob = ratio ** units",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L589-15",
+  "mutation": ">= -> > @ line 589: elif score >= 0.75:",
+  "status": "SURVIVED",
   "secs": 0.7,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "MIN2MAX-L532-24",
-  "mutation": "min( -> max( @ line 532: ruin_prob = min(1.0, ruin_prob)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L537-41",
-  "mutation": "* -> / @ line 537: result[\"ruin_pct\"] = round(ruin_prob * 100, 4)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LT2LE-L547-26",
-  "mutation": "< -> <= @ line 547: if q / (win_rate * b) < 1.0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L547-21",
-  "mutation": "* -> / @ line 547: if q / (win_rate * b) < 1.0:",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L547-9",
-  "mutation": "/ -> * @ line 547: if q / (win_rate * b) < 1.0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L548-30",
-  "mutation": "* -> / @ line 548: ratio = q / (win_rate * b)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L548-18",
-  "mutation": "/ -> * @ line 548: ratio = q / (win_rate * b)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LT2LE-L552-31",
-  "mutation": "< -> <= @ line 552: if ratio > 0 and ratio < 1.0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L552-17",
-  "mutation": "> -> >= @ line 552: if ratio > 0 and ratio < 1.0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L552-21",
-  "mutation": "and -> or @ line 552: if ratio > 0 and ratio < 1.0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L553-34",
-  "mutation": "* -> / @ line 553: safe_stake = bankroll * math.log(ratio) / math.log(acceptable_ruin)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L553-52",
-  "mutation": "/ -> * @ line 553: safe_stake = bankroll * math.log(ratio) / math.log(acceptable_ruin)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L554-25",
-  "mutation": "max( -> min( @ line 554: safe_stake = max(0, safe_stake)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L562-50",
-  "mutation": "> -> >= @ line 562: (safe_stake / bankroll * 100) if bankroll > 0 else 0, 2",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L562-31",
-  "mutation": "* -> / @ line 562: (safe_stake / bankroll * 100) if bankroll > 0 else 0, 2",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L562-20",
-  "mutation": "/ -> * @ line 562: (safe_stake / bankroll * 100) if bankroll > 0 else 0, 2",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LT2LE-L566-17",
-  "mutation": "< -> <= @ line 566: if ruin_prob < 0.001:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LT2LE-L569-19",
-  "mutation": "< -> <= @ line 569: elif ruin_prob < 0.01:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LT2LE-L572-19",
-  "mutation": "< -> <= @ line 572: elif ruin_prob < 0.05:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LT2LE-L575-19",
-  "mutation": "< -> <= @ line 575: elif ruin_prob < 0.20:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L578-64",
-  "mutation": "/ -> * @ line 578: f\"Dangerously oversized. Reduce to ${safe_stake:.0f}/bet immediately. \"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L585-41",
-  "mutation": "/ -> * @ line 585: f\"Reduce to ${safe_stake:.0f}/bet or stop until bankroll rebuilds.\"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "OR2AND-L585-46",
-  "mutation": "or -> and @ line 585: f\"Reduce to ${safe_stake:.0f}/bet or stop until bankroll rebuilds.\"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L596-3",
-  "mutation": "> -> >= @ line 596: ) -> Optional[float]:",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L591-15",
+  "mutation": ">= -> > @ line 591: elif score >= 0.55:",
+  "status": "SURVIVED",
   "secs": 0.7,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.34s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L598-30",
-  "mutation": "- -> + @ line 598: ev_per_bet = win_rate * b - (1 - win_rate)",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "GE2GT-L593-15",
+  "mutation": ">= -> > @ line 593: elif score >= 0.30:",
+  "status": "SURVIVED",
   "secs": 0.8,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.36s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L598-26",
-  "mutation": "* -> / @ line 598: ev_per_bet = win_rate * b - (1 - win_rate)",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L599-19",
+  "mutation": "min( -> max( @ line 599: source_class = min(leg_confidences, key=lambda lc: lc.score).source_class",
+  "status": "SURVIVED",
   "secs": 0.8,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
  },
  {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L599-18",
-  "mutation": ">= -> > @ line 599: if ev_per_bet >= 0:",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L600-27",
-  "mutation": "- -> + @ line 600: return None  # Not -EV",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L603-21",
-  "mutation": "> -> >= @ line 603: if expected_loss > 0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L604-27",
-  "mutation": "/ -> * @ line 604: return round(units / expected_loss, 0)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L615-3",
-  "mutation": "> -> >= @ line 615: ) -> tuple[float, float, float]:",
-  "status": "killed",
+  "file": "tools/edge_confidence.py",
+  "id": "MIN2MAX-L609-14",
+  "mutation": "min( -> max( @ line 609: weakest = min(leg_confidences, key=lambda lc: lc.score)",
+  "status": "SURVIVED",
   "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LT2LE-L624-51",
-  "mutation": "< -> <= @ line 624: outcomes = rng.random((n_simulations, n_bets)) < win_rate",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L627-48",
-  "mutation": "- -> + @ line 627: profits = np.where(outcomes, b * avg_stake, -avg_stake)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L627-35",
-  "mutation": "* -> / @ line 627: profits = np.where(outcomes, b * avg_stake, -avg_stake)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L631-30",
-  "mutation": "+ -> - @ line 631: bankroll_paths = bankroll + cum_profits",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MIN2MAX-L634-22",
-  "mutation": "min( -> max( @ line 634: min_bankroll = np.min(bankroll_paths, axis=1)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LE2LT-L635-26",
-  "mutation": "<= -> < @ line 635: ruined = min_bankroll <= 0",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L639-40",
-  "mutation": "- -> + @ line 639: final_bankrolls = bankroll_paths[:, -1]",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L644-29",
-  "mutation": "- -> + @ line 644: drawdowns = (running_max - bankroll_paths) / np.maximum(running_max, 1.0)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L644-47",
-  "mutation": "/ -> * @ line 644: drawdowns = (running_max - bankroll_paths) / np.maximum(running_max, 1.0)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L645-23",
-  "mutation": "max( -> min( @ line 645: max_drawdowns = np.max(drawdowns, axis=1)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L659-3",
-  "mutation": "> -> >= @ line 659: ) -> dict:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "OR2AND-L661-32",
-  "mutation": "or -> and @ line 661: Estimate whether to bet now or wait for a better number.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L664-4",
-  "mutation": "- -> + @ line 664: - Betting NOW locks in the current edge.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L665-4",
-  "mutation": "- -> + @ line 665: - WAITING risks the line moving against you (edge shrinks or disappears)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "OR2AND-L665-62",
-  "mutation": "or -> and @ line 665: - WAITING risks the line moving against you (edge shrinks or disappears)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L671-44",
-  "mutation": "+ -> - @ line 671: = current_edge * decay + line_improvement_prob * improvement_size",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L671-36",
-  "mutation": "* -> / @ line 671: = current_edge * decay + line_improvement_prob * improvement_size",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L672-23",
-  "mutation": "- -> + @ line 672: - line_worsening_prob * worsening_size",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L672-45",
-  "mutation": "* -> / @ line 672: - line_worsening_prob * worsening_size",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L676-54",
-  "mutation": "- -> + @ line 676: (the market will correct).  But in inefficient sub-markets (props, alts),",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L677-58",
-  "mutation": "+ -> - @ line 677: or when sharp action hasn't arrived yet, there can be +EV in waiting.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "OR2AND-L677-4",
-  "mutation": "or -> and @ line 677: or when sharp action hasn't arrived yet, there can be +EV in waiting.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L686-39",
-  "mutation": "and -> or @ line 686: Dict with bet_now_ev, wait_ev, and recommendation.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L692-21",
-  "mutation": "> -> >= @ line 692: if hours_to_game > 24:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L695-23",
-  "mutation": "> -> >= @ line 695: elif hours_to_game > 4:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L712-22",
-  "mutation": "max( -> min( @ line 712: hours_remaining = max(0.01, hours_to_game)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L713-35",
-  "mutation": "- -> + @ line 713: edge_remaining_frac = math.exp(-decay_rate * vol * hours_remaining)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L713-47",
-  "mutation": "* -> / @ line 713: edge_remaining_frac = math.exp(-decay_rate * vol * hours_remaining)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L714-45",
-  "mutation": "* -> / @ line 714: expected_edge_after_decay = current_edge * edge_remaining_frac",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L724-39",
-  "mutation": "* -> / @ line 724: favorable_steam_boost = steam_prob * 0.3 * vol * hours_remaining",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L725-40",
-  "mutation": "* -> / @ line 725: unfavorable_steam_cost = steam_prob * 0.7 * vol * hours_remaining",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L730-30",
-  "mutation": "max( -> min( @ line 730: efficiency = 1.0 - (1.0 / max(decay_rate, 0.01)) * 0.1",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L730-21",
-  "mutation": "- -> + @ line 730: efficiency = 1.0 - (1.0 / max(decay_rate, 0.01)) * 0.1",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L730-53",
-  "mutation": "* -> / @ line 730: efficiency = 1.0 - (1.0 / max(decay_rate, 0.01)) * 0.1",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L730-28",
-  "mutation": "/ -> * @ line 730: efficiency = 1.0 - (1.0 / max(decay_rate, 0.01)) * 0.1",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MIN2MAX-L731-26",
-  "mutation": "min( -> max( @ line 731: efficiency = max(0.0, min(1.0, efficiency))",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L731-17",
-  "mutation": "max( -> min( @ line 731: efficiency = max(0.0, min(1.0, efficiency))",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MIN2MAX-L732-56",
-  "mutation": "min( -> max( @ line 732: stale_line_bonus = (1.0 - efficiency) * vol * 0.5 * min(hours_remaining, 12.0)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L732-28",
-  "mutation": "- -> + @ line 732: stale_line_bonus = (1.0 - efficiency) * vol * 0.5 * min(hours_remaining, 12.0)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L732-42",
-  "mutation": "* -> / @ line 732: stale_line_bonus = (1.0 - efficiency) * vol * 0.5 * min(hours_remaining, 12.0)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L737-8",
-  "mutation": "+ -> - @ line 737: + favorable_steam_boost",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L738-8",
-  "mutation": "- -> + @ line 738: - unfavorable_steam_cost",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L739-8",
-  "mutation": "+ -> - @ line 739: + stale_line_bonus",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L743-27",
-  "mutation": "* -> / @ line 743: wait_uncertainty = vol * math.sqrt(hours_remaining)",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L746-22",
-  "mutation": "- -> + @ line 746: ev_diff = wait_ev - bet_now_ev",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LE2LT-L747-18",
-  "mutation": "<= -> < @ line 747: if bet_now_ev <= 0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "OR2AND-L749-42",
-  "mutation": "or -> and @ line 749: reasoning = \"Current edge is zero or negative. No bet at any timing.\"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L750-17",
-  "mutation": "> -> >= @ line 750: elif ev_diff > wait_uncertainty * 0.5:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L750-36",
-  "mutation": "* -> / @ line 750: elif ev_diff > wait_uncertainty * 0.5:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "ADD2SUB-L753-26",
-  "mutation": "+ -> - @ line 753: f\"Waiting has +{ev_diff*100:.2f}% higher expected edge. \"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L753-35",
-  "mutation": "* -> / @ line 753: f\"Waiting has +{ev_diff*100:.2f}% higher expected edge. \"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L754-59",
-  "mutation": "/ -> * @ line 754: f\"Market regime: {regime}. Volatility {vol:.3f}/hr. \"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L755-63",
-  "mutation": "- -> + @ line 755: f\"Edge decay to {edge_remaining_frac:.1%} but stale-line \"",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L756-54",
-  "mutation": "* -> / @ line 756: f\"opportunity outweighs ({stale_line_bonus*100:.2f}% bonus).\"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LT2LE-L758-17",
-  "mutation": "< -> <= @ line 758: elif ev_diff < -wait_uncertainty * 0.25:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L758-19",
-  "mutation": "- -> + @ line 758: elif ev_diff < -wait_uncertainty * 0.25:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L758-37",
-  "mutation": "* -> / @ line 758: elif ev_diff < -wait_uncertainty * 0.25:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L762-40",
-  "mutation": "* -> / @ line 762: f\"{expected_edge_after_decay*100:.2f}% (from {current_edge*100:.2f}%). \"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L768-43",
-  "mutation": "* -> / @ line 768: f\"Close call. Wait EV ({wait_ev*100:.2f}%) vs now EV ({bet_now_ev*100:.2f}%). \"",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L769-33",
-  "mutation": "* -> / @ line 769: f\"Difference {ev_diff*100:.3f}% is within noise ({wait_uncertainty*100:.2f}%). \"",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L806-3",
-  "mutation": "> -> >= @ line 806: ) -> dict:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L811-53",
-  "mutation": "and -> or @ line 811: This function bridges the gap between Kelly math and the unit system.",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "SUB2ADD-L818-50",
-  "mutation": "- -> + @ line 818: confidence:     AGP confidence score (0.0 - 1.0).",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L820-66",
-  "mutation": "* -> / @ line 820: unit_size:      Dollar value of 1 unit (default: bankroll * 0.01).",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "AND2OR-L823-57",
-  "mutation": "and -> or @ line 823: Dict with units, dollar_amount, pct_of_bankroll, and breakdown.",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L826-29",
-  "mutation": "* -> / @ line 826: unit_size = bankroll * 0.01",
-  "status": "killed",
-  "secs": 0.9,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "LE2LT-L828-17",
-  "mutation": "<= -> < @ line 828: if unit_size <= 0 or bankroll <= 0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "OR2AND-L828-22",
-  "mutation": "or -> and @ line 828: if unit_size <= 0 or bankroll <= 0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "OR2AND-L834-39",
-  "mutation": "or -> and @ line 834: \"error\": \"Invalid bankroll or unit size\",",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L856-20",
-  "mutation": "* -> / @ line 856: fraction = edge * kelly_fraction * tier_mult",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MIN2MAX-L859-24",
-  "mutation": "min( -> max( @ line 859: fraction = max(0.0, min(fraction, 0.05))",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MAX2MIN-L859-15",
-  "mutation": "max( -> min( @ line 859: fraction = max(0.0, min(fraction, 0.05))",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L861-35",
-  "mutation": "* -> / @ line 861: dollar_amount = round(bankroll * fraction, 2)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L862-61",
-  "mutation": "> -> >= @ line 862: units = round(dollar_amount / unit_size, 2) if unit_size > 0 else 0.0",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "DIV2MUL-L862-32",
-  "mutation": "/ -> * @ line 862: units = round(dollar_amount / unit_size, 2) if unit_size > 0 else 0.0",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L863-25",
-  "mutation": "* -> / @ line 863: pct = round(fraction * 100, 3)",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L866-13",
-  "mutation": ">= -> > @ line 866: if units >= 3.0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L868-15",
-  "mutation": ">= -> > @ line 868: elif units >= 2.0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L870-15",
-  "mutation": ">= -> > @ line 870: elif units >= 1.0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GE2GT-L872-15",
-  "mutation": ">= -> > @ line 872: elif units >= 0.5:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "GT2GE-L874-15",
-  "mutation": "> -> >= @ line 874: elif units > 0:",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
- },
- {
-  "file": "tools/kelly.py",
-  "id": "MUL2DIV-L892-39",
-  "mutation": "* -> / @ line 892: \"raw_fraction\": round(edge * kelly_fraction * tier_mult, 6),",
-  "status": "killed",
-  "secs": 0.8,
-  "tail": ""
+  "tail": "........................................                                 [100%]\n40 passed in 0.35s\n"
  }
 ]
