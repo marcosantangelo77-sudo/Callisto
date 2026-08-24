@@ -259,6 +259,21 @@ def independence_key(source_name: str, base_url: str) -> str:
 
 # ── Question-type translation (JOB 4) ──────────────────────────────────────
 
+#: Signals that a sub-question is an ENTITY LOOKUP (who/where is X, what is
+#: the capital of Y, when was Z born) rather than a time-series or document
+#: search. Deliberately narrow — a false positive only ADDS wikidata as a
+#: candidate source, never removes the keyword-selected ones.
+_ENTITY_QUESTION_RE = re.compile(
+    r"\bwho\b|\bwhere\b|\bborn\b|\bcapital of\b|\bfounded?\b|\blocated\b"
+    r"|\bpresident of\b|\bceo\b|\bwikidata\b|\bsucceeded by\b|\bspouse\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_entity_question(text: str) -> bool:
+    return bool(_ENTITY_QUESTION_RE.search(text or ""))
+
+
 def translate_question_type(registry, question_text: str,
                             question_type: str) -> tuple[str, list[str]]:
     """Map free-text decomposition output onto the registry's own vocabulary.
@@ -275,6 +290,18 @@ def translate_question_type(registry, question_text: str,
     degrades to today's selection rather than below it.
     """
     candidates = f"{question_type} {question_text}".strip()
+    # D3 (known-answer harness): ENTITY questions must route to the entity
+    # graph. Keyword overlap cannot tell "capital of France" from a banking
+    # query — FDIC's 'institution search by name' clause matched 'Paris' and
+    # 'Einstein', while Wikidata (which holds the answer) scored 0%. Detect
+    # the lookup SHAPE and pin wikidata into the candidate set; selection
+    # still ranks and callers still apply min_score/exclusions, so this is a
+    # routing hint, not a bypass.
+    if _looks_like_entity_question(question_text):
+        entry = registry.get("wikidata")
+        if entry is not None:
+            candidates = (candidates + " capital city born located entity "
+                          "country").strip()
     best_score = 0.0
     best_names: list[str] = []
     for d in registry.select_explained(candidates):

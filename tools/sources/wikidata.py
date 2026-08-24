@@ -25,6 +25,8 @@ SPEC = SourceSpec(
         "entity attributes and relationships via SPARQL",
         "cross-language labels/aliases for entities",
         "graph queries (who held office X when, subclasses of Y)",
+        "capital cities of countries; where an entity is located or born "
+            "(place of birth); what country an entity belongs to",
     ),
     cannot_answer=(
         "real-time data (edit lag minutes-to-days)",
