@@ -1619,6 +1619,12 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
     existing failover chain. A Retry-After header is honoured; the TOTAL
     time spent sleeping on 429s for one call is bounded (_429_PATIENCE_S,
     run 10) so a hostile/lazy server cannot stall a call.
+
+    SPEED run 12 (2026-08-23): connect-phase failures (ConnectError /
+    ConnectTimeout) are NOT retried in place — no bytes were sent, so an
+    immediate second attempt against the same dead socket carries no
+    information and only taxes every dead-hop probe ~0.5s. They propagate
+    to the failover chain at once; read/write-phase errors keep the retry.
     """
     last_exc: Optional[Exception] = None
     waited = 0.0  # total seconds slept on 429s for THIS call (run 10)
