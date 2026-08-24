@@ -271,7 +271,7 @@ def kelly_dynamic(
     # At variance_estimate = edge (uncertainty equals the edge), dampener ~ 0.5.
     k = 1.0 / max(abs(edge), 0.001)  # normalize so dampener halves when var == edge
     variance_dampener = 1.0 / (1.0 + k * variance_estimate)
-    variance_dampener = max(0.06, min(1.0, variance_dampener))
+    variance_dampener = max(0.05, min(1.0, variance_dampener))
 
     # Step 4: Combine
     adjusted_fraction = base_fraction * smooth_mult * variance_dampener
@@ -367,7 +367,7 @@ def kelly_portfolio(bets: list[dict]) -> list[dict]:
 
         individual_kellys.append({
             "raw_fraction": round(base_frac, 6),
-            "confidence_adjusted": round(adj_frac, 6),
+            "confidence_adjusted": round(adj_frac, 7),
             "tier": tier,
         })
 
