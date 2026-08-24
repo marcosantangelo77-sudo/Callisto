@@ -1040,6 +1040,52 @@ def _plan_wayback(question: str) -> PlanResult:
         resolved={"url": url}, reason=f"snapshot lookup for {url}")
 
 
+def _plan_federalreserve(question: str) -> PlanResult:
+    core = core_query(
+        question,
+        extra_stop={"federal", "reserve", "fed", "fomc", "speech",
+                    "speeches", "statement", "statements", "minutes",
+                    "powell", "chair", "press", "release", "releases"})
+    if not core:
+        return PlanResult(False, reason="no topical core beyond Fed "
+                          "document-type vocabulary")
+    low = question.lower()
+    # FOMC statements/minutes live in the press feed under 'Monetary
+    # Policy'; plain speech questions read the speeches feed. Both feeds
+    # are cheap and small, so fetch both when the question is ambiguous.
+    wants_minutes = any(w in low for w in ("fomc", "statement", "minutes",
+                                           "rate decision"))
+    queries = []
+    if wants_minutes or "speech" not in low:
+        queries.append(PlannedQuery(
+            source="federalreserve", method="monetary_policy_items",
+            rationale="FOMC statements/minutes from the official press "
+                      "feed's Monetary Policy category"))
+    if not wants_minutes or "speech" in low:
+        queries.append(PlannedQuery(
+            source="federalreserve", method="recent_speeches",
+            rationale="Board speeches feed, matched against the extracted "
+                      f"core '{core}' by the caller"))
+    return PlanResult(True, queries=queries,
+                      reason=f"feed scan; topical filter '{core}'")
+
+
+def _plan_pubmed(question: str) -> PlanResult:
+    core = core_query(
+        question,
+        extra_stop={"pubmed", "published", "publication", "publications",
+                    "paper", "papers", "journal", "journals", "phase",
+                    "results", "outcomes", "outcome", "trial", "trials"})
+    if not core:
+        return PlanResult(False, reason="no topical core beyond publication "
+                          "vocabulary")
+    return PlanResult(True, queries=[PlannedQuery(
+        source="pubmed", method="search",
+        kwargs={"query": core, "limit": 10},
+        rationale="E-utilities esearch (sorted by date) using the "
+                  "extracted core")], reason=f"searched as '{core}'")
+
+
 # keyword-capable adapters: same shape, source-specific knobs
 _KEYWORD_PLANNERS = {
     "openalex": _plan_openalex,
@@ -1062,6 +1108,9 @@ _KEYWORD_PLANNERS = {
     "uspto_odp": _plan_uspto_odp,
     "courtlistener": _plan_courtlistener,
     "wayback": _plan_wayback,
+    # ── wave 6: fed + pubmed gaps ───────────────────────────────────────
+    "federalreserve": _plan_federalreserve,
+    "pubmed": _plan_pubmed,
 }
 
 #: SEC deliberately unplannable here — the machine is rate-limited/403'd and
