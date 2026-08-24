@@ -75,6 +75,20 @@ class BlsAdapter:
             url += ("&" if "?" in url else "?") + \
                 "registrationkey=" + self.api_key
         data, rec = self.source.post_json(url, payload)
+        # BLS signals failure with HTTP 200 + status != REQUEST_SUCCEEDED
+        # (e.g. the shared anonymous daily quota: REQUEST_NOT_PROCESSED).
+        # Returning that body verbatim parsed as ZERO series downstream —
+        # a quota rejection masquerading as 'no data exists'.
+        status = str(data.get("status", "")).upper()
+        if status != "REQUEST_SUCCEEDED":
+            msgs = "; ".join(data.get("message") or []) or "no server message"
+            raise SourceError(f"BLS request failed ({status or 'NO STATUS'}): "
+                              f"{msgs}")
+        series = (data.get("Results") or {}).get("series") or []
+        if not series:
+            raise SourceError(
+                f"BLS reported success but returned no series data for "
+                f"{', '.join(ids)} from {rec.url}")
         data["_fetch"] = {"url": rec.url, "sha256": rec.content_sha256,
                           "fetched_at": rec.fetched_at}
         return data

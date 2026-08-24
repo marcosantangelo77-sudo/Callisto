@@ -56,16 +56,18 @@ class FederalRegisterAdapter:
     def search(self, conditions: str = "", query_term: str = "",
                order: str = "newest", limit: int = 20,
                extra_params: dict | None = None) -> dict:
-        """`conditions` uses FR filter syntax, e.g. 'agencies[]=epa'."""
+        """Term search. Both `conditions` and `query_term` feed the FR
+        `conditions[term]` param (merged when both given) — the API 500s
+        on a bare `conditions=` value (live-verified 2026-08-24)."""
         params: dict = {
             "per_page": min(int(limit), 1000),
             "order": order,
             "fields[]": self.FIELDS,
         }
-        if conditions:
-            params["conditions[term]"] = conditions
-        if query_term:
-            params["conditions"] = query_term
+        term = " ".join(t for t in (query_term.strip(), conditions.strip())
+                        if t)
+        if term:
+            params["conditions[term]"] = term
         params.update(extra_params or {})
         url = self.source.build_url("/documents.json", params)
         return self._rename(self.source.get_json(url)[0])
@@ -79,11 +81,16 @@ class FederalRegisterAdapter:
     @classmethod
     def _rename(cls, payload: dict) -> dict:
         """Map renamed API fields back to the keys this adapter always
-        exposed (publication_date -> published_at)."""
-        docs = payload.get("documents")
-        if isinstance(docs, list):
-            for d in docs:
-                for api_name, our_name in cls._FIELD_RENAME.items():
-                    if api_name in d:
-                        d[our_name] = d.pop(api_name)
+        exposed (publication_date -> published_at). The real response
+        shapes are {'results': [...]} for /documents.json and a bare
+        document dict for /documents/{id}.json — neither has ever had a
+        'documents' key."""
+        docs = payload.get("results")
+        targets = docs if isinstance(docs, list) else [payload]
+        for d in targets:
+            if not isinstance(d, dict):
+                continue
+            for api_name, our_name in cls._FIELD_RENAME.items():
+                if api_name in d:
+                    d[our_name] = d.pop(api_name)
         return payload

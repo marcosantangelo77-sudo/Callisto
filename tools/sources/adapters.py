@@ -57,4 +57,5 @@ def register_all(registry: SourceRegistry) -> None:
             logging.getLogger("callisto.source_registry").info(
                 "source '%s' unavailable (import failed)", mod_name)
             continue
-        registry.register(SourceAdapter(spec=spec, make_adapter=cls))
+        registry.register(SourceAdapter(spec=spec, make_adapter=cls,
+                                        module=mod_name))

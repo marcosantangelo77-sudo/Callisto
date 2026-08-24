@@ -94,20 +94,15 @@ def _build(name: str):
     """(source, adapter) for a registered source.
 
     Probes may pass either a module filename ('sec_fts') or the registry
-    spec name ('sec_fulltext'); both resolve. An unknown name raises
-    instead of returning None — an unpack of None once masked three dead
-    probes as one mysterious TypeError.
+    spec name ('sec_fulltext'); both resolve — the registry indexes by
+    spec name AND defining-module name. An unknown name raises instead of
+    returning None — an unpack of None once masked three dead probes as
+    one mysterious TypeError.
     """
     from tools.sources.base import RestSource
     from tools.sources.registry import get_source_registry
     reg = get_source_registry()
     entry = reg.get(name)
-    if entry is None:
-        # tolerate module-filename aliases for registry spec names
-        for cand in reg.names():
-            if cand.replace("_", "") == name.replace("_", ""):
-                entry = reg.get(cand)
-                break
     if entry is None:
         raise KeyError(f"source '{name}' is not registered "
                        f"(registered: {', '.join(reg.names())})")
@@ -345,10 +340,12 @@ def _census() -> ProbeResult:
 
 @probe("eia", "CALLISTO_EIA_API_KEY")
 def _eia() -> ProbeResult:
+    # COPRPUS.A is not a real EIA series id ("Series ID 'COPRPUS.A' is not
+    # valid", live-verified 2026-08-24); WTI weekly ending stocks is.
     r = ProbeResult("eia")
     src, ad = _build("eia")
-    r.url = src.build_url("/seriesid/COPRPUS.A",
-                          {"frequency": "annual"})
+    r.url = src.build_url("/seriesid/PET.WCESTUS1.W",
+                          {"frequency": "weekly"})
     def shape(d):
         resp = d.get("response") or d
         data = resp.get("data") or []
@@ -358,7 +355,7 @@ def _eia() -> ProbeResult:
     def count(d):
         resp = d.get("response") or d
         return len(resp.get("data", []) or [])
-    return _run(lambda: ad.series("COPRPUS.A", frequency="annual",
+    return _run(lambda: ad.series("PET.WCESTUS1.W", frequency="weekly",
                                   length=3), r, count, shape)
 
 

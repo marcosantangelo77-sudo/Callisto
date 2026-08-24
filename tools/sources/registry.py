@@ -70,16 +70,24 @@ class SelectionDecision:
 class SourceAdapter:
     spec: SourceSpec
     make_adapter: object  # callable(RestSource) -> adapter instance
+    # defining-module filename ('cftc', 'sec_fts'), so callers may address
+    # the source by either its spec name or its module name — health probes
+    # use module filenames, and a lookup that silently missed once masked
+    # three dead probes as one TypeError
+    module: str = ""
 
 
 class SourceRegistry:
     def __init__(self) -> None:
         self._adapters: dict[str, SourceAdapter] = {}
+        self._by_module: dict[str, SourceAdapter] = {}
 
     def register(self, adapter: SourceAdapter) -> None:
         logger.info("source registry: registering '%s' (tier %d)",
                     adapter.spec.name, adapter.spec.tier)
         self._adapters[adapter.spec.name] = adapter
+        if adapter.module:
+            self._by_module[adapter.module] = adapter
 
     def names(self) -> list[str]:
         return sorted(self._adapters)
@@ -88,7 +96,8 @@ class SourceRegistry:
         return [a.spec.to_dict() for a in self._adapters.values()]
 
     def get(self, name: str) -> Optional[SourceAdapter]:
-        return self._adapters.get(name)
+        """Resolve by spec name first, then by defining-module filename."""
+        return self._adapters.get(name) or self._by_module.get(name)
 
     def select(self, question_type: str, *, max_tier: int = 5,
                exclude: set[str] | None = None,
