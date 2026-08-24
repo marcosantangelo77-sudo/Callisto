@@ -258,5 +258,157 @@
       "44fbcc44e6f440e8": "unprovable"
     },
     "verdict": "refused"
+  },
+  {
+    "id": "Q06",
+    "question": "Was the federal funds effective rate above 5 percent in June 2007?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "FEDFUNDS June 2007 = 5.25%.",
+    "verified_by": "fredgraph.csv FEDFUNDS 2007-06",
+    "elapsed_s": 316.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 4,
+    "sources": [
+      "courtlistener",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "What was the federal funds effective rate in June 2007 as published by the Federal Reserve H.15 release?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Did the Fed's target range/target for the federal funds rate during June 2007 (5.25%) imply an effective rate above 5 percent for that month?",
+        "answer": "The provided evidence items are irrelevant to the question: [0] is a World Bank indicator search returning agricultural indicators, and [1] is CourtListener case-law results. Neither contains any data on the Fed's federal funds rate target or effective rate for June 2007, so the question cannot be answered from this evidence.",
+        "tier": "VERIFIED",
+        "confidence": 0.95,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What was the federal funds effective rate in June 2007 as pu': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2007, bank, central, effective, fed, federal, funds, june; [fdic] content covers 20% of the question's topical words (need 25%); missing: 2007, bank, central, effective, funds, june, monthly, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2007, bank, central, effective, fed, federal, funds, june",
+      "leaf 'Did the Fed's target range/target for the federal funds rate': 2 fetch(s) rejected at ingestion: [fdic] content covers 5% of the question's topical words (need 25%); missing: 2007, above, during, effective, fed, federal, fomc, funds; [fred] content covers 0% of the question's topical words (need 25%); missing: 2007, above, during, effective, fed, federal, fomc, funds"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q07",
+    "question": "Did any FDIC-insured banks fail during calendar year 2021?",
+    "category": "no-answer (answer is NO)",
+    "expected_stance": "DENIES",
+    "gt": "FDIC recorded ZERO bank failures in 2021.",
+    "verified_by": "banks.data.fdic.gov failures FAILYR=2021 \u2192 0 rows",
+    "elapsed_s": 135.0,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 7,
+    "sources": [
+      "courtlistener",
+      "openalex",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "How many FDIC-insured banks failed (were closed by regulators) during calendar year 2021, per the FDIC's official failed bank list?",
+        "answer": "The provided evidence does not contain the FDIC's official failed bank list or any count of FDIC-insured bank failures in 2021 (the World Bank indicator search and OpenAlex paper results are irrelevant to this question), so no count can be cited from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "What are the names, dates, and failure circumstances of any individual FDIC-insured institutions closed in 2021?",
+        "answer": "The provided evidence does not identify any FDIC-insured institutions closed in 2021. Evidence [0] is a World Bank indicator search returning agricultural indicators; evidence [1] is CourtListener case law (a 2014 WAMU/FDIC opinion and a 2021 Pennsylvania trust-case opinion) with no bank-failure data; evidence [2] is an OpenAlex paper about FDIC failed-bank auctions generally, naming no specific 2021 closures, dates, or failure circumstances. No institution names, closure dates, or failure circu",
+        "tier": "VERIFIED",
+        "confidence": 0.9,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Did any 2021 bank closures that might be cited as failures fall outside the FDIC's definition of 'failure' (e.g., voluntary liquidations or assisted mergers without closure), and does that change the answer?",
+        "answer": "The evidence provided does not address the question. Item [0] is an unrelated World Bank indicator search (fertilizer/agricultural land metrics) and item [1] is an empty OpenAlex result set. Neither contains information about 2021 US bank closures, the FDIC's definition of 'failure', or any specific closures that might fall outside it (e.g., voluntary liquidations or assisted mergers). Therefore, whether any 2021 bank closures cited as failures fall outside the FDIC's definition \u2014 and whether th",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'How many FDIC-insured banks failed (were closed by regulator': 5 fetch(s) rejected at ingestion: [fdic] content covers 18% of the question's topical words (need 25%); missing: 2021, calendar, closed, during, failed, insured, list, many; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, closed, during, failed, fdic; [courtlistener] content covers 18% of the question's topical words (need 25%); missing: 2021, calendar, closed, during, failed, fdic, insured, list; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, closed, during, failed, fdic; [courtlistener] content covers 18% of the question's topical words (need 25%); missing: 2021, calendar, closed, during, failed, fdic, insured, list",
+      "leaf 'What are the names, dates, and failure circumstances of any ': 2 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2021, announcements, any, circumstances, closed, dates, failure, fdic; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, announcements, any, circumstances, closed, dates, failure, fdic",
+      "leaf 'Did any 2021 bank closures that might be cited as failures f': 5 fetch(s) rejected at ingestion: [fdic] content covers 20% of the question's topical words (need 25%); missing: 2021, answer, any, assisted, change, cited, closure, closures; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, answer, any, assisted, bank, banking, change, cited; [courtlistener] content covers 0% of the question's topical words (need 25%); missing: 2021, answer, any, assisted, bank, banking, change, cited; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, answer, any, assisted, bank, banking, change, cited; [courtlistener] content covers 0% of the question's topical words (need 25%); missing: 2021, answer, any, assisted, bank, banking, change, cited"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q09",
+    "question": "Did the Supreme Court decide Loper Bright Enterprises v. Raimondo before 2024?",
+    "category": "multi-hop/negation",
+    "expected_stance": "DENIES",
+    "gt": "dateFiled = 2024-06-28 \u2014 not before 2024.",
+    "verified_by": "courtlistener search API caseName/dateFiled",
+    "elapsed_s": 68.8,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
+  },
+  {
+    "id": "Q10",
+    "question": "Was the World Bank estimate of U.S. population in 2020 greater than 330 million?",
+    "category": "comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "331,578,104.",
+    "verified_by": "api.worldbank.org SP.POP.TOTL USA 2020",
+    "elapsed_s": 62.5,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
