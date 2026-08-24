@@ -107,6 +107,10 @@ class LeafOutcome:
     #: English phrases and default to YES, so the SIGN of every forecast was
     #: decided by incidental wording (see test_redteam_direction_from_prose).
     stance: str = "UNDETERMINED"
+    #: Set when a verified sandbox computation contradicts the declared
+    #: answer/stance: the leaf refuses (answer emptied, stance UNDETERMINED,
+    #: estimate zeroed) rather than sealing its own arithmetic's negation.
+    reconciliation_failure: Optional[str] = None
     source_classes: list[str] = field(default_factory=list)
     n_sources: int = 0
     requirement_reasons: list[str] = field(default_factory=list)
@@ -443,6 +447,7 @@ class ResearchPipeline:
             _call_tag=call_tag or q.question_id)
         proposal = parse_model_json(resp) or {}
 
+        sbx = None  # sandbox result, if a computation was requested
         compute = proposal.get("compute")
         if compute and isinstance(compute, dict) and compute.get("code"):
             # The compute path mutates shared stores (ledger, artifact
@@ -492,7 +497,36 @@ class ResearchPipeline:
         # answer must not silently become a confident YES, which is exactly
         # what the old default-yes keyword scan did.
         out.stance = _st if _st in ("AFFIRMS", "DENIES") else "UNDETERMINED"
+
+        # ── Compute-output↔stance reconciliation (redteam C5) ──────────────
+        # A sandbox run whose stdout contains exactly one bare boolean is a
+        # VERIFIED comparison. It is binding on the leaf's direction: prose
+        # that asserts its negation must not seal. Refusal — not correction,
+        # not a lowered-but-sealed score. A reconciliation failure may only
+        # LOWER confidence or refuse; it never raises either side.
+        computed_bool = None
+        if sbx is not None and getattr(sbx, "status", None) == "ok":
+            computed_bool = _sole_bare_boolean(
+                str(getattr(sbx, "stdout", "") or ""))
+        reconciliation_failure = None
+        if computed_bool is not None and out.stance != "UNDETERMINED":
+            required = "AFFIRMS" if computed_bool else "DENIES"
+            if out.stance != required:
+                reconciliation_failure = (
+                    f"sandbox printed {computed_bool} ({required}) but the "
+                    f"answer asserted {out.stance}")
+                out.answer = ""
+                out.stance = "UNDETERMINED"
+
         proposed = float(proposal.get("proposed_confidence") or 0.0)
+        if reconciliation_failure:
+            # Refusal path: nothing may be sealed on a contradicted
+            # computation, and no number may survive the contradiction.
+            out.reconciliation_failure = reconciliation_failure
+            out.gap_explanation = (
+                "refused: the executed computation contradicts the proposed "
+                "conclusion — " + reconciliation_failure)
+            proposed = 0.0
 
         # ESTIMATE vs CEILING (agp.estimate): the model's proposed_confidence
         # is its BELIEF; provenance and the requirement gate are ENTITLEMENT.
@@ -1107,6 +1141,19 @@ def verify_artifact_gate(store: ArtifactStore, refs) -> Optional[str]:
     example = (bad[0] or "?")[:16]
     return ("artifact verification failed before seal: "
             f"{len(bad)} missing/corrupt (e.g. {example}…)")
+
+
+def _sole_bare_boolean(stdout: str) -> Optional[bool]:
+    """Return the boolean iff stdout consists of EXACTLY one bare True/False
+    line and nothing else. Anything richer — multiple lines, extra prose,
+    numbers — is NOT treated as a verified comparison verdict; the
+    reconciliation check stays silent rather than guess intent."""
+    stripped = stdout.strip()
+    if stripped == "True":
+        return True
+    if stripped == "False":
+        return False
+    return None
 
 
 def _store_sandbox(sbx, store: ArtifactStore) -> list[ArtifactRef]:

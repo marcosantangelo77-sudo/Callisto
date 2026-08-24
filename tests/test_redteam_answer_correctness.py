@@ -305,11 +305,10 @@ def test_summary_distinguishes_asked_from_answered():
 # ── C5: arithmetic and comparison ───────────────────────────────────────────
 
 
-@pytest.mark.xfail(reason="C5: the sandbox computes a comparison and the "
-                          "sealed answer asserts its opposite — no "
-                          "cross-check between compute output and asserted "
-                          "stance/answer", strict=True)
 def test_answer_may_not_contradict_its_own_computed_comparison():
+    """FIXED by the compute-output↔stance reconciliation check. Promoted
+    from strict-xfail canary to passing pin; see TestComputeReconciliation
+    for the full contract (inverse case, agreeing case, non-boolean stdout)."""
     model = ScriptedModel({
         "Architect": [{"content": _decomp([
             _leaf("Was the unemployment rate lower in July 2026 than in "
@@ -373,3 +372,88 @@ class TestNumericContradictionMachinery:
         g = ClaimGroup(claim="unemployment january 2023")
         g.items = [c1, c2]
         assert detect_contradictions(g) == []
+
+
+# ── C5 FIX: compute-output↔stance reconciliation ────────────────────────────
+#
+# The engine now treats a sandbox run whose stdout is exactly one bare
+# boolean as a VERIFIED comparison, binding on the leaf's direction. Prose
+# asserting the negation must not seal: the leaf refuses (answer emptied,
+# stance UNDETERMINED). A computation AGREEING with the prose seals exactly
+# as before. No confidence number is ever raised by this check — a
+# reconciliation failure may only lower or refuse.
+
+
+class TestComputeReconciliation:
+    def _model(self, code="print(4.1 < 3.5)", answer=_ans(
+            "The rate WAS lower in July 2026 (4.1%) than January 2023 "
+            "(3.5%).", conf=0.9)):
+        return ScriptedModel({
+            "Architect": [{"content": _decomp([
+                _leaf("Was the unemployment rate lower in July 2026 than in "
+                      "January 2023 in the BLS series")])}],
+            "Manager": [
+                {"content": json.dumps({"answer": "", "proposed_confidence":
+                                        0, "compute": {"code": code,
+                                                       "inputs": {}}})},
+                {"content": answer},
+            ]})
+
+    def test_false_computation_blocks_affirmative_prose(self):
+        """THE exact case: sandbox prints False, prose asserts 'WAS lower'.
+        Must not seal."""
+        r = _run(_pipeline(self._model()))
+        leaf = r.leaves[0]
+        assert leaf.sandbox_status == "ok"
+        assert leaf.reconciliation_failure, "contradiction must be recorded"
+        assert leaf.answer == ""
+        assert leaf.stance == "UNDETERMINED"
+        assert not any(l.answer for l in r.leaves)
+        # Refusal propagates: no sealed conclusion asserts the opposite.
+        assert getattr(r, "refusal_reason", None) or all(
+            "WAS lower" not in l.answer for l in r.leaves)
+
+    def test_true_computation_blocks_negative_prose(self):
+        """Inverse: sandbox prints True, prose denies. Must not seal."""
+        m = self._model(code="print(4.1 > 3.5)",
+                        answer=_ans("The rate was NOT lower in July 2026.",
+                                    conf=0.9, stance="DENIES"))
+        r = _run(_pipeline(m))
+        leaf = r.leaves[0]
+        assert leaf.reconciliation_failure
+        assert leaf.answer == ""
+        assert leaf.stance == "UNDETERMINED"
+
+    def test_agreeing_computation_still_seals_normally(self):
+        """A computation that AGREES with the prose must seal exactly as
+        before — refusal must be surgical, not universal."""
+        m = self._model(code="print(4.1 < 3.5)",
+                        answer=_ans("The rate was NOT lower in July 2026 "
+                                    "(4.1%) than in January 2023 (3.5%).",
+                                    conf=0.9, stance="DENIES"))
+        r = _run(_pipeline(m))
+        leaf = r.leaves[0]
+        assert leaf.sandbox_status == "ok"
+        assert leaf.reconciliation_failure is None
+        assert leaf.stance == "DENIES"
+        assert "NOT lower" in leaf.answer
+
+    def test_non_boolean_stdout_is_not_a_verdict(self):
+        """Richer stdout (numbers, multiple lines) must NOT trigger the
+        reconciliation veto — the check stays silent rather than guess."""
+        m = self._model(code="print(4.1)\nprint(3.5)",
+                        answer=_ans("Rate was 4.1 vs 3.5.", conf=0.8,
+                                    stance="DENIES"))
+        r = _run(_pipeline(m))
+        leaf = r.leaves[0]
+        assert leaf.reconciliation_failure is None
+        assert leaf.stance == "DENIES"
+
+    def test_refusal_never_raises_confidence(self):
+        """GATE RULE: reconciliation failure zeroes the estimate; nothing on
+        the refused leaf exceeds what an UNDETERMINED leaf could carry."""
+        m = self._model()  # False + affirmative prose at proposed 0.9
+        r = _run(_pipeline(m))
+        leaf = r.leaves[0]
+        if leaf.reconciliation_failure:
+            assert leaf.confidence_estimate == 0.0
