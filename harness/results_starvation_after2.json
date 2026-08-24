@@ -369,5 +369,164 @@
       "248731c8721f4869": "honest_null"
     },
     "verdict": "refused"
+  },
+  {
+    "id": "Q11",
+    "question": "Did Silicon Valley Bank fail in March 2023?",
+    "category": "yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "SILICON VALLEY BANK, FAILDATE 3/10/2023.",
+    "verified_by": "FDIC failures FAILDATE 3/10/2023",
+    "elapsed_s": 308.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 1,
+    "sources": [
+      "fdic"
+    ],
+    "leaves": [
+      {
+        "text": "Was Silicon Valley Bank placed into receivership by the FDIC in March 2023?",
+        "answer": "The FDIC institutions record for Silicon Valley Bank (CERT 24735) shows ACTIVE: 0 / INACTIVE: 1 with an end date of 03/10/2023 (EFFDATE/ENDEFYMD '03/10/2023', CFPBENDDTE '2023-03-10', DATEUPDT '03/13/2023') and a NEWCERT 59331, consistent with the bank ceasing to exist as an active institution on March 10, 2023 under FDIC records. However, this record does not explicitly state that the bank was 'placed into receivership' \u2014 it only evidences deactivation/termination effective 2023-03-10, which is",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "What was the exact date and legal mechanism of Silicon Valley Bank's failure (closure by regulators, deposit insurance invocation)?",
+        "answer": "No evidence items were provided, so the exact date and legal mechanism of Silicon Valley Bank's failure cannot be determined from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Do contemporaneous financial news reports from March 2023 corroborate SVB's collapse as a bank failure rather than mere distress?",
+        "answer": "No evidence items were provided, so the claim cannot be assessed from cited sources.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'Was Silicon Valley Bank placed into receivership by the FDIC': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press), fred (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press), fred (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press), openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['fdic']",
+      "leaf 'Was Silicon Valley Bank placed into receivership by the FDIC': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, fdic, march, occ, official, placed, press",
+      "leaf 'What was the exact date and legal mechanism of Silicon Valle': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=ex, fdic (content covers 17% of the question's topical words (need 25%); missing: announcements, closure, date, deposit, exact, failure, filings, insurance), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: announcements, bank, closure, date, deposit, exact, failure, filings), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, wikidata (content covers 6% of the question's topical words (need 25%); missing: announcements, bank, closure, date, deposit, failure, filings, insurance); answer rests on NO sources",
+      "leaf 'What was the exact date and legal mechanism of Silicon Valle': 3 fetch(s) rejected at ingestion: [fdic] content covers 17% of the question's topical words (need 25%); missing: announcements, closure, date, deposit, exact, failure, filings, insurance; [fred] content covers 0% of the question's topical words (need 25%); missing: announcements, bank, closure, date, deposit, exact, failure, filings; [wikidata] content covers 6% of the question's topical words (need 25%); missing: announcements, bank, closure, date, deposit, failure, filings, insurance",
+      "leaf 'Do contemporaneous financial news reports from March 2023 co': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=co, fdic (content covers 20% of the question's topical words (need 25%); missing: 2023, archived, collapse, contemporaneous, coverage, distress, financial, march), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, archived, bank, collapse, contemporaneous, corroborate, coverage, distress), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, wikidata (content covers 5% of the question's topical words (need 25%); missing: 2023, archived, bank, collapse, corroborate, coverage, distress, failure); answer rests on NO sources",
+      "leaf 'Do contemporaneous financial news reports from March 2023 co': 3 fetch(s) rejected at ingestion: [fdic] content covers 20% of the question's topical words (need 25%); missing: 2023, archived, collapse, contemporaneous, coverage, distress, financial, march; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, bank, collapse, contemporaneous, corroborate, coverage, distress; [wikidata] content covers 5% of the question's topical words (need 25%); missing: 2023, archived, bank, collapse, corroborate, coverage, distress, failure"
+    ],
+    "gap_kinds": {
+      "105cfaa48c7d4a9b": "unprovable",
+      "474dab4312a54cd9": "honest_null",
+      "98aed94c837c41ed": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q12",
+    "question": "Did exactly four FDIC-insured banks fail during 2023?",
+    "category": "negation (answer: no, five)",
+    "expected_stance": "DENIES",
+    "gt": "Five failures: SVB, Signature, First Republic, Heartland Tri-State, Citizens Bank (11/3).",
+    "verified_by": "FDIC failures FAILYR=2023 \u2192 5 rows",
+    "elapsed_s": 227.0,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "confidence 0.0 below DB floor 0.3 after adversary penalties",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "How many FDIC-insured banks failed during calendar year 2023 according to the FDIC's official failed bank list?",
+        "answer": "None",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Which individual FDIC-insured institutions were closed by regulators in 2023, and on what dates?",
+        "answer": "No evidence was provided, so the specific institutions and closure dates cannot be determined from the given materials.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Does the count of 2023 failures change under different inclusion criteria (e.g., assisted acquisitions like Signature and First Republic, credit union acquisitions, or failures announced in early 2024 for 2023 activity)?",
+        "answer": "No evidence was provided, so the question cannot be settled: whether the count of 2023 bank failures changes under different inclusion criteria (assisted acquisitions such as Signature and First Republic, credit union acquisitions, or early-2024 announcements for 2023 activity) cannot be determined from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Do independent compilations of bank failures (industry trackers, financial media) corroborate the same total for 2023?",
+        "answer": "No evidence items were provided, so independent compilations of 2023 bank-failure totals cannot be corroborated from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "Refuting evidence is not hypothetical \u2014 it is public and trivially retrievable. The FDIC's own Failed Bank List for 2023 names five failures: Silicon Valley Bank (2023-03-10), Signature Bank (2023-03-12), First Republic Bank (2023-05-01), Heartland Tri-State Bank (2023-07-28), and Citizens Bank of Sac City, Iowa (2023-11-03). Any downstream reading of 'exactly four' from these honest_nulls is dire",
+      "The single most likely artifact is an evidence-plumbing failure being laundered into an epistemic virtue: all four sub-answers carry [UNVERIFIED 0.00] with GAP honest_null, i.e., the retrieval step returned zero items, and the pipeline then reported calibrated-sounding nulls instead of flagging retrieval failure. A count derived by treating these nulls as support (or by dropping one bank to force ",
+      "A 'four' answer almost certainly arises from counting criteria chosen post hoc: excluding Heartland Tri-State or Citizens Bank of Sac City (small, non-headline failures) while including SVB/Signature/First Republic plus one more yields four. The observed pattern (a specific small count) can be produced by headline-driven selection \u2014 media coverage concentrates on the three large March\u2013May failures",
+      "'Exactly four' is equally explained by conflating distinct populations: e.g., counting only banks placed into FDIC receivership with purchase-and-assumption loss-share deals, or only failures handled via systemic-risk exceptions (SVB, Signature = 2) plus First Republic = 3 plus one miscategorized entry. The same facts (five receiverships, several resolved via assisted acquisitions) are fully consi"
+    ],
+    "notes": [
+      "leaf 'How many FDIC-insured banks failed during calendar year 2023': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=FD, fdic (content covers 20% of the question's topical words (need 25%); missing: 2023, according, agency, calendar, during, failed, insured, list), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, according, agency, bank, banks, calendar, during, failed), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 0% of the question's topical words (need 25%); missing: 2023, according, agency, bank, banks, calendar, during, failed); answer rests on NO sources",
+      "leaf 'How many FDIC-insured banks failed during calendar year 2023': 3 fetch(s) rejected at ingestion: [fdic] content covers 20% of the question's topical words (need 25%); missing: 2023, according, agency, calendar, during, failed, insured, list; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, according, agency, bank, banks, calendar, during, failed; [wikidata] content covers 0% of the question's topical words (need 25%); missing: 2023, according, agency, bank, banks, calendar, during, failed",
+      "leaf 'Which individual FDIC-insured institutions were closed by re': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, banking, closed, closure, dates, fdic, individual, institutions), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, banking, closed, closure, dates, fdic, individual, institutions), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 18% of the question's topical words (need 25%); missing: 2023, banking, closed, closure, dates, fdic, institutions, insured); answer rests on NO sources",
+      "leaf 'Which individual FDIC-insured institutions were closed by re': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, banking, closed, closure, dates, fdic, individual, institutions; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, banking, closed, closure, dates, fdic, individual, institutions; [wikidata] content covers 18% of the question's topical words (need 25%); missing: 2023, banking, closed, closure, dates, fdic, institutions, insured",
+      "leaf 'Does the count of 2023 failures change under different inclu': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=co, fdic (content covers 15% of the question's topical words (need 25%); missing: 2023, 2024, acquisitions, activity, alternative, analysis, announced, assisted), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, 2024, acquisitions, activity, alternative, analysis, announced, assisted), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap; answer rests on NO sources",
+      "leaf 'Does the count of 2023 failures change under different inclu': 2 fetch(s) rejected at ingestion: [fdic] content covers 15% of the question's topical words (need 25%); missing: 2023, 2024, acquisitions, activity, alternative, analysis, announced, assisted; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, 2024, acquisitions, activity, alternative, analysis, announced, assisted"
+    ],
+    "gap_kinds": {
+      "e9087e369a73486f": "honest_null",
+      "f10aceed44824121": "honest_null",
+      "be5c723354814ec0": "honest_null",
+      "137883fbcba0497e": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q13",
+    "question": "What will the U.S. unemployment rate be in January 2027?",
+    "category": "unknowable-future",
+    "expected_stance": "UNDETERMINED",
+    "gt": "Unknowable; correct output is refusal or UNDETERMINED.",
+    "verified_by": "definitionally unobservable",
+    "elapsed_s": 20.1,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "correct"
   }
 ]
