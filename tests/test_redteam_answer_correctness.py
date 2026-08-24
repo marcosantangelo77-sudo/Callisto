@@ -218,21 +218,34 @@ def test_same_series_two_leaves_get_identical_query_parameters():
     """Two leaves about the SAME series resolve to byte-identical planned
     calls today. This pin holds the PLANNER half of C3: any future change
     that lets per-leaf phrasing shift series parameters must do so
-    deliberately and visibly."""
+    deliberately and visibly.
+
+    UPDATED (task 191, D1 fix): the planner now WINDOWS the observations on
+    the years each leaf names — that is deliberate, visible per-leaf phrasing
+    sensitivity, exactly the shape this pin was keeping a hole open for. The
+    pin is preserved on the parts that must NOT vary: same series id, same
+    method, same limit/ordering. The two example leaves name different years,
+    so they legitimately differ in window; two leaves naming the same years
+    must still produce byte-identical calls."""
     from tools.sources import query_builder
+    # different phrasing, SAME named year -> identical planned call
     plans = [query_builder.build_plan("fred", t) for t in (
         "What was the US unemployment rate in January 2023",
-        "What has been the US unemployment rate in 2026 to date")]
+        "US unemployment rate as of Jan 2023 — what was it?")]
     calls = [(q.method, tuple(sorted(q.kwargs.items())))
              for p in plans for q in p.queries]
     assert len(set(calls)) == 1
+    # the deliberate, visible difference: windows follow named years
+    p23 = query_builder.build_plan(
+        "fred", "What was the US unemployment rate in January 2023")
+    p26 = query_builder.build_plan(
+        "fred", "What has been the US unemployment rate in 2026 to date")
+    kw23 = p23.queries[0].kwargs
+    kw26 = p26.queries[0].kwargs
+    assert kw23["series_id"] == kw26["series_id"]
+    assert kw23.get("start") == "2023-01-01" and kw26.get("start") == "2026-01-01"
 
 
-@pytest.mark.xfail(reason="C3: planner pins limit=120 with NO "
-                          "observation_start — the returned window depends "
-                          "on the endpoint's default ordering, and nothing "
-                          "records WHICH window a leaf's answer was "
-                          "computed over", strict=True)
 def test_series_window_is_explicit_and_recorded_on_the_answer():
     from tools.sources import query_builder
     p = query_builder.build_plan(
