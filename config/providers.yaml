@@ -101,10 +101,20 @@ providers:
     # endpoint backed by the SAME Portal OAuth the CLI uses — but one long-
     # lived process instead of a fresh interpreter per completion. Measured
     # on this machine: CLI fork 11.4-20.3s/call vs proxy warm 1.2-2.4s/call.
-    # Start it with one command; when absent, this endpoint fails health and
-    # routing degrades to ox_alpha (fresh-fork CLI) exactly as before.
+    #
+    # SPEED RUN 9 (2026-08-24): this entry now has a STATIC default base_url,
+    # so the proxy participates in routing WITHOUT anyone exporting
+    # OX_ALPHA_PROXY_BASE_URL. Before this run the env-var-only form resolved
+    # _unresolved on every machine where nobody exported it — measured live:
+    # zero running processes had it set, every completion paid the fresh-fork
+    # tax (~11-20s) while the proxy sat idle on 8645/8646. When the proxy
+    # process is NOT running, connecting to the default port refuses in
+    # <20ms and failover proceeds exactly as before (fast cooldown, then the
+    # CLI tier) — degrade-not-crash unchanged.
     backend: openai_compat
-    base_url_env: OX_ALPHA_PROXY_BASE_URL   # e.g. http://127.0.0.1:8645/v1
+    base_url: http://127.0.0.1:8645/v1     # default; OX_ALPHA_PROXY_BASE_URL
+                                           # overrides when set (run 9)
+    base_url_env: OX_ALPHA_PROXY_BASE_URL   # e.g. http://127.0.0.1:8646/v1
     api_key_env: OX_ALPHA_PROXY_API_KEY     # any token; proxy attaches real creds
     model_env: OX_ALPHA_PROXY_MODEL
     model: stealth/ox-alpha         # used when the env vars are unset

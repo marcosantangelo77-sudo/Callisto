@@ -10,8 +10,9 @@ long-lived process (warm calls measured 1.2-2.4s). These tests pin:
    enforce schemas either).
 2. ORDERING — when resolvable it sits ahead of ox_alpha in every task class;
    ox_alpha remains the LAST-resort everywhere.
-3. DEGRADATION — with no OX_ALPHA_PROXY_BASE_URL set the endpoint is
-   _unresolved and routing is byte-identical to the pre-run7 lists.
+3. DEGRADATION — run 9 replaced unset-env=>_unresolved with a static
+   default base_url; absence of the proxy PROCESS still fails over fast to
+   ox_alpha (TestDispatch).
 4. DISPATCH — ProviderRouter._post reaches an OpenAI-compatible endpoint
    through a monkeypatched transport (no real socket: the no_socket barrier
    exists because live testing 403'd this machine's SEC budget; loopback
@@ -53,17 +54,25 @@ class TestDeclaration:
         assert not ep.extra.get("_unresolved")
         assert ep.base_url == "http://127.0.0.1:1/v1"
 
-    def test_unresolved_without_env(self, monkeypatch):
+    def test_resolved_by_default_without_env(self, monkeypatch):
+        """SPEED run 9 supersedes run 7's unset-env=>_unresolved contract:
+        the proxy now declares a static default base_url, so with NO env var
+        it RESOLVES and routes ahead of the fresh-fork CLI. (Measured live
+        run 9: zero running processes had OX_ALPHA_PROXY_BASE_URL set — the
+        env-only form left every completion on the ~11-20s fork path while
+        the proxy sat idle.) Absence of the proxy PROCESS is still safe: see
+        TestDispatch.test_absent_proxy_fails_over."""
         for v in ("OX_ALPHA_PROXY_BASE_URL", "OX_ALPHA_PROXY_API_KEY",
                   "OX_ALPHA_PROXY_MODEL"):
             monkeypatch.delenv(v, raising=False)
         r = inference.ProviderRouter()
         ep = r.endpoints["ox_alpha_proxy"]
-        assert ep.extra.get("_unresolved"), (
-            "without base URL the proxy must be unresolved, not half-configured")
-        # ...and routing then behaves exactly like the pre-run7 pool:
+        assert not ep.extra.get("_unresolved"), (
+            "static default base_url must resolve without any env var")
+        assert ep.base_url == "http://127.0.0.1:8645/v1"
         cands = r.candidates_for("research_synthesis")
-        assert "ox_alpha_proxy" not in cands
+        assert "ox_alpha_proxy" in cands
+        assert cands.index("ox_alpha_proxy") < cands.index("ox_alpha")
         assert cands[-1] == "ox_alpha"
 
     def test_honest_capabilities(self, monkeypatch):

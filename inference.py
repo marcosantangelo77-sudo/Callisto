@@ -939,6 +939,16 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     skipped by routing (LOUD log) rather than crashing construction — that
     keeps a local-only box constructible while a hosted tier is configured.
 
+    SPEED run 9 (2026-08-24): an env var that IS set overrides a static
+    value; a static value stands as the DEFAULT when the env var is unset.
+    Before this run an env-backed field with a static default could never
+    see its default honoured (static won, env was dead) — and ox_alpha_proxy
+    shipped with ONLY the env form, so on any machine where nobody exported
+    OX_ALPHA_PROXY_BASE_URL the endpoint resolved _unresolved and every
+    completion fell through to the fresh-fork CLI tier (~11-20s/call
+    measured) while the persistent proxy sat idle. Precedence affects only
+    entries declaring BOTH keys; today that is exactly one endpoint.
+
     backend="hermes_cli" needs NEITHER base_url nor model: it shells out to
     the Hermes CLI (Nous Portal OAuth lives in the keychain) and serves the
     hosted stealth-ox-alpha model, so base_url stays "" and model defaults
@@ -946,10 +956,14 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     """
     backend = raw.get("backend", "openai_compat")
     base_url = raw.get("base_url")
-    if not base_url and raw.get("base_url_env"):
-        base_url = os.getenv(raw["base_url_env"], "")
-        if not base_url:
-            raw = {**raw, "_unresolved": True}
+    if raw.get("base_url_env"):
+        # env-if-set wins over the static value (run 9); an unset env var
+        # leaves the static default standing instead of voiding it.
+        env_base = os.getenv(raw["base_url_env"], "")
+        if env_base:
+            base_url = env_base
+    if not base_url:
+        raw = {**raw, "_unresolved": True}
     api_key = None
     if raw.get("api_key_env"):
         api_key = os.getenv(raw["api_key_env"]) or None
