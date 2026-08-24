@@ -38,7 +38,6 @@ from dataclasses import dataclass, field
 from typing import Optional, Union
 
 from tools.devig import devig_market
-from tools.kelly import kelly_full
 
 Quote = Union[int, float]
 
@@ -201,6 +200,10 @@ def assess_edge(
 
     edge = calibrated_prob - market_fair
     notes = []
+    # Kelly is computed here rather than via tools.kelly.kelly_full on
+    # purpose: that function rounds the fraction to 6dp before returning,
+    # and round() can move a sizing output UP. The one direction an
+    # automated actor must never move it (PATTERNS family 6).
     if not audit.get("devigged"):
         notes.append(
             "single-sided quote: market probability is RAW IMPLIED, not "
@@ -216,7 +219,20 @@ def assess_edge(
 
     ev_per_unit = calibrated_prob * b - q      # stake 1, win b*p - q expectation
 
-    actionable = edge >= min_edge and ev_per_unit > 0
+    # Fail closed (PATTERNS family 3): a single-sided quote's edge includes
+    # phantom vig, so it can look actionable when the market disagrees. CLV
+    # already refuses one-sided comparisons; actionability now refuses too.
+    # The numbers stay in the assessment — evidence, not a gate pass.
+    devigged = bool(audit.get("devigged"))
+    actionable = (
+        devigged and edge >= min_edge and ev_per_unit > 0
+    )
+    if not devigged and edge >= min_edge and ev_per_unit > 0:
+        notes.append(
+            "NOT actionable despite positive raw edge: the quote could not "
+            "be devigged (no counter-quote), so the edge may be entirely "
+            "phantom vig"
+        )
     if kelly_full_frac > MAX_FRACTION_FULL_KELLY:
         notes.append(
             f"full Kelly {kelly_full_frac:.4f} capped at "
