@@ -1,0 +1,178 @@
+[
+ {
+  "file": "agp/thresholds.py",
+  "id": "SUB2ADD-L4-61",
+  "mutation": "- -> + @ line 4: Single source of truth for confidence tier boundaries, source-class ceilings,",
+  "status": "SURVIVED",
+  "secs": 3.3,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.82s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "AND2OR-L5-21",
+  "mutation": "and -> or @ line 5: escalation triggers, and the DB floor. Imported by agp, orchestrator, and memory.",
+  "status": "SURVIVED",
+  "secs": 3.0,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.48s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "SUB2ADD-L8-2",
+  "mutation": "- -> + @ line 8: - agp/__init__.py:39-48   (ConfidenceTier.from_score boundaries)",
+  "status": "SURVIVED",
+  "secs": 3.1,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.59s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "DIV2MUL-L8-7",
+  "mutation": "/ -> * @ line 8: - agp/__init__.py:39-48   (ConfidenceTier.from_score boundaries)",
+  "status": "SURVIVED",
+  "secs": 3.1,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.66s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "SUB2ADD-L9-2",
+  "mutation": "- -> + @ line 9: - orchestrator.py:93-99   (MAX_CONFIDENCE_BY_SOURCE)",
+  "status": "SURVIVED",
+  "secs": 2.9,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.45s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "SUB2ADD-L10-2",
+  "mutation": "- -> + @ line 10: - orchestrator.py:101     (ESCALATION_THRESHOLD)",
+  "status": "SURVIVED",
+  "secs": 3.0,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.57s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "SUB2ADD-L11-2",
+  "mutation": "- -> + @ line 11: - memory.py:34            (DB CHECK constraint floor)",
+  "status": "SURVIVED",
+  "secs": 3.0,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.47s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "SUB2ADD-L14-14",
+  "mutation": "- -> + @ line 14: and regression-testing downstream promotion gates.",
+  "status": "SURVIVED",
+  "secs": 3.0,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.52s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "AND2OR-L14-0",
+  "mutation": "and -> or @ line 14: and regression-testing downstream promotion gates.",
+  "status": "SURVIVED",
+  "secs": 3.1,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.62s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "SUB2ADD-L29-58",
+  "mutation": "- -> + @ line 29: \"SECONDARY\": 0.75,  # CORROBORATED \u2014 web search, third-party reports",
+  "status": "SURVIVED",
+  "secs": 3.0,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.52s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "SUB2ADD-L31-59",
+  "mutation": "- -> + @ line 31: \"INFERRED\": 0.55,   # PROBABLE \u2014 training data, no real-time verification",
+  "status": "SURVIVED",
+  "secs": 2.9,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.42s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "GT2GE-L57-43",
+  "mutation": "> -> >= @ line 57: def floor_conf(x: float, places: int = 2) -> float:",
+  "status": "killed",
+  "secs": 0.7,
+  "tail": ""
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "EQ2NE-L60-23",
+  "mutation": "== -> != @ line 60: round(0.269183, 2) == 0.27 \u2014 an increase. That is small, and it is still an",
+  "status": "SURVIVED",
+  "secs": 2.9,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.45s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "AND2OR-L60-61",
+  "mutation": "and -> or @ line 60: round(0.269183, 2) == 0.27 \u2014 an increase. That is small, and it is still an",
+  "status": "SURVIVED",
+  "secs": 3.1,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.66s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "SUB2ADD-L63-39",
+  "mutation": "- -> + @ line 63: through several clamp/penalty round-trips can creep upward with no evidence",
+  "status": "SURVIVED",
+  "secs": 3.2,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.65s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "DIV2MUL-L63-25",
+  "mutation": "/ -> * @ line 63: through several clamp/penalty round-trips can creep upward with no evidence",
+  "status": "SURVIVED",
+  "secs": 3.0,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.56s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "SUB2ADD-L64-20",
+  "mutation": "- -> + @ line 64: behind it. A red-team pass found it in apply_verdict, in the provenance",
+  "status": "SURVIVED",
+  "secs": 2.9,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.48s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "AND2OR-L65-11",
+  "mutation": "and -> or @ line 65: clamp, and in the panel path after an earlier fix landed in only one of",
+  "status": "SURVIVED",
+  "secs": 2.9,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.47s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "MUL2DIV-L69-12",
+  "mutation": "* -> / @ line 69: f = 10 ** places",
+  "status": "killed",
+  "secs": 0.7,
+  "tail": ""
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "FLOOR2ROUND-L70-11",
+  "mutation": "floor -> round @ line 70: return math.floor(float(x) * f) / f",
+  "status": "SURVIVED",
+  "secs": 2.9,
+  "tail": "...............................................................          [100%]\n63 passed, 2 deselected in 2.42s\n"
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "MUL2DIV-L70-31",
+  "mutation": "* -> / @ line 70: return math.floor(float(x) * f) / f",
+  "status": "killed",
+  "secs": 1.1,
+  "tail": ""
+ },
+ {
+  "file": "agp/thresholds.py",
+  "id": "DIV2MUL-L70-36",
+  "mutation": "/ -> * @ line 70: return math.floor(float(x) * f) / f",
+  "status": "killed",
+  "secs": 1.1,
+  "tail": ""
+ }
+]
