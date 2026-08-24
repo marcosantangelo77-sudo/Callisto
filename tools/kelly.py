@@ -74,7 +74,7 @@ LINE_MOVEMENT_PROFILES = {
         "early_vol": 0.020,
         "mid_vol":   0.045,
         "late_vol":  0.075,
-        "steam_prob": 0.14,
+        "steam_prob": 0.15,
     },
     "icehockey_nhl": {
         "early_vol": 0.018,
