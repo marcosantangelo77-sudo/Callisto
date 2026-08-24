@@ -150,23 +150,35 @@ def test_s1_gain_all_skipped_round1_is_not_stasis():
 
 # ── Seam 4: stopping rules vs gap classification ───────────────────────────
 
-def test_s4_stasis_stop_on_total_miss_stays_retrieval_or_honest_null():
-    """A leaf that stops on STASIS after sources genuinely returned only
-    junk must classify as honest_null (sources were reached and judged),
-    NOT retrieval_failure; and a leaf whose sources all ERRORED before a
-    stasis stop must stay retrieval_failure. The stop reason string is
-    carried into the explanation either way."""
+def test_s4_all_junk_single_source_stop_reason_is_not_route_missing():
+    """F1 (verified behaviour): one junk source is rejected in round 1,
+    excluded, and round 2 finds zero routable specs. Stasis NEVER fires
+    (round 2 never ran) and the stop reason claims 'selected sources lack
+    generic fetch routes' even though alpha HAD a route and was judged
+    irrelevant — a misattribution that sends operators to fix query
+    authoring instead of the gate. Documented as defect F1 in
+    findings/integration_seams.md."""
     reg = _registry(_spec("alpha", "https://api.openalex.org"))
-    routes_junk = {"/fetch_alpha": IRRELEVANT}
-
-    # Case A: junk returned, stasis fires after round 2 -> honest null
-    r = _retriever(reg, routes_junk, adaptive_gain=False, stasis=True)
+    r = _retriever(reg, {"/fetch_alpha": IRRELEVANT},
+                   adaptive_gain=False, stasis=True)
     qa = _q(min_ind=2)
     tr_a = r.retrieve(qa, qa.text, min_independent=2)
     kind_a, expl_a = classify_null_kind(tr_a)
     assert kind_a == "honest_null", (kind_a, expl_a)
-    assert tr_a.stop_reason.startswith("stasis:")
-    assert "stasis" in expl_a.lower(), expl_a
+    # F1: stasis blind to the all-excluded path...
+    assert not tr_a.stop_reason.startswith("stasis:")
+    # ...and the stop reason misattributes the exclusion:
+    assert "lack generic fetch routes" in tr_a.stop_reason
+
+    # Contrast: two junk sources where round 2 CAN re-run -> stasis fires.
+    reg2 = _registry(_spec("alpha", "https://api.openalex.org"),
+                     _spec("beta", "https://b.example"))
+    r2 = _retriever(reg2, {"/fetch_alpha": IRRELEVANT,
+                           "/fetch_beta": IRRELEVANT},
+                    adaptive_gain=False, stasis=True)
+    qb = _q(min_ind=3)
+    tr_b = r2.retrieve(qb, qb.text, min_independent=3)
+    assert tr_b.stop_reason.startswith("stasis:"), tr_b.stop_reason
 
     # Case B: source errors immediately, no rounds land -> retrieval failure
     def boom(url, headers):
