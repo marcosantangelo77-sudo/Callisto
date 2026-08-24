@@ -494,13 +494,9 @@ class ResearchPipeline:
             # Re-ask for the final answer now that computation ran.
             resp = await self.model.complete(
                 "Manager", answer_messages(
-<<<<<<< HEAD
                     q.text, [e.content for e in evidence_items]),
                 _call_tag=call_tag or q.question_id)
-=======
-                    q.text, [e.content for e in evidence_items]))
             self._author_model = self._resp_model(resp) or self._author_model
->>>>>>> origin/fix/bea-eia-queries
             proposal = parse_model_json(resp) or {}
 
         out.answer = str(proposal.get("answer", "")).strip()
