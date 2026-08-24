@@ -410,5 +410,100 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q11",
+    "question": "Did Silicon Valley Bank fail in March 2023?",
+    "category": "yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "SILICON VALLEY BANK, FAILDATE 3/10/2023.",
+    "verified_by": "FDIC failures FAILDATE 3/10/2023",
+    "elapsed_s": 228.7,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "Did Silicon Valley Bank fail in March 2023?\n\n- [PROBABLE 0.70] Was Silicon Valley Bank placed into FDIC receivership in March 2023?: The FDIC institutions record for Silicon Valley Bank (CERT 24735) shows ACTIVE=0 / INACTIVE=1 with an end date of 2023-03-10 (ENDEFYMD/EFFDATE '03/10/2023', DATEUPDT/PROCDATE '03/13/2023') and a successor certificate (NEWCERT 59331), consistent with the bank being closed and placed into FDIC resolution on March 10, 2023. However, the word 'receivership' itself does not appear in either item; item [1] is an irrelevant World Bank indicator search.\n- [UNVERIFIED 0.00] Did the California Department of Financial Protection and Innovation close SVB and appoint the FDIC as receiver on March 10, 2023?: The provided evidence does not address the question. Evidence [0] is a World Bank indicator search returning unrelated agricultural indicators, and evidence [1] is an OpenAlex result about FDIC deposit insurance reform with only a generic abstract mentioning the FDIC \u2014 neither states that the California DFPI closed SVB and appointed the FDIC as receiver on March 10, 2023.\n- [PROBABLE 0.55] Did SVB experience a bank run with deposit withdrawals exceeding ~$40 billion in the days before its closure in March 2023?: The evidence supports that SVB experienced a bank run in March 2023: item [1] (Cipriani, Eisenbach, Kovner et al., Federal Reserve Bank of New York, using high-frequency payments data) states SVB 'experienced a deposit run\u2014significantly more' than other failed banks, though fewer than many banks that survived, and attributes runs to weak fundamentals rather than depositor coordination, concentrated among institutional depositors. However, neither item quantifies the withdrawal amount; item [0] is an irrelevant World Bank indicator listing and item [1] contains no dollar figures. The specific claim of withdrawals exceeding ~$40 billion is therefore not settled by the provided evidence.\n- [UNVERIFIED 0.10] Do major financial news archives from March 2023 report SVB's collapse as one of the largest US bank failures?: The evidence provided does not settle this. Evidence [0] is an irrelevant World Bank indicator search (fertilizer/agricultural indicators, no SVB content). Evidence [1] is an OpenAlex result for a 2025 academic working paper (Kelly & Rose) reviewing the 2023 banking crisis \u2014 it is not a March 2023 financial news archive and its truncated abstract does not state that news archives reported SVB's collapse as one of the largest US bank failures. No evidence item actually shows what major financial news archives from March 2023 reported.  [GAP: unprovable]",
+    "stance": "AFFIRMS",
+    "confidence_score": 0.35,
+    "confidence_tier": "PROBABLE",
+    "n_fetches": 8,
+    "sources": [
+      "fdic",
+      "openalex",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "Was Silicon Valley Bank placed into FDIC receivership in March 2023?",
+        "answer": "The FDIC institutions record for Silicon Valley Bank (CERT 24735) shows ACTIVE=0 / INACTIVE=1 with an end date of 2023-03-10 (ENDEFYMD/EFFDATE '03/10/2023', DATEUPDT/PROCDATE '03/13/2023') and a successor certificate (NEWCERT 59331), consistent with the bank being closed and placed into FDIC resolution on March 10, 2023. However, the word 'receivership' itself does not appear in either item; item [1] is an irrelevant World Bank indicator search.",
+        "tier": "PROBABLE",
+        "confidence": 0.7,
+        "stance": "AFFIRMS",
+        "gap_kind": ""
+      },
+      {
+        "text": "Did the California Department of Financial Protection and Innovation close SVB and appoint the FDIC as receiver on March 10, 2023?",
+        "answer": "The provided evidence does not address the question. Evidence [0] is a World Bank indicator search returning unrelated agricultural indicators, and evidence [1] is an OpenAlex result about FDIC deposit insurance reform with only a generic abstract mentioning the FDIC \u2014 neither states that the California DFPI closed SVB and appointed the FDIC as receiver on March 10, 2023.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Did SVB experience a bank run with deposit withdrawals exceeding ~$40 billion in the days before its closure in March 2023?",
+        "answer": "The evidence supports that SVB experienced a bank run in March 2023: item [1] (Cipriani, Eisenbach, Kovner et al., Federal Reserve Bank of New York, using high-frequency payments data) states SVB 'experienced a deposit run\u2014significantly more' than other failed banks, though fewer than many banks that survived, and attributes runs to weak fundamentals rather than depositor coordination, concentrated among institutional depositors. However, neither item quantifies the withdrawal amount; item [0] i",
+        "tier": "PROBABLE",
+        "confidence": 0.55,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Do major financial news archives from March 2023 report SVB's collapse as one of the largest US bank failures?",
+        "answer": "The evidence provided does not settle this. Evidence [0] is an irrelevant World Bank indicator search (fertilizer/agricultural indicators, no SVB content). Evidence [1] is an OpenAlex result for a 2025 academic working paper (Kelly & Rose) reviewing the 2023 banking crisis \u2014 it is not a March 2023 financial news archive and its truncated abstract does not state that news archives reported SVB's collapse as one of the largest US bank failures. No evidence item actually shows what major financial ",
+        "tier": "UNVERIFIED",
+        "confidence": 0.1,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [
+      "The FDIC institutions record shows only that CERT 24735 became inactive on 2023-03-10 with a successor certificate (NEWCERT 59331). An INACTIVE=1 / ENDEFYMD entry with a NEWCERT also occurs when a healthy bank is acquired or merged into another institution \u2014 the record contains no failure flag, no receivership designation, and no 'failed bank' field. The same data shape would be produced by a volu",
+      "NEWCERT 59331 corresponds to Silicon Valley Bridge Bank, N.A., an FDIC-operated bridge institution. Under the bridge-bank mechanism the original charter is terminated and a new national-bank charter is created, which mechanically produces exactly this ACTIVE=0/INACTIVE=1 + successor-cert pattern in the institutions file without any additional inference about 'failure'. The conclusion's stated conf",
+      "The FDIC API call used filters 'NAME:Was Silicon Valley Bank' \u2014 the full question text, not the bank's name. That it still returned exactly one matching record for Silicon Valley Bank means the search pipeline retrieved the target despite a malformed query (likely fuzzy/partial matching), so the retrieval step is not trustworthy as constructed and its provenance cannot be audited: a different malf",
+      "Four of the six evidence items are identical World Bank indicator listings (same sha256 across all three fetches) that have zero bearing on any sub-question, and both OpenAlex hits are post-hoc academic papers (2023 St. Louis Fed synopsis, 2025 Kelly & Rose working paper), not contemporaneous records. The entire evidentiary weight of the top-level conclusion therefore hangs on one database row fet"
+    ],
+    "notes": [
+      "leaf 'Was Silicon Valley Bank placed into FDIC receivership in Mar': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, announcements, bank, fdic, filing, filings, march, official; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, announcements, bank, fdic, filing, filings, march, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, announcements, bank, fdic, filing, filings, march, official",
+      "leaf 'Did the California Department of Financial Protection and In': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, appoint, california, close, contemporaneous, department, fdic, financial; [fdic] content covers 11% of the question's topical words (need 25%); missing: 2023, appoint, close, contemporaneous, fdic, financial, innovation, march; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, appoint, california, close, contemporaneous, department, fdic, financial; [courtlistener] content covers 0% of the question's topical words (need 25%); missing: 2023, appoint, california, close, contemporaneous, department, fdic, financial; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, appoint, california, close, contemporaneous, department, fdic, financial",
+      "leaf 'Did SVB experience a bank run with deposit withdrawals excee': 4 fetch(s) rejected at ingestion: [fdic] content covers 5% of the question's topical words (need 25%); missing: 2023, bank, before, billion, closure, days, deposit, disclosures; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, before, billion, closure, days, deposit, disclosures; [courtlistener] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, before, billion, closure, days, deposit, disclosures; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, before, billion, closure, days, deposit, disclosures",
+      "leaf 'Do major financial news archives from March 2023 report SVB'': 4 fetch(s) rejected at ingestion: [fdic] content covers 16% of the question's topical words (need 25%); missing: 2023, archived, archives, collapse, coverage, event, financial, largest; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, archives, bank, collapse, coverage, event, failures; [courtlistener] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, archives, bank, collapse, coverage, event, failures; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, archived, archives, bank, collapse, coverage, event, failures"
+    ],
+    "gap_kinds": {
+      "b3ef338493ea496c": "unprovable"
+    },
+    "verdict": "correct"
+  },
+  {
+    "id": "Q12",
+    "question": "Did exactly four FDIC-insured banks fail during 2023?",
+    "category": "negation (answer: no, five)",
+    "expected_stance": "DENIES",
+    "gt": "Five failures: SVB, Signature, First Republic, Heartland Tri-State, Citizens Bank (11/3).",
+    "verified_by": "FDIC failures FAILYR=2023 \u2192 5 rows",
+    "elapsed_s": 63.6,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
