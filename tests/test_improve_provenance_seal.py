@@ -100,19 +100,54 @@ def test_end_to_end_pipeline_keeps_primary_status_of_admitted_fetch():
 
 def test_sealed_session_payload_carries_engine_artifact_refs():
     """When the engine seals a run that produced artifacts, the SESSION's
-    sealed payload must contain those refs — not just the PipelineResult."""
-    import inspect
+    sealed payload must contain those refs — and verify_seal must cover
+    them (tampering with the layer breaks verification)."""
+    import asyncio
+    import json
+    import tempfile
+    from pathlib import Path
 
-    from tools.pipeline import engine
+    from tools.pipeline.engine import ResearchPipeline, fixture_transport
+    from tools.artifacts import ArtifactStore
 
-    src = inspect.getsource(engine.ResearchPipeline._run_inner)
-    # The engine must attach pending refs to the session BEFORE sealing.
-    attach_pos = min(
-        src.find("session.add_artifacts"),
-        src.find("session.artifact_refs =") if
-        "session.artifact_refs =" in src else len(src))
-    seal_pos = src.find("session.seal()")
-    assert attach_pos != -1 and attach_pos < seal_pos, (
-        "engine seals the session without attaching artifact refs — the A20 "
-        "seal-over-artifacts layer is present but never populated in "
-        "production")
+    def _decompose():
+        return json.dumps({"sub_questions": [
+            {"text": "compute something quantitative", "kind": "quantitative",
+             "question_type": "numeric computation",
+             "min_source_tier": 5, "min_independent_sources": 0,
+             "quant_required": True}]})
+
+    answer = json.dumps({
+        "answer": "the computation ran",
+        "proposed_confidence": 0.6,
+        "compute": {"code": "print(2 + 2)", "inputs": {}}})
+
+    class _Model:
+        def __init__(self):
+            self.calls = {}
+
+        async def complete(self, task_class, messages, schema=None):
+            self.calls.setdefault(task_class, 0)
+            self.calls[task_class] += 1
+            if task_class == "Architect":
+                return {"parsed_json": json.loads(_decompose()),
+                        "model": "stub"}
+            return {"parsed_json": json.loads(answer), "model": "stub"}
+
+    class _Quiet:
+        async def complete(self, task_class, messages, schema=None):
+            return {"parsed_json": {"objections": []}, "model": "stub"}
+
+    tmp = Path(tempfile.mkdtemp())
+    pipe = ResearchPipeline(
+        model=_Model(), adversary_router=_Quiet(), transport=None,
+        store=ArtifactStore(root=tmp / "artifacts"))
+    result = asyncio.new_event_loop().run_until_complete(
+        pipe.run("Compute question?", today=__import__("datetime").date(2026, 8, 22)))
+    assert result.sealed, result.refusal_reason
+    assert result.artifact_refs, "run produced no artifacts; test inconclusive"
+    d = result.session.to_dict()
+    sealed_sha = {r["sha256"] for r in d.get("artifact_refs", [])}
+    assert sealed_sha == {r.sha256 for r in result.artifact_refs}, (
+        "sealed session payload does not carry the run's artifact refs — "
+        "verify_seal hashes an empty artifact layer (A20 machinery inert)")

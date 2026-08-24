@@ -977,6 +977,14 @@ class ResearchPipeline:
             logger.warning("seal refused for %s: %s",
                            session.session_id, refusal)
             return result
+        # A20 completion (improve 2026-08-24): the seal payload has carried
+        # an artifact_refs layer since the A20 fix, but NOTHING ever
+        # populated it — the engine kept refs on itself and attached them to
+        # PipelineResult only after session.seal(), so verify_seal always
+        # hashed an empty artifact layer. Attach BEFORE sealing so the keyed
+        # seal covers the quantitative artifacts the conclusion cites.
+        if self.artifact_refs:
+            session.add_artifacts(list(self.artifact_refs))
         try:
             seal_hash = session.seal()
         except Exception as e:  # noqa: BLE001 — AGPSealRefused et al.
