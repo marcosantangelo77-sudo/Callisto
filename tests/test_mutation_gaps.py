@@ -190,12 +190,24 @@ def test_clamp_confidence_provenance_ceiling_by_class():
 # ---------------------------------------------------------------------------
 
 def test_ensemble_ceiling_boundaries_inclusive():
-    # spread exactly 0.30 -> capped SPECULATIVE-side ceiling
-    assert ensemble_ceiling([0.70, 1.00]) is not None
-    # spread exactly 0.15 (= half threshold) -> mild ceiling
-    assert ensemble_ceiling([0.70, 0.85]) == pytest.approx(0.70)
+    from agp.adversary import (DISAGREEMENT_SPREAD_THRESHOLD,
+                               DISAGREEMENT_CEILING, MILD_DISAGREEMENT_CEILING)
+    # exact-representable pairs: 0.75-0.45 == 0.30 exactly in binary floats
+    lo = 0.45
+    hi = lo + DISAGREEMENT_SPREAD_THRESHOLD
+    assert hi - lo == DISAGREEMENT_SPREAD_THRESHOLD
+    # spread EXACTLY at threshold must still cap (>= not >)
+    assert ensemble_ceiling([lo, hi]) == DISAGREEMENT_CEILING
+    # just below: no wide-disagreement cap, but half-threshold mild cap applies
+    import math
+    below = math.nextafter(DISAGREEMENT_SPREAD_THRESHOLD, 0.0)
+    assert ensemble_ceiling([lo, lo + below]) == MILD_DISAGREEMENT_CEILING
+    # spread exactly at half threshold -> mild ceiling (>= not >)
+    half = DISAGREEMENT_SPREAD_THRESHOLD / 2
+    assert ensemble_ceiling([lo, lo + half]) == MILD_DISAGREEMENT_CEILING
     # tight agreement -> no restriction
-    assert ensemble_ceiling([0.70, 0.71]) is None
+    tiny = math.nextafter(half, 0.0)
+    assert ensemble_ceiling([lo, lo + tiny]) is None
 
 
 def test_clamp_with_ensemble_only_pulls_down():

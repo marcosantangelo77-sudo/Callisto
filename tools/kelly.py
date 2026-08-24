@@ -289,7 +289,7 @@ def kelly_dynamic(
     reasons.append(f"Base quarter-Kelly: {base_fraction:.4f} ({base_fraction*100:.2f}% of bankroll)")
     reasons.append(f"AGP tier: {tier} (score={confidence_score:.2f}, multiplier={smooth_mult:.3f})")
     reasons.append(f"Variance dampener: {variance_dampener:.3f} (edge_uncertainty={variance_estimate:.4f})")
-    if adjusted_fraction < hard_cap:
+    if adjusted_fraction > hard_cap:
         reasons.append(f"Hard-capped from {adjusted_fraction*100:.2f}% to {hard_cap*100:.1f}%")
     reasons.append(f"Final: {final_fraction*100:.3f}% of ${bankroll:,.0f} = ${stake:,.2f}")
 
