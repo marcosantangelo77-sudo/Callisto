@@ -1119,6 +1119,46 @@ class ProviderRouter:
             emp.get("usd_per_brier_point", 5.0))
         self._score_store = None
         self._routing_policy = None
+        # Shared HTTP connection pool (speed run 2026-08-23). Created lazily,
+        # bound to the first running event loop that uses it; a test can force
+        # re-creation with _reset_shared_client() after changing loops.
+        self._http_client: Optional[httpx.AsyncClient] = None
+
+    def _shared_client(self) -> httpx.AsyncClient:
+        """Process/router-wide pooled AsyncClient. Rebuilt if the running
+        event loop changed (asyncio transports are loop-bound). A client that
+        does not expose ``is_closed`` (test doubles) is treated as spent, so
+        opaque stand-ins keep the legacy fresh-client-per-call shape."""
+        try:
+            loop = _asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        current = self._http_client
+        spent = (current is None
+                 or bool(getattr(current, "is_closed", True))
+                 or getattr(current, "_bound_loop", None) is not loop)
+        if spent:
+            client = httpx.AsyncClient(
+                timeout=httpx.Timeout(300.0, connect=10.0),
+                limits=httpx.Limits(
+                    max_connections=32,
+                    max_keepalive_connections=8,
+                    keepalive_expiry=120.0,
+                ),
+            )
+            client._bound_loop = loop  # type: ignore[attr-defined]
+            self._http_client = client
+        return self._http_client
+
+    def _reset_shared_client(self) -> None:
+        self._http_client = None
+
+    async def aclose(self) -> None:
+        """Close the shared pool (graceful shutdown / tests)."""
+        client = self._http_client
+        self._http_client = None
+        if client is not None and not getattr(client, "is_closed", True):
+            await client.aclose()
 
     @property
     def score_store(self):
@@ -1313,12 +1353,12 @@ class ProviderRouter:
             "max_tokens": 1,
         }
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(
-                    f"{ep.base_url}/chat/completions", json=payload,
-                    headers=headers,
-                )
-                resp.raise_for_status()
+            client = self._shared_client()
+            resp = await client.post(
+                f"{ep.base_url}/chat/completions", json=payload,
+                headers=headers, timeout=timeout,
+            )
+            resp.raise_for_status()
             self.states[name].record_success()
             return {"endpoint": name, "status": "ok"}
         except Exception as e:
@@ -1381,13 +1421,20 @@ class ProviderRouter:
         headers = {"Content-Type": "application/json"}
         if endpoint.api_key:
             headers["Authorization"] = f"Bearer {endpoint.api_key}"
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{endpoint.base_url}/chat/completions", json=payload,
-                headers=headers,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        # SPEED run 2026-08-23: one shared AsyncClient (connection pool) instead
+        # of a fresh client per request. A fresh client pays TCP connect + TLS
+        # handshake every call — measured ~0.3s extra per call against a remote
+        # TLS host, on top of inference time, for every completion and health
+        # probe. The shared client reuses pooled keep-alive connections.
+        # Per-request timeout still overrides the client default; failover
+        # semantics are unchanged (errors propagate to _post_with_retry).
+        client = self._shared_client()
+        resp = await client.post(
+            f"{endpoint.base_url}/chat/completions", json=payload,
+            headers=headers, timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
         try:
             content = data["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError, TypeError):
@@ -1550,24 +1597,70 @@ class ProviderRouter:
 async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
                            timeout: float, attempts: int = 2) -> tuple[str, dict]:
     """Retry transient failures within one endpoint before failing over.
-    Connection errors and 5xx retry; other HTTP errors do not."""
+    Connection errors and 5xx retry; other HTTP errors do not.
+
+    SPEED run 8 (2026-08-23): upstream 429 (rate/capacity) also retries
+    in place. Measured live: the ox_alpha proxy serves the SAME model as
+    every later failover tier, but a Portal-capacity 429 is transient —
+    failing over on it discarded the ~10x persistent-proxy win and landed
+    every such call on the ~12-20s fresh-fork CLI path. Retry-in-place
+    changes only WHERE the identical completion is served; non-429 4xx
+    still fail over immediately and exhaustion still propagates to the
+    existing failover chain. A Retry-After header is honoured, capped at
+    _429_RETRY_AFTER_CAP_S so a hostile/lazy server cannot stall a call.
+    """
     last_exc: Optional[Exception] = None
     for i in range(attempts):
+        slept = False
         try:
             return await post_fn(endpoint, payload, timeout)
         except httpx.HTTPStatusError as e:
-            if e.response.status_code < 500:
+            status = e.response.status_code
+            if status < 500 and status != 429:
                 raise
             last_exc = e
+            if status == 429:
+                retry_after = _retry_after_seconds(e.response)
+                if retry_after > _429_MAX_TOTAL_WAIT_S:
+                    raise  # server says: back off longer than we may wait
+                await _asyncio.sleep(retry_after)
+                slept = True
         except (httpx.TransportError,) as e:
             last_exc = e
-        if i < attempts - 1:
+        if i < attempts - 1 and not slept:
             await _asyncio.sleep(0.5 * (i + 1))
     assert last_exc is not None
     raise last_exc
 
 
 _router: Optional[ProviderRouter] = None
+
+# ── SPEED run 8: 429 retry-in-place constants ─────────────────────────────
+# A 429 with no Retry-After waits this long before the next in-place attempt.
+_429_DEFAULT_BACKOFF_S = 1.0
+# Never sleep longer than this on a Retry-After; a server demanding more
+# backoff than we may spend fails over instead of stalling the caller.
+_429_MAX_TOTAL_WAIT_S = 10.0
+
+
+def _retry_after_seconds(response: httpx.Response) -> float:
+    """Retry-After from a 429 response, in seconds, capped.
+
+    Accepts delta-seconds (and ignores HTTP-date form — treat as default
+    backoff rather than parsing dates). Missing/garbled header -> default.
+    """
+    raw = ""
+    try:
+        raw = response.headers.get("Retry-After") or ""
+    except Exception:
+        return _429_DEFAULT_BACKOFF_S
+    try:
+        val = float(raw.strip())
+    except (ValueError, AttributeError):
+        return _429_DEFAULT_BACKOFF_S
+    if val < 0:
+        return _429_DEFAULT_BACKOFF_S
+    return min(val, _429_MAX_TOTAL_WAIT_S)
 
 
 def get_router() -> ProviderRouter:
