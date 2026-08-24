@@ -34,12 +34,15 @@ from tools.routing.scores import ModelScoreStore                # noqa: E402
 
 def make_researcher_factory():
     assert hermes_available(), "hermes CLI not found"
-    model = HermesCliModel(timeout_s=300.0)
+    # Free tier: a single completion can exceed 600s. 900s budgets for the
+    # worst case instead of timing out into spurious error rows.
+    model = HermesCliModel(timeout_s=900.0)
 
     def factory():
+        # routes=None -> real HTTP transport through the source registry
         return PipelineResearcher(
             model=model,
-            routes={},   # no fixture routes — real transport via registry
+            routes=None,
             adversary_router=model,
         )
     return factory
