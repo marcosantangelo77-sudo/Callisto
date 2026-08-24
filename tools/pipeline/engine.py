@@ -785,6 +785,7 @@ class ResearchPipeline:
             fetches = lr["fetches"]
             trace_q = lr.get("trace")
             outcome, new_evidence, new_refs = lr["outcome"]
+            result.fetches.extend(fetches)
             # Cross-run memory: keep what this leaf's retrieval actually
             # did (admitted/rejected/errored/skipped per source). Counts
             # only — the record builder never sees bodies or verdicts'
