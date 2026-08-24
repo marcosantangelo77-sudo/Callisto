@@ -39,7 +39,14 @@ def _overlap(q_words: list[str], answer_words: set[str]) -> tuple[bool, float, l
     matched = []
     for qw in q_words:
         for w in answer_words:
-            if w and (w.startswith(qw) or qw.startswith(w)):
+            # Exact or prefix match counts ONLY when the question word is
+            # long enough to carry identity. A 3-char prefix of
+            # 'semiconductor' ('sem') matching any word starting 'sem'
+            # let a 15-character junk document score 88% coverage (red
+            # team R2). Both directions must be >= 4 chars, or the match
+            # must be exact.
+            if w == qw or (len(qw) >= 4 and len(w) >= 4
+                           and (w.startswith(qw) or qw.startswith(w))):
                 matched.append(qw)
                 break
     if not q_words:
