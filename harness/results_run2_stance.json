@@ -165,5 +165,64 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q07",
+    "question": "Did any FDIC-insured banks fail during calendar year 2021?",
+    "category": "no-answer (answer is NO)",
+    "expected_stance": "DENIES",
+    "gt": "FDIC recorded ZERO bank failures in 2021.",
+    "verified_by": "banks.data.fdic.gov failures FAILYR=2021 \u2192 0 rows",
+    "elapsed_s": 350.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 4,
+    "sources": [
+      "fdic",
+      "worldbank"
+    ],
+    "leaves": [
+      {
+        "text": "Which FDIC-insured banks were officially declared failed by the FDIC during calendar year 2021, per the FDIC's Failed Bank List?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "How many FDIC-insured institution failures did the FDIC report in its official 2021 annual banking statistics (e.g., Quarterly Banking Profile)?",
+        "answer": "The provided evidence contains no information about FDIC-insured institution failures in 2021 \u2014 it is an unrelated World Bank indicator search result. The widely reported figure is zero failures, but the evidence given does not support asserting it.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.05,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      },
+      {
+        "text": "Do independent contemporaneous news or industry reports corroborate the count and identities of any 2021 FDIC-insured bank failures recorded by the FDIC?",
+        "answer": "The evidence does not answer the question. Evidence [0] is an FDIC failed-bank listing but contains only 1930s\u20131980s entries with no 2021 failures, and evidence [1] is an irrelevant World Bank indicator search result. No independent contemporaneous news or industry reports are present in the evidence.",
+        "tier": "VERIFIED",
+        "confidence": 0.95,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'Which FDIC-insured banks were officially declared failed by ': 2 fetch(s) rejected at ingestion: [fdic] content covers 20% of the question's topical words (need 25%); missing: 2021, calendar, declared, during, failed, insured, list, officially; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic",
+      "leaf 'How many FDIC-insured institution failures did the FDIC repo': 3 fetch(s) rejected at ingestion: [fdic] content covers 20% of the question's topical words (need 25%); missing: 2021, aggregate, annual, institution, insured, many, official, profile; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, aggregate, annual, banking, failures, fdic, institution, insured; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, aggregate, annual, banking, failures, fdic, institution, insured",
+      "leaf 'Do independent contemporaneous news or industry reports corr': 1 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, any, bank, contemporaneous, corroborate, count, failures, fdic"
+    ],
+    "gap_kinds": {
+      "8dc2f710dbd344c0": "unprovable"
+    },
+    "verdict": "refused"
   }
 ]
