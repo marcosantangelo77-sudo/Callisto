@@ -62,9 +62,9 @@ SETTLE_URL = ("https://www.cmegroup.com/CmeWS/mvc/Settlements/TradeDate/305/"
 def _payload():
     return {
         "settlements": [
-            {"product": "ZQZ4", "settle": "95:87"},   # Dec-24: avg EFFR 4.13%
+            {"product": "ZQZ24", "settle": "95:80"},  # Dec-24: avg EFFR 4.20%
             {"product": "GEZ4", "settle": "96:00"},   # non-ZQ, filtered out
-            {"product": "ZQH5", "settle": ""},        # unpriced month dropped
+            {"product": "ZQH25", "settle": ""},       # unpriced month dropped
         ],
     }
 
@@ -93,23 +93,23 @@ def test_settlements_primary_recorded():
 def test_zq_curve_filters_non_zq_and_unpriced():
     ad, _t = make_adapter({SETTLE_URL: _payload()})
     curve = ad.zq_curve("20241101")
-    assert set(curve) == {"ZQZ4", "_fetch", "_trade_date"}
-    assert curve["ZQZ4"]["price"] == pytest.approx(95.87)
-    assert curve["ZQZ4"]["expected_effr"] == pytest.approx(4.13)
+    assert set(curve) == {"ZQZ24", "_fetch", "_trade_date"}
+    assert curve["ZQZ24"]["price"] == pytest.approx(95.80)
+    assert curve["ZQZ24"]["expected_effr"] == pytest.approx(4.20)
 
 
 def test_derived_probability_fedwatch_methodology():
-    """Dec-24 contract at settle 95.87 → avg EFFR 4.13%. Meeting 18 Dec 2024,
-    current upper bound 4.50%, December has 31 days: 17 before + 14 after.
-    post = (4.13*31 − 4.50*17)/14 = 3.6807% → change −0.8193% →
-    probability of a cut ≈ 0.8193/25bp ≈ 0.3277 (FedWatch methodology)."""
+    """Dec-24 contract at settle 95:80 → avg EFFR 4.20%. Meeting 18 Dec 2024,
+    current upper bound 4.25%, December has 31 days: 17 before + 14 after.
+    post = (4.20*31 − 4.25*17)/14 = 4.1393% → change −0.1107% → probability
+    of a cut ≈ 0.1107/25bp ≈ 0.4429 (published FedWatch methodology)."""
     ad, _t = make_adapter({SETTLE_URL: _payload()})
-    d = ad.implied_probability("2024-12-18", 4.50, trade_date="20241101")
+    d = ad.implied_probability("2024-12-18", 4.25, trade_date="20241101")
     assert d is not None
     assert d["direction"] == "cut"
-    post = (4.13 * 31 - 4.50 * 17) / 14
+    post = (4.20 * 31 - 4.25 * 17) / 14
     assert d["probability_of_change"] == pytest.approx(
-        (4.50 - post) / 0.25, abs=1e-4)
+        (4.25 - post) / 0.25, abs=1e-4)
     assert 0.0 <= d["probability_of_change"] <= 1.0
     # INFERRED must cite its PRIMARY parent with trade date + hash
     assert d["provenance_class"] == "INFERRED"

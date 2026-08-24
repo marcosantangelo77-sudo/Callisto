@@ -209,7 +209,7 @@ class CmeFedFutAdapter:
         post_level = ((expected_end * n_days
                        - current_rate_pct * days_before) / days_after)
         expected_change = post_level - current_rate_pct
-        prob_change = max(0.0, min(1.0, expected_change / 0.25))
+        prob_change = max(0.0, min(1.0, abs(expected_change) / 0.25))
         direction = ("hike" if expected_change > 0.0001
                      else "cut" if expected_change < -0.0001 else "none")
         return {
