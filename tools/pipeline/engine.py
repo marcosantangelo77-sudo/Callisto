@@ -598,8 +598,19 @@ class ResearchPipeline:
         if trace is not None and trace.independent_keys:
             n_indep = len(trace.independent_keys)
         else:
-            n_indep = len({f.source_name for f in fetches}) + (
-                1 if out.sandbox_status == "ok" else 0)
+            # No-trace fallback (resumed/legacy payload): count independence
+            # units with THE SAME rule the live retriever used, not raw
+            # source-name distinctness — openalex + semanticscholar are one
+            # voice, and two spellings of one name must not read as two
+            # sources (red team R3). Computation is not corroboration: a
+            # sandbox success adds ZERO independent voices (R3b) — it can
+            # satisfy produced_quant above, never min_independent_sources.
+            from tools.pipeline.retrieval import independence_key
+            n_indep = len({
+                independence_key(f.source_name,
+                                 getattr(f, "base_url", "")
+                                 or f"https://{f.source_name}")
+                for f in fetches})
         reasons = q.evidence_requirements.unmet_reasons(
             achieved, n_indep,
             produced_quant=_produced_quantitative(out.answer, sbx))

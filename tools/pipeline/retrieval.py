@@ -76,6 +76,21 @@ def _prefix_hit(a: str, b: str) -> bool:
     return a == b or a.startswith(b) or b.startswith(a)
 
 
+def _prefix_ok(question_word: str, hay_word: str) -> bool:
+    """Directional prefix match with an identity floor (red team R2).
+
+    A prefix match counts only when BOTH words are >= 4 characters, or the
+    words are exactly equal. 'semiconductor'.startswith('sem') is how a
+    15-character junk document scored 88% coverage and was admitted over
+    any realistic threshold; short prefixes carry no word identity.
+    """
+    if question_word == hay_word:
+        return True
+    return (len(question_word) >= 4 and len(hay_word) >= 4
+            and (hay_word.startswith(question_word)
+                 or question_word.startswith(hay_word)))
+
+
 # ── D4 (known-answer harness): structural numeric relevance ───────────────
 # A time-series body (FRED observations, debt_to_penny rows, WB indicator
 # values) carries dates and numbers but almost none of the question's topic
@@ -184,13 +199,21 @@ class RelevanceGate:
         q_tokens = set(_tokens(question_text)) | set(_tokens(question_type))
         if not q_tokens:
             return False, 0.0, "question has no judgeable topical words"
+        # A question with only ONE topical token cannot be relevance-judged
+        # on coverage: any document containing that one word admits at 100%
+        # (red team R2b — 'semiconductor supply foundry' minus stopword
+        # collapse leaves a denominator where one shared word = admitted).
+        # Require at least two matched tokens regardless of min_coverage.
+        if len(q_tokens) < 2:
+            return False, 0.0, (
+                "question has fewer than two topical words; coverage "
+                "cannot distinguish relevant from irrelevant content")
         hay = set()
         for w in _WORD_RE.findall(extract_text(parsed).lower()):
             if len(w) >= 3:
                 hay.add(w)
         matched = [t for t in q_tokens
-                   if any(h == t or h.startswith(t) or t.startswith(h)
-                          for h in hay)]
+                   if any(h == t or _prefix_ok(t, h) for h in hay)]
         coverage = len(matched) / len(q_tokens)
         # D4 structural route: a numeric body whose observation window is
         # exactly the years the question names IS on-topic evidence even
