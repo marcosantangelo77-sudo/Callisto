@@ -262,10 +262,10 @@ def _gdelt() -> ProbeResult:
                 lambda d: len(d.get("articles", [])), shape)
 
 
-@probe("sec_fts")
+@probe("sec_fulltext")
 def _sec_fts() -> ProbeResult:
-    r = ProbeResult("sec_fts")
-    src, ad = _build("sec_fts")
+    r = ProbeResult("sec_fulltext")
+    src, ad = _build("sec_fulltext")
     r.url = src.build_url("/search-index", {"q": "\"annual report\""})
     def shape(d):
         hits = ((d.get("hits") or {}).get("hits")) or []
@@ -381,7 +381,7 @@ def _fdic() -> ProbeResult:
                 r, count, shape)
 
 
-@probe("cftc")
+@probe("cftc_cot")
 def _cftc() -> ProbeResult:
     # Historical defect: wrong Socrata dataset id.
     from tools.sources.cftc import LEGACY_FUTURES_ONLY
