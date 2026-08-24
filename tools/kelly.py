@@ -137,6 +137,24 @@ def _confidence_tier_from_score(score: float) -> str:
 # =========================================================================
 # 1. Full Kelly
 # =========================================================================
+def _round_down(x: float, ndigits: int = 6) -> float:
+    """Round HALF-DOWN and never upward in magnitude.
+
+    A stake quantiser may only LOSE information. round() is half-up (and
+    banker's elsewhere), which lets an automated actor RAISE its own Kelly
+    fraction — the exact Family-6 defect this module exists to prevent.
+    Ties go to the smaller stake; everything below the tie boundary rounds
+    to itself via float repr, and any value that would display as a larger
+    6dp number than the true fraction is truncated toward zero instead.
+    """
+    if x == 0.0:
+        return 0.0
+    scale = 10.0 ** ndigits
+    # Truncate toward zero at ndigits: for x>0 result <= x, for x<0
+    # result >= x, so |reported| never exceeds the exact fraction.
+    return math.trunc(x * scale) / scale
+
+
 def kelly_full(edge: float, odds: int | float) -> float:
     """
     Classic Kelly criterion: optimal fraction of bankroll to wager.
@@ -168,7 +186,7 @@ def kelly_full(edge: float, odds: int | float) -> float:
         return 0.0
 
     fraction = (b * p - q) / b
-    return max(0.0, round(fraction, 6))
+    return max(0.0, _round_down(fraction))
 
 
 # =========================================================================
@@ -196,7 +214,7 @@ def kelly_fractional(
         Reduced fraction of bankroll to wager.
     """
     full = kelly_full(edge, odds)
-    return round(full * fraction, 6)
+    return _round_down(full * fraction)
 
 
 # =========================================================================
