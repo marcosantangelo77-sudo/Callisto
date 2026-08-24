@@ -198,16 +198,17 @@ def test_ensemble_ceiling_boundaries_inclusive():
     assert hi - lo == DISAGREEMENT_SPREAD_THRESHOLD
     # spread EXACTLY at threshold must still cap (>= not >)
     assert ensemble_ceiling([lo, hi]) == DISAGREEMENT_CEILING
-    # just below: no wide-disagreement cap, but half-threshold mild cap applies
+    assert MILD_DISAGREEMENT_CEILING == 0.70
+    # half threshold: no float pair in [0,1] subtracts to exactly 0.15, so pin
+    # the smallest spread that still gets the mild cap and the largest that
+    # gets none — bracketing the boundary within one ULP.
     import math
-    below = math.nextafter(DISAGREEMENT_SPREAD_THRESHOLD, 0.0)
-    assert ensemble_ceiling([lo, lo + below]) == MILD_DISAGREEMENT_CEILING
-    # spread exactly at half threshold -> mild ceiling (>= not >)
-    half = DISAGREEMENT_SPREAD_THRESHOLD / 2
-    assert ensemble_ceiling([lo, lo + half]) == MILD_DISAGREEMENT_CEILING
-    # tight agreement -> no restriction
-    tiny = math.nextafter(half, 0.0)
-    assert ensemble_ceiling([lo, lo + tiny]) is None
+    mild = ensemble_ceiling([0.45, 0.6000000000000001])   # spread 0.15000...01
+    assert mild == MILD_DISAGREEMENT_CEILING
+    # EXACT half-threshold pair exists: [0.0, 0.15] subtracts to exactly 0.15
+    assert ensemble_ceiling([0.00, 0.15]) == MILD_DISAGREEMENT_CEILING
+    none_ = ensemble_ceiling([0.45, 0.5999999999999999])  # spread just below .15
+    assert none_ is None
 
 
 def test_clamp_with_ensemble_only_pulls_down():
@@ -217,6 +218,13 @@ def test_clamp_with_ensemble_only_pulls_down():
     # clamping to the mild ceiling floors it downward too
     s, _ = clamp_with_ensemble(0.836, [0.60, 0.76])
     assert s == 0.70  # floored, not rounded to 0.84
+
+
+def test_clamp_with_ensemble_at_exact_ceiling_no_round_up():
+    # score EXACTLY equal to the ceiling must pass through unchanged (<= not <),
+    # and the returned value must be the FLOORED ceiling (0.70), never rounded.
+    s, reason = clamp_with_ensemble(0.70, [0.45, 0.6000000000000001])
+    assert s == 0.70 and reason == ""
 
 
 # ---------------------------------------------------------------------------
