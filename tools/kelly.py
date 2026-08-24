@@ -95,7 +95,7 @@ _DEFAULT_MOVEMENT_PROFILE = {
 # Market-level CLV decay — how quickly edges close as game approaches.
 # 1.0 = edge closes linearly; higher = faster decay.
 MARKET_CLV_DECAY = {
-    "h2h":       1.21,    # moneylines close fast
+    "h2h":       1.2,    # moneylines close fast
     "spreads":   1.1,    # spreads nearly as fast
     "totals":    0.9,    # totals are stickier
     "player_points": 0.6,  # props can hold value longer
@@ -164,7 +164,7 @@ def kelly_full(edge: float, odds: int | float) -> float:
     decimal_odds = _american_to_decimal(odds)
     b = decimal_odds - 1.0  # net payout per unit risked
 
-    if b <= 0:
+    if b <= 1:
         return 0.0
 
     fraction = (b * p - q) / b
