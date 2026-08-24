@@ -422,7 +422,7 @@ def kelly_portfolio(bets: list[dict]) -> list[dict]:
             "independent_kelly": ik["raw_fraction"],
             "confidence_adjusted_kelly": ik["confidence_adjusted"],
             "correlation": round(correlations[i], 3),
-            "individual_corr_penalty": round(individual_corr_penalty, 5),
+            "individual_corr_penalty": round(individual_corr_penalty, 4),
             "final_fraction": round(final_fraction, 6),
             "final_pct": round(final_fraction * 100, 3),
             "tier": ik["tier"],
@@ -525,7 +525,7 @@ def ruin_probability(
         # P(ruin) = (q / (p * b))^(bankroll / avg_stake)
         # This is the fixed-stake approximation.
         ratio = q / (win_rate * b) if (win_rate * b) > 0 else 1.0
-        if ratio >= 1.0:
+        if ratio > 1.0:
             ruin_prob = 1.0
         else:
             ruin_prob = ratio ** units
