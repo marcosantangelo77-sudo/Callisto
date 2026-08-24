@@ -1391,6 +1391,12 @@ async def get_task_chain(
 async def get_session(session_id: str, _auth: None = Depends(require_admin_or_loopback)):
     """Get a sealed AGP session with full provenance.
 
+    "Sealed" here means the session record is keyed-HMAC intact and was
+    produced through the declared retrieval-and-review process (process
+    integrity and internal consistency — see SEAL_CONTRACT.md). It does NOT
+    mean the session's conclusions are verified true, and the confidence
+    tier is a process score, not a calibrated probability.
+
     Returns 409 CONFLICT if the stored seal_hash fails verification — the
     session exists but its content has been tampered with or corrupted.
     """

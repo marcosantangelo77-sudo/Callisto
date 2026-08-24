@@ -92,6 +92,13 @@ def _result_record(result, question: str) -> dict:
             datetime.timezone.utc).isoformat(timespec="seconds"),
         "question": question,
         "sealed": bool(getattr(result, "sealed", False)),
+        # What `sealed` means (authoritative: SEAL_CONTRACT.md) — process
+        # integrity and internal consistency of this exact text + evidence,
+        # NOT verified truth. Kept in the record itself so a reader who never
+        # opens the docs still sees the real contract.
+        "seal_meaning": ("process integrity and internal consistency; not "
+                         "verified truth; confidence is a process score, "
+                         "not a calibrated probability"),
         "refusal_reason": getattr(result, "refusal_reason", ""),
         "conclusion": getattr(result, "conclusion", ""),
         "confidence": {
@@ -156,6 +163,10 @@ async def _cmd_ask(args: argparse.Namespace) -> int:
     if result.sealed:
         print(f"SEALED   confidence {result.confidence_score:.2f} "
               f"tier={result.confidence_tier}")
+        print("         SEALED certifies process integrity and internal")
+        print("         consistency only — NOT that the answer is true.")
+        print("         Confidence is a process score, not a calibrated")
+        print("         probability. See SEAL_CONTRACT.md.")
     else:
         print("REFUSED")
         if result.refusal_reason:
@@ -379,6 +390,11 @@ def _cmd_show(args: argparse.Namespace) -> int:
     print(f"when     : {rec.get('recorded_at', '?')}")
     print(f"question : {rec.get('question', '?')}")
     print(f"{verdict:<9}: {conf.get('tier', '?')} {conf.get('score', 0):.2f}")
+    if rec.get("sealed"):
+        print("note     : SEALED = process integrity + internal consistency;")
+        print("           it does NOT mean the answer is verified true.")
+        print("           Confidence is a process score, not a calibrated")
+        print("           probability. See SEAL_CONTRACT.md.")
     if rec.get("refusal_reason"):
         print(f"reason   : {rec['refusal_reason']}")
     if rec.get("conclusion"):

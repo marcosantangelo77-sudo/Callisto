@@ -1006,6 +1006,10 @@ class Orchestrator:
     async def run_session(self, query: str, skip_search: bool = False) -> dict:
         """Execute a full 7-step AGP session. Returns the sealed session dict.
 
+        "Sealed" = keyed-HMAC tamper evidence + declared-process gates
+        (process integrity, internal consistency). It does not certify the
+        conclusion is true — see SEAL_CONTRACT.md.
+
         skip_search: If True, skip web searches entirely (for internal tasks
         like edge analysis that already have all data they need).
         """
