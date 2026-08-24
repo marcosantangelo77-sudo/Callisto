@@ -149,6 +149,32 @@ class PipelineResult:
     #: the top level so a sealed result states WHICH kind of null each thin
     #: leaf is. Classification only — never read by scoring.
     gap_kinds: dict = field(default_factory=dict)   # qid -> kind value
+    #: Health-history disclosure: which of the run's PLANNED sources were
+    #: STALE (worked before, failing now) or NEVER_OK at conclusion time.
+    #: A conclusion drawn from half a registry is a different claim than
+    #: one drawn from all of it. Classification/disclosure only — this
+    #: field must never move a confidence score.
+    source_coverage: dict = field(default_factory=dict)
+
+    def coverage_note(self) -> str:
+        """Human-readable degraded-source disclosure, '' when full."""
+        sc = self.source_coverage or {}
+        stale, never_ok = sc.get("stale", []), sc.get("never_ok", [])
+        if not stale and not never_ok:
+            return ""
+        parts = []
+        if stale:
+            parts.append("STALE (previously returned data, now empty/"
+                         "broken): " + ", ".join(stale))
+        if never_ok:
+            parts.append("NEVER_OK (no successful observation on record): "
+                         + ", ".join(never_ok))
+        n = len(stale) + len(never_ok)
+        return (f"SOURCE COVERAGE WARNING: {n} of this question's planned "
+                f"sources were degraded when this conclusion was drawn "
+                f"— { '; '.join(parts)}. The conclusion may rest on an "
+                f"incomplete registry; owner action required for the "
+                f"degraded sources.")
 
     def summary_dict(self) -> dict:
         return {
@@ -622,6 +648,35 @@ class ResearchPipeline:
         session.advance_to(SessionStep.PRIMARY_COLLECTION)
         session.advance_to(SessionStep.CONTRADICTION_CHECK)
         session.advance_to(SessionStep.SYNTHESIS)
+
+        # Source-coverage disclosure: which of the PLANNED sources were
+        # degraded (per persisted health history) when this conclusion was
+        # drawn? Disclosure and classification only — no score moves, and
+        # an absent/unreadable history degrades to full coverage claimed
+        # by NOBODY (the field stays empty rather than asserting health).
+        try:
+            from tools.sources.staleness import HealthStore
+            _store = HealthStore()
+            result.source_coverage = {
+                "stale": sorted(
+                    n for n in session.sources
+                    if _store.status_of(n) == "STALE"),
+                "never_ok": sorted(
+                    n for n in session.sources
+                    if _store.status_of(n) == "NEVER_OK"),
+                "unseen": sorted(
+                    n for n in session.sources
+                    if _store.status_of(n) == "UNSEEN"),
+            }
+            note = result.coverage_note()
+            if note:
+                result.notes.append(note)
+                # The sealed conclusion TEXT must carry the warning too —
+                # a user reading only the output sees degraded coverage
+                # without opening any debug field.
+                conclusion += "\n\n" + note
+        except Exception:               # noqa: BLE001 — never block a run
+            pass                        # on a health-store problem
 
         if not any(l.answer for l in result.leaves):
             result.refusal_reason = "every leaf came back unanswered"
