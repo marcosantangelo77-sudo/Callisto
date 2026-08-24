@@ -1,0 +1,80 @@
+{
+  "artifacts": [],
+  "conclusion": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [CORROBORATED 0.75] leaf 0: what does the evidence say about apple earnings expectations and analyst consensus: the evidence supports the claim\n- [CORROBORATED 0.75] leaf 1: what does the evidence say about apple earnings expectations and analyst consensus: the evidence supports the claim\n- [CORROBORATED 0.75] leaf 2: what does the evidence say about apple earnings expectations and analyst consensus: the evidence supports the claim",
+  "confidence_score": 0.55,
+  "confidence_tier": "PROBABLE",
+  "evidence": [
+    "{\"documents\": [{\"agency\": \"government agency\", \"document_number\": \"2024-12345\", \"published_at\": \"2024-01-15\", \"title\": \"Final agency rule published by the government: proposed and final rules on apple earnings disclosure\"}]}",
+    "{\"documents\": [{\"agency\": \"government agency\", \"document_number\": \"2024-12345\", \"published_at\": \"2024-01-15\", \"title\": \"Final agency rule published by the government: proposed and final rules on apple earnings disclosure\"}]}",
+    "{\"documents\": [{\"agency\": \"government agency\", \"document_number\": \"2024-12345\", \"published_at\": \"2024-01-15\", \"title\": \"Final agency rule published by the government: proposed and final rules on apple earnings disclosure\"}]}"
+  ],
+  "fetches": [
+    {
+      "sha": "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8",
+      "source_name": "federalregister",
+      "url": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields%5B%5D=title&fields%5B%5D=type&fields%5B%5D=abstract&fields%5B%5D=action&fields%5B%5D=publication_date&fields%5B%5D=effective_on&fields%5B%5D=docket_ids&fields%5B%5D=citation&fields%5B%5D=document_number&fields%5B%5D=html_url&fields%5B%5D=agencies&conditions=leaf+apple+earnings+expectations+analyst+consensus"
+    },
+    {
+      "sha": "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8",
+      "source_name": "federalregister",
+      "url": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields%5B%5D=title&fields%5B%5D=type&fields%5B%5D=abstract&fields%5B%5D=action&fields%5B%5D=publication_date&fields%5B%5D=effective_on&fields%5B%5D=docket_ids&fields%5B%5D=citation&fields%5B%5D=document_number&fields%5B%5D=html_url&fields%5B%5D=agencies&conditions=leaf+apple+earnings+expectations+analyst+consensus"
+    },
+    {
+      "sha": "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8",
+      "source_name": "federalregister",
+      "url": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields%5B%5D=title&fields%5B%5D=type&fields%5B%5D=abstract&fields%5B%5D=action&fields%5B%5D=publication_date&fields%5B%5D=effective_on&fields%5B%5D=docket_ids&fields%5B%5D=citation&fields%5B%5D=document_number&fields%5B%5D=html_url&fields%5B%5D=agencies&conditions=leaf+apple+earnings+expectations+analyst+consensus"
+    }
+  ],
+  "leaves": [
+    {
+      "answer": "the evidence supports the claim",
+      "artifact_sha256s": [],
+      "confidence": 0.75,
+      "n_sources": 1,
+      "requirement_reasons": [],
+      "sandbox_status": null,
+      "source_classes": [
+        "PRIMARY"
+      ],
+      "text": "leaf 0: what does the evidence say about apple earnings expectations and analyst consensus",
+      "tier": "CORROBORATED"
+    },
+    {
+      "answer": "the evidence supports the claim",
+      "artifact_sha256s": [],
+      "confidence": 0.75,
+      "n_sources": 1,
+      "requirement_reasons": [],
+      "sandbox_status": null,
+      "source_classes": [
+        "PRIMARY"
+      ],
+      "text": "leaf 1: what does the evidence say about apple earnings expectations and analyst consensus",
+      "tier": "CORROBORATED"
+    },
+    {
+      "answer": "the evidence supports the claim",
+      "artifact_sha256s": [],
+      "confidence": 0.75,
+      "n_sources": 1,
+      "requirement_reasons": [],
+      "sandbox_status": null,
+      "source_classes": [
+        "PRIMARY"
+      ],
+      "text": "leaf 2: what does the evidence say about apple earnings expectations and analyst consensus",
+      "tier": "CORROBORATED"
+    }
+  ],
+  "ledger_observations": 3,
+  "ledger_primary": [
+    "a1c42f409a87f2efef68b93dfa0f65d8eb1670f60388dc17c43150ecd68b0b24",
+    "d6b25d3001a8802bb40cbd6ba5e0cce9a6818d3942c7c96c19005ceec0318883",
+    "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8"
+  ],
+  "notes": [],
+  "objections": [],
+  "refusal_reason": "",
+  "seal_verifies": true,
+  "sealed": true
+}
