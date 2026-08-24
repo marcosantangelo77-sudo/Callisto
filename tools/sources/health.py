@@ -354,18 +354,16 @@ def _eia() -> ProbeResult:
                            {"frequency": "weekly", "data[0]": "value",
                             "facets[series][]": "WCSSTUS1"}))
     def shape(d):
-        resp = d.get("response") or {}
-        data = resp.get("data") or []
+        data = d.get("data") or []
         if not data:
-            return f"no response.data; keys={sorted(d)[:10]}"
+            return f"no data rows; keys={sorted(d)[:10]}"
         row = data[0]
         for col in ("period", "value"):
             if col not in row:
                 return f"row missing '{col}': keys={sorted(row)[:10]}"
         return ""
     def count(d):
-        resp = d.get("response") or {}
-        return len(resp.get("data") or [])
+        return len(d.get("data") or [])
     return _run(lambda: ad.series("PET.WCSSTUS1.W", frequency="weekly",
                                   length=3), r, count, shape)
 
