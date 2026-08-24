@@ -62,7 +62,8 @@ def _fat_openalex_body() -> dict:
              "title": f"Scholarly study on semiconductor supply chain "
                       f"resilience number {i}",
              "abstract": f"Abstract {i}: analyst consensus and quarterly "
-                         f"results in semiconductor manufacturing.",
+                         f"results in semiconductor manufacturing. "
+                         + ("context " * 40),
              "publication_year": 2024, "cited_by_count": 12}
             for i in range(10)
         ],
@@ -155,14 +156,44 @@ class TestEvidenceDigest:
         assert sha == expected
 
     def test_unparsed_fetch_falls_back_to_raw_window(self):
-        raw = "X" * 5000
-        body_parsed = None
-        # A plain-text route parses to a string; extract_text returns it
-        # verbatim, so this also exercises the digest path on strings.
-        result, prompts = asyncio.run(
-            _run_one({"results": "plain"}, {"/works": raw}))
-        answer_prompt = next(p for p in prompts if "EVIDENCE:" in p)
-        assert "XXXX" in answer_prompt
+        """A fetch whose parsed value is None degrades to the old
+        body[:4000] window — the fallback branch of _evidence_text.
+        Exercised directly on FetchResult so the relevance gate (which
+        needs topical words) does not confound the branch under test."""
+        from tools.pipeline.engine import FetchResult, ResearchPipeline as RP
+
+        def _evidence_text(f):
+            # rebind the production closure via a 1-leaf pipeline run is
+            # heavy; instead replicate its contract through the engine by
+            # calling the private helper's logic path: build a pipeline and
+            # answer a leaf with one fetch whose parsed is None.
+            async def go():
+                model = ScriptedModel(responses={
+                    "Architect": [_decompose()],
+                    "Manager": [_answer() for _ in range(4)]})
+                pipeline = RP(model=model,
+                              adversary_router=_QuietAdversary(),
+                              transport=fixture_transport({"/works": "{}"}),
+                              store=ArtifactStore(
+                                  root=Path("/tmp") / "speed_run13_fb"))
+                from agp import AGPSession
+                session = AGPSession(query="s")
+                session.domain = Domain.FINANCIAL
+                from agp.research_program import ResearchQuestion, \
+                    QuestionKind
+                q = ResearchQuestion(text="t", kind=QuestionKind.DESCRIPTIVE,
+                                     question_id="q0")
+                fetch = FetchResult(
+                    source_name="openalex", url="http://x/works",
+                    content_sha256="0" * 64, body="X" * 5000,
+                    parsed=None, question_id="q0")
+                outcome, evs = await pipeline._answer_leaf(q, [fetch],
+                                                           session)
+                return evs
+            return asyncio.run(go())[0].content
+
+        content = _evidence_text(self)
+        assert content == "X" * 4000
 
 
 class TestGoldensUnchanged:
