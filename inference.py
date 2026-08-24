@@ -1638,6 +1638,16 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
                 waited += retry_after
                 await _asyncio.sleep(retry_after)
                 slept = True
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            # SPEED run 12: a CONNECT-phase failure sent no bytes anywhere —
+            # there is nothing transient to recover within one in-place retry,
+            # so sleeping 0.5s between two refusals of the same dead socket is
+            # pure tax (measured 0.528s per dead-hop probe on loopback, and a
+            # doubled connect-timeout hang on SYN-dropping hosts). Propagate
+            # immediately: the caller's existing failover chain takes over,
+            # the endpoint's cooldown still records via record_failure, and a
+            # recovered box is re-probed after cooldown exactly as before.
+            raise
         except (httpx.TransportError,) as e:
             last_exc = e
         if i < attempts - 1 and not slept:
