@@ -256,5 +256,89 @@
     ],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q11",
+    "question": "Did Silicon Valley Bank fail in March 2023?",
+    "category": "yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "SILICON VALLEY BANK, FAILDATE 3/10/2023.",
+    "verified_by": "FDIC failures FAILDATE 3/10/2023",
+    "elapsed_s": 231.4,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "Did Silicon Valley Bank enter FDIC receivership as a failed bank in March 2023?",
+        "answer": "No evidence was provided, so the question cannot be settled from cited sources. (As background fact SVB did enter FDIC receivership on March 10, 2023, but that is not supported by any given evidence.)",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "What was the date and mechanism of SVB's closure (e.g., California DFPI action, FDIC appointment)?",
+        "answer": "No evidence was provided, so the date and mechanism of SVB's closure cannot be determined from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Did SVB's failure involve insolvency or illiquidity severe enough to meet the definition of 'failure' rather than mere distress?",
+        "answer": "No evidence items were provided, so the evidence cannot settle whether SVB's failure involved insolvency or illiquidity meeting the definition of 'failure' rather than mere distress.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'Did Silicon Valley Bank enter FDIC receivership as a failed ': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, enter, failed, fdic, list, march, official), fdic (content covers 15% of the question's topical words (need 25%); missing: 2023, enter, failed, list, march, official, receivership, records), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2023, bank, enter, failed, fdic, list, march, official), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 23% of the question's topical words (need 25%); missing: 2023, bank, failed, fdic, list, march, official, receivership); answer rests on NO sources",
+      "leaf 'Did Silicon Valley Bank enter FDIC receivership as a failed ': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, enter, failed, fdic, list, march, official; [fdic] content covers 15% of the question's topical words (need 25%); missing: 2023, enter, failed, list, march, official, receivership, records; [fred] content covers 0% of the question's topical words (need 25%); missing: 2023, bank, enter, failed, fdic, list, march, official; [wikidata] content covers 23% of the question's topical words (need 25%); missing: 2023, bank, failed, fdic, list, march, official, receivership",
+      "leaf 'What was the date and mechanism of SVB's closure (e.g., Cali': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: action, appointment, california, closure, date, dfpi, fdic, legal), fdic (content covers 7% of the question's topical words (need 25%); missing: action, appointment, closure, date, dfpi, fdic, legal, mechanism), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: action, appointment, california, closure, date, dfpi, fdic, legal), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, wikidata (content covers 7% of the question's topical words (need 25%); missing: action, appointment, california, closure, dfpi, fdic, legal, mechanism); answer rests on NO sources",
+      "leaf 'What was the date and mechanism of SVB's closure (e.g., Cali': 4 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: action, appointment, california, closure, date, dfpi, fdic, legal; [fdic] content covers 7% of the question's topical words (need 25%); missing: action, appointment, closure, date, dfpi, fdic, legal, mechanism; [fred] content covers 0% of the question's topical words (need 25%); missing: action, appointment, california, closure, date, dfpi, fdic, legal; [wikidata] content covers 7% of the question's topical words (need 25%); missing: action, appointment, california, closure, dfpi, fdic, legal, mechanism",
+      "leaf 'Did SVB's failure involve insolvency or illiquidity severe e': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=SV, federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: definition, distress, enough, failure, fdic, fed, illiquidity, insolvency), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap; answer rests on NO sources",
+      "leaf 'Did SVB's failure involve insolvency or illiquidity severe e': 1 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: definition, distress, enough, failure, fdic, fed, illiquidity, insolvency"
+    ],
+    "gap_kinds": {
+      "90d82b911fbd403f": "honest_null",
+      "64015bcebba34092": "honest_null",
+      "927288d01d1f4030": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q12",
+    "question": "Did exactly four FDIC-insured banks fail during 2023?",
+    "category": "negation (answer: no, five)",
+    "expected_stance": "DENIES",
+    "gt": "Five failures: SVB, Signature, First Republic, Heartland Tri-State, Citizens Bank (11/3).",
+    "verified_by": "FDIC failures FAILYR=2023 \u2192 5 rows",
+    "elapsed_s": 57.1,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
