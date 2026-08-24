@@ -1,0 +1,330 @@
+[
+ {
+  "id": "fred_01",
+  "source": "fred",
+  "shape": "comparison-true-answer-NO",
+  "question": "Was the US unemployment rate in January 2023 lower than the unemployment rate in June 2026?",
+  "ground_truth": "NO \u2014 3.5% (Jan 2023) vs 4.2% (Jun 2026): the rate went UP, not down",
+  "gt_source": "FRED UNRATE via fredgraph.csv fetched 2026-08-24"
+ },
+ {
+  "id": "fred_02",
+  "source": "fred",
+  "shape": "simple-fact",
+  "question": "Did the US civilian unemployment rate stay below 4.0 percent for every month of calendar year 2023?",
+  "ground_truth": "YES \u2014 2023 monthly UNRATE ranged 3.4-3.9%",
+  "gt_source": "FRED UNRATE fredgraph.csv: 2023 max = 3.9"
+ },
+ {
+  "id": "fred_03",
+  "source": "fred",
+  "shape": "comparison-reverse",
+  "question": "Is the US unemployment rate higher today (mid-2026) than it was in January 2023?",
+  "ground_truth": "YES \u2014 Jul 2026 = 4.1% vs Jan 2023 = 3.5%",
+  "gt_source": "FRED UNRATE fredgraph.csv"
+ },
+ {
+  "id": "fred_04",
+  "source": "fred",
+  "shape": "stale-evidence-historical-extreme",
+  "question": "Did the US unemployment rate reach 14.8 percent in April 2020?",
+  "ground_truth": "YES \u2014 April 2020 = 14.8%, the peak of the period",
+  "gt_source": "FRED UNRATE fredgraph.csv"
+ },
+ {
+  "id": "fred_05",
+  "source": "fred",
+  "shape": "multi-hop-same-source",
+  "question": "Did the US unemployment rate first fall below 4.0 percent after the pandemic before June 2022?",
+  "ground_truth": "YES \u2014 Dec 2021 = 3.9%, first post-pandemic month under 4.0%",
+  "gt_source": "FRED UNRATE fredgraph.csv series scan"
+ },
+ {
+  "id": "treasury_01",
+  "source": "treasury",
+  "shape": "recent-changed",
+  "question": "Is gross total federal debt outstanding currently above $39 trillion?",
+  "ground_truth": "YES \u2014 treasurydirect.gov current: totalDebt = $40.03T as of Aug 20, 2026",
+  "gt_source": "treasurydirect.gov/NP_WS/debt/current fetched 2026-08-24"
+ },
+ {
+  "id": "treasury_02",
+  "source": "treasury",
+  "shape": "value-fact",
+  "question": "Was the average interest rate on marketable Treasury bills below 1 percent in September 2009?",
+  "ground_truth": "YES \u2014 T-bill average interest rate Sep 2009 = 0.347%",
+  "gt_source": "FiscalData v1/debt/mspd avg_interest_rates? actually v2/accounting/od/avg_interest_rates: 2009-09-30 T-Bills 0.347"
+ },
+ {
+  "id": "treasury_03",
+  "source": "treasury",
+  "shape": "comparison-cross-period",
+  "question": "Was the average interest rate on Treasury notes in September 2009 lower than 4 percent?",
+  "ground_truth": "YES \u2014 Treasury Notes avg 3.043% on 2009-09-30",
+  "gt_source": "FiscalData avg_interest_rates dataset"
+ },
+ {
+  "id": "fdic_01",
+  "source": "fdic",
+  "shape": "count-fact-true-answer-NO",
+  "question": "Are there more than 5,000 active FDIC-insured financial institutions right now?",
+  "ground_truth": "NO \u2014 BankFind API reports 4,245 active institutions",
+  "gt_source": "banks.data.fdic.gov/api/institutions?filters=ACTIVE:1 -> totals.count=4245"
+ },
+ {
+  "id": "fdic_02",
+  "source": "fdic",
+  "shape": "long-trend-comparison",
+  "question": "Have the number of active FDIC-insured institutions roughly halved since the year 2000?",
+  "ground_truth": "YES \u2014 ~8,300-8,600 active institutions in 2000 vs ~4,245 now (roughly half)",
+  "gt_source": "FDIC historical counts; current from BankFind API"
+ },
+ {
+  "id": "cl_01",
+  "source": "courtlistener",
+  "shape": "date-fact",
+  "question": "Was the Supreme Court decision in Obergefell v. Hodges issued before January 2016?",
+  "ground_truth": "YES \u2014 decided June 26, 2015",
+  "gt_source": "CourtListener search API: Obergefell opinions dateFiled 2015; SCOTUS record"
+ },
+ {
+  "id": "cl_02",
+  "source": "courtlistener",
+  "shape": "multi-hop-cross-domain",
+  "question": "Did the Supreme Court decide Obergefell v. Hodges more than five years before the FDA authorized the first COVID-19 vaccine?",
+  "ground_truth": "YES \u2014 Jun 26 2015 vs Dec 11 2020 (Pfizer EUA) = 5 years 5.5 months apart",
+  "gt_source": "CourtListener dateFiled + FDA EUA record (public history)"
+ },
+ {
+  "id": "gdelt_01",
+  "source": "gdelt",
+  "shape": "coverage-recent",
+  "question": "In GDELT's news index over the past week, do articles mentioning 'hurricane' appear?",
+  "ground_truth": "VERIFY at run time against GDELT DOC API (rate-limited; expect YES)",
+  "gt_source": "GDELT DOC 2.0 artlist (pending cooldown probe)"
+ },
+ {
+  "id": "gdelt_02",
+  "source": "gdelt",
+  "shape": "unknowable-negligible",
+  "question": "Do any GDELT-indexed news articles mention the exact phrase 'callisto battery test'?",
+  "ground_truth": "NO / effectively none \u2014 phrase is a made-up battery-harness string; empty result is expected and honest",
+  "gt_source": "GDELT DOC 2.0 artlist (pending cooldown probe)"
+ },
+ {
+  "id": "kalshi_01",
+  "source": "kalshi",
+  "shape": "market-state",
+  "question": "Does Kalshi currently have open trading markets listed?",
+  "ground_truth": "YES \u2014 markets?status=open returns live markets (verified 100+ just now)",
+  "gt_source": "api.elections.kalshi.com/trade-api/v2/markets?status=open"
+ },
+ {
+  "id": "kalshi_02",
+  "source": "kalshi",
+  "shape": "series-existence",
+  "question": "Does Kalshi list election-related trading series?",
+  "ground_truth": "YES \u2014 series/?category=Elections returns 1,627 series (e.g., KXFL6D, HOUSETX34)",
+  "gt_source": "Kalshi trade-api series endpoint fetched 2026-08-24"
+ },
+ {
+  "id": "openalex_01",
+  "source": "openalex",
+  "shape": "count-comparison",
+  "question": "Have more than 100,000 scholarly works indexed by OpenAlex mentioned drosophila in their title?",
+  "ground_truth": "YES \u2014 title.search:drosophila count = 115,513",
+  "gt_source": "api.openalex.org/works?filter=title.search:drosophila meta.count"
+ },
+ {
+  "id": "openalex_02",
+  "source": "openalex",
+  "shape": "multi-hop-cross-era",
+  "question": "Was the oldest OpenAlex-indexed work with drosophila in its title published before Einstein published general relativity?",
+  "ground_truth": "YES \u2014 oldest = 1882 ('The Pickled Fruit Fly\u2014Drosophila ampelophila'); GR = November 1915",
+  "gt_source": "OpenAlex works sorted by publication_date"
+ },
+ {
+  "id": "wayback_01",
+  "source": "wayback",
+  "shape": "historical-snapshot",
+  "question": "Does the Wayback Machine hold a snapshot of example.com within roughly the last day?",
+  "ground_truth": "YES \u2014 latest snapshot timestamp 20260824040442 (fetched 2026-08-24)",
+  "gt_source": "archive.org/wayback/available?url=example.com"
+ },
+ {
+  "id": "wikidata_01",
+  "source": "wikidata",
+  "shape": "entity-comparison",
+  "question": "Is China's population larger than the United States population according to Wikidata?",
+  "ground_truth": "YES \u2014 Q148 = 1,404,890,000 vs Q30 = 340,110,988",
+  "gt_source": "Wikidata SPARQL P1082 for Q148/Q30 fetched 2026-08-24"
+ },
+ {
+  "id": "worldbank_01",
+  "source": "worldbank",
+  "shape": "value-fact",
+  "question": "Did the World Bank report the US population as exceeding 330 million people in calendar year 2021?",
+  "ground_truth": "YES \u2014 332,100,166 in 2021",
+  "gt_source": "api.worldbank.org/v2/country/US/indicator/SP.POP.TOTL"
+ },
+ {
+  "id": "worldbank_02",
+  "source": "worldbank",
+  "shape": "trend-monotonic",
+  "question": "According to World Bank data, did the US population increase every single year from 2020 through 2024?",
+  "ground_truth": "YES \u2014 331.58M, 332.10M, 334.00M, 336.76M, 340.00M: strictly increasing",
+  "gt_source": "World Bank SP.POP.TOTL 2020-2024"
+ },
+ {
+  "id": "worldbank_03",
+  "source": "worldbank",
+  "shape": "data-vintage",
+  "question": "Has the World Bank published a US nominal GDP figure for calendar year 2025?",
+  "ground_truth": "YES \u2014 2025 value exists: $30.77T (published in advance of some other sources); if pipeline says NO, verify which vintage it sees",
+  "gt_source": "api.worldbank.org NY.GDP.MKTP.CD date=2020:2026 -> 2025=30,769,700,000,000"
+ },
+ {
+  "id": "fed_01",
+  "source": "federalreserve",
+  "shape": "policy-path-2025",
+  "question": "Did the effective federal funds rate stay above 3.5 percent for all of calendar year 2025?",
+  "ground_truth": "YES \u2014 FEDFUNDS 2025 monthly range was 3.72-4.33%",
+  "gt_source": "FRED FEDFUNDS fredgraph.csv fetched directly"
+ },
+ {
+  "id": "pubmed_01",
+  "source": "pubmed",
+  "shape": "literature-count",
+  "question": "Have more than 50,000 articles indexed in PubMed mention aspirin?",
+  "ground_truth": "YES \u2014 esearch term 'aspirin' count = 80,460",
+  "gt_source": "eutils esearch db=pubmed term=aspirin fetched 2026-08-24"
+ },
+ {
+  "id": "unknowable_01",
+  "source": "none",
+  "shape": "unknowable-out-of-scope",
+  "question": "How many US commercial banks failed and were seized by the FDIC during calendar year 1989, according to our indexed primary sources?",
+  "ground_truth": "The true number (~206 per FDIC history) is NOT retrievable from our adapters' coverage windows/APIs; a confident specific answer sourced from nothing = FAILURE. Honest refusal or clearly-flagged low confidence is CORRECT.",
+  "gt_source": "FDIC failed-bank historical list is outside BankFind API scope we registered"
+ },
+ {
+  "id": "unknowable_02",
+  "source": "none",
+  "shape": "unknowable",
+  "question": "What will be the exact closing level of the S&P 500 on the final trading day of December 2026?",
+  "ground_truth": "UNKNOWABLE \u2014 future event",
+  "gt_source": "future"
+ },
+ {
+  "id": "unknowable_03",
+  "source": "none",
+  "shape": "unknowable-unverifiable-detail",
+  "question": "What exact model of microphone did the announcer use for the very first World Series radio broadcast in 1921?",
+  "ground_truth": "UNKNOWABLE from any of our sources \u2014 such detail is not in any registered adapter; confident fabrication would be FAILURE",
+  "gt_source": "out of scope of all registered sources"
+ },
+ {
+  "id": "unknowable_04",
+  "source": "none",
+  "shape": "unknowable-private-data",
+  "question": "What is the current unpaid balance remaining on this machine owner's electric utility account?",
+  "ground_truth": "UNKNOWABLE \u2014 private account data not accessible to any source; any specific number is fabricated",
+  "gt_source": "private"
+ },
+ {
+  "id": "unknowable_05",
+  "source": "none",
+  "shape": "unknowable-count",
+  "question": "Exactly how many distinct HTTP requests did every Wikipedia visitor make yesterday?",
+  "ground_truth": "UNKNOWABLE \u2014 no public source gives this; confident number = fabricated",
+  "gt_source": "not published anywhere reachable"
+ },
+ {
+  "id": "changed_01",
+  "source": "fred",
+  "shape": "recent-changed-direction-trap",
+  "question": "As of the most recent published observation, is the US unemployment rate still at or below its January 2023 level?",
+  "ground_truth": "NO \u2014 Jan 2023 = 3.5%; recent months are 4.1-4.4% (Jul 2026 = 4.1%)",
+  "gt_source": "FRED UNRATE fredgraph.csv"
+ },
+ {
+  "id": "changed_02",
+  "source": "treasury",
+  "shape": "recent-changed-threshold",
+  "question": "Is gross federal debt outstanding still below $38 trillion?",
+  "ground_truth": "NO \u2014 $40.03T as of Aug 20, 2026 (treasurydirect current)",
+  "gt_source": "treasurydirect.gov/NP_WS/debt/current"
+ },
+ {
+  "id": "changed_03",
+  "source": "kalshi",
+  "shape": "recent-live-state",
+  "question": "Is there currently at least one open market on Kalshi?",
+  "ground_truth": "YES \u2014 verified live markets exist now",
+  "gt_source": "Kalshi markets?status=open at run time"
+ },
+ {
+  "id": "changed_04",
+  "source": "wayback",
+  "shape": "recent-capture",
+  "question": "Has the Wayback Machine captured example.com at least once since August 1, 2026?",
+  "ground_truth": "YES \u2014 snapshot 20260824040442 exists",
+  "gt_source": "web.archive.org availability API"
+ },
+ {
+  "id": "changed_05",
+  "source": "openalex",
+  "shape": "growing-corpus",
+  "question": "Does the OpenAlex index contain more than 100 million scholarly works in total?",
+  "ground_truth": "VERIFY AT RUN TIME \u2014 query api.openalex.org/works?per-page=1 meta.count now; last known >250M works. Record actual value.",
+  "gt_source": "api.openalex.org/works meta.count (run-time fetch)"
+ },
+ {
+  "id": "census_01",
+  "source": "census",
+  "shape": "estimate-fact",
+  "question": "Did the American Community Survey estimate the total US population at more than 300 million people?",
+  "ground_truth": "YES \u2014 ACS 2023 B01001_001E ~334.9M (census API now requires a key; value from published ACS tables; pipeline may fetch or refuse)",
+  "gt_source": "api.census.gov/data/2023/acs/acs1 (key required); ACS published estimate"
+ },
+ {
+  "id": "cl_03",
+  "source": "courtlistener",
+  "shape": "comparison-reverse",
+  "question": "Did the Supreme Court decide Dobbs v. Jackson Women's Health Organization before it decided Obergefell v. Hodges?",
+  "ground_truth": "NO \u2014 Dobbs Jun 24 2022 came AFTER Obergefell Jun 26 2015",
+  "gt_source": "CourtListener dateFiled for both cases"
+ },
+ {
+  "id": "fred_06",
+  "source": "fred",
+  "shape": "unknowable-future",
+  "question": "Will the US unemployment rate be lower in December 2026 than it was in June 2026?",
+  "ground_truth": "UNKNOWABLE \u2014 future observation not yet published; refusal/low confidence is CORRECT, confident yes/no is FAILURE",
+  "gt_source": "future FRED observation does not exist yet"
+ },
+ {
+  "id": "worldbank_04",
+  "source": "worldbank",
+  "shape": "cross-country-comparison",
+  "question": "Does the World Bank report India's population as larger than the United States population?",
+  "ground_truth": "YES \u2014 India ~1.45B vs US ~340M (SP.POP.TOTL latest years)",
+  "gt_source": "api.worldbank.org/v2/country/IND;US/indicator/SP.POP.TOTL"
+ },
+ {
+  "id": "openalex_03",
+  "source": "openalex",
+  "shape": "author-attribution",
+  "question": "Are there OpenAlex-indexed works authored by someone with the display name 'Albert Einstein'?",
+  "ground_truth": "VERIFY AT RUN TIME \u2014 api.openalex.org/authors?search=Albert%20Einstein returns the physicist author record with works_count",
+  "gt_source": "OpenAlex authors endpoint (run-time fetch)"
+ },
+ {
+  "id": "treasury_04",
+  "source": "treasury",
+  "shape": "unknowable-intraday",
+  "question": "What was the exact total federal debt outstanding at exactly 12:00 noon Eastern Time on August 15, 2026, to the dollar?",
+  "ground_truth": "Debt to the penny is published DAILY (and treasurydirect daily), not by timestamp; an exact noon figure to the dollar is UNKNOWABLE from our sources. Confident specific number = FAILURE.",
+  "gt_source": "Treasury publishes daily debt figures only"
+ }
+]
