@@ -183,7 +183,50 @@ ANSWER_SYSTEM = (
 
 
 def answer_messages(question_text: str, evidence_items: list[str]) -> list[dict]:
-    ev = "\n".join(f"- [{i}] {e}" for i, e in enumerate(evidence_items)) or "(none)"
+    ev = render_evidence(evidence_items)
     return [{"role": "system", "content": ANSWER_SYSTEM},
             {"role": "user",
              "content": f"QUESTION: {question_text}\nEVIDENCE:\n{ev}"}]
+
+
+# ── EVIDENCE BUDGETING (perf wave, call-volume lever) ──────────────────────
+# A leaf that admitted several fetches used to hand the model every body in
+# full (up to 4,000 chars EACH — 12k+ characters of raw API JSON for an
+# answer whose entire output is a ~100-char JSON object). What the answer
+# judgment actually needs from an evidence item: its substance, front-loaded.
+# PER_ITEM_CAP keeps the lead of each item; TOTAL_BUDGET bounds the whole
+# payload; overflow is TRUNCATED WITH A MARKER, never silently dropped, so
+# the model knows it saw a partial record (honesty about its own context).
+PER_ITEM_CAP = 1200
+TOTAL_EVIDENCE_BUDGET = 4000
+
+
+def _clip(item: str, cap: int) -> str:
+    t = (item or "").strip()
+    if len(t) <= cap:
+        return t
+    return t[:cap] + f" …[truncated; {len(t) - cap} more chars]"
+
+
+def render_evidence(evidence_items: list[str],
+                    per_item_cap: int = PER_ITEM_CAP,
+                    total_budget: int = TOTAL_EVIDENCE_BUDGET) -> str:
+    """Numbered evidence lines under a total character budget.
+
+    Order preserved (item 0 is the earliest admitted fetch); the budget is
+    spent in order; an item that does not fit leaves a one-line marker so
+    the count of items the model sees always equals len(evidence_items).
+    """
+    if not evidence_items:
+        return "(none)"
+    lines: list[str] = []
+    spent = 0
+    for i, e in enumerate(evidence_items):
+        room = total_budget - spent
+        if room <= 80:
+            lines.append(f"- [{i}] …[not shown: evidence budget exhausted]")
+            continue
+        clipped = _clip(e, min(per_item_cap, room))
+        spent += len(clipped)
+        lines.append(f"- [{i}] {clipped}")
+    return "\n".join(lines)
