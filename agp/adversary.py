@@ -345,7 +345,7 @@ class AdversaryLedger:
                 "precision_of_attack": round(right / len(scored), 3) if scored else None,
                 "verdict": (
                     "insufficient_data" if not scored
-                    else "well_calibrated" if right / len(scored) > 0.35
+                    else "well_calibrated" if right / len(scored) >= 0.35
                     else "too_harsh"
                 ),
             }
@@ -491,7 +491,7 @@ class Adversary:
         penalty = sum(o.penalty for o in objs)
         clamped = floor_conf(max(0.0, float(confidence_score) - penalty))
         reason = ""
-        if objs and clamped < floor_conf(float(confidence_score)):
+        if objs and clamped < round_conf(float(confidence_score)):
             reason = f"adversary: {len(objs)} objection(s), -{penalty:.2f} confidence"
         return clamped, reason
 
