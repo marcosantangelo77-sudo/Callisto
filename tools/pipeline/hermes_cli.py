@@ -43,15 +43,30 @@ def _default_max_procs() -> int:
 
 
 _hermes_proc_semaphore: Optional[asyncio.Semaphore] = None
+# Loop identity the cached semaphore was created under. asyncio primitives are
+# loop-bound; a semaphore created on question 1's loop raises "is bound to a
+# different event loop" when question 2 opens its own. Track the owning loop
+# so proc_semaphore() re-creates (preserving the process-count limit) instead
+# of poisoning every subsequent question of a batch.
+_semaphore_loop_id: Optional[int] = None
+
+
+def _current_loop_id() -> int:
+    try:
+        return id(asyncio.get_running_loop())
+    except RuntimeError:
+        return 0
 
 
 def proc_semaphore() -> asyncio.Semaphore:
-    """Process-count semaphore, created lazily so it binds to whatever event
-    loop is running (asyncio primitives are loop-bound before Python 3.10
-    semantics settle; lazy creation avoids cross-loop reuse in tests)."""
-    global _hermes_proc_semaphore
-    if _hermes_proc_semaphore is None:
+    """Process-count semaphore for the RUNNING loop, re-created when the
+    running loop changes. The per-process concurrency cap is preserved; what
+    changes across loops is only the primitive itself."""
+    global _hermes_proc_semaphore, _semaphore_loop_id
+    loop_id = _current_loop_id()
+    if _hermes_proc_semaphore is None or _semaphore_loop_id != loop_id:
         _hermes_proc_semaphore = asyncio.Semaphore(_default_max_procs())
+        _semaphore_loop_id = loop_id
     return _hermes_proc_semaphore
 
 
