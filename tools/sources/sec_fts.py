@@ -77,7 +77,10 @@ class SecFullTextAdapter:
         raw = data.get("hits", {})
         for h in raw.get("hits", [])[:limit]:
             src = h.get("_source", {})
-            m = _ACCESSION_RE.match(src.get("_id", ""))
+            # EFTS puts _id on the HIT object ('_id' beside '_source'),
+            # not inside it — reading it from _source left accession and
+            # filename EMPTY for every single hit while total looked fine.
+            m = _ACCESSION_RE.match(h.get("_id", "") or "")
             hits.append({
                 "accession": m.group("acc") if m else "",
                 "filename": m.group("file") if m else "",

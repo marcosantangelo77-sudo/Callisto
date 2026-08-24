@@ -182,16 +182,32 @@ class TestUsptoOdp:
 
 class TestSecFullText:
     def test_search_normalizes_hits(self):
+        # Fixture uses the LIVE wire shape (captured 2026-08-24): EFTS puts
+        # _id on the HIT object beside _source, not inside it. The old
+        # fixture embedded _id inside _source and the parser read it from
+        # there too — so both agreed with each other and NOT with reality,
+        # leaving accession/filename empty for every real hit.
         sft, _t = build("sec_fts", "SecFullTextAdapter", {
             SEC_BASE + "?q=solar+tariff&dateRange=custom&startdt=2020-01-01"
                        "&enddt=2021-01-01&forms=10-K": {
-                "hits": {"total": {"value": 7}, "hits": [
-                    {"_source": {"_id": "0000320193-20-000096:aapl-10k.htm",
-                                 "ciks": [320193],
+                "took": 973, "timed_out": False,
+                "hits": {"total": {"value": 7, "relation": "gte"},
+                         "hits": [
+                    {"_index": "edgar_file",
+                     "_id": "0000320193-20-000096:aapl-10k.htm",
+                     "_score": 3.87,
+                     "_source": {"ciks": ["0000320193"],
                                  "file_type": "10-K",
                                  "file_date": "2020-07-30",
-                                 "display_names": ["Apple Inc."]}}],
-                }},
+                                 "display_names": ["Apple Inc."]}},
+                    {"_index": "edgar_file", "_id": "not-an-accession-id",
+                     "_score": 3.1,
+                     "_source": {"ciks": ["0000040404"],
+                                 "file_type": "10-K",
+                                 "file_date": "2020-02-30",
+                                 "display_names": ["Generic Co"]}},
+                ]},
+            },
         })
         out = sft.search("solar tariff", start="2020-01-01",
                          end="2021-01-01", forms="10-K")
@@ -200,6 +216,10 @@ class TestSecFullText:
         assert h["accession"] == "0000320193-20-000096"
         assert h["filename"] == "aapl-10k.htm"
         assert h["company"] == "Apple Inc."
+        assert h["form"] == "10-K"
+        assert h["filed"] == "2020-07-30"
+        # unparseable _id degrades to empty fields, never raises
+        assert out["hits"][1]["accession"] == ""
         assert "_fetch" in out and out["_fetch"]["sha256"]
 
     def test_empty_query_rejected_without_fetch(self):

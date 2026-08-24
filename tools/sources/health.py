@@ -259,18 +259,28 @@ def _gdelt() -> ProbeResult:
 
 @probe("sec_fts")
 def _sec_fts() -> ProbeResult:
+    # search() returns the NORMALIZED contract ({'total', 'hits':[...]}),
+    # not the raw Elasticsearch envelope — counting d['hits']['hits'] on
+    # the normalized shape raised AttributeError ('list' has no .get) once
+    # the name-resolution mask was lifted.
     r = ProbeResult("sec_fts")
     src, ad = _build("sec_fts")
     r.url = src.build_url("/search-index", {"q": "\"annual report\""})
     def shape(d):
-        hits = ((d.get("hits") or {}).get("hits")) or []
-        return "" if hits else "hits.hits empty"
-    out = _run(lambda: ad.search("\"annual report\"", limit=5), r,
-               lambda d: len(((d.get("hits") or {}).get("hits")) or []),
-               shape)
-    # search() normalizes into 'results'; empty normalized output with raw
-    # hits present would still be caught by the count above.
-    return out
+        hits = d.get("hits")
+        if not isinstance(hits, list) or not hits:
+            return "normalized hits[] empty"
+        need = ("accession", "filename", "company", "form", "filed")
+        missing = [k for k in need if k not in hits[0]]
+        if missing:
+            return f"normalized hit missing keys: {missing}"
+        if not hits[0].get("accession"):
+            return "hit accession did not parse from _id"
+        return ""
+    def count(d):
+        return len(d.get("hits") or [])
+    return _run(lambda: ad.search("\"annual report\"", limit=5), r,
+                count, shape)
 
 
 @probe("courtlistener", "CALLISTO_COURTLISTENER_TOKEN")
