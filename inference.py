@@ -1621,9 +1621,14 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
             last_exc = e
             if status == 429:
                 retry_after = _retry_after_seconds(e.response)
-                if retry_after > _429_MAX_TOTAL_WAIT_S:
-                    raise  # server says: back off longer than we may wait
-                await _asyncio.sleep(retry_after)
+                # SPEED run 9: a Retry-After above the old 10s cap used to
+                # decline the retry and fail over. Measured live, Portal's
+                # capacity 429s carry Retry-After: 30 — and the CLI fork that
+                # receives the same call survives by waiting out the same
+                # window inside its own session. Waiting (bounded) on the
+                # ~10x-faster endpoint beats paying fresh-fork startup to
+                # arrive even later.
+                await _asyncio.sleep(min(retry_after, _429_PATIENCE_S))
                 slept = True
         except (httpx.TransportError,) as e:
             last_exc = e
@@ -1638,9 +1643,14 @@ _router: Optional[ProviderRouter] = None
 # ── SPEED run 8: 429 retry-in-place constants ─────────────────────────────
 # A 429 with no Retry-After waits this long before the next in-place attempt.
 _429_DEFAULT_BACKOFF_S = 1.0
-# Never sleep longer than this on a Retry-After; a server demanding more
-# backoff than we may spend fails over instead of stalling the caller.
+# Retry-After values up to this are honoured exactly (run 8: "small" backoffs).
 _429_MAX_TOTAL_WAIT_S = 10.0
+# SPEED run 9: hard ceiling on any single 429 sleep. Above _429_MAX_TOTAL_WAIT_S
+# the requested Retry-After is clamped here rather than declining the retry:
+# Portal's capacity 429s carry Retry-After: 30 and the fresh-fork CLI failover
+# path implicitly waits out the same window anyway — patience on the fast,
+# persistent endpoint is strictly cheaper than a ~10-14s cold fork.
+_429_PATIENCE_S = 35.0
 
 
 def _retry_after_seconds(response: httpx.Response) -> float:
