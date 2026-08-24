@@ -10,8 +10,10 @@ long-lived process (warm calls measured 1.2-2.4s). These tests pin:
    enforce schemas either).
 2. ORDERING — when resolvable it sits ahead of ox_alpha in every task class;
    ox_alpha remains the LAST-resort everywhere.
-3. DEGRADATION — with no OX_ALPHA_PROXY_BASE_URL set the endpoint is
-   _unresolved and routing is byte-identical to the pre-run7 lists.
+3. DEGRADATION — with no env set the endpoint now resolves via its declared
+   base_url_default (run 11 discovery fix); when the proxy process is NOT
+   running the loopback refusal is instant, the cooldown suppresses repeat
+   probes, and routing degrades to ox_alpha exactly as before.
 4. DISPATCH — ProviderRouter._post reaches an OpenAI-compatible endpoint
    through a monkeypatched transport (no real socket: the no_socket barrier
    exists because live testing 403'd this machine's SEC budget; loopback
@@ -53,18 +55,22 @@ class TestDeclaration:
         assert not ep.extra.get("_unresolved")
         assert ep.base_url == "http://127.0.0.1:1/v1"
 
-    def test_unresolved_without_env(self, monkeypatch):
+    def test_default_discovery_when_env_unset(self, monkeypatch):
+        """SPEED run 11: with no env set the proxy now resolves via the
+        DECLARED base_url_default (config/providers.yaml) instead of staying
+        unresolved — that is the discovery fix; see
+        findings/speed_2026-08-23_run11.md. It must still sit ahead of the
+        CLI and behind nothing local."""
         for v in ("OX_ALPHA_PROXY_BASE_URL", "OX_ALPHA_PROXY_API_KEY",
                   "OX_ALPHA_PROXY_MODEL"):
             monkeypatch.delenv(v, raising=False)
         r = inference.ProviderRouter()
         ep = r.endpoints["ox_alpha_proxy"]
-        assert ep.extra.get("_unresolved"), (
-            "without base URL the proxy must be unresolved, not half-configured")
-        # ...and routing then behaves exactly like the pre-run7 pool:
+        assert not ep.extra.get("_unresolved"), (
+            "run11: declared default makes the running proxy discoverable")
         cands = r.candidates_for("research_synthesis")
-        assert "ox_alpha_proxy" not in cands
-        assert cands[-1] == "ox_alpha"
+        assert "ox_alpha_proxy" in cands
+        assert cands.index("ox_alpha_proxy") < cands.index("ox_alpha")
 
     def test_honest_capabilities(self, monkeypatch):
         r = _router_with_proxy(monkeypatch)

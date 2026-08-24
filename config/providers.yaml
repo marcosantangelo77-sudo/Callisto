@@ -105,6 +105,13 @@ providers:
     # routing degrades to ox_alpha (fresh-fork CLI) exactly as before.
     backend: openai_compat
     base_url_env: OX_ALPHA_PROXY_BASE_URL   # e.g. http://127.0.0.1:8645/v1
+    # SPEED run 11: discovered when the env is unset. Matches where
+    # `hermes proxy start` binds on this machine; the proxy serves the SAME
+    # Portal model as ox_alpha from one persistent process (measured warm
+    # 1.2-2.4s/call vs 11.4-20.3s fresh-fork CLI). When it is NOT running,
+    # the loopback refusal is instant and the cooldown ladder suppresses
+    # repeat probes — degradation is exactly the pre-run-7 CLI-only path.
+    base_url_default: http://127.0.0.1:8646/v1
     api_key_env: OX_ALPHA_PROXY_API_KEY     # any token; proxy attaches real creds
     model_env: OX_ALPHA_PROXY_MODEL
     model: stealth/ox-alpha         # used when the env vars are unset

@@ -934,10 +934,18 @@ def load_providers_config(path=None) -> dict:
 def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     """Build an EndpointConfig from one entry under `providers:`.
 
-    Env-backed fields (base_url_env / api_key_env / model_env) resolve at
-    build time when set; if unset the endpoint is marked _unresolved and is
+    base_url resolution order (SPEED run 11): explicit base_url → env var
+    (base_url_env) → declared base_url_default (a loopback URL the operator
+    wrote in this file, e.g. where `hermes proxy start` binds) → unresolved.
+    If all four come up empty the endpoint is marked _unresolved and is
     skipped by routing (LOUD log) rather than crashing construction — that
     keeps a local-only box constructible while a hosted tier is configured.
+
+    A base_url_default makes a LOCAL companion process discoverable without
+    exporting env vars in every shell: when the process is up the fast path
+    serves; when it is down the loopback refusal is instant and the existing
+    per-endpoint cooldown suppresses repeat probes before failing over —
+    strictly pre-discovery behaviour plus sub-second probes.
 
     backend="hermes_cli" needs NEITHER base_url nor model: it shells out to
     the Hermes CLI (Nous Portal OAuth lives in the keychain) and serves the
@@ -948,8 +956,10 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     base_url = raw.get("base_url")
     if not base_url and raw.get("base_url_env"):
         base_url = os.getenv(raw["base_url_env"], "")
-        if not base_url:
-            raw = {**raw, "_unresolved": True}
+    if not base_url:
+        base_url = raw.get("base_url_default") or ""
+    if not base_url:
+        raw = {**raw, "_unresolved": True}
     api_key = None
     if raw.get("api_key_env"):
         api_key = os.getenv(raw["api_key_env"]) or None
