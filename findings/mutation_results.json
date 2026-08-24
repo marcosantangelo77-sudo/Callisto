@@ -1,1706 +1,1122 @@
 [
  {
-  "file": "agp/provenance.py",
-  "id": "SUB2ADD-L2-10",
-  "mutation": "- -> + @ line 2: Provenance-assigned source classes and verified citations.",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.25s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "AND2OR-L2-35",
-  "mutation": "and -> or @ line 2: Provenance-assigned source classes and verified citations.",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.26s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "ADD2SUB-L4-43",
-  "mutation": "+ -> - @ line 4: Design (findings/instance4.md, mechanism 1 + 2 of the earned-confidence",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.29s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "SUB2ADD-L4-60",
-  "mutation": "- -> + @ line 4: Design (findings/instance4.md, mechanism 1 + 2 of the earned-confidence",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.27s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "DIV2MUL-L4-16",
-  "mutation": "/ -> * @ line 4: Design (findings/instance4.md, mechanism 1 + 2 of the earned-confidence",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.27s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "DIV2MUL-L6-48",
-  "mutation": "/ -> * @ line 6: a real tool call returning real bytes is PRIMARY/SECONDARY by construction,",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.26s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "SUB2ADD-L10-20",
-  "mutation": "- -> + @ line 10: The ledger is append-only: ``record_tool_result`` is called once per real",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.29s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "SUB2ADD-L16-60",
-  "mutation": "- -> + @ line 16: findings/instance4.md as a PROPOSAL (orchestrator.py is read-only for this",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.27s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "DIV2MUL-L16-8",
-  "mutation": "/ -> * @ line 16: findings/instance4.md as a PROPOSAL (orchestrator.py is read-only for this",
-  "status": "SURVIVED",
-  "secs": 0.8,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.27s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L30-33",
-  "mutation": "> -> >= @ line 30: def _content_hash(content: str) -> str:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L3-12",
+  "mutation": "- -> + @ line 3: The live end-to-end run showed five sub-questions producing ONE fetch that",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.4,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "SUB2ADD-L31-45",
-  "mutation": "- -> + @ line 31: return hashlib.sha256(content.encode(\"utf-8\", errors=\"replace\")).hexdigest()",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.26s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "LT2LE-L36-39",
-  "mutation": "< -> <= @ line 36: _URL_RE = re.compile(r\"https?://[^\\s\\\"'<>)\\]]+\", re.IGNORECASE)",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L7-51",
+  "mutation": "> -> >= @ line 7: 1. ITERATIVE RETRIEVAL. Fetching is a loop: query -> INSPECT what came",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.3,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "ADD2SUB-L36-45",
-  "mutation": "+ -> - @ line 36: _URL_RE = re.compile(r\"https?://[^\\s\\\"'<>)\\]]+\", re.IGNORECASE)",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L8-9",
+  "mutation": "> -> >= @ line 8: back -> decide whether it answers the sub-question -> refine and",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "DIV2MUL-L36-31",
-  "mutation": "/ -> * @ line 36: _URL_RE = re.compile(r\"https?://[^\\s\\\"'<>)\\]]+\", re.IGNORECASE)",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L8-44",
+  "mutation": "- -> + @ line 8: back -> decide whether it answers the sub-question -> refine and",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L39-29",
-  "mutation": "> -> >= @ line 39: def extract_urls(text: str) -> set[str]:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L8-64",
+  "mutation": "and -> or @ line 8: back -> decide whether it answers the sub-question -> refine and",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.3,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "AND2OR-L47-46",
-  "mutation": "and -> or @ line 47: if parsed.scheme in (\"http\", \"https\") and parsed.netloc:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.28s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "DIV2MUL-L58-70",
-  "mutation": "/ -> * @ line 58: content_hash: str                   # sha256 of the returned bytes/text",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.27s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "TRUE2FALSE-L60-42",
-  "mutation": "True -> False @ line 60: primary: bool = False               # True = fetched document body (PRIMARY)",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.27s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "SUB2ADD-L66-10",
-  "mutation": "- -> + @ line 66: Source-class assignment rules (mechanism 1):",
-  "status": "SURVIVED",
-  "secs": 0.8,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.33s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "SUB2ADD-L67-6",
-  "mutation": "- -> + @ line 67: - evidence whose exact content hash matches an observation marked",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.28s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "TRUE2FALSE-L68-18",
-  "mutation": "True -> False @ line 68: ``primary=True``                       \u2192 PRIMARY",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.28s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "SUB2ADD-L69-6",
-  "mutation": "- -> + @ line 69: - evidence whose hash matches any other observation, OR which cites a",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.27s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "SUB2ADD-L71-6",
-  "mutation": "- -> + @ line 71: - anything else                          \u2192 INFERRED (regardless of what",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.28s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L78-24",
-  "mutation": "> -> >= @ line 78: def __init__(self) -> None:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L9-20",
+  "mutation": "> -> >= @ line 9: re-query if not -> stop when evidence is sufficient or the budget is",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "MUL2DIV-L93-44",
-  "mutation": "* -> / @ line 93: self, tool_name: str, content: str, *, primary: bool = False,",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.26s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L95-7",
-  "mutation": "> -> >= @ line 95: ) -> ToolObservation:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L9-5",
+  "mutation": "- -> + @ line 9: re-query if not -> stop when evidence is sufficient or the budget is",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.3,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "OR2AND-L99-47",
-  "mutation": "or -> and @ line 99: content_hash=_content_hash(content or \"\"),",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L9-55",
+  "mutation": "or -> and @ line 9: re-query if not -> stop when evidence is sufficient or the budget is",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.3,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "OR2AND-L100-32",
-  "mutation": "or -> and @ line 100: urls=frozenset(urls or ()),",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L11-62",
+  "mutation": "and -> or @ line 11: reused verbatim \u2014 we do not invent a second stopping rule, and its",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.3,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L115-69",
-  "mutation": "> -> >= @ line 115: urls: Optional[Iterable[str]] = None) -> None:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L15-10",
+  "mutation": "- -> + @ line 15: the sub-question BEFORE it can enter the evidence set. Rejected items",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.3,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "SUB2ADD-L119-47",
-  "mutation": "- -> + @ line 119: cannot mint PRIMARY/SECONDARY via exact-hash match, and the URL can",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.26s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "DIV2MUL-L119-27",
-  "mutation": "/ -> * @ line 119: cannot mint PRIMARY/SECONDARY via exact-hash match, and the URL can",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.26s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "AND2OR-L119-60",
-  "mutation": "and -> or @ line 119: cannot mint PRIMARY/SECONDARY via exact-hash match, and the URL can",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.25s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "SUB2ADD-L121-14",
-  "mutation": "- -> + @ line 121: a post-fetch judgment may move provenance: down.",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.25s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "OR2AND-L123-34",
-  "mutation": "or -> and @ line 123: h = _content_hash(content or \"\")",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.26s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "OR2AND-L126-22",
-  "mutation": "or -> and @ line 126: for u in urls or ():",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.29s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L130-60",
-  "mutation": "> -> >= @ line 130: def superseded(self, content: str = \"\", url: str = \"\") -> bool:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.29s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "AND2OR-L132-19",
-  "mutation": "and -> or @ line 132: if content and _content_hash(content) in self._rejected_hashes:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.27s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "TRUE2FALSE-L133-19",
-  "mutation": "True -> False @ line 133: return True",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.26s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "AND2OR-L134-25",
-  "mutation": "and -> or @ line 134: return bool(url) and url in self._rejected_urls",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.29s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L138-29",
-  "mutation": "> -> >= @ line 138: def observed_urls(self) -> set[str]:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L16-62",
+  "mutation": "- -> + @ line 16: are recorded \u2014 with the reason \u2014 on the leaf outcome. A sub-question",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.3,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L141-45",
-  "mutation": "> -> >= @ line 141: def has_observation(self, content: str) -> bool:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L18-39",
+  "mutation": "and -> or @ line 18: synthesizer, never silently dropped and never dressed up as a hit.",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.3,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "OR2AND-L142-37",
-  "mutation": "or -> and @ line 142: return _content_hash(content or \"\") in self._by_hash",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L20-6",
+  "mutation": "- -> + @ line 20: 3. FAN-OUT WITH ENFORCED SOURCE INDEPENDENCE. Each round queries every",
   "status": "killed",
-  "secs": 0.6,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L144-46",
-  "mutation": "> -> >= @ line 144: def is_primary_bytes(self, content: str) -> bool:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L21-20",
+  "mutation": "and -> or @ line 21: selected source, and sufficiency counts DISTINCT independent sources \u2014",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "OR2AND-L145-59",
-  "mutation": "or -> and @ line 145: for obs in self._by_hash.get(_content_hash(content or \"\"), ()):",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "DIV2MUL-L23-33",
+  "mutation": "/ -> * @ line 23: two results from one publisher/index corroborate nothing.",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "TRUE2FALSE-L147-23",
-  "mutation": "True -> False @ line 147: return True",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "ADD2SUB-L40-32",
+  "mutation": "+ -> - @ line 40: _WORD_RE = re.compile(r\"[a-z0-9]+\")",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 0.9,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L150-45",
-  "mutation": "> -> >= @ line 150: def cites_verified_url(self, text: str) -> bool:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/provenance.py",
-  "id": "DIV2MUL-L154-58",
-  "mutation": "/ -> * @ line 154: substring check: fabricated URLs fail, and 'http://' as a literal",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.25s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "AND2OR-L154-47",
-  "mutation": "and -> or @ line 154: substring check: fabricated URLs fail, and 'http://' as a literal",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.25s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L162-55",
-  "mutation": "> -> >= @ line 162: def assign_source_class(self, evidence: Evidence) -> SourceClass:",
-  "status": "killed",
-  "secs": 0.6,
-  "tail": ""
- },
- {
-  "file": "agp/provenance.py",
-  "id": "SUB2ADD-L164-51",
-  "mutation": "- -> + @ line 164: evidence.source_class \u2014 that field is model-declared and untrusted.\"\"\"",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.25s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "AND2OR-L164-61",
-  "mutation": "and -> or @ line 164: evidence.source_class \u2014 that field is model-declared and untrusted.\"\"\"",
-  "status": "SURVIVED",
-  "secs": 0.8,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.34s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "OR2AND-L165-35",
-  "mutation": "or -> and @ line 165: content = evidence.content or \"\"",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L177-66",
-  "mutation": "> -> >= @ line 177: max_by_source: dict[str, float]) -> float:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/provenance.py",
-  "id": "MIN2MAX-L179-21",
-  "mutation": "min( -> max( @ line 179: score = max(0.0, min(1.0, float(score)))",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/provenance.py",
-  "id": "MAX2MIN-L179-12",
-  "mutation": "max( -> min( @ line 179: score = max(0.0, min(1.0, float(score)))",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/provenance.py",
-  "id": "MIN2MAX-L180-22",
-  "mutation": "min( -> max( @ line 180: return floor_conf(min(score, max_by_source.get(source_class.value, 0.55)))",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L40-26",
+  "mutation": "- -> + @ line 40: _WORD_RE = re.compile(r\"[a-z0-9]+\")",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L186-43",
-  "mutation": "> -> >= @ line 186: floor: float = 0.30) -> int:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L60-37",
+  "mutation": "and -> or @ line 60: \"has\", \"how\", \"why\", \"whether\", \"and\", \"for\", \"with\", \"into\", \"from\",",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L70-33",
+  "mutation": "> -> >= @ line 70: def _prefix_hit(a: str, b: str) -> bool:",
+  "status": "killed",
+  "secs": 0.7,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "EQ2NE-L71-13",
+  "mutation": "== -> != @ line 71: return a == b or a.startswith(b) or b.startswith(a)",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L71-18",
+  "mutation": "or -> and @ line 71: return a == b or a.startswith(b) or b.startswith(a)",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L74-24",
+  "mutation": "> -> >= @ line 74: def _tokens(text: str) -> list[str]:",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "GT2GE-L189-52",
-  "mutation": "> -> >= @ line 189: Returns number of items DEMOTED (declared class > provenance class).",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.28s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "AND2OR-L191-68",
-  "mutation": "and -> or @ line 191: PRIMARY). Confidence is clamped to the assigned class's ceiling and",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.27s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "MUL2DIV-L192-15",
-  "mutation": "* -> / @ line 192: floored at *floor* (the DB CHECK floor).",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.26s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "LT2LE-L199-39",
-  "mutation": "< -> <= @ line 199: if rank.get(assigned.value, 0) < rank.get(ev.source_class.value, 0):",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GE2GT-L76-22",
+  "mutation": ">= -> > @ line 76: if len(w) >= 3 and w not in _QUERY_STOPWORDS]",
   "status": "killed",
-  "secs": 0.6,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "MIN2MAX-L209-15",
-  "mutation": "min( -> max( @ line 209: conf = min(prior, min(float(ev.confidence_score),",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L76-27",
+  "mutation": "and -> or @ line 76: if len(w) >= 3 and w not in _QUERY_STOPWORDS]",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L93-47",
+  "mutation": "> -> >= @ line 93: def extract_text(parsed: Any, depth: int = 0) -> str:",
   "status": "killed",
   "secs": 0.7,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "MIN2MAX-L211-41",
-  "mutation": "min( -> max( @ line 211: ev.confidence_score = floor_conf(min(prior, max(floor, conf))",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L98-13",
+  "mutation": "> -> >= @ line 98: if depth > 6:",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "ADD2SUB-L103-46",
+  "mutation": "+ -> - @ line 103: return \" \".join(extract_text(v, depth + 1)",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "ADD2SUB-L106-46",
+  "mutation": "+ -> - @ line 106: return \" \".join(extract_text(v, depth + 1) for v in parsed[:50])",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L114-27",
+  "mutation": "- -> + @ line 114: textual content, prefix-matched so 'semiconductor' matches",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L116-18",
+  "mutation": "and -> or @ line 116: may raise it, and this module never lowers it.",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "LE2LT-L120-34",
+  "mutation": "<= -> < @ line 120: if not 0.0 < min_coverage <= 1.0:",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "LT2LE-L120-19",
+  "mutation": "< -> <= @ line 120: if not 0.0 < min_coverage <= 1.0:",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L125-28",
+  "mutation": "> -> >= @ line 125: parsed: Any) -> tuple[bool, float, str]:",
   "status": "killed",
   "secs": 0.7,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "MAX2MIN-L211-52",
-  "mutation": "max( -> min( @ line 211: ev.confidence_score = floor_conf(min(prior, max(floor, conf))",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GE2GT-L132-22",
+  "mutation": ">= -> > @ line 132: if len(w) >= 3:",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/provenance.py",
-  "id": "MIN2MAX-L212-56",
-  "mutation": "min( -> max( @ line 212: if prior >= floor else min(prior, conf))",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.27s\n"
- },
- {
-  "file": "agp/provenance.py",
-  "id": "GE2GT-L212-42",
-  "mutation": ">= -> > @ line 212: if prior >= floor else min(prior, conf))",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".............................                                            [100%]\n29 passed, 2 deselected in 0.30s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L3-6",
-  "mutation": "- -> + @ line 3: \u00a7multi-model role assignment).",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.32s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L6-65",
-  "mutation": "- -> + @ line 6: but never ATTACKS; before this module its only call site was a 32-token",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.32s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L10-2",
-  "mutation": "- -> + @ line 10: - what evidence would refute it?",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.31s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L11-2",
-  "mutation": "- -> + @ line 11: - what alternative explanation fits the same facts?",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.28s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L12-2",
-  "mutation": "- -> + @ line 12: - what selection effect could produce this pattern without the mechanism?",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L13-2",
-  "mutation": "- -> + @ line 13: - what is the most likely way this is a false positive?",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L17-62",
-  "mutation": "or -> and @ line 17: 1. ASYMMETRY. The adversary can only LOWER a confidence score or VETO the",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L18-31",
-  "mutation": "- -> + @ line 18: seal outright \u2014 the same one-directional rule as clamp_parent_confidence.",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.31s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MIN2MAX-L20-13",
-  "mutation": "min( -> max( @ line 20: module is min(raw, something) or raw \u2212 penalty, floored at 0.",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L20-33",
-  "mutation": "or -> and @ line 20: module is min(raw, something) or raw \u2212 penalty, floored at 0.",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.30s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L23-60",
-  "mutation": "/ -> * @ line 23: went through (SUSTAINED = seal blocked, OVERRULED = human/pipeline let it",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.28s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L24-28",
-  "mutation": "and -> or @ line 24: pass over the objection) and \u2014 once the claim resolves \u2014 whether the",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.28s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L25-63",
-  "mutation": "or -> and @ line 25: objection was RIGHT (claim resolved against the conclusion) or WRONG.",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L30-32",
-  "mutation": "and -> or @ line 30: reasoning that overruled it, and the eventual outcome stay in the log as",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L31-9",
-  "mutation": "- -> + @ line 31: append-only JSONL. Disagreement becomes training data.",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L33-6",
-  "mutation": "- -> + @ line 33: Domain-general throughout: nothing here knows what a bet, a coin, or a",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L33-66",
-  "mutation": "or -> and @ line 33: Domain-general throughout: nothing here knows what a bet, a coin, or a",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L53-16",
-  "mutation": "> -> >= @ line 53: def _now_iso() -> str:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L57-17",
-  "mutation": "> -> >= @ line 57: def _utc_date() -> str:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L69-29",
-  "mutation": "/ -> * @ line 69: endpoint pool from config/providers.yaml, so assigning a model per ROLE",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L71-32",
-  "mutation": "or -> and @ line 71: never hardcoding a provider or model name (BUILD_MANDATE \u00a71).",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L103-52",
-  "mutation": "> -> >= @ line 103: def ensemble_ceiling(evaluations: Iterable[float]) -> Optional[float]:",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.26s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L106-30",
-  "mutation": "- -> + @ line 106: evaluations: independently-produced probabilities for the same claim",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L107-21",
-  "mutation": "/ -> * @ line 107: (different models/configurations via different router endpoints).",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MIN2MAX-L110-4",
-  "mutation": "min( -> max( @ line 110: min(score, ceiling). Wide spread caps below PROBABLE; moderate spread",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MIN2MAX-L114-19",
-  "mutation": "min( -> max( @ line 114: xs = [max(0.0, min(1.0, float(x))) for x in evaluations]",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MAX2MIN-L114-10",
-  "mutation": "max( -> min( @ line 114: xs = [max(0.0, min(1.0, float(x))) for x in evaluations]",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "LT2LE-L115-15",
-  "mutation": "< -> <= @ line 115: if len(xs) < 2:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MIN2MAX-L117-23",
-  "mutation": "min( -> max( @ line 117: spread = max(xs) - min(xs)",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MAX2MIN-L117-13",
-  "mutation": "max( -> min( @ line 117: spread = max(xs) - min(xs)",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L117-21",
-  "mutation": "- -> + @ line 117: spread = max(xs) - min(xs)",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GE2GT-L118-14",
-  "mutation": ">= -> > @ line 118: if spread >= DISAGREEMENT_SPREAD_THRESHOLD:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GE2GT-L120-14",
-  "mutation": ">= -> > @ line 120: if spread >= DISAGREEMENT_SPREAD_THRESHOLD / 2:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.28s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L120-47",
-  "mutation": "/ -> * @ line 120: if spread >= DISAGREEMENT_SPREAD_THRESHOLD / 2:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L126-55",
-  "mutation": "> -> >= @ line 126: evaluations: Iterable[float]) -> tuple[float, str]:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MIN2MAX-L128-17",
-  "mutation": "min( -> max( @ line 128: s = max(0.0, min(1.0, float(score)))",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MAX2MIN-L128-8",
-  "mutation": "max( -> min( @ line 128: s = max(0.0, min(1.0, float(score)))",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "LE2LT-L130-26",
-  "mutation": "<= -> < @ line 130: if ceil_ is None or s <= ceil_:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.28s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L130-21",
-  "mutation": "or -> and @ line 130: if ceil_ is None or s <= ceil_:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "FLOOR2ROUND-L136-15",
-  "mutation": "floor -> round @ line 136: return math.floor(s * 100) / 100, \"\"",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MUL2DIV-L136-28",
-  "mutation": "* -> / @ line 136: return math.floor(s * 100) / 100, \"\"",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L136-35",
-  "mutation": "/ -> * @ line 136: return math.floor(s * 100) / 100, \"\"",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "FLOOR2ROUND-L138-8",
-  "mutation": "floor -> round @ line 138: math.floor(ceil_ * 100) / 100,",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MUL2DIV-L138-25",
-  "mutation": "* -> / @ line 138: math.floor(ceil_ * 100) / 100,",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L138-32",
-  "mutation": "/ -> * @ line 138: math.floor(ceil_ * 100) / 100,",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L151-64",
-  "mutation": "/ -> * @ line 151: claim_id: str                       # stable id of the claim/session attacked",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L153-50",
-  "mutation": "- -> + @ line 153: kind: str = \"unspecified\"           # refuting-evidence | alternative-explanation |",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L157-76",
-  "mutation": "- -> + @ line 157: model: str = \"\"                     # which endpoint produced it (router-reported)",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L158-73",
-  "mutation": "- -> + @ line 158: claim_domain: str = \"\"              # claim class (Domain name) \u2014 per-model\u00d7domain calibra",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L165-23",
-  "mutation": "> -> >= @ line 165: def to_dict(self) -> dict:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L169-27",
-  "mutation": "> -> >= @ line 169: def is_blocking(self) -> bool:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "EQ2NE-L170-29",
-  "mutation": "== -> != @ line 170: return self.severity == \"BLOCKING\"",
-  "status": "killed",
-  "secs": 0.6,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L173-23",
-  "mutation": "> -> >= @ line 173: def penalty(self) -> float:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L184-47",
-  "mutation": "- -> + @ line 184: restarts and stays auditable by eye. Thread-safe. Nothing may delete or",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L184-13",
-  "mutation": "and -> or @ line 184: restarts and stays auditable by eye. Thread-safe. Nothing may delete or",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L184-73",
-  "mutation": "or -> and @ line 184: restarts and stays auditable by eye. Thread-safe. Nothing may delete or",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L185-35",
-  "mutation": "and -> or @ line 185: rewrite an entry \u2014 overrulings and resolutions APPEND fields by rewriting",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L186-10",
-  "mutation": "- -> + @ line 186: the in-memory copy and appending a marker line; the original raise is",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.28s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L186-23",
-  "mutation": "and -> or @ line 186: the in-memory copy and appending a marker line; the original raise is",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L191-29",
-  "mutation": "- -> + @ line 191: from a rubber stamp \u2014 too-harsh and too-soft critics both show up here.",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L191-36",
-  "mutation": "and -> or @ line 191: from a rubber stamp \u2014 too-harsh and too-soft critics both show up here.",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.26s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L198-37",
-  "mutation": "/ -> * @ line 198: os.path.expanduser(\"~/.local/state/callisto\"))",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L205-21",
-  "mutation": "> -> >= @ line 205: def _load(self) -> None:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L207-51",
-  "mutation": "- -> + @ line 207: with open(self.path, \"r\", encoding=\"utf-8\") as f:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MUL2DIV-L216-45",
-  "mutation": "* -> / @ line 216: ob = AdversaryObjection(**{k: v for k, v in rec.items()",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L222-47",
-  "mutation": "> -> >= @ line 222: def _append(self, ob: AdversaryObjection) -> None:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L223-47",
-  "mutation": "or -> and @ line 223: os.makedirs(os.path.dirname(self.path) or \".\", exist_ok=True)",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "TRUE2FALSE-L223-64",
-  "mutation": "True -> False @ line 223: os.makedirs(os.path.dirname(self.path) or \".\", exist_ok=True)",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L224-47",
-  "mutation": "- -> + @ line 224: with open(self.path, \"a\", encoding=\"utf-8\") as f:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "ADD2SUB-L225-65",
-  "mutation": "+ -> - @ line 225: f.write(json.dumps(ob.to_dict(), ensure_ascii=False) + \"\\n\")",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.26s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L228-63",
-  "mutation": "> -> >= @ line 228: def record_objection(self, objection: AdversaryObjection) -> None:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L235-50",
-  "mutation": "> -> >= @ line 235: overrule_reasoning: str) -> int:",
-  "status": "killed",
-  "secs": 0.6,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "EQ2NE-L242-29",
-  "mutation": "== -> != @ line 242: if ob.status == \"RAISED\" and ob.text == objection_text:",
-  "status": "killed",
-  "secs": 0.6,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L242-41",
-  "mutation": "and -> or @ line 242: if ob.status == \"RAISED\" and ob.text == objection_text:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L250-68",
-  "mutation": "> -> >= @ line 250: def record_sustained(self, claim_id: str, objection_text: str) -> None:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "EQ2NE-L254-29",
-  "mutation": "== -> != @ line 254: if ob.status == \"RAISED\" and ob.text == objection_text:",
-  "status": "killed",
-  "secs": 0.6,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L254-41",
-  "mutation": "and -> or @ line 254: if ob.status == \"RAISED\" and ob.text == objection_text:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.33s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L260-51",
-  "mutation": "> -> >= @ line 260: scoreable: bool = True) -> None:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "TRUE2FALSE-L260-44",
-  "mutation": "True -> False @ line 260: scoreable: bool = True) -> None:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L264-15",
-  "mutation": "or -> and @ line 264: WRONG (or raised a real flaw the resolution confirmed); WRONG when",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L266-27",
-  "mutation": "and -> or @ line 266: marked UNSCOREABLE and excluded from accuracy.",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "EQ2NE-L270-33",
-  "mutation": "== -> != @ line 270: if ob.resolution == \"PENDING\" or not ob.resolution:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L270-46",
-  "mutation": "or -> and @ line 270: if ob.resolution == \"PENDING\" or not ob.resolution:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L279-45",
-  "mutation": "> -> >= @ line 279: def objections_for(self, claim_id: str) -> list[AdversaryObjection]:",
-  "status": "killed",
-  "secs": 0.7,
-  "tail": ""
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L282-28",
-  "mutation": "> -> >= @ line 282: def all_resolved(self) -> list[AdversaryObjection]:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "EQ2NE-L135-28",
+  "mutation": "== -> != @ line 135: if any(h == t or h.startswith(t) or t.startswith(h)",
   "status": "killed",
   "secs": 0.8,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L294-27",
-  "mutation": "> -> >= @ line 294: def calibration(self) -> dict:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L135-33",
+  "mutation": "or -> and @ line 135: if any(h == t or h.startswith(t) or t.startswith(h)",
+  "status": "killed",
+  "secs": 1.1,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "DIV2MUL-L137-32",
+  "mutation": "/ -> * @ line 137: coverage = len(matched) / len(q_tokens)",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "LT2LE-L138-20",
+  "mutation": "< -> <= @ line 138: if coverage < self.min_coverage:",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L139-37",
+  "mutation": "- -> + @ line 139: missed = sorted(q_tokens - set(matched))",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "TRUE2FALSE-L144-15",
+  "mutation": "True -> False @ line 144: return True, coverage, (",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L162-42",
+  "mutation": "> -> >= @ line 162: def in_family(source_name: str, members) -> bool:",
   "status": "killed",
   "secs": 0.7,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "EQ2NE-L305-51",
-  "mutation": "== -> != @ line 305: right = sum(1 for o in scored if o.outcome == \"RIGHT\")",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L165-67",
+  "mutation": "- -> + @ line 165: Normalised: 'semantic_scholar', 'semanticscholar' and 'Semantic-Scholar'",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L165-54",
+  "mutation": "and -> or @ line 165: Normalised: 'semantic_scholar', 'semanticscholar' and 'Semantic-Scholar'",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "DIV2MUL-L167-9",
+  "mutation": "/ -> * @ line 167: tools/why.py previously reimplemented it without normalisation, so a",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L168-48",
+  "mutation": "and -> or @ line 168: family collapse silently failed to register and two dependent sources",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L171-20",
+  "mutation": "- -> + @ line 171: n = re.sub(r\"[^a-z0-9]\", \"\", str(source_name).lower())",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "EQ2NE-L172-56",
+  "mutation": "== -> != @ line 172: return any(re.sub(r\"[^a-z0-9]\", \"\", str(m).lower()) == n for m in members)",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L172-27",
+  "mutation": "- -> + @ line 172: return any(re.sub(r\"[^a-z0-9]\", \"\", str(m).lower()) == n for m in members)",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L175-55",
+  "mutation": "> -> >= @ line 175: def independence_key(source_name: str, base_url: str) -> str:",
   "status": "killed",
   "secs": 0.7,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "EQ2NE-L308-49",
-  "mutation": "== -> != @ line 308: for o in obs if o.status == \"SUSTAINED\")",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.30s\n"
+  "file": "tools/pipeline/retrieval.py",
+  "id": "DIV2MUL-L178-29",
+  "mutation": "/ -> * @ line 178: host = re.sub(r\"^https?://\", \"\", base_url).split(\"/\")[0]",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L314-47",
-  "mutation": "/ -> * @ line 314: \"precision_of_attack\": round(right / len(scored), 3) if scored else None,",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.28s\n"
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L184-34",
+  "mutation": "- -> + @ line 184: _norm = lambda x: re.sub(r\"[^a-z0-9]\", \"\", str(x).lower())",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "GE2GT-L317-62",
-  "mutation": ">= -> > @ line 317: else \"well_calibrated\" if right / len(scored) >= 0.35",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
+  "file": "tools/pipeline/retrieval.py",
+  "id": "EQ2NE-L187-24",
+  "mutation": "== -> != @ line 187: if any(_norm(m) == nname for m in members):",
+  "status": "killed",
+  "secs": 0.8,
+  "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L317-48",
-  "mutation": "/ -> * @ line 317: else \"well_calibrated\" if right / len(scored) >= 0.35",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L192-16",
+  "mutation": "or -> and @ line 192: return host or source_name",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L198-49",
+  "mutation": "> -> >= @ line 198: question_type: str) -> tuple[str, list[str]]:",
   "status": "killed",
   "secs": 0.7,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L322-66",
-  "mutation": "> -> >= @ line 322: def calibration_by_model(self, domain: Optional[str] = None) -> dict:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "DIV2MUL-L203-52",
+  "mutation": "/ -> * @ line 203: adapters declare 'scholarly work search by title/author/topic'. Rather",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L205-47",
+  "mutation": "and -> or @ line 205: clauses which one covers the question best and adopt ITS phrasing for",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L216-34",
+  "mutation": "> -> >= @ line 216: if d.included and d.score > best_score:",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L216-22",
+  "mutation": "and -> or @ line 216: if d.included and d.score > best_score:",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L219-24",
+  "mutation": "and -> or @ line 219: elif d.included and best_names and \\",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GE2GT-L220-24",
+  "mutation": ">= -> > @ line 220: d.score >= best_score * 0.9:",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "MUL2DIV-L220-38",
+  "mutation": "* -> / @ line 220: d.score >= best_score * 0.9:",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L244-37",
+  "mutation": "> -> >= @ line 244: def build_query(question_text: str) -> str:",
+  "status": "killed",
+  "secs": 0.8,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L253-25",
+  "mutation": "or -> and @ line 253: return \" \".join(out) or question_text.strip()",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L256-67",
+  "mutation": "> -> >= @ line 256: def refine_query(previous_query: str, relevant_titles: list[str]) -> str:",
+  "status": "killed",
+  "secs": 0.8,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GE2GT-L266-24",
+  "mutation": ">= -> > @ line 266: if len(add) >= 4:",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GE2GT-L268-20",
+  "mutation": ">= -> > @ line 268: if len(add) >= 4:",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "ADD2SUB-L270-27",
+  "mutation": "+ -> - @ line 270: return (previous_query + \" \" + \" \".join(add)).strip()",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L279-27",
+  "mutation": "and -> or @ line 279: declared requirement \u2014 and which one. This is the smallest viable",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L280-12",
+  "mutation": "- -> + @ line 280: expected-information-gain test: not a Bayesian VOI model, just the",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L283-45",
+  "mutation": "and -> or @ line 283: possible effect on the leaf's conclusion and is skipped.\"\"\"",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L294-30",
+  "mutation": "> -> >= @ line 294: def worth_the_call(self) -> bool:",
   "status": "killed",
   "secs": 0.7,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L324-42",
-  "mutation": "- -> + @ line 324: (NEXT.md dissent logging; W4 multi-model). Keyed by the ``model`` that",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L295-38",
+  "mutation": "and -> or @ line 295: return bool(self.satisfiable) and not self.duplicate_voice",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L329-63",
-  "mutation": "- -> + @ line 329: n_scored=0 rather than an implied 100% or 0%. The empty-string model",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L329-47",
-  "mutation": "or -> and @ line 329: n_scored=0 rather than an implied 100% or 0%. The empty-string model",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L330-25",
-  "mutation": "/ -> * @ line 330: (backend failure / unattributed) is grouped under \"(unattributed)\".",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.28s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L334-34",
-  "mutation": "and -> or @ line 334: if domain is not None and o.claim_domain != domain:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L336-26",
-  "mutation": "or -> and @ line 336: key = o.model or \"(unattributed)\"",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.28s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "EQ2NE-L341-55",
-  "mutation": "== -> != @ line 341: right = sum(1 for o in scored if o.outcome == \"RIGHT\")",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.28s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L345-51",
-  "mutation": "/ -> * @ line 345: \"precision_of_attack\": round(right / len(scored), 3) if scored else None,",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GE2GT-L348-66",
-  "mutation": ">= -> > @ line 348: else \"well_calibrated\" if right / len(scored) >= 0.35",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L348-52",
-  "mutation": "/ -> * @ line 348: else \"well_calibrated\" if right / len(scored) >= 0.35",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L359-61",
-  "mutation": "- -> + @ line 359: ATTACK_SYSTEM_PROMPT = \"\"\"You are THE ADVERSARY in a research-integrity \\",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L361-50",
-  "mutation": "and -> or @ line 361: conclusion below is WRONG. You are not a reviewer and you must not be polite. \\",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L365-61",
-  "mutation": "or -> and @ line 365: 1. REFUTING EVIDENCE \u2014 what specific evidence, if it existed or was missed, \\",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L366-69",
-  "mutation": "and -> or @ line 366: would refute this conclusion? Is any already present in the evidence and \\",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L376-51",
-  "mutation": "or -> and @ line 376: Rules: every objection must name the concrete fact or gap it rests on \u2014 no \\",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.30s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L379-12",
-  "mutation": "and -> or @ line 379: is ignored, and being calibrated matters more than being fierce.\"\"\"",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L405-46",
-  "mutation": "> -> >= @ line 405: reasoning: str = \"\") -> str:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L299-44",
+  "mutation": "> -> >= @ line 299: question_type: str = \"\") -> GainEstimate:",
   "status": "killed",
   "secs": 0.7,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L406-21",
-  "mutation": "- -> + @ line 406: ev = \"\\n\".join(f\"- {e}\" for e in evidence_items) or \"(none)\"",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L406-53",
-  "mutation": "or -> and @ line 406: ev = \"\\n\".join(f\"- {e}\" for e in evidence_items) or \"(none)\"",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L417-27",
-  "mutation": "- -> + @ line 417: Construction is backend-agnostic. Pass any object exposing",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L420-46",
-  "mutation": "- -> + @ line 420: from ROLE_TASK_CLASSES[ADVERSARY] so model-per-role stays a config",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.26s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L423-43",
-  "mutation": "and -> or @ line 423: ASYMMETRY GUARANTEE: ``apply_verdict`` and ``make_seal_veto`` can only",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L424-21",
-  "mutation": "or -> and @ line 424: lower confidence or refuse the seal. There is no code path in this",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L431-29",
-  "mutation": "or -> and @ line 431: self.ledger = ledger or AdversaryLedger()",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.26s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L432-37",
-  "mutation": "or -> and @ line 432: self.task_class = task_class or AGPRole.ROLE_TASK_CLASSES[AGPRole.ADVERSARY][0]",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L306-47",
+  "mutation": "- -> + @ line 306: produce it: the planner already authors per-source queries; here we",
   "status": "killed",
-  "secs": 0.6,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L436-74",
-  "mutation": "> -> >= @ line 436: evidence_items: Iterable[str], reasoning: str = \"\") -> list[AdversaryObjection]:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L310-6",
+  "mutation": "- -> + @ line 310: - quant_required with no quantitative evidence yet: any real fetch",
   "status": "killed",
-  "secs": 0.6,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L454-56",
-  "mutation": "or -> and @ line 454: parsed = json.loads(resp.get(\"content\") or \"{}\")",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L463-27",
-  "mutation": "or -> and @ line 463: for raw in (parsed or {}).get(\"objections\", []) or []:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L311-29",
+  "mutation": "> -> >= @ line 311: could carry numbers -> potentially satisfies.",
   "status": "killed",
-  "secs": 0.6,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L464-41",
-  "mutation": "or -> and @ line 464: if not isinstance(raw, dict) or not (raw.get(\"text\") or \"\").strip():",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L465-33",
-  "mutation": "- -> + @ line 465: continue  # empty-text objections are noise, drop them",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.26s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L480-65",
-  "mutation": "> -> >= @ line 480: objections: Iterable[AdversaryObjection]) -> tuple[float, str]:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L312-6",
+  "mutation": "- -> + @ line 312: - independent-source shortfall: a source whose independence_key is",
   "status": "killed",
-  "secs": 0.7,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L483-8",
-  "mutation": "- -> + @ line 483: - Any BLOCKING objection \u2192 veto_reason set (seal must refuse).",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L484-8",
-  "mutation": "- -> + @ line 484: - Otherwise score \u2212 \u03a3 penalties (MAJOR/MINOR), floored at 0.",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L484-46",
-  "mutation": "/ -> * @ line 484: - Otherwise score \u2212 \u03a3 penalties (MAJOR/MINOR), floored at 0.",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.26s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L485-8",
-  "mutation": "- -> + @ line 485: - No objections \u2192 score unchanged. There is NO bonus path.",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MAX2MIN-L490-34",
-  "mutation": "max( -> min( @ line 490: return floor_conf(max(0.0, float(confidence_score))), ob.text",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "MAX2MIN-L492-29",
-  "mutation": "max( -> min( @ line 492: clamped = floor_conf(max(0.0, float(confidence_score) - penalty))",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L313-54",
+  "mutation": "> -> >= @ line 313: NOT already in the trace can add a NEW voice -> potentially",
   "status": "killed",
-  "secs": 0.6,
+  "secs": 1.3,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L492-62",
-  "mutation": "- -> + @ line 492: clamped = floor_conf(max(0.0, float(confidence_score) - penalty))",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L314-60",
+  "mutation": "or -> and @ line 314: satisfies. One already counted (same overlap family or host)",
   "status": "killed",
-  "secs": 0.6,
+  "secs": 1.3,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "LT2LE-L494-28",
-  "mutation": "< -> <= @ line 494: if objs and clamped < floor_conf(float(confidence_score)):",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L494-16",
-  "mutation": "and -> or @ line 494: if objs and clamped < floor_conf(float(confidence_score)):",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L495-60",
-  "mutation": "- -> + @ line 495: reason = f\"adversary: {len(objs)} objection(s), -{penalty:.2f} confidence\"",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L499-52",
-  "mutation": "> -> >= @ line 499: def make_seal_veto(self, persist: bool = True) -> Callable:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L316-6",
+  "mutation": "- -> + @ line 316: - source-class shortfall: class is assigned AFTER ingest from",
   "status": "killed",
-  "secs": 0.6,
+  "secs": 1.3,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "TRUE2FALSE-L499-45",
-  "mutation": "True -> False @ line 499: def make_seal_veto(self, persist: bool = True) -> Callable:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.37s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L503-37",
-  "mutation": "- -> + @ line 503: Runs the attack SYNCHRONOUSLY-wrapped around the async backend via a",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L508-13",
-  "mutation": "- -> + @ line 508: Non-blocking        \u2192 summary.confidence_score lowered in place",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "DIV2MUL-L512-32",
-  "mutation": "/ -> * @ line 512: On success the sustained/overruled statuses are persisted so the",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L517-37",
-  "mutation": "> -> >= @ line 517: def _veto(session, summary) -> Optional[str]:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L319-6",
+  "mutation": "- -> + @ line 319: - a source whose declared `cannot_answer` covers the question AND",
   "status": "killed",
-  "secs": 0.6,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "OR2AND-L519-60",
-  "mutation": "or -> and @ line 519: claim_id = getattr(session, \"session_id\", None) or claim_default(session)",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L328-58",
+  "mutation": "- -> + @ line 328: achieved, n_indep, produced_quant=True)  # success-case upper bound",
   "status": "killed",
-  "secs": 0.6,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "LT2LE-L541-36",
-  "mutation": "< -> <= @ line 541: if reason and new_score < summary.confidence_score:",
-  "status": "SURVIVED",
-  "secs": 0.6,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.26s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L541-22",
-  "mutation": "and -> or @ line 541: if reason and new_score < summary.confidence_score:",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L549-47",
-  "mutation": "- -> + @ line 549: \"sealed over objection: non-blocking severity; \"",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
- },
- {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L553-37",
-  "mutation": "> -> >= @ line 553: def claim_default(_session) -> str:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "TRUE2FALSE-L328-42",
+  "mutation": "True -> False @ line 328: achieved, n_indep, produced_quant=True)  # success-case upper bound",
   "status": "killed",
-  "secs": 0.6,
+  "secs": 1.2,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "SUB2ADD-L554-27",
-  "mutation": "- -> + @ line 554: return \"unknown-claim\"",
-  "status": "SURVIVED",
-  "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.29s\n"
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L339-56",
+  "mutation": "or -> and @ line 339: answers = [c for c in (getattr(spec, \"answers\", ()) or ())]",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "GT2GE-L559-56",
-  "mutation": "> -> >= @ line 559: def install_adversary(session, adversary: \"Adversary\") -> Callable:",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L344-58",
+  "mutation": "or -> and @ line 344: (getattr(spec, \"cannot_answer\", ()) or ())).lower()",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L346-21",
+  "mutation": "and -> or @ line 346: bool(cannot) and not ans_tokens",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L347-8",
+  "mutation": "and -> or @ line 347: and any(_prefix_hit(t, cw) or _prefix_hit(cw, t)",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L347-35",
+  "mutation": "or -> and @ line 347: and any(_prefix_hit(t, cw) or _prefix_hit(cw, t)",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "LT2LE-L359-62",
+  "mutation": "< -> <= @ line 359: indep_short = [r for r in reasons if \"independent sources <\" in r]",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "EQ2NE-L360-39",
+  "mutation": "== -> != @ line 360: if duplicate_voice and indep_short == reasons:",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L360-23",
+  "mutation": "and -> or @ line 360: if duplicate_voice and indep_short == reasons:",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L387-26",
+  "mutation": "> -> >= @ line 387: def n_admitted(self) -> int:",
   "status": "killed",
   "secs": 0.7,
   "tail": ""
  },
  {
-  "file": "agp/adversary.py",
-  "id": "AND2OR-L564-4",
-  "mutation": "and -> or @ line 564: and callers can compare the returned callables to detect that).",
-  "status": "SURVIVED",
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L395-59",
+  "mutation": "and -> or @ line 395: caller (fixtures in tests), the model seam is optional and used only",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "MUL2DIV-L400-23",
+  "mutation": "* -> / @ line 400: def __init__(self, *, registry, ledger, transport=None,",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "TRUE2FALSE-L406-37",
+  "mutation": "True -> False @ line 406: use_planner: bool = True,",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "TRUE2FALSE-L407-39",
+  "mutation": "True -> False @ line 407: adaptive_gain: bool = True,",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L412-25",
+  "mutation": "or -> and @ line 412: self.gate = gate or RelevanceGate()",
+  "status": "killed",
+  "secs": 1.0,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "MAX2MIN-L413-26",
+  "mutation": "max( -> min( @ line 413: self.max_rounds = max(1, int(max_rounds))",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "MAX2MIN-L414-36",
+  "mutation": "max( -> min( @ line 414: self.max_sources_per_leaf = max(1, int(max_sources_per_leaf))",
+  "status": "killed",
+  "secs": 1.0,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "MAX2MIN-L415-37",
+  "mutation": "max( -> min( @ line 415: self.max_fetches_per_round = max(1, int(max_fetches_per_round))",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L453-40",
+  "mutation": "> -> >= @ line 453: min_independent: int) -> RetrievalTrace:",
+  "status": "killed",
+  "secs": 0.8,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L458-32",
+  "mutation": "and -> or @ line 458: if legacy_calls is None and not self.use_planner:",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "ADD2SUB-L478-44",
+  "mutation": "+ -> - @ line 478: for rnd in range(1, self.max_rounds + 1):",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L498-42",
+  "mutation": "and -> or @ line 498: if plan.plannable and plan.queries:",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L504-56",
+  "mutation": "or -> and @ line 504: \"reason\": (plan.reason or",
+  "status": "killed",
+  "secs": 1.5,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "EQ2NE-L516-71",
+  "mutation": "== -> != @ line 516: if sorted(getattr(s, \"name\", \"\") for s in ordered) == \\",
+  "status": "killed",
+  "secs": 1.4,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L531-42",
+  "mutation": "> -> >= @ line 531: if self.adaptive_gain and rnd > 1:",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L531-34",
+  "mutation": "and -> or @ line 531: if self.adaptive_gain and rnd > 1:",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L537-38",
+  "mutation": "or -> and @ line 537: question_type or question.text)",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L543-47",
+  "mutation": "- -> + @ line 543: \"declared cannot-answer / no addressable \"",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "DIV2MUL-L543-55",
+  "mutation": "/ -> * @ line 543: \"declared cannot-answer / no addressable \"",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "SUB2ADD-L548-41",
+  "mutation": "- -> + @ line 548: logger.info(\"gain-skip %s r%d: %s\",",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "EQ2NE-L603-49",
+  "mutation": "== -> != @ line 603: kwargs = {k: (query if v == \"term\" else v)",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L604-55",
+  "mutation": "or -> and @ line 604: for k, v in (kw_args or {}).items()}",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "EQ2NE-L605-48",
+  "mutation": "== -> != @ line 605: args = tuple(query if a == \"term\" else a",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L611-46",
+  "mutation": "or -> and @ line 611: if not plan.plannable or not plan.queries:",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L613-49",
+  "mutation": "or -> and @ line 613: (plan.reason or",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "MUL2DIV-L621-60",
+  "mutation": "* -> / @ line 621: fetched = getattr(adapter, method_name)(*args, **kwargs)",
+  "status": "killed",
   "secs": 0.7,
-  "tail": ".....................................                                    [100%]\n37 passed in 0.27s\n"
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L622-50",
+  "mutation": "or -> and @ line 622: if source.last_record is None or \\",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "TRUE2FALSE-L627-71",
+  "mutation": "True -> False @ line 627: body = __import__(\"json\").dumps(fetched, sort_keys=True)",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "MIN2MAX-L639-26",
+  "mutation": "min( -> max( @ line 639: max_workers = min(len(specs), 8) if len(specs) > 1 else 1",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L639-59",
+  "mutation": "> -> >= @ line 639: max_workers = min(len(specs), 8) if len(specs) > 1 else 1",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L654-61",
+  "mutation": "or -> and @ line 654: urls=urls or None)",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "EQ2NE-L656-24",
+  "mutation": "== -> != @ line 656: if kind == \"skip\":",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "EQ2NE-L663-24",
+  "mutation": "== -> != @ line 663: if kind == \"fail\":",
+  "status": "killed",
+  "secs": 0.9,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "TRUE2FALSE-L692-56",
+  "mutation": "True -> False @ line 692: f\"{spec.name}_fetch\", body, primary=True, urls=[fr.url])",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "TRUE2FALSE-L699-52",
+  "mutation": "True -> False @ line 699: {\"name\": spec.name, \"admitted\": True,",
+  "status": "killed",
+  "secs": 0.8,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GE2GT-L722-53",
+  "mutation": ">= -> > @ line 722: sufficient = len(trace.independent_keys) >= min_independent",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "MIN2MAX-L723-30",
+  "mutation": "min( -> max( @ line 723: dec = term.record(min(1.0, len(trace.independent_keys) /",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "DIV2MUL-L723-67",
+  "mutation": "/ -> * @ line 723: dec = term.record(min(1.0, len(trace.independent_keys) /",
+  "status": "killed",
+  "secs": 1.3,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "MAX2MIN-L724-34",
+  "mutation": "max( -> min( @ line 724: max(1, min_independent)))",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L730-34",
+  "mutation": "and -> or @ line 730: if not sufficient and not dec.stop and \\",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "DIV2MUL-L737-43",
+  "mutation": "/ -> * @ line 737: f\"cannot alter tier/stance/confidence\")",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GE2GT-L742-30",
+  "mutation": ">= -> > @ line 742: f\"sources >= required {min_independent}\")",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "OR2AND-L754-46",
+  "mutation": "or -> and @ line 754: trace.stop_reason = trace.stop_reason or \"round budget exhausted\"",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L767-26",
+  "mutation": "> -> >= @ line 767: def _titles(parsed: Any) -> list[str]:",
+  "status": "killed",
+  "secs": 0.7,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "GT2GE-L771-17",
+  "mutation": "> -> >= @ line 771: if depth > 5:",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "AND2OR-L775-65",
+  "mutation": "and -> or @ line 775: if k in (\"title\", \"display_name\", \"brief_title\") and \\",
+  "status": "killed",
+  "secs": 1.4,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "ADD2SUB-L779-34",
+  "mutation": "+ -> - @ line 779: walk(v, depth + 1)",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
+ },
+ {
+  "file": "tools/pipeline/retrieval.py",
+  "id": "ADD2SUB-L782-30",
+  "mutation": "+ -> - @ line 782: walk(v, depth + 1)",
+  "status": "killed",
+  "secs": 1.2,
+  "tail": ""
  }
 ]
