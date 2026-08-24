@@ -268,10 +268,15 @@ class TestCensus:
 
 class TestEia:
     def test_series_requires_key_header_not_query(self, monkeypatch):
+        # Live-verified 2026-08: /v2/seriesid/{ID} was retired (HTTP 404);
+        # v2 series are facet values on a data route. PET.WCESTUS1.W is a
+        # v1 weekly petroleum stocks id; the fixture pins the steo route
+        # fallback shape used for unmapped ids.
         eia, t = build("eia", "EiaAdapter", {
-            EIA_BASE + "/seriesid/PET.WCESTUS1.W?frequency=weekly": {
+            EIA_BASE + "/steo/data?frequency=weekly"
+                       "&facets%5BseriesId%5D%5B%5D=PET.WCESTUS1": {
                 "response": {"data": [{"period": "2024-01-05",
-                                       "value": 73.81}]}}},
+                                       "value": 73.81}]}},},
         )
         monkeypatch.setenv("CALLISTO_EIA_API_KEY", "ek")
         out = eia.series("pet.wcestus1.w", frequency="weekly")
@@ -280,7 +285,23 @@ class TestEia:
         assert t.calls[0][1]["X-Api-Key"] == "ek"
         assert "api_key=ek" not in t.calls[0][0] and "key=ek" not in t.calls[0][0]
 
-    def test_missing_key_no_fetch(self):
+    def test_series_known_route_facet(self, monkeypatch):
+        # Known ids route to their real v2 data route with the right facet
+        # name — verified live: RWTC -> petroleum/pri/spt?facets[series][].
+        eia, t = build("eia", "EiaAdapter", {
+            EIA_BASE + "/petroleum/pri/spt/data?frequency=monthly"
+                       "&facets%5Bseries%5D%5B%5D=RWTC&length=3": {
+                "response": {"total": "487", "data": [
+                    {"period": "2024-07", "series": "RWTC",
+                     "value": "81.8"}]}},},
+        )
+        monkeypatch.setenv("CALLISTO_EIA_API_KEY", "ek")
+        out = eia.series("RWTC", frequency="monthly", length=3)
+        assert out["data"][0]["value"] == "81.8"
+
+    def test_missing_key_no_fetch(self, monkeypatch):
+        # _require_key runs before any URL is built; ensure no ambient key
+        monkeypatch.delenv("CALLISTO_EIA_API_KEY", raising=False)
         eia, t = build("eia", "EiaAdapter", {})
         with pytest.raises(SourceError, match="CALLISTO_EIA_API_KEY"):
             eia.series("PET.WCESTUS1.W")
