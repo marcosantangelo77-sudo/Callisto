@@ -1,30 +1,30 @@
 {
-  "generated_at": "2026-08-24T09:04:25.450816+00:00",
+  "generated_at": "2026-08-24T09:12:51.665559+00:00",
   "n_total": 5,
-  "n_scored": 2,
-  "n_null": 3,
-  "null_rate": 0.6,
+  "n_scored": 5,
+  "n_null": 0,
+  "null_rate": 0.0,
   "mean_brier": 0.25,
   "brier_ci95": [
     0.25,
     0.25
   ],
   "mean_absolute_error_vs_half": 0.0,
-  "sealed_rate": 0.5,
-  "mean_elapsed_s": 171.9,
+  "sealed_rate": 0.2,
+  "mean_elapsed_s": 144.4,
   "magnitude": {
-    "n_with_market": 2,
-    "mean_edge_taken": -0.3,
-    "mean_directional_edge": -0.3,
+    "n_with_market": 5,
+    "mean_edge_taken": -0.14,
+    "mean_directional_edge": -0.22,
     "beat_market_rate": 0.0
   },
   "brier_decomposition": {
-    "reliability": 0.25,
+    "reliability": 0.01,
     "resolution": 0.0,
-    "uncertainty": 0.0,
+    "uncertainty": 0.24,
     "brier_from_parts": 0.25,
-    "n": 2,
-    "base_rate": 1.0
+    "n": 5,
+    "base_rate": 0.6
   },
   "calibration_overall": [
     {
@@ -46,10 +46,10 @@
     {
       "bin_low": 0.4,
       "bin_high": 0.6,
-      "n": 2,
+      "n": 5,
       "n_no_truth": 0,
       "mean_p": 0.5,
-      "realised": 1.0
+      "realised": 0.6
     },
     {
       "bin_low": 0.6,
@@ -71,48 +71,31 @@
   "slices": {
     "by_domain": {
       "FINANCIAL": {
-        "n": 2,
+        "n": 5,
         "brier": 0.25,
-        "mean_directional_edge": -0.3
+        "mean_directional_edge": -0.22
       }
     },
     "by_horizon": {
       "short": {
-        "n": 2,
+        "n": 5,
         "brier": 0.25,
-        "mean_directional_edge": -0.3
+        "mean_directional_edge": -0.22
       }
     },
     "by_question_type": {
       "beat_or_miss": {
-        "n": 2,
+        "n": 5,
         "brier": 0.25,
-        "mean_directional_edge": -0.3
+        "mean_directional_edge": -0.22
       }
     },
-    "nulls_by_domain": {
-      "FINANCIAL": 3
-    },
-    "errors_by_domain": {
-      "FINANCIAL": 3
-    }
+    "nulls_by_domain": {},
+    "errors_by_domain": {}
   },
   "failures": {
     "refusals": [],
-    "errors": [
-      {
-        "question_id": "ca8b500dd9b1417e",
-        "error": "RuntimeError: <asyncio.locks.Semaphore object at 0x101acf010 [locked]> is bound to a different event loop"
-      },
-      {
-        "question_id": "f5de4cd259114c7f",
-        "error": "RuntimeError: <asyncio.locks.Semaphore object at 0x101acf010 [locked]> is bound to a different event loop"
-      },
-      {
-        "question_id": "7317d0d47f554e38",
-        "error": "RuntimeError: <asyncio.locks.Semaphore object at 0x101acf010 [locked]> is bound to a different event loop"
-      }
-    ]
+    "errors": []
   },
-  "verdict": "MAJORITY NULLS \u2014 most evidence could not prove pre-cutoff publication; treat scores as unrepresentative and fix retrieval first."
+  "verdict": "at or worse than chance \u2014 do not trust these predictions yet"
 }
