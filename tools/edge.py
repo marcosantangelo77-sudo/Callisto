@@ -38,7 +38,6 @@ from dataclasses import dataclass, field
 from typing import Optional, Union
 
 from tools.devig import devig_market
-from tools.kelly import kelly_full
 
 Quote = Union[int, float]
 
@@ -178,6 +177,26 @@ def _to_decimal(price: Quote) -> float:
     return 1.0 / p
 
 
+def _quote_decimal(quote: "MarketQuote") -> float:
+    """Decimal odds for OUR side, honouring quote.kind.
+
+    BUG FIXED 2026-08-23: assess_edge used to call _to_decimal(quote.price),
+    which re-runs AUTO detection and ignores quote.kind entirely. A
+    kind='contract_cents' quote of 47 (= $0.47, true decimal 2.128) was read
+    as decimal odds 47.0, inflating EV ~100x and pinning Kelly at the cap.
+    The market-probability half of the same call honoured kind; the payout
+    half did not. Any non-auto kind now goes through implied_probability(),
+    the same path fair_probability() uses, so both halves of an assessment
+    can no longer disagree about what the price means.
+    """
+    if quote.kind == "auto":
+        return _to_decimal(quote.price)
+    p = quote.implied_probability()
+    if not 0.0 < p < 1.0:
+        raise ValueError(f"implied probability {p} out of (0,1)")
+    return 1.0 / p
+
+
 # ---------------------------------------------------------------------------
 # Edge assessment — the lifecycle stage itself
 # ---------------------------------------------------------------------------
@@ -262,8 +281,9 @@ def assess_edge(
     edge = calibrated_prob - market_fair
     notes: list[str] = []
 
-    # Decimal payout available at the quoted price.
-    decimal = _to_decimal(quote.price)
+    # Decimal payout available at the quoted price — honouring quote.kind
+    # (see _quote_decimal: auto-detect here was the ~100x EV bug).
+    decimal = _quote_decimal(quote)
     b = decimal - 1.0
 
     # ONE price, one copy (Family 2): edge is measured against the DEVIGGED
