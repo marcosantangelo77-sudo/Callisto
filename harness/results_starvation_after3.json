@@ -195,5 +195,65 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q07",
+    "question": "Did any FDIC-insured banks fail during calendar year 2021?",
+    "category": "no-answer (answer is NO)",
+    "expected_stance": "DENIES",
+    "gt": "FDIC recorded ZERO bank failures in 2021.",
+    "verified_by": "banks.data.fdic.gov failures FAILYR=2021 \u2192 0 rows",
+    "elapsed_s": 324.6,
+    "error": "",
+    "sealed": true,
+    "refusal_reason": "",
+    "conclusion": "Did any FDIC-insured banks fail during calendar year 2021?\n\n- [SPECULATIVE 0.54] Do independent contemporaneous news and industry reports corroborate the count of 2021 US bank failures reported by the FDIC?: The evidence provided contains only truncated rows from the FDIC failed-bank database for years such as 1934-1936 and 1985. No 2021 failure records and no independent contemporaneous news or industry reports are included in the evidence, so corroboration of the 2021 count cannot be assessed from what was given.  [GAP: unprovable]\n\n[evidence age at seal: oldest 294s, newest 294s, median 294s across 2 timestamped fetches]",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.54,
+    "confidence_tier": "SPECULATIVE",
+    "n_fetches": 2,
+    "sources": [
+      "fdic"
+    ],
+    "leaves": [
+      {
+        "text": "Which FDIC-insured banks were officially declared failed by the FDIC during calendar year 2021 (per the FDIC Failed Bank List)?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "How many FDIC-insured bank failures did the FDIC report for calendar year 2021 in its official statistics and Quarterly Banking Profile?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Do independent contemporaneous news and industry reports corroborate the count of 2021 US bank failures reported by the FDIC?",
+        "answer": "The evidence provided contains only truncated rows from the FDIC failed-bank database for years such as 1934-1936 and 1985. No 2021 failure records and no independent contemporaneous news or industry reports are included in the evidence, so corroboration of the 2021 count cannot be assessed from what was given.",
+        "tier": "SPECULATIVE",
+        "confidence": 0.54,
+        "stance": "UNDETERMINED",
+        "gap_kind": "unprovable"
+      }
+    ],
+    "objections": [],
+    "notes": [
+      "leaf 'Which FDIC-insured banks were officially declared failed by ': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=FD, fdic (content covers 19% of the question's topical words (need 25%); missing: 2021, calendar, declared, during, failed, insured, list, official), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic); answer rests on NO sources",
+      "leaf 'Which FDIC-insured banks were officially declared failed by ': 3 fetch(s) rejected at ingestion: [fdic] content covers 19% of the question's topical words (need 25%); missing: 2021, calendar, declared, during, failed, insured, list, official; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic; [wikidata] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, banks, calendar, declared, during, failed, fdic",
+      "leaf 'How many FDIC-insured bank failures did the FDIC report for ': sources asked but NOT contributing evidence: federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 0% of the question's topical words (need 25%); missing: 2021, aggregate, bank, banking, calendar, failures, fdic, insured), fred (content covers 0% of the question's topical words (need 25%); missing: 2021, aggregate, bank, banking, calendar, failures, fdic, insured), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, fred (content covers 0% of the question's topical words (need 25%); missing: 2021, aggregate, bank, banking, calendar, failures, fdic, insured), wikidata (content covers 0% of the question's topical words (need 25%); missing: 2021, aggregate, bank, banking, calendar, failures, fdic, insured); answer rests on ['fdic']",
+      "leaf 'How many FDIC-insured bank failures did the FDIC report for ': 4 fetch(s) rejected at ingestion: [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, aggregate, bank, banking, calendar, failures, fdic, insured; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, aggregate, bank, banking, calendar, failures, fdic, insured; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, aggregate, bank, banking, calendar, failures, fdic, insured; [wikidata] content covers 0% of the question's topical words (need 25%); missing: 2021, aggregate, bank, banking, calendar, failures, fdic, insured",
+      "leaf 'Do independent contemporaneous news and industry reports cor': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2021, bank, contemporaneous, corroborate, count, coverage, failures, fdic), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2021, bank, contemporaneous, corroborate, count, coverage, failures, fdic), fred (content covers 0% of the question's topical words (need 25%); missing: 2021, bank, contemporaneous, corroborate, count, coverage, failures, fdic), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2021, bank, contemporaneous, corroborate, count, coverage, failures, fdic), fred (content covers 0% of the question's topical words (need 25%); missing: 2021, bank, contemporaneous, corroborate, count, coverage, failures, fdic), openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on ['fdic']",
+      "leaf 'Do independent contemporaneous news and industry reports cor': 5 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, contemporaneous, corroborate, count, coverage, failures, fdic; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, contemporaneous, corroborate, count, coverage, failures, fdic; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, contemporaneous, corroborate, count, coverage, failures, fdic; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, contemporaneous, corroborate, count, coverage, failures, fdic; [fred] content covers 0% of the question's topical words (need 25%); missing: 2021, bank, contemporaneous, corroborate, count, coverage, failures, fdic"
+    ],
+    "gap_kinds": {
+      "f726270369a049fe": "honest_null",
+      "a85d12c697d04934": "unprovable"
+    },
+    "verdict": "undetermined-sealed"
   }
 ]
