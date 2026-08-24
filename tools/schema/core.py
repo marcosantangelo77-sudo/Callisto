@@ -72,6 +72,43 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_runs_source_finished
     ON ingestion_runs(source, finished_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ingestion_runs_status
     ON ingestion_runs(status, finished_at DESC);
+
+-- ──────────────────────────────────────────
+-- PREDICTIONS + OUTCOMES: the domain-general resolution seam
+-- ──────────────────────────────────────────
+-- What tools/resolvers/generic.py::SqlitePredictionResolver has read since
+-- B1, formalised at last: one PREREGISTERED prediction per row (a number
+-- committed before ground truth), and at most one outcome per prediction
+-- (outcomes.prediction_id IS the primary key — a second resolution of the
+-- same prediction cannot be inserted, only refused).
+--
+-- predicted_prob is NOT NULL with a 0..1 CHECK: a prediction without a
+-- number is not a prediction (K1's lesson — absence must fail closed).
+-- claim_id deliberately carries NO foreign key to hypotheses(hypothesis_id):
+-- that table is plugin-owned (plugins/sports/schema.py) and the core must
+-- not depend on any plugin. Integrity is enforced in code
+-- (tools/resolvers/generic.py::PredictionJournal) by requiring the claim
+-- row to exist at write time.
+CREATE TABLE IF NOT EXISTS predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    claim_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    predicted_prob REAL NOT NULL CHECK(predicted_prob >= 0.0 AND predicted_prob <= 1.0),
+    context_key TEXT,
+    due_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_predictions_claim ON predictions(claim_id);
+CREATE INDEX IF NOT EXISTS idx_predictions_open ON predictions(due_at);
+
+CREATE TABLE IF NOT EXISTS outcomes (
+    prediction_id INTEGER PRIMARY KEY,
+    resolved_outcome TEXT NOT NULL
+        CHECK(resolved_outcome IN ('positive','negative','indeterminate')),
+    payoff REAL,
+    resolved_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_by TEXT NOT NULL DEFAULT 'owner'
+);
 """
 
 
