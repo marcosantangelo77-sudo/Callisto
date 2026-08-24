@@ -135,5 +135,78 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q08",
+    "question": "Is Paris the capital of France according to Wikidata?",
+    "category": "checkable-yes",
+    "expected_stance": "AFFIRMS",
+    "gt": "Wikidata Q142 P36 = Q90 = Paris.",
+    "verified_by": "wikidata wbgetclaims Q142 P36 \u2192 Q90 (Paris)",
+    "elapsed_s": 236.1,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [
+      {
+        "text": "What does Wikidata list as the value of the 'capital' (P36) property on the France entity (Q142)?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      },
+      {
+        "text": "Does the Wikidata item for Paris (Q90) identify it as a capital city and link it to France as the country whose capital it is?",
+        "answer": "No evidence items were provided, so the Wikidata claim about Q90 cannot be verified from the given evidence.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": "honest_null"
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What does Wikidata list as the value of the 'capital' (P36) ': sources asked but NOT contributing evidence: bls (content covers 14% of the question's topical words (need 25%); missing: capital, entity, france, list, p36, property, q142, query), cftc_cot (content covers 0% of the question's topical words (need 25%); missing: api, capital, data, entity, france, list, p36, property), clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: api, capital, data, entity, france, list, p36, property), fdic (content covers 7% of the question's topical words (need 25%); missing: api, capital, data, entity, france, list, p36, property), fred (error: HTTP 400 for https://api.stlouisfed.org/fred/series/observations?series_id=P36&l, treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/P36, worldbank (content covers 21% of the question's topical words (need 25%); missing: capital, data, entity, list, property, q142, query, sparql), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc; answer rests on NO sources",
+      "leaf 'What does Wikidata list as the value of the 'capital' (P36) ': 5 fetch(s) rejected at ingestion: [bls] content covers 14% of the question's topical words (need 25%); missing: capital, entity, france, list, p36, property, q142, query; [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: api, capital, data, entity, france, list, p36, property; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: api, capital, data, entity, france, list, p36, property; [fdic] content covers 7% of the question's topical words (need 25%); missing: api, capital, data, entity, france, list, p36, property; [worldbank] content covers 21% of the question's topical words (need 25%); missing: capital, data, entity, list, property, q142, query, sparql",
+      "leaf 'Does the Wikidata item for Paris (Q90) identify it as a capi': sources asked but NOT contributing evidence: bls (content covers 0% of the question's topical words (need 25%); missing: capital, city, country, entity, france, graph, identify, item), cftc_cot (content covers 0% of the question's topical words (need 25%); missing: capital, city, country, entity, france, graph, identify, item), clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: capital, city, country, entity, france, graph, identify, item), fdic (content covers 6% of the question's topical words (need 25%); missing: capital, city, country, entity, france, graph, identify, item), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (error: HTTP 400 for https://api.stlouisfed.org/fred/series/observations?series_id=Q90&l, treasury (error: HTTP 404 for https://api.fiscaldata.treasury.gov/services/api/fiscal_service/Q90, worldbank (content covers 18% of the question's topical words (need 25%); missing: capital, city, entity, graph, identify, item, link, links), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re; answer rests on NO sources",
+      "leaf 'Does the Wikidata item for Paris (Q90) identify it as a capi': 5 fetch(s) rejected at ingestion: [bls] content covers 0% of the question's topical words (need 25%); missing: capital, city, country, entity, france, graph, identify, item; [cftc_cot] content covers 0% of the question's topical words (need 25%); missing: capital, city, country, entity, france, graph, identify, item; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: capital, city, country, entity, france, graph, identify, item; [fdic] content covers 6% of the question's topical words (need 25%); missing: capital, city, country, entity, france, graph, identify, item; [worldbank] content covers 18% of the question's topical words (need 25%); missing: capital, city, entity, graph, identify, item, link, links"
+    ],
+    "gap_kinds": {
+      "7d6da0192edf4534": "honest_null",
+      "1429b4dc320b4d1d": "honest_null"
+    },
+    "verdict": "refused"
+  },
+  {
+    "id": "Q09",
+    "question": "Did the Supreme Court decide Loper Bright Enterprises v. Raimondo before 2024?",
+    "category": "multi-hop/negation",
+    "expected_stance": "DENIES",
+    "gt": "dateFiled = 2024-06-28 \u2014 not before 2024.",
+    "verified_by": "courtlistener search API caseName/dateFiled",
+    "elapsed_s": 62.8,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "every leaf came back unanswered",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 0,
+    "sources": [],
+    "leaves": [],
+    "objections": [],
+    "notes": [],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
