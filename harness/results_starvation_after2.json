@@ -683,5 +683,74 @@
     "notes": [],
     "gap_kinds": {},
     "verdict": "refused"
+  },
+  {
+    "id": "Q18",
+    "question": "Is the average of the U.S. unemployment rates for January through June 2026 greater than 4.25 percent?",
+    "category": "arithmetic-comparison",
+    "expected_stance": "AFFIRMS",
+    "gt": "Mean = 4.283\u2026 > 4.25.",
+    "verified_by": "fredgraph.csv UNRATE + arithmetic",
+    "elapsed_s": 242.7,
+    "error": "",
+    "sealed": false,
+    "refusal_reason": "adversary veto: adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default",
+    "conclusion": "",
+    "stance": "UNDETERMINED",
+    "confidence_score": 0.0,
+    "confidence_tier": "UNVERIFIED",
+    "n_fetches": 8,
+    "sources": [
+      "bls",
+      "fdic",
+      "fred"
+    ],
+    "leaves": [
+      {
+        "text": "What was the official U.S. unemployment rate (BLS Current Population Survey, seasonally adjusted) for each month from January 2026 through June 2026?",
+        "answer": "The official U.S. unemployment rate (CPS, seasonally adjusted, via FRED UNRATE as of 2026-08-24): Jan 2026 = 4.3%, Feb = 4.4%, Mar = 4.3%, Apr = 4.3%, May = 4.3%, Jun = 4.2%. Note: the direct BLS API request failed on quota; these values come from the FRED mirror of BLS series UNRATE.",
+        "tier": "VERIFIED",
+        "confidence": 0.9,
+        "stance": "AFFIRMS",
+        "gap_kind": ""
+      },
+      {
+        "text": "Has BLS released the June 2026 Employment Situation report containing the final published unemployment rate for all six months January-June 2026, and are any of those figures still preliminary or subject to benchmark revision?",
+        "answer": "The evidence does not settle this. The BLS API request failed (daily threshold reached, no data returned), and the second source (a Federal Register-style institutions index filtered on 'Employment Situation') returned zero results. There is therefore no evidence of the June 2026 Employment Situation release or of any unemployment rate figures for January-June 2026; whether any figures are preliminary or subject to benchmark revision cannot be assessed.",
+        "tier": "UNVERIFIED",
+        "confidence": 0.05,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Does the arithmetic average of the six monthly unemployment rates for January-June 2026 exceed 4.25 percent?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      },
+      {
+        "text": "Do independent forecasts (e.g., CBO, Fed SEP, consensus surveys) made before full 2026 data availability predict a January-June 2026 average above or below 4.25 percent, as a cross-check if some months are unreleased?",
+        "answer": "",
+        "tier": "UNVERIFIED",
+        "confidence": 0.0,
+        "stance": "UNDETERMINED",
+        "gap_kind": ""
+      }
+    ],
+    "objections": [
+      "adversary backend failed (JSONDecodeError: Expecting value: line 1 column 1 (char 0)) \u2014 conclusion unattacked, refusing by default"
+    ],
+    "notes": [
+      "leaf 'What was the official U.S. unemployment rate (BLS Current Po': sources asked but NOT contributing evidence: census (error: HTTP 404 for https://api.census.gov/data/timeseries/timeseries/international/pop, clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=of, federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/; answer rests on ['bls', 'fdic', 'fred']",
+      "leaf 'Has BLS released the June 2026 Employment Situation report c': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=BL; answer rests on ['bls', 'fdic']",
+      "leaf 'Does the arithmetic average of the six monthly unemployment ': sources asked but NOT contributing evidence: clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2026, arithmetic, average, bls, computation, direct, exceed, january), federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, clinicaltrials (content covers 0% of the question's topical words (need 25%); missing: 2026, arithmetic, average, bls, computation, direct, exceed, january), worldbank (content covers 12% of the question's topical words (need 25%); missing: arithmetic, average, bls, computation, direct, exceed, january, june); answer rests on ['bls', 'fred']",
+      "leaf 'Does the arithmetic average of the six monthly unemployment ': 3 fetch(s) rejected at ingestion: [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2026, arithmetic, average, bls, computation, direct, exceed, january; [clinicaltrials] content covers 0% of the question's topical words (need 25%); missing: 2026, arithmetic, average, bls, computation, direct, exceed, january; [worldbank] content covers 12% of the question's topical words (need 25%); missing: arithmetic, average, bls, computation, direct, exceed, january, june",
+      "leaf 'Do independent forecasts (e.g., CBO, Fed SEP, consensus surv': sources asked but NOT contributing evidence: clinicaltrials (error: HTTP 400 for https://clinicaltrials.gov/api/v2/studies?pageSize=20&query.term=in, federalregister (error: exhausted retries; last error: HTTP 500 for https://www.federalregister.gov/api/, fred (content covers 3% of the question's topical words (need 25%); missing: above, availability, average, before, below, cbo, check, consensus), courtlistener (error: exhausted retries; last error: HTTP 429 for https://www.courtlistener.com/api/re, openalex (error: exhausted retries; last error: HTTP 429 for https://api.openalex.org/works?searc, fred (content covers 3% of the question's topical words (need 25%); missing: above, availability, average, before, below, cbo, check, consensus), semanticscholar (error: exhausted retries; last error: HTTP 403 for https://api.semanticscholar.org/grap, wikidata (content covers 13% of the question's topical words (need 25%); missing: 2026, above, availability, average, before, below, cbo, check); answer rests on ['fdic']",
+      "leaf 'Do independent forecasts (e.g., CBO, Fed SEP, consensus surv': 3 fetch(s) rejected at ingestion: [fred] content covers 3% of the question's topical words (need 25%); missing: above, availability, average, before, below, cbo, check, consensus; [fred] content covers 3% of the question's topical words (need 25%); missing: above, availability, average, before, below, cbo, check, consensus; [wikidata] content covers 13% of the question's topical words (need 25%); missing: 2026, above, availability, average, before, below, cbo, check"
+    ],
+    "gap_kinds": {},
+    "verdict": "refused"
   }
 ]
