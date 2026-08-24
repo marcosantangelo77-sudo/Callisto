@@ -890,6 +890,6 @@ def calculate_units(
             "tier_multiplier": round(tier_mult, 3),
             "kelly_fraction": kelly_fraction,
             "raw_fraction": round(edge * kelly_fraction * tier_mult, 6),
-            "capped_fraction": round(fraction, 6),
+            "capped_fraction": round(fraction, 7),
         },
     }
