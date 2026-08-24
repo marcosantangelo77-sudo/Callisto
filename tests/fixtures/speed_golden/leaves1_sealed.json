@@ -10,7 +10,7 @@
     {
       "sha": "e8d35d81c7675ecf88645098a87032ff1d17a6c011183643eeb4a43ecdd675a8",
       "source_name": "federalregister",
-      "url": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields%5B%5D=title&fields%5B%5D=type&fields%5B%5D=abstract&fields%5B%5D=action&fields%5B%5D=publication_date&fields%5B%5D=effective_on&fields%5B%5D=docket_ids&fields%5B%5D=citation&fields%5B%5D=document_number&fields%5B%5D=html_url&fields%5B%5D=agencies&conditions=leaf+apple+earnings+expectations+analyst+consensus"
+      "url": "https://www.federalregister.gov/api/v1/documents.json?per_page=20&order=newest&fields%5B%5D=title&fields%5B%5D=type&fields%5B%5D=abstract&fields%5B%5D=action&fields%5B%5D=publication_date&fields%5B%5D=effective_on&fields%5B%5D=docket_ids&fields%5B%5D=citation&fields%5B%5D=document_number&fields%5B%5D=html_url&fields%5B%5D=agencies&conditions%5Bterm%5D=leaf+apple+earnings+expectations+analyst+consensus"
     }
   ],
   "leaves": [
