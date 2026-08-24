@@ -825,7 +825,7 @@ def calculate_units(
     if unit_size is None:
         unit_size = bankroll * 0.01
 
-    if unit_size <= 0 or bankroll <= 1:
+    if unit_size <= 0 or bankroll <= 0:
         return {
             "units": 0.0,
             "dollar_amount": 0.0,
@@ -889,7 +889,7 @@ def calculate_units(
             "tier": tier,
             "tier_multiplier": round(tier_mult, 3),
             "kelly_fraction": kelly_fraction,
-            "raw_fraction": round(edge * kelly_fraction * tier_mult, 6),
+            "raw_fraction": round(edge * kelly_fraction * tier_mult, 7),
             "capped_fraction": round(fraction, 7),
         },
     }
