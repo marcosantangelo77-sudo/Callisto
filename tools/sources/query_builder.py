@@ -665,6 +665,42 @@ _WORLDBANK_INDICATORS: dict[str, list[Candidate]] = {
     "energy use": [
         Candidate("EG.USE.PCAP.KG.OE", "Energy use per capita", 0.8),
     ],
+    # D1 (question battery, findings/question_battery.md): every concept
+    # below was previously reachable ONLY through the broken free-text
+    # `search` fallback, which the WB API ignores (byte-identical response
+    # regardless of query). These are real WDI codes — data edits, not
+    # guesses — so common macro questions resolve to indicator fetches.
+    "unemployment": [
+        Candidate("SL.UEM.TOTL.ZS", "Unemployment, total (% of labor "
+                  "force)", 0.9),
+    ],
+    "inflation": [
+        Candidate("FP.CPI.TOTL.ZG", "Inflation, consumer prices (annual "
+                  "%)", 0.9),
+    ],
+    "life expectancy": [
+        Candidate("SP.DYN.LE00.IN", "Life expectancy at birth, total "
+                  "(years)", 0.9),
+    ],
+    "gdp per capita": [
+        Candidate("NY.GDP.PCAP.CD", "GDP per capita (current US$)", 0.95),
+    ],
+    "exports": [
+        Candidate("NE.EXP.GNFS.CD", "Exports of goods and services (% "
+                  "of GDP)", 0.85),
+    ],
+    "imports": [
+        Candidate("NE.IMP.GNFS.CD", "Imports of goods and services (% "
+                  "of GDP)", 0.85),
+    ],
+    "co2": [
+        Candidate("EN.GHG.CO2.PC.CE.AR5", "CO2 emissions per capita",
+                  0.85),
+    ],
+    "co2 emissions": [
+        Candidate("EN.GHG.CO2.PC.CE.AR5", "CO2 emissions per capita",
+                  0.9),
+    ],
 }
 
 #: ISO3 country codes that appear as ordinary words in questions.
@@ -723,13 +759,22 @@ def _plan_worldbank(question: str) -> PlanResult:
         if not core:
             return PlanResult(False, reason="no known indicator and no "
                               "searchable core")
-        # fall back to WB's own indicator search so results carry real codes
-        return PlanResult(True, queries=[PlannedQuery(
-            source="worldbank", method="search_indicators",
-            kwargs={"query": core, "limit": 10},
-            rationale="WB indicator full-text search; results carry codes "
-                      "for a follow-up indicator fetch")],
-            reason=f"no curated indicator matched; searched as '{core}'")
+        # D1 (question battery, findings/question_battery.md): the old
+        # fallback stuffed the natural-language core into the WB API's
+        # free-text `search` parameter. The API IGNORES that parameter and
+        # returns the same default catalogue page every time — fertilizer
+        # datasets for court-case questions, byte-identical sha256 across
+        # differently-worded queries. A source that always returns junk is
+        # worse than a source that says "I cannot answer this" (precedent:
+        # kalshi's honest gap), so an unresolved concept is now an honest
+        # gap naming exactly what is missing.
+        return PlanResult(False, reason=(
+            f"World Bank WDI has no working free-text indicator search: the "
+            f"API ignores its `search` parameter and returns an unrelated "
+            f"default catalogue page (see findings/question_battery.md D1). "
+            f"No curated WDI concept matched '{core}'. Add the "
+            f"concept to _WORLDBANK_INDICATORS or supply an explicit "
+            f"indicator code like SP.POP.TOTL."))
     code = resolved_i["indicator_code"]
     kw: dict = {"code": code, "per_page": 200}
     if country:
