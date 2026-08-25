@@ -328,13 +328,29 @@ def annotate_for_reinjection(row: dict) -> dict:
     The emitted dict always carries source_class and confidence_ceiling so
     downstream prompt-builders (and the wiki's source admission) cannot treat
     a reinjected INFERRED learning as PRIMARY evidence.
+
+    Effective-confidence resolution, in order:
+      1. a caller-provided ``effective_confidence`` (e.g. already passed
+         through decay_confidence) is honoured and capped by the ceiling;
+      2. otherwise the raw stored ``confidence`` is used, capped likewise.
+
+    History (improve/memory-wiki): this function previously OVERWROTE any
+    caller-provided effective_confidence with min(raw, ceiling), which made
+    read-time decay dead code on every prompt path — a 100-day-old learning
+    emitted at full stored confidence. Callers that compute decay must see it
+    survive; callers that do not get the old capped-raw behaviour unchanged.
     """
     cls = normalize_source_class(row.get("source_class")) or "INFERRED"
+    ceiling = PROVENANCE_CEILINGS[cls]
     out = dict(row)
     out["source_class"] = cls
-    out["confidence_ceiling"] = PROVENANCE_CEILINGS[cls]
-    out["effective_confidence"] = min(
-        float(row.get("confidence", 0.0)),
-        PROVENANCE_CEILINGS[cls],
-    )
+    out["confidence_ceiling"] = ceiling
+    provided = row.get("effective_confidence")
+    if provided is not None:
+        eff = float(provided)
+    else:
+        eff = float(row.get("confidence", 0.0))
+    # Cap by class ceiling; never introduce upward rounding here — the only
+    # arithmetic is min(), so the value can only fall.
+    out["effective_confidence"] = max(0.0, min(eff, ceiling))
     return out
