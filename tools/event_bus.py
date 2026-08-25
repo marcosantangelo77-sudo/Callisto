@@ -138,7 +138,13 @@ class EventBus:
             )
 
     async def start_audit_drain(self, db_path: str = DB_PATH) -> None:
-        """Start background task that persists audit events to SQLite."""
+        """Start background task that persists audit events to SQLite.
+
+        Idempotent: repeated calls while a drainer is live are no-ops so a
+        second start never orphans an earlier drain task.
+        """
+        if self._running and self._audit_task is not None and not self._audit_task.done():
+            return
         self._running = True
         self._audit_task = asyncio.create_task(self._drain_audit(db_path))
         logger.info("Event bus audit drain started")
@@ -183,12 +189,17 @@ class EventBus:
                 logger.debug(f"Audit drain error: {e}")
 
     async def stop(self) -> None:
-        """Stop the audit drain."""
+        """Stop the audit drain.
+
+        Idempotent: safe to call repeatedly; cancels and awaits the owned
+        task exactly once and clears the task reference.
+        """
         self._running = False
-        if self._audit_task:
-            self._audit_task.cancel()
+        task, self._audit_task = self._audit_task, None
+        if task is not None and not task.done():
+            task.cancel()
             try:
-                await self._audit_task
+                await task
             except asyncio.CancelledError:
                 pass
 
