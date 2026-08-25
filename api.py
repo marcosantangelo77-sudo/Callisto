@@ -1339,15 +1339,27 @@ async def _wiki_task_short_circuit(query: str) -> Optional[dict]:
         sim = top.get("similarity")
         if not isinstance(sim, (int, float)) or sim < threshold:
             return None
+        # An article that earned nothing must not answer a research task.
+        # The historical ``or 0.5`` raised absent/zero confidence to a
+        # passing score — absence is fail-closed here, same as everywhere
+        # else in the memory/wiki layer (build/memory-wiki).
+        conf = top.get("confidence")
+        if not isinstance(conf, (int, float)) or conf <= 0:
+            logger.info(
+                f"Wiki short-circuit declined: article '{top.get('topic')}' "
+                f"has no earned confidence ({conf!r}) — routing through pipeline."
+            )
+            return None
         return {
             "short_circuited": True,
             "wiki_topic": top.get("topic"),
             "wiki_title": top.get("title"),
             "wiki_similarity": round(sim, 4),
             "wiki_domain": top.get("domain"),
-            "wiki_confidence": top.get("confidence"),
+            "wiki_confidence": conf,
+            "wiki_provenance_class": top.get("provenance_class"),
             "conclusion": top.get("summary") or top.get("content"),
-            "confidence_score": top.get("confidence") or 0.5,
+            "confidence_score": round(float(conf), 4),
             "domain": top.get("domain") or "GENERAL",
             "source": "wiki_short_circuit",
         }
@@ -1448,11 +1460,16 @@ async def query_world(
 @app.get("/wiki/stats")
 async def wiki_stats():
     """Get wiki compilation statistics."""
-    from tools.knowledge_wiki import get_wiki
+    from tools.knowledge_wiki import get_write_stats, get_wiki
     wiki = get_wiki()
     async with aiosqlite.connect(memory.db_path) as db:
         await db.execute("PRAGMA busy_timeout = 60000")
-        return await wiki.get_stats(db)
+        stats = await wiki.get_stats(db)
+    # Direct-write counters were added so silent wiki failures become loud
+    # (pre-2026-04-22 every demotion write failed inside except:pass); they
+    # are only observable if something actually serves them.
+    stats["direct_writes"] = get_write_stats()
+    return stats
 
 
 @app.get("/wiki/articles")

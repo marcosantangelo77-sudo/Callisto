@@ -109,12 +109,30 @@ class TestWikiCompilation:
         assert c == 0.0  # fail closed: omitting confidence must pull DOWN
 
     def test_no_source_class_anywhere_in_wiki_confidence(self):
-        """Article confidence is computed ONLY from float confidences; there
-        is no source-class term at all. Two INFERRED 0.55 items and two
-        PRIMARY 1.0 items are indistinguishable to the compiler."""
+        """Article confidence NUMBERS are computed ONLY from float
+        confidences; provenance class is carried alongside as a label, not
+        mixed into the arithmetic. (Historic red-team finding: two INFERRED
+        0.55 items and two PRIMARY 1.0 items were indistinguishable to the
+        compiler — CLOSED by build/memory-wiki: sources carry
+        provenance_class through ingestion and articles persist their
+        weakest source class; see test_build_memory_wiki_policy.)"""
         import inspect
         from tools import knowledge_wiki
         src = inspect.getsource(knowledge_wiki._article_confidence)
         src += inspect.getsource(knowledge_wiki._merged_article_confidence)
         assert "source_class" not in src, (
-            "wiki confidence ignores provenance class entirely")
+            "wiki confidence arithmetic must stay purely numeric")
+
+    def test_articles_now_carry_their_weakest_source_class(self):
+        """RESOLUTION of the historic gap above: the compiler exposes the
+        weakest-source-class rule and articles can be told apart."""
+        import inspect
+        from tools import knowledge_wiki
+        assert hasattr(knowledge_wiki, "_weakest_source_class")
+        src = inspect.getsource(knowledge_wiki._weakest_source_class)
+        assert "_CLASS_ORDER" in src or "min(" in src
+        # and it actually distinguishes the historic attack pair:
+        infer = [{"provenance_class": "INFERRED"}, {"provenance_class": "INFERRED"}]
+        prim = [{"provenance_class": "PRIMARY"}, {"provenance_class": "PRIMARY"}]
+        assert knowledge_wiki._weakest_source_class(infer) == "INFERRED"
+        assert knowledge_wiki._weakest_source_class(prim) == "PRIMARY"

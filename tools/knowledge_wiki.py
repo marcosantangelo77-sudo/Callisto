@@ -174,11 +174,16 @@ _CLASS_ORDER = {"INFERRED": 0, "SIGNAL": 1, "SECONDARY": 2, "PRIMARY": 3}
 
 
 def _normalize_class(value) -> Optional[str]:
-    """Coerce a declared class to a known one; anything else is None."""
+    """Coerce a declared class to a known one; anything else is None.
+
+    Deliberately STRICT (exact match): this reads STORED bytes, and only
+    canonical agp SourceClass spellings are legitimate in the column. A
+    lenient normalizer ('primary ' → PRIMARY) is a check that cannot fail
+    — PATTERNS #4. Contrast memory_epistemics.normalize_source_class,
+    which governs live caller-declared parameters and stays lenient."""
     if value is None:
         return None
-    v = str(value).strip().upper()
-    return v if v in _CLASS_ORDER else None
+    return value if value in _CLASS_ORDER else None
 
 
 def _as_confidence(value) -> float:
@@ -1133,12 +1138,26 @@ class KnowledgeWiki:
         source_entries: Optional[list[str]] = None,
         confidence: float = 0.6,
         summary: Optional[str] = None,
+        source_class: Optional[str] = None,
     ) -> dict:
         """Schema-correct direct write of a wiki article.
 
         Unlike ``_create_article``/``_update_article`` this does NOT invoke the
         LLM compile pipeline — it's for "we already know the lesson, file it"
         cases like LIVE-demotion post-mortems and backtest null results.
+
+        Trust policy (build/memory-wiki — family-#2 closure; this direct
+        write previously sat outside every gate):
+
+          - UPDATE merges confidence DOWNWARD (min of existing and new), per
+            the module invariant that an article is never stronger than the
+            weakest thing fed into it. The historical REPLACE let a caller's
+            self-reported number RAISE an article's standing.
+          - ``source_class``, when declared, subjects the number to that
+            class's ceiling (PRIMARY/SECONDARY/SIGNAL/INFERRED).
+          - the declared/weakest class is persisted to
+            ``wiki_articles.provenance_class`` so consumers can tell what
+            kind of inputs stand behind the number.
 
         Uses the REAL table schema (topic PK, title, content, summary,
         related_topics, source_sessions, source_entries, domain, confidence,
@@ -1152,6 +1171,13 @@ class KnowledgeWiki:
         global _wiki_writes_failed, _wiki_writes_succeeded
         await self.initialize(db)
 
+        cls = _normalize_class(source_class)
+        # An UNDECLARED class imposes no ceiling: existing callers write
+        # measured backtest/demotion summaries with code-constant numbers,
+        # and silently re-ceiling them to 0.55 would change recorded
+        # sports-loop values nobody asked to change. Declaring a class is
+        # the opt-in to ceiling enforcement.
+        ceiling = _class_ceiling(cls) if cls else 1.0
         related_topics = related_topics or []
         source_sessions = source_sessions or []
         source_entries = source_entries or []
@@ -1164,6 +1190,19 @@ class KnowledgeWiki:
         try:
             existing = await self._get_article(db, topic)
             if existing:
+                # Merge DOWN only (min): a lesson can demote an article,
+                # never promote it above what already stands.
+                stored_conf = round(min(
+                    float(existing.get("confidence") or 0.0),
+                    float(confidence),
+                    ceiling,
+                ), 3)
+                existing_class = _normalize_class(existing.get("provenance_class"))
+                if existing_class and cls:
+                    merged_class = min(existing_class, cls,
+                                       key=lambda c: _CLASS_ORDER[c])
+                else:
+                    merged_class = cls or existing_class
                 # Merge related_topics + source lists (dedup), bump compile_count
                 merged_related = list(dict.fromkeys(
                     existing.get("related_topics", []) + related_topics
@@ -1179,52 +1218,54 @@ class KnowledgeWiki:
                     "summary = ?, related_topics = ?, source_sessions = ?, "
                     "source_entries = ?, domain = ?, confidence = ?, "
                     "updated_at = ?, compile_count = compile_count + 1, "
-                    "content_hash = ? WHERE topic = ?",
+                    "content_hash = ?, provenance_class = ? WHERE topic = ?",
                     (
                         title, content, summary,
                         json.dumps(merged_related),
                         json.dumps(merged_sessions),
                         json.dumps(merged_entries),
-                        domain, round(float(confidence), 3), now,
-                        content_hash, topic,
+                        domain, stored_conf, now,
+                        content_hash, merged_class, topic,
                     ),
                 )
                 await db.commit()
                 _wiki_writes_succeeded += 1
                 logger.info(
                     f"Wiki lesson: updated '{topic}' (domain={domain}, "
-                    f"compile_count+=1)"
+                    f"conf={stored_conf}, compile_count+=1)"
                 )
                 try:
                     await self._emit_article_embedding(
                         topic,
                         {"title": title, "summary": summary, "content": content},
-                        domain, round(float(confidence), 3),
+                        domain, stored_conf,
                     )
                 except Exception as e:
                     logger.debug(f"Wiki lesson embed deferred for '{topic}': {e}")
                 return {"action": "updated", "topic": topic}
             else:
+                stored_conf = round(min(float(confidence), ceiling), 3)
                 await db.execute(
                     "INSERT INTO wiki_articles "
                     "(topic, title, content, summary, related_topics, "
                     " source_sessions, source_entries, domain, confidence, "
-                    " created_at, updated_at, compile_count, content_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " created_at, updated_at, compile_count, content_hash, "
+                    " provenance_class) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         topic, title, content, summary,
                         json.dumps(related_topics),
                         json.dumps(source_sessions),
                         json.dumps(source_entries),
-                        domain, round(float(confidence), 3),
-                        now, now, 1, content_hash,
+                        domain, stored_conf,
+                        now, now, 1, content_hash, cls,
                     ),
                 )
                 await db.commit()
                 _wiki_writes_succeeded += 1
                 logger.info(
                     f"Wiki lesson: created '{topic}' (domain={domain}, "
-                    f"{len(content)} chars)"
+                    f"conf={stored_conf}, {len(content)} chars)"
                 )
                 # Emit the embedding so the article is retrievable via
                 # semantic search — without this the wiki-in-the-loop
@@ -1233,7 +1274,7 @@ class KnowledgeWiki:
                     await self._emit_article_embedding(
                         topic,
                         {"title": title, "summary": summary, "content": content},
-                        domain, round(float(confidence), 3),
+                        domain, stored_conf,
                     )
                 except Exception as e:
                     logger.debug(f"Wiki lesson embed deferred for '{topic}': {e}")
@@ -1305,7 +1346,7 @@ class KnowledgeWiki:
                     placeholders = ", ".join("?" for _ in topics_in_order)
                     sql = (
                         f"SELECT topic, title, summary, content, domain, confidence, "
-                        f"updated_at FROM wiki_articles WHERE topic IN ({placeholders})"
+                        f"updated_at, provenance_class FROM wiki_articles WHERE topic IN ({placeholders})"
                     )
                     params = list(topics_in_order)
                     if domain:
@@ -1323,6 +1364,7 @@ class KnowledgeWiki:
                             "topic": r[0], "title": r[1], "summary": r[2],
                             "content": r[3], "domain": r[4], "confidence": r[5],
                             "updated_at": r[6],
+                            "provenance_class": r[7] if len(r) > 7 else None,
                             "similarity": round(sim_by_topic[t], 6),
                         })
                         if len(out) >= top_k:
@@ -1341,8 +1383,8 @@ class KnowledgeWiki:
 
         # Fallback: legacy keyword LIKE search.
         sql = (
-            "SELECT topic, title, summary, content, domain, confidence, updated_at "
-            "FROM wiki_articles "
+            "SELECT topic, title, summary, content, domain, confidence, updated_at, "
+            "provenance_class FROM wiki_articles "
             "WHERE (content LIKE ? OR title LIKE ? OR topic LIKE ?)"
         )
         params = [f"%{query}%", f"%{query}%", f"%{query}%"]
@@ -1356,7 +1398,9 @@ class KnowledgeWiki:
             {
                 "topic": r[0], "title": r[1], "summary": r[2],
                 "content": r[3], "domain": r[4], "confidence": r[5],
-                "updated_at": r[6], "similarity": None,
+                "updated_at": r[6],
+                "provenance_class": r[7] if len(r) > 7 else None,
+                "similarity": None,
             }
             for r in await cursor.fetchall()
         ]

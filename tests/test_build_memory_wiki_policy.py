@@ -52,6 +52,10 @@ async def db(tmp_path):
     async with aiosqlite.connect(str(tmp_path / "test.db")) as conn:
         wiki = KnowledgeWiki(str(tmp_path / "test.db"))
         await wiki.initialize(conn)
+        # Production adds source_task_id via ensure_schema's ALTER; mirror
+        # that here so _create_article's column probe matches reality.
+        from tools.schema.engine import _safe_add_column
+        await _safe_add_column(conn, "wiki_articles", "source_task_id", "TEXT")
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY, query TEXT NOT NULL,
@@ -333,6 +337,40 @@ class _MemoryStub:
     short-circuit probe only touches ``db_path``."""
     def __init__(self, db_path: str):
         self.db_path = db_path
+
+
+class TestIngestionPropertySweep:
+    """PATTERNS method #1: property sweeps over a parameter space found more
+    real defects here than any hand-written case. Property: whatever a
+    source claims, the ADMITTED confidence never exceeds its provenance
+    ceiling, and absence never enters above 0.0."""
+
+    @pytest.mark.parametrize("seed", range(25))
+    def test_admitted_confidence_never_exceeds_class_ceiling(self, seed):
+        import random
+        from tools.knowledge_wiki import (
+            _as_confidence, _class_ceiling, _normalize_class)
+        rng = random.Random(seed)
+        for _ in range(200):
+            cls_raw = rng.choice([
+                "PRIMARY", "SECONDARY", "SIGNAL", "INFERRED",
+                None, "", "primary ", "BOGUS", 3.2])
+            conf_raw = rng.choice([
+                None, 0.0, 0.5, 0.55, 0.75, 0.9, 1.0, 1.4, -0.3, "0.8", "x"])
+            cls = _normalize_class(cls_raw)
+            admitted = min(_as_confidence(conf_raw), _class_ceiling(cls))
+            assert 0.0 <= admitted <= 1.0
+            if cls is None:
+                # unclassified ⇒ INFERRED ceiling (fail closed)
+                assert admitted <= INFERRED_CAP + 1e-12
+            else:
+                assert admitted <= _class_ceiling(cls) + 1e-12
+
+    def test_absence_never_manufactures_half(self):
+        """The exact defect this run kills at three sites: ``conf or 0.5``."""
+        from tools.knowledge_wiki import _as_confidence
+        for absent in (None, "", "garbage", [], {}):
+            assert _as_confidence(absent) == 0.0
 
 
 def _tmp_db_path(db_fixture_tuple):
