@@ -261,13 +261,32 @@ class RestSource:
                 return getattr(resp, "status", 200), resp.read().decode(
                     "utf-8", errors="replace")
 
+        # RED TEAM S2: an injected test transport must see the SAME request
+        # the real path makes. Previously it received only (url, headers)
+        # and the JSON payload was silently dropped — every fixture-tested
+        # POST adapter (BLS) exercised POST semantics that do not exist in
+        # production (family 7). The Transport signature gains an optional
+        # third parameter; legacy two-arg transports still work.
+        def _via_transport() -> tuple[int, str]:
+            import inspect
+            try:
+                takes_payload = len(
+                    inspect.signature(self._transport).parameters) >= 3  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                takes_payload = False
+            transport = self._transport
+            assert transport is not None
+            if takes_payload:
+                return transport(url, headers, body.decode("utf-8"))
+            return transport(url, headers)
+
         last_err: Optional[str] = None
         for attempt in range(1, MAX_RETRIES + 1):
             self._limiter.wait()
             started = time.monotonic()
             try:
                 if self._transport is not None:
-                    status, text = self._transport(url, headers)
+                    status, text = _via_transport()
                 else:
                     status, text = _do()
                 self._record(url, status, text, time.monotonic() - started)

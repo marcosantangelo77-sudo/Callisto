@@ -58,8 +58,13 @@ def test_s2_injected_post_transport_receives_payload():
     fixture-tested adapter has untested POST semantics (BLS is POST)."""
     seen = {}
 
-    def transport(url, headers):
+    # *body absorbs the optional third argument the fixed post() offers;
+    # a two-arg transport stays valid, but the payload must REACH it.
+    def transport(url, headers, *body):
         seen["url"] = url
+        if body:
+            import json as _json
+            seen["payload"] = _json.loads(body[0])
         return (200, "{}")
 
     src = RestSource(_spec(), transport=transport)
