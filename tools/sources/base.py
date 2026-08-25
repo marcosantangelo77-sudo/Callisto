@@ -296,7 +296,15 @@ class RestSource:
             raise SourceError(f"no fetch record for {url}")
         return data, rec
 
-    def _record(self, url: str, status: int, body: str, dur: float) -> FetchRecord:
+    def _record(self, url: str, status: int, body: str, dur: float,
+                *, primary: bool = True) -> FetchRecord:
+        # RED TEAM S1 (source-registry-0825): a non-200 body is an ERROR
+        # PAGE, not evidence. Recording it as primary=True let any later
+        # text citing this URL verify as SECONDARY off a 503 gateway page
+        # (family 3/9). Error bodies are still recorded — the audit trail
+        # keeps them — but with primary=False, so they can mint nothing.
+        if status != 200:
+            primary = False
         rec = FetchRecord(
             url=url,
             status=status,
@@ -310,11 +318,23 @@ class RestSource:
         if self.ledger is not None:
             try:
                 self.ledger.record_tool_result(
-                    f"{self.spec.name}_fetch", body, primary=True, urls=[url]
+                    f"{self.spec.name}_fetch", body, primary=primary, urls=[url]
                 )
-            except Exception:  # pragma: no cover - ledger must not break fetches
-                logger.exception("provenance ledger rejected %s observation",
-                                 self.spec.name)
+            except Exception:
+                # RED TEAM S3: fail CLOSED. A swallowed ledger failure
+                # produces fetched bytes that NO seal or citation can ever
+                # verify while the pipeline runs green — family 1, a
+                # verification layer silently absent. Unverifiable evidence
+                # is worse than a failed fetch, so the ledger failure
+                # surfaces as a SourceError naming the source.
+                logger.exception(
+                    "PROVENANCE WRITE FAILED for %s (%s) — failing the "
+                    "fetch closed rather than minting unverifiable bytes",
+                    self.spec.name, url)
+                raise SourceError(
+                    f"provenance ledger rejected the {self.spec.name} "
+                    f"observation for {url}; refusing to return "
+                    f"unverifiable bytes")
         return rec
 
     def get_json(self, url: str) -> tuple[Any, FetchRecord]:
