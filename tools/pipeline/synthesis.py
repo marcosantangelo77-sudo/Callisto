@@ -326,6 +326,8 @@ def detect_contradictions(group: ClaimGroup,
     # stance
     sup = {it.indep_key: it for it in group.items if it.stance == "supports"}
     ref = {it.indep_key: it for it in group.items if it.stance == "refutes"}
+    unspecified = [it for it in group.items
+                   if it.stance not in ("supports", "refutes")]
     if sup and ref and not (set(sup) & set(ref)):
         sa, ra = next(iter(sup.values())), next(iter(ref.values()))
         out.append(Contradiction(
@@ -339,6 +341,28 @@ def detect_contradictions(group: ClaimGroup,
                  "indep_keys": sorted(ref),
                  "provenance": [{"sha256": x.content_sha256, "url": x.url}
                                 for x in ref.values()]},
+            ],
+            what_would_settle_it=_settle_suggestion("stance", group.claim),
+            severity="MAJOR",
+        ))
+    elif ref and unspecified:
+        # S1c (redteam synthesis): an EXPLICIT refutation is a live conflict
+        # even when no other voice states a stance. Silence must not be read
+        # as support: the refutation against uncommitted voices leaves the
+        # claim unresolved and caps the group at SPECULATIVE.
+        ra = next(iter(ref.values()))
+        out.append(Contradiction(
+            claim=group.claim, kind="stance",
+            sides=[
+                {"stance": "refutes", "sources": [ra.source_name],
+                 "indep_keys": sorted(ref),
+                 "provenance": [{"sha256": x.content_sha256, "url": x.url}
+                                for x in ref.values()]},
+                {"stance": "unspecified",
+                 "sources": [x.source_name for x in unspecified],
+                 "indep_keys": [x.indep_key for x in unspecified],
+                 "provenance": [{"sha256": x.content_sha256, "url": x.url}
+                                for x in unspecified]},
             ],
             what_would_settle_it=_settle_suggestion("stance", group.claim),
             severity="MAJOR",
@@ -393,9 +417,26 @@ def confidence_from_agreement(group: ClaimGroup,
     for it in group.items:
         by_class.setdefault(it.source_class if it.source_class in _CLASS_RANK
                             else "INFERRED", set()).add(it.indep_key)
+    # S2b (redteam synthesis): mirrors of ONE document under many names each
+    # get a distinct indep_key, so name-based counting credits volume that a
+    # single publisher controls. When NO item in the class carries a content
+    # hash there is nothing proving these are distinct documents — cap the
+    # class at single-voice credit. Production fetches always carry hashes,
+    # so genuine multi-source corroboration is unaffected.
+    unprovenanced_class: set[str] = set()
     score = 0.0
     for cls, ikeys in by_class.items():
         cls_voices = len(ikeys)
+        cls_items = [it for it in group.items
+                     if (it.source_class if it.source_class in _CLASS_RANK
+                         else "INFERRED") == cls]
+        if not any(it.content_sha256 for it in cls_items):
+            unprovenanced_class.add(cls)
+            reasons.append(
+                f"class {cls}: no content hashes on any item — distinct-"
+                f"document provenance unverifiable; corroboration capped "
+                f"at single-voice share")
+            continue
         cls_frac = min(1.0, _SINGLE_VOICE_FRACTION
                        + _PER_EXTRA_VOICE * max(0, cls_voices - 1))
         cls_ceiling = MAX_CONFIDENCE_BY_SOURCE.get(cls, 0.55)
@@ -403,6 +444,9 @@ def confidence_from_agreement(group: ClaimGroup,
         reasons.append(
             f"class {cls}: {cls_voices} independent voice(s) -> "
             f"{cls_frac:.0%} of its {cls_ceiling:.2f} ceiling")
+    for cls in unprovenanced_class:
+        cls_ceiling = MAX_CONFIDENCE_BY_SOURCE.get(cls, 0.55)
+        score = max(score, floor_conf(cls_ceiling * _SINGLE_VOICE_FRACTION))
     reasons.append(
         f"{n_indep} independent source(s) agree overall -> "
         f"{frac:.0%} of best-class ceiling (per-class accounting governs)")
@@ -571,8 +615,24 @@ def synthesize(question: str,
         rep.nulls[qid] = classify_null(trace)
         rep.notes.append(f"leaf {qid}: {rep.nulls[qid].status}")
     if rep.groups:
-        rep.confidence = max(
-            s for s, _ in rep.group_confidences.values())
+        # S3 (redteam synthesis): overall confidence was max(group scores),
+        # so one lucky PRIMARY group outweighed every other claim however
+        # poorly supported the rest of the question was — and the parent
+        # then inherited that number via the best-leaf rule. The overall
+        # figure is now the EVIDENCE-WEIGHTED mean over groups: strong
+        # groups still lift it, weak filler pulls it down, and no single
+        # corner can carry an entire report. Only ever lowers or equals the
+        # old max, never raises it.
+        total_items = sum(len(g.items) for g in rep.groups) or 1
+        weighted = sum(
+            len(g.items) * s
+            for g, (s, _) in ((g, rep.group_confidences[g.claim])
+                              for g in rep.groups)) / total_items
+        rep.confidence = min(weighted,
+                             max(s for s, _ in rep.group_confidences.values()))
+        rep.notes.append(
+            f"overall confidence is evidence-weighted across "
+            f"{len(rep.groups)} group(s), not the single best group")
     if rep.contradictions:
         rep.confidence = min(rep.confidence, _SPECULATIVE_CAP)
         rep.notes.append(
