@@ -941,20 +941,20 @@ class ResearchPipeline:
             if refs_failed is not None:
                 return
             leaf_refs = []
-            if not isinstance(outcome.artifact_refs or [], list):
+            if not isinstance(outcome.artifact_refs, list):
                 refs_failed = (
                     f"artifact refs for leaf '{qid}' are malformed "
                     f"(not a list: {outcome.artifact_refs!r}); "
                     "refusing artifactless seal")
                 return
-            if not isinstance(outcome.artifact_sha256s or [], list):
+            if not isinstance(outcome.artifact_sha256s, list):
                 refs_failed = (
                     f"artifact sha256s for leaf '{qid}' are malformed "
                     f"(not a list: {outcome.artifact_sha256s!r}); "
                     "refusing artifactless seal")
                 return
             try:
-                for rd in outcome.artifact_refs or []:
+                for rd in outcome.artifact_refs:
                     # Accept only real ArtifactRef instances (fresh paths) or
                     # dict payloads that rebuild cleanly via from_dict()
                     # (resumed paths). Anything else — junk strings, malformed
@@ -1279,11 +1279,14 @@ def _leaf_from_payload(d: dict) -> LeafOutcome:
     d["source_classes"] = _as_list_or_empty(d.get("source_classes"))
     d["requirement_reasons"] = _as_list_or_empty(d.get("requirement_reasons"))
     # Malformed (non-list) checkpoint fields must not raise during
-    # hydration; keep them unset so ordered assembly can fail closed
-    # with a descriptive refusal reason instead of a TypeError.
+    # hydration. A truly ABSENT field is the legacy form and falls back to
+    # the dataclass default (empty list); a PRESENT non-list value
+    # (None, int, dict, ...) is preserved verbatim so ordered assembly can
+    # distinguish "legacy checkpoint without this field" from "checkpoint
+    # with a malformed field" and fail closed on the latter.
     for k in ("artifact_sha256s", "artifact_refs"):
-        if not isinstance(d.get(k), list):
-            d[k] = None
+        if k in d and not isinstance(d[k], list):
+            pass  # preserve the malformed value for strict assembly checks
     # Full refs may be absent on legacy checkpoints; the ordered-assembly
     # SHA cross-check then fails closed rather than sealing artifactlessly.
     return LeafOutcome(**d)

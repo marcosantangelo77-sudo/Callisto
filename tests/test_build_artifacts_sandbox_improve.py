@@ -329,6 +329,76 @@ class TestCheckpointArtifactRefIntegrity:
         assert "refus" in r2.refusal_reason.lower()
         assert not r2.artifact_refs
 
+    def test_malformed_int_refs_with_empty_shas_refuse_not_seal(self, tmp_path):
+        """Independently reproduced counterexample: a resumed answer
+        checkpoint with leaf artifact_refs=42 and artifact_sha256s=[]
+        must NOT seal with empty refs and empty refusal reason. A present
+        non-list field is malformed (not legacy-absent) -> fail closed."""
+        tp = _load_pipeline_test_module()
+        from tools.pipeline.checkpoint import FileCheckpointer
+        cp = FileCheckpointer(root=tmp_path / "ckpt")
+        shared_store = tp.ArtifactStore(root=tmp_path / "artifacts")
+        fresh = _compute_model_and_pipeline(
+            tp, tmp_path, checkpointer=cp, store=shared_store)
+        r1 = _run(fresh)
+        assert r1.sealed and r1.artifact_refs
+
+        n_rewritten = 0
+        for ck in cp.list_all():
+            if ck.stage != "answer_leaf":
+                continue
+            leaf = dict(ck.payload.get("leaf") or {})
+            if leaf.get("artifact_sha256s"):
+                leaf["artifact_refs"] = 42
+                leaf["artifact_sha256s"] = []
+                ck.payload["leaf"] = leaf
+                cp.save(ck.run, ck.stage, ck.input_hash, ck.payload,
+                        claim_ids=ck.claim_ids)
+                n_rewritten += 1
+        assert n_rewritten, "no artifact-bearing answer checkpoint rewritten"
+
+        resumed = _compute_model_and_pipeline(
+            tp, tmp_path / "r2", checkpointer=cp, store=shared_store)
+        r2 = _run(resumed)
+        assert not r2.sealed, (
+            "artifactless seal from malformed refs=42/shas=[] must be "
+            f"impossible; got sealed=True refusal={r2.refusal_reason!r}")
+        assert r2.refusal_reason, "fail-closed must carry an honest reason"
+        assert "refus" in r2.refusal_reason.lower()
+        assert not r2.artifact_refs
+
+    def test_malformed_int_refs_with_int_shas_refuse_not_seal(self, tmp_path):
+        """Both fields present as non-list ints: fail closed too."""
+        tp = _load_pipeline_test_module()
+        from tools.pipeline.checkpoint import FileCheckpointer
+        cp = FileCheckpointer(root=tmp_path / "ckpt")
+        shared_store = tp.ArtifactStore(root=tmp_path / "artifacts")
+        fresh = _compute_model_and_pipeline(
+            tp, tmp_path, checkpointer=cp, store=shared_store)
+        r1 = _run(fresh)
+        assert r1.sealed and r1.artifact_refs
+
+        n_rewritten = 0
+        for ck in cp.list_all():
+            if ck.stage != "answer_leaf":
+                continue
+            leaf = dict(ck.payload.get("leaf") or {})
+            if leaf.get("artifact_sha256s"):
+                leaf["artifact_refs"] = 42
+                leaf["artifact_sha256s"] = 42
+                ck.payload["leaf"] = leaf
+                cp.save(ck.run, ck.stage, ck.input_hash, ck.payload,
+                        claim_ids=ck.claim_ids)
+                n_rewritten += 1
+        assert n_rewritten
+
+        resumed = _compute_model_and_pipeline(
+            tp, tmp_path / "r2", checkpointer=cp, store=shared_store)
+        r2 = _run(resumed)
+        assert not r2.sealed
+        assert r2.refusal_reason and "refus" in r2.refusal_reason.lower()
+        assert not r2.artifact_refs
+
     def test_non_list_artifact_refs_checkpoint_refuses_not_crashes(self, tmp_path):
         """artifact_refs stored as a non-list (e.g. a dict) must fail closed,
         never crash during checkpoint hydration."""
