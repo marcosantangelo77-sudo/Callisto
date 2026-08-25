@@ -318,21 +318,37 @@ class KnowledgeWiki:
                 "timestamp": row[5],
             })
 
-        # Recent hermes learnings
+        # Recent hermes learnings.
+        #
+        # EPISTEMICS (improve/memory-wiki): admission is gated on the DECAYED
+        # effective confidence, not the raw stored value. The escalator fix
+        # capped model-written learnings at the INFERRED ceiling (0.55) but this
+        # gate sat at 0.5 — BELOW the ceiling — so a single self-reported guess
+        # stayed a compile source forever regardless of staleness. Read-time
+        # decay (tools/memory_epistemics.decay_confidence, the same clock the
+        # prompt path uses) means an unverified 0.55 claim falls below this gate
+        # after ~1.9 days un-re-observed; re-recording refreshes learned_at, so
+        # re-observed learnings stay admissible. Direction of error: decay only
+        # ever LOWERS admissibility and article confidence.
+        from tools.memory_epistemics import decay_confidence
         cursor = await db.execute(
             "SELECT key, value, confidence, learned_at "
             "FROM hermes_learnings WHERE learned_at > ? AND confidence >= 0.5 "
             "ORDER BY learned_at DESC LIMIT ?",
             (last_compile, MAX_SOURCES_PER_COMPILE),
         )
+        now_utc = datetime.now(timezone.utc)
         for row in await cursor.fetchall():
+            eff = decay_confidence(row[2], row[3], now_utc)
+            if eff < 0.5:
+                continue  # stale unverified guess: no longer compile-worthy
             sources.append({
                 "type": "learning",
                 "id": row[0],
                 "query": row[0],
                 "domain": "GENERAL",
                 "content": row[1],
-                "confidence": row[2],
+                "confidence": eff,
                 "timestamp": row[3],
             })
 

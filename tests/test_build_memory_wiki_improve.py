@@ -74,11 +74,16 @@ SPORTS_SCHEMA = [
     ("(sport TEXT, team TEXT, market TEXT, bookmaker TEXT, american_odds INTEGER,"
      " edge REAL, expected_value REAL, kelly_fraction REAL, detected_at TEXT)"),  # ev_opportunities
     ("(session_id TEXT PRIMARY KEY, query TEXT, domain TEXT, conclusion TEXT,"
-     " confidence_score REAL, confidence_tier TEXT, sealed_at TEXT)"),    # sessions
+     " confidence_score REAL, confidence_tier TEXT, full_session TEXT,"
+     " seal_hash TEXT, sealed_at TEXT)"),                                 # sessions
     ("(hypothesis_id INTEGER PRIMARY KEY, name TEXT, sport TEXT, market_type TEXT,"
      " thesis TEXT, status TEXT, updated_at TEXT)"),                     # hypotheses
     ("(event_id INTEGER PRIMARY KEY, hypothesis_id INTEGER,"
      " signal_generated INTEGER, edge REAL)"),                           # backtest_events
+    ("(entry_id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT,"
+     " origin_agent TEXT, content TEXT, source_class TEXT,"
+     " confidence_score REAL, confidence_tier TEXT, domain TEXT,"
+     " source_name TEXT, created_at TEXT)"),                             # catalogue
 ]
 
 
@@ -97,7 +102,7 @@ def _make_db(tmp_path, learnings):
             sender TEXT NOT NULL, message TEXT NOT NULL, read INTEGER DEFAULT 0)""")
     for table, ddl in zip(
         ("bankroll", "bets", "ev_opportunities", "sessions",
-         "hypotheses", "backtest_events"), SPORTS_SCHEMA):
+         "hypotheses", "backtest_events", "catalogue"), SPORTS_SCHEMA):
         conn.execute(f"CREATE TABLE {table} {ddl}")
     for key, value, learned_at, conf in learnings:
         conn.execute(

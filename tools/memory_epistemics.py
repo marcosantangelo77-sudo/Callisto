@@ -14,10 +14,17 @@ Three defects this closes (findings/instance4.md, P3):
    and every subsequent read applies time decay. Nothing is monotonic.
 
 2. UNVERIFIED ADMISSIONS. A learning whose source class is INFERRED can
-   never be stored above the INFERRED ceiling regardless of what the writer
-   claimed; learnings claiming sealed provenance must carry a seal that
-   verifies, or they fall back to INFERRED. The wiki's >= 0.5 admission gate
-   therefore cannot be reached by an unverified guess alone.
+    never be stored above the INFERRED ceiling regardless of what the writer
+    claimed; learnings claiming sealed provenance must carry a seal that
+    verifies, or they fall back to INFERRED. The wiki's >= 0.5 compile gate
+    therefore cannot be climbed by ACCUMULATION: with the ratchet dead there
+    is no path from repeated guesses to a rising stored value.
+    (Honesty note, improve/memory-wiki: an earlier revision of this paragraph
+    claimed the gate "cannot be reached by an unverified guess alone". That
+    was numerically false — the INFERRED ceiling is 0.55, ABOVE the 0.5 gate.
+    What actually bounds that path now is decay: the wiki admits on DECAYED
+    effective confidence, so a single unverified 0.55 guess stays
+    wiki-admissible only ~1.9 days without re-observation.)
 
 3. PROVENANCE CEILINGS ON REINJECTION. Every learning carries its source
    class and confidence ceiling; when it is re-emitted into prompt context
