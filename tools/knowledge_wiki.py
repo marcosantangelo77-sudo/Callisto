@@ -706,7 +706,7 @@ class KnowledgeWiki:
             )
 
         prompt = (
-            f"You are a knowledge compiler for an autonomous sports betting research system.\n\n"
+            f"You are a knowledge compiler for an autonomous research system.\n\n"
             f"TOPIC: {topic}\n\n"
             f"NEW SOURCES:\n{sources_block}\n"
             f"{update_instruction}\n\n"

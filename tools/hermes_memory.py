@@ -38,7 +38,6 @@ load_dotenv()
 logger = logging.getLogger("callisto.hermes")
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
-MESSAGES_FILE = os.path.join(os.path.dirname(DB_PATH), "hermes_messages.json")
 
 # Context caller types — determines which sections get priority
 CALLER_HYPOTHESIS_GEN = "hypothesis_gen"
@@ -486,8 +485,9 @@ class HermesMemory:
             "Books: DraftKings (primary), Fanatics (secondary).\n"
             "Core method: devig sharp books (Pinnacle) to find true probability,\n"
             "compare to soft books (DK/FanDuel/BetMGM) for mispricing.\n"
-            "You are Claude Opus 4.6 \u2014 the PRIMARY reasoning engine.\n"
-            "Local models (Sentinel) handle lightweight tasks only.\n"
+            "You are the frontier reasoning engine for this session; local\n"
+            "models handle lightweight tasks only. (Routing is config-driven —\n"
+            "never assume a specific provider or model.)\n"
             "DISPOSITION:\n"
             "- You are a skeptic first. Your default: any signal is noise until proven.\n"
             "- You challenge your own output before returning it.\n"
