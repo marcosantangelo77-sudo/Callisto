@@ -9,7 +9,8 @@ One CLI for the things a person sitting at this machine actually does:
             fetch provenance) under the state dir.
   runs      list saved runs, newest first
   show      re-print one run — conclusion, artifacts RE-HASHED against the
-            artifact store, fetch provenance
+            artifact store, fetch provenance, and the seal RE-VERIFIED
+            against the stored session payload (exit 1 on tamper)
   status    hypothesis-pool / lifecycle counts from the local database
   doctor    can this box run a live question right now? (providers, sources)
 
@@ -36,6 +37,7 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Optional
 
 REPO = Path(__file__).resolve().parent
 
@@ -466,7 +468,9 @@ def _cmd_show(args: argparse.Namespace) -> int:
         for o in obs[:5]:
             print(f"  - {str(o)[:200]}")
     print(f"\nrecord   : {path}")
-    return 0
+    # A tampered sealed record must not exit clean — the whole point of the
+    # seal is that checking it can fail.
+    return 1 if status == "TAMPERED" else 0
 
 
 # ── parser ────────────────────────────────────────────────────────────────

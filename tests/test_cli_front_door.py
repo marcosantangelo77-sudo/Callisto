@@ -350,3 +350,181 @@ class TestRunPersistence:
     def test_show_unknown_id_exits_one(self, runs_env, capsys):
         rc = _cmd_show(build_parser().parse_args(["show", "nope"]))
         assert rc == 1
+
+
+# ── seal durability: the persisted record must let anyone re-verify ───────
+
+from agp import AGPSession, seal_verification_method
+
+
+def _sealed_agp_session(conclusion="Sealed conclusion text.",
+                        confidence=0.34):
+    """A REAL sealed AGPSession — walks the full step lifecycle and mints an
+    actual seal_hash, so the CLI seam is exercised against real crypto."""
+    from agp import (Domain, Evidence, SessionStep, SessionSummary,
+                     SourceClass)
+    s = AGPSession("root question")
+    s.advance_to(SessionStep.ASSIGN_DOMAIN)
+    s.domain = Domain.GENERAL
+    s.advance_to(SessionStep.SOURCE_ENUMERATION)
+    s.sources = ["openalex"]
+    s.advance_to(SessionStep.PRIMARY_COLLECTION)
+    s.add_evidence(Evidence(content="an observed fact",
+                            source_class=SourceClass.SECONDARY,
+                            confidence_score=0.70, domain=Domain.GENERAL,
+                            origin_agent="test"))
+    s.advance_to(SessionStep.CONTRADICTION_CHECK)
+    s.advance_to(SessionStep.SYNTHESIS)
+    s.summary = SessionSummary(scope="root question", domain=Domain.GENERAL,
+                               conclusion=conclusion,
+                               confidence_score=confidence, evidence_count=1,
+                               contradiction_count=0)
+    s.advance_to(SessionStep.SESSION_CLOSE)
+    s.seal()
+    return s
+
+
+def _fake_result_with_session(session):
+    base = _fake_result()
+    return _NS(**{**base.__dict__, "session": session})
+
+
+class TestSealDurability:
+    @pytest.fixture(autouse=True)
+    def _clean_seal_env(self, monkeypatch):
+        monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
+        monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+
+    @pytest.fixture
+    def runs_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CALLISTO_RUNS_DIR", str(tmp_path / "runs"))
+        return tmp_path / "runs"
+
+    @pytest.fixture
+    def wired(self, monkeypatch):
+        router = FakeRouter()
+        monkeypatch.setattr("callisto._load_router", lambda path: router)
+        return router
+
+    def test_ask_persists_a_verifiable_sealed_session(
+            self, wired, runs_env, monkeypatch, capsys):
+        monkeypatch.setenv("CALLISTO_SEAL_KEY", "12" * 32)
+        def make_engine(router_, self_review):
+            eng = _NS(adversary_router=None if self_review else router_)
+            async def run(q):
+                return _fake_result_with_session(_sealed_agp_session())
+            eng.run = run
+            return eng
+        monkeypatch.setattr("callisto._make_engine", make_engine)
+
+        rc = asyncio.run(_cmd_ask(build_parser().parse_args(["ask", "q"])))
+        assert rc == 0
+        saved = list(runs_env.glob("*.json"))
+        assert len(saved) == 1
+        rec = json.loads(saved[0].read_text())
+        sess = rec["session"]
+        assert isinstance(sess, dict) and sess["seal_hash"]
+        # The saved payload alone verifies, under the production verifier.
+        assert AGPSession.verify_seal(sess) is True
+        assert seal_verification_method(sess) == "keyed"
+
+    def test_ask_persists_refused_session_without_claiming_a_seal(
+            self, wired, runs_env, monkeypatch):
+        result = _NS(sealed=False, refusal_reason="adversary veto: x",
+                     conclusion="", confidence_score=0.0,
+                     confidence_tier="UNVERIFIED", leaves=[],
+                     artifact_refs=[], fetches=[], objections=[],
+                     notes=[], session=AGPSession("q"))   # never sealed
+        async def run(q): return result
+        def maker(router_, self_review):
+            eng = _NS(adversary_router=None if self_review else router_)
+            eng.run = run
+            return eng
+        monkeypatch.setattr("callisto._make_engine", maker)
+
+        asyncio.run(_cmd_ask(build_parser().parse_args(["ask", "q"])))
+        saved = list(runs_env.glob("*.json"))
+        rec = json.loads(saved[0].read_text())
+        assert rec["sealed"] is False
+        assert rec["refusal_reason"].startswith("adversary veto")
+
+    def test_show_reports_keyed_seal_verified(self, runs_env, capsys,
+                                              monkeypatch):
+        monkeypatch.setenv("CALLISTO_SEAL_KEY", "12" * 32)
+        rec = _result_record(
+            _fake_result_with_session(_sealed_agp_session()), "q")
+        path = _persist_run(rec)
+        rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "SEALED" in out and "VERIFIED (keyed)" in out
+
+    def test_show_labels_unkeyed_seal_honestly(self, runs_env, capsys):
+        # No CALLISTO_SEAL_KEY in this regime: the seal verifies only as
+        # legacy public SHA-256, and show must say so rather than imply the
+        # keyed guarantee.
+        rec = _result_record(
+            _fake_result_with_session(_sealed_agp_session()), "q")
+        path = _persist_run(rec)
+        rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "VERIFIED (unkeyed)" in out
+
+    def test_show_fails_loudly_on_tampered_payload(self, runs_env, capsys,
+                                                    monkeypatch):
+        monkeypatch.setenv("CALLISTO_SEAL_KEY", "12" * 32)
+        rec = _result_record(
+            _fake_result_with_session(_sealed_agp_session(
+                confidence=0.34)), "q")
+        path = _persist_run(rec)
+        # One byte of self-flattery: bump the SEALED confidence post-hoc.
+        # The verdict line falls back to the record's own (unedited) field,
+        # but nothing may present the payload as trustworthy any more.
+        loaded = json.loads(path.read_text())
+        loaded["session"]["summary"]["confidence_score"] = 0.90
+        path.write_text(json.dumps(loaded))
+
+        rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "TAMPERED" in out
+        assert "forged or corrupted" in out
+
+    def test_verified_payload_wins_over_edited_record_fields(
+            self, runs_env, capsys, monkeypatch):
+        """Trust-bearing values render from the bytes the seal VERIFIED, not
+        from the record's editable top-level confidence fields."""
+        monkeypatch.setenv("CALLISTO_SEAL_KEY", "56" * 32)
+        rec = _result_record(
+            _fake_result_with_session(_sealed_agp_session(
+                conclusion="real", confidence=0.34)), "q")
+        path = _persist_run(rec)
+        loaded = json.loads(path.read_text())
+        loaded["confidence"]["score"] = 0.95      # flatter the top-level copy
+        loaded["confidence"]["tier"] = "VERIFIED"
+        path.write_text(json.dumps(loaded))
+        rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
+        out = capsys.readouterr().out
+        assert rc == 0 and "VERIFIED (keyed)" in out
+        assert "SPECULATIVE 0.34" in out          # the sealed truth
+        assert "VERIFIED 0.95" not in out         # never the edited label
+
+    def test_refused_run_shows_not_sealed_and_exits_zero(
+            self, runs_env, capsys):
+        rec = _result_record(
+            _fake_result_with_session(AGPSession("q")), "q")
+        rec["sealed"] = False
+        path = _persist_run(rec)
+        rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
+        out = capsys.readouterr().out
+        assert rc == 0 and "not sealed" in out
+
+    def test_legacy_record_without_session_still_renders(
+            self, runs_env, capsys):
+        rec = _result_record(_fake_result(), "q")
+        rec.pop("session", None)                  # pre-durability record
+        path = _persist_run(rec)
+        rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
+        out = capsys.readouterr().out
+        assert rc == 0 and "not recorded" in out
