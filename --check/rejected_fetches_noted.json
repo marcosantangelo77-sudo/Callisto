@@ -1,0 +1,64 @@
+{
+  "artifacts": [],
+  "conclusion": "Will Apple report quarterly results above Wall Street consensus expectations in its next earnings report?\n\n- [PROBABLE 0.70] leaf 0: what does the evidence say about apple earnings expectations and analyst consensus: the evidence supports the claim\n- [PROBABLE 0.70] leaf 1: what does the evidence say about apple earnings expectations and analyst consensus: the evidence supports the claim\n\n[evidence age at seal: oldest 0s, newest 0s, median 0s across 2 timestamped fetches]",
+  "confidence_score": 0.55,
+  "confidence_tier": "PROBABLE",
+  "evidence": [
+    "{\"results\": [{\"cited_by_count\": 12, \"id\": \"W1\", \"publication_year\": 2024, \"title\": \"Scholarly study on apple earnings expectations: analyst consensus and quarterly results\"}]}",
+    "{\"results\": [{\"cited_by_count\": 12, \"id\": \"W1\", \"publication_year\": 2024, \"title\": \"Scholarly study on apple earnings expectations: analyst consensus and quarterly results\"}]}"
+  ],
+  "fetches": [
+    {
+      "sha": "fa33f80e2e9dd0114fa0204ffbe46ce33c1713fe13ebfd7857100af99ade0386",
+      "source_name": "openalex",
+      "url": "https://api.openalex.org/works?search=leaf+apple+earnings+expectations+analyst+consensus&per-page=10"
+    },
+    {
+      "sha": "fa33f80e2e9dd0114fa0204ffbe46ce33c1713fe13ebfd7857100af99ade0386",
+      "source_name": "openalex",
+      "url": "https://api.openalex.org/works?search=leaf+apple+earnings+expectations+analyst+consensus&per-page=10"
+    }
+  ],
+  "leaves": [
+    {
+      "answer": "the evidence supports the claim",
+      "artifact_sha256s": [],
+      "confidence": 0.7,
+      "n_sources": 1,
+      "requirement_reasons": [],
+      "sandbox_status": null,
+      "source_classes": [
+        "PRIMARY"
+      ],
+      "text": "leaf 0: what does the evidence say about apple earnings expectations and analyst consensus",
+      "tier": "PROBABLE"
+    },
+    {
+      "answer": "the evidence supports the claim",
+      "artifact_sha256s": [],
+      "confidence": 0.7,
+      "n_sources": 1,
+      "requirement_reasons": [],
+      "sandbox_status": null,
+      "source_classes": [
+        "PRIMARY"
+      ],
+      "text": "leaf 1: what does the evidence say about apple earnings expectations and analyst consensus",
+      "tier": "PROBABLE"
+    }
+  ],
+  "ledger_observations": 3,
+  "ledger_primary": [
+    "360b659ac0a1c81bd6d955797138168efe76855350661593e5b4db0aa7546534",
+    "d6b25d3001a8802bb40cbd6ba5e0cce9a6818d3942c7c96c19005ceec0318883",
+    "fa33f80e2e9dd0114fa0204ffbe46ce33c1713fe13ebfd7857100af99ade0386"
+  ],
+  "notes": [
+    "leaf 'leaf 0: what does the evidence say about apple earnings expe': 1 fetch(s) rejected at ingestion: [federalregister] content covers 0% of the question's topical words (need 25%); missing: analyst, apple, consensus, earnings, evidence, expectations, leaf, work",
+    "leaf 'leaf 1: what does the evidence say about apple earnings expe': 1 fetch(s) rejected at ingestion: [federalregister] content covers 0% of the question's topical words (need 25%); missing: agency, analyst, apple, consensus, dates, docket, earnings, evidence"
+  ],
+  "objections": [],
+  "refusal_reason": "",
+  "seal_verifies": true,
+  "sealed": true
+}

@@ -199,8 +199,10 @@ class TestHealthAndFailover:
         result = asyncio.run(router.complete(
             "research_synthesis", [{"role": "user", "content": "x"}]))
         assert result["tier"] == "spark"
-        # gpu1 got its in-place retry (2 attempts) before failing over.
-        assert calls["gpu1"] == 2
+        # SPEED run 12 (restored by run 16 after the runs-14 recovery merge
+        # dropped it): a CONNECT-phase refusal sends no bytes and is NOT
+        # retried in place — one attempt, then fail over.
+        assert calls["gpu1"] == 1
         assert router.states["gpu1"].consecutive_failures == 1
         # Next call skips the cooling gpu1 entirely.
         calls["gpu1"] = 0

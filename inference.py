@@ -1427,7 +1427,8 @@ class ProviderRouter:
         }
         if max_tokens:
             payload["max_tokens"] = max_tokens
-        if schema is not None and endpoint.structured_output:
+        if schema is not None and getattr(
+                endpoint, "structured_output", True):
             # Structured output. llama-server supports json_schema in
             # response_format; hosted OpenAI-compat APIs accept it too.
             # SPEED run 16: ONLY for endpoints that declare the capability.
@@ -1436,7 +1437,8 @@ class ProviderRouter:
             # (nothing upstream enforces it) and hard-400s on stricter
             # OpenAI-compat providers; best-effort endpoints get the same
             # contract as hermes_cli — no enforcement, tolerant parse
-            # downstream (battery D3).
+            # downstream (battery D3). getattr default True keeps legacy
+            # config shapes (TierConfig) at pre-run-16 byte behaviour.
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "callisto_output", "schema": schema},
@@ -1669,6 +1671,16 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
     budget be the binding constraint (four RA:30 windows fit); exhaustion
     raises _RateLimitExhausted so complete() can spare the healthy
     endpoint its exponential cooldown.
+
+    SPEED run 16 (2026-08-24): RESTORED run 12's connect-phase rule, which
+    the runs-14 recovery merge dropped from this function despite its
+    commit message claiming otherwise — caught by the tier5 pool suite
+    pinning dead-hop attempt counts. Connect-phase failures (ConnectError
+    /ConnectTimeout) send NO bytes anywhere; an immediate second attempt
+    against the same dead socket carries no information and only taxes
+    every dead-hop probe (~0.5s measured per probe, ×attempts after run
+    15 raised the ceiling). They propagate to the failover chain at once;
+    read/write-phase errors keep the retry.
     """
     last_exc: Optional[Exception] = None
     waited = 0.0  # total seconds slept on 429s for THIS call (run 10)
@@ -1691,6 +1703,12 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
                 waited += retry_after
                 await _asyncio.sleep(retry_after)
                 slept = True
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            # Run 12 (restored run 16): nothing transient to recover within
+            # one endpoint when the CONNECT itself failed — fail over now,
+            # cooldown still records via record_failure, a recovered box is
+            # re-probed after cooldown exactly as before.
+            raise
         except (httpx.TransportError,) as e:
             last_exc = e
         if i < attempts - 1 and not slept:
