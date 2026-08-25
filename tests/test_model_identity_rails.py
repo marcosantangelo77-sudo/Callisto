@@ -269,3 +269,103 @@ class TestMissingIdentityCompat:
         rec = store.record(role="r", model="hermes-cli", task_class="t",
                            question_id="q", brier=0.4)
         assert store.load_all() == [rec]  # untouched, unaliased
+
+
+class TestIdentitylessDisplayCollision:
+    def test_same_display_model_endpoints_remain_distinct(self):
+        """Two identity-less endpoints sharing a display `model` label must
+        stay two separate CandidateModels (legacy behaviour preserved)."""
+        cfg = {
+            "providers": {
+                "a": {"backend": "openai_compat", "base_url": "http://x/v1",
+                      "model": "shared"},
+                "b": {"backend": "openai_compat", "base_url": "http://y/v1",
+                      "model": "shared"},
+            },
+            "routing": {"task_classes": {"screening": ["a", "b"]}},
+        }
+        import tempfile, os, yaml
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(cfg, f)
+            path = f.name
+        try:
+            r = inference.ProviderRouter(config_path=path)
+            cands = r._candidates_as_models(["a", "b"])
+        finally:
+            os.unlink(path)
+        assert [(c.name, c.tier) for c in cands] == [("shared", "a"), ("shared", "b")]
+
+
+class TestDynamicProxyIdentity:
+    def _proxy_router(self):
+        return inference._endpoint_from_config("ox_alpha_proxy", {
+            "backend": "openai_compat",
+            "base_url": "http://127.0.0.1:8645/v1",
+            "model_env": "OX_ALPHA_PROXY_MODEL",
+            "model_identity": IDENTITY,
+            "model": "stealth/ox-alpha",
+        })
+
+    def test_env_override_to_different_model_invalidates_identity(self, monkeypatch):
+        monkeypatch.setenv("OX_ALPHA_PROXY_MODEL", "stealth/ox-alpha-beta")
+        ep = self._proxy_router()
+        assert ep.model == "stealth/ox-alpha-beta"
+        # We cannot know what a beta proxy really serves: no canonical claim.
+        assert ep.model_identity is None
+
+    def test_env_equal_to_static_model_keeps_identity(self, monkeypatch):
+        monkeypatch.setenv("OX_ALPHA_PROXY_MODEL", "stealth/ox-alpha")
+        ep = self._proxy_router()
+        assert ep.model == "stealth/ox-alpha"
+        assert ep.model_identity == IDENTITY
+
+    def test_env_unset_falls_back_and_keeps_identity(self, monkeypatch):
+        monkeypatch.delenv("OX_ALPHA_PROXY_MODEL", raising=False)
+        ep = self._proxy_router()
+        assert ep.model == "stealth/ox-alpha"
+        assert ep.model_identity == IDENTITY
+
+    def test_explicit_resolved_identity_supplied_by_config_wins(self, monkeypatch):
+        monkeypatch.setenv("OX_ALPHA_PROXY_MODEL", "stealth/ox-alpha-beta")
+        ep = inference._endpoint_from_config("ox_alpha_proxy", {
+            "backend": "openai_compat",
+            "base_url": "http://127.0.0.1:8645/v1",
+            "model_env": "OX_ALPHA_PROXY_MODEL",
+            "model_identity": IDENTITY,
+            "model": "stealth/ox-alpha",
+            "resolved_model_identity_env": "OX_ALPHA_RESOLVED_IDENTITY",
+        })
+        assert ep.model_identity is None  # env var unset -> still invalidated
+        monkeypatch.setenv("OX_ALPHA_RESOLVED_IDENTITY", "nous/beta/explicit")
+        ep2 = inference._endpoint_from_config("ox_alpha_proxy", {
+            "backend": "openai_compat",
+            "base_url": "http://127.0.0.1:8645/v1",
+            "model_env": "OX_ALPHA_PROXY_MODEL",
+            "model_identity": IDENTITY,
+            "model": "stealth/ox-alpha",
+            "resolved_model_identity_env": "OX_ALPHA_RESOLVED_IDENTITY",
+        })
+        assert ep2.model_identity == "nous/beta/explicit"
+
+    def test_beta_proxy_and_cli_are_separate_scoring_candidates(self, monkeypatch):
+        """With the proxy overridden to a different model, the router must NOT
+        group/dedupe it with the Hermes CLI rail under the static identity."""
+        monkeypatch.setenv("OX_ALPHA_PROXY_BASE_URL", "http://127.0.0.1:1/v1")
+        monkeypatch.setenv("OX_ALPHA_PROXY_API_KEY", "test-token")
+        monkeypatch.setenv("OX_ALPHA_PROXY_MODEL", "stealth/ox-alpha-beta")
+        r = inference.ProviderRouter()
+        assert r.endpoints["ox_alpha_proxy"].model_identity is None
+        assert r.scoring_model_name("ox_alpha_proxy") != \
+            r.scoring_model_name("ox_alpha")
+        r.empirical_routing_enabled = True
+        try:
+            cands = r._candidates_as_models(
+                ["gpu1", "frontier", "ox_alpha_proxy", "ox_alpha"])
+        finally:
+            r.empirical_routing_enabled = False
+        names = [c.name for c in cands if "ox" in c.name or "alpha" in c.name]
+        assert len(names) == 2, names  # two distinct scoring candidates
+        # and the rails are NOT adjacent-grouped under one identity
+        grouped = r._group_by_identity(
+            ["ox_alpha_proxy", "gpu1", "frontier", "ox_alpha"])
+        assert grouped.index("ox_alpha_proxy") < grouped.index("gpu1")

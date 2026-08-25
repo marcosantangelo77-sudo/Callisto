@@ -966,8 +966,11 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     # overrides the static model; an unset or empty env value falls back to
     # the static model (which may itself be absent for env-only configs).
     model = raw.get("model")
+    env_model: Optional[str] = None
     if raw.get("model_env"):
-        model = os.getenv(raw["model_env"], "") or model
+        env_model = os.getenv(raw["model_env"], "") or None
+        if env_model:
+            model = env_model
     if backend == "hermes_cli":
         # No URL, no env vars, no keychain access — just the binary.
         unresolved = False
@@ -975,6 +978,24 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
         base_url = ""
     else:
         unresolved = bool(raw.get("_unresolved")) or not (base_url and model)
+    # Canonical-identity safety rule: a static `model_identity` is only
+    # trustworthy while the effective served model matches the configured
+    # static one. A nonempty `model_env` override pointing at a DIFFERENT
+    # model means we no longer know which weights actually run there, so the
+    # declared identity is invalidated (the endpoint becomes standalone).
+    # An explicit resolved identity may still be supplied via
+    # `resolved_model_identity` / `resolved_model_identity_env`; it is NEVER
+    # inferred from the override's model string.
+    model_identity = raw.get("model_identity") or None
+    if env_model and raw.get("model") and env_model != raw.get("model"):
+        model_identity = None
+    resolved_identity = (
+        os.getenv(raw["resolved_model_identity_env"], "") or None
+        if raw.get("resolved_model_identity_env")
+        else (raw.get("resolved_model_identity") or None))
+    if resolved_identity:
+        model_identity = resolved_identity
+
     return EndpointConfig(
         name=name,
         backend=raw.get("backend", "openai_compat"),
@@ -989,7 +1010,7 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
         max_concurrency=max(1, int(raw.get("max_concurrency", 1))),
         cost_per_1k_input=float(raw.get("cost_per_1k_input", 0) or 0),
         cost_per_1k_output=float(raw.get("cost_per_1k_output", 0) or 0),
-        model_identity=(raw.get("model_identity") or None),
+        model_identity=model_identity,
         extra={**(raw.get("extra") or {}), **({"_unresolved": True} if unresolved else {})},
     )
 
@@ -1189,17 +1210,21 @@ class ProviderRouter:
     def _candidates_as_models(self, names: list[str]) -> list:
         from tools.routing.policy import CandidateModel
         out = []
-        seen_names: set[str] = set()
+        seen_identities: set[str] = set()
         for rank, n in enumerate(names):
             ep = self.endpoints.get(n)
             if ep is None:
                 continue
             model_name = self.scoring_model_name(n)
-            if model_name in seen_names:
-                # Same canonical model via another transport rail: ONE
-                # scoring candidate, not several.
-                continue
-            seen_names.add(model_name)
+            # Dedupe ONLY rails with an explicit canonical model identity.
+            # Identity-less endpoints keep legacy standalone behaviour even
+            # when their display `model` labels collide.
+            if ep.model_identity:
+                if ep.model_identity in seen_identities:
+                    # Same canonical model via another transport rail: ONE
+                    # scoring candidate, not several.
+                    continue
+                seen_identities.add(ep.model_identity)
             out.append(CandidateModel(
                 name=model_name,
                 tier=n,
