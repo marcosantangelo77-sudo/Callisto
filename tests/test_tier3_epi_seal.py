@@ -164,3 +164,79 @@ class TestKeyedSeal:
             assert h == hashlib.sha256(payload.encode()).hexdigest()
         finally:
             del os.environ["CALLISTO_SEAL_KEY"]
+
+
+class TestSealVerificationMethod:
+    """seal_verification_method reports WHICH digest family verified, so a
+    verifier can state how much trust a seal carries instead of collapsing
+    keyed and unkeyed into one boolean. verify_seal stays exactly its
+    ``is not None``."""
+
+    def test_unkeyed_seal_reports_unkeyed(self):
+        s = _make_session()
+        s.seal()                                   # no env key → legacy digest
+        assert agp.seal_verification_method(s.to_dict()) == "unkeyed"
+
+    def test_keyed_seal_reports_keyed(self):
+        import os
+        s = _make_session()
+        os.environ["CALLISTO_SEAL_KEY"] = "12" * 32
+        try:
+            s.seal()
+            assert agp.seal_verification_method(s.to_dict()) == "keyed"
+        finally:
+            del os.environ["CALLISTO_SEAL_KEY"]
+
+    def test_legacy_unkeyed_seal_under_keyed_regime_still_reports_unkeyed(
+            self):
+        import os
+        s = _make_session()
+        s.seal()                                   # sealed before keying
+        stored = json.dumps(s.to_dict())
+        os.environ["CALLISTO_SEAL_KEY"] = "34" * 32
+        try:
+            # verify passes (legacy accepted) but the label is honest: this
+            # seal is NOT covered by any key.
+            assert AGPSession.verify_seal(stored) is True
+            assert agp.seal_verification_method(stored) == "unkeyed"
+        finally:
+            del os.environ["CALLISTO_SEAL_KEY"]
+
+    def test_rotated_old_key_reports_keyed(self):
+        import os
+        s = _make_session()
+        os.environ["CALLISTO_SEAL_KEY"] = "aa" * 32
+        try:
+            s.seal()
+            os.environ["CALLISTO_SEAL_KEY_OLD"] = "aa" * 32
+            os.environ["CALLISTO_SEAL_KEY"] = "bb" * 32
+            try:
+                assert agp.seal_verification_method(s.to_dict()) == "keyed"
+            finally:
+                del os.environ["CALLISTO_SEAL_KEY_OLD"]
+        finally:
+            del os.environ["CALLISTO_SEAL_KEY"]
+
+    def test_tampered_reports_none(self):
+        s = _make_session()
+        s.seal()
+        d = dict(s.to_dict())
+        d["summary"]["conclusion"] += " (quietly strengthened)"
+        assert agp.seal_verification_method(d) is None
+
+    def test_missing_or_malformed_input_reports_none(self):
+        assert agp.seal_verification_method({"seal_hash": None}) is None
+        assert agp.seal_verification_method({}) is None
+        assert agp.seal_verification_method("not json at all {") is None
+        assert agp.seal_verification_method(None) is None
+
+    def test_verify_seal_is_exactly_the_none_check(self):
+        s = _make_session()
+        s.seal()
+        good = s.to_dict()
+        bad = dict(good)
+        bad["evidence"][0]["confidence_score"] = 0.99
+        assert AGPSession.verify_seal(good) == (
+            agp.seal_verification_method(good) is not None)
+        assert AGPSession.verify_seal(bad) == (
+            agp.seal_verification_method(bad) is not None)

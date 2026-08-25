@@ -463,28 +463,42 @@ class AGPSession:
 
         Callers that want hard failure should raise AGPSealTampered themselves.
         """
-        try:
-            if isinstance(stored, str):
-                data = json.loads(stored)
-            else:
-                data = dict(stored)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return False
+        return seal_verification_method(stored) is not None
 
-        stored_hash = data.get("seal_hash")
-        if not stored_hash or not isinstance(stored_hash, str):
-            return False
 
-        payload = _canonical_payload(data)
-        # Accept: current key (or unkeyed fallback), then legacy unkeyed
-        # digest (pre-keying seals), then any rotation keys. Constant-time
-        # comparisons throughout.
-        candidates = [_seal_digest(payload), hashlib.sha256(payload.encode("utf-8")).hexdigest()]
-        for key in _seal_keys():
-            candidates.append(
-                hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
-            )
-        return any(hmac.compare_digest(c, stored_hash) for c in candidates)
+def seal_verification_method(stored: Union[dict, str]) -> Optional[str]:
+    """Which digest family verified this stored session, if any.
+
+    Returns "keyed" when an HMAC key (current or rotation) verified it,
+    "unkeyed" when only the legacy public SHA-256 did, and None when nothing
+    verified — missing seal_hash, malformed input, or tampered content.
+    Never raises. verify_seal() is exactly ``... is not None``; the split
+    exists so a verifier can REPORT how much trust the seal carries instead
+    of collapsing keyed and unkeyed into one boolean.
+    """
+    try:
+        if isinstance(stored, str):
+            data = json.loads(stored)
+        else:
+            data = dict(stored)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+    stored_hash = data.get("seal_hash")
+    if not stored_hash or not isinstance(stored_hash, str):
+        return None
+
+    payload = _canonical_payload(data)
+    # Constant-time comparisons throughout; a digest can match at most one
+    # family, so check order affects only the reported label, never the verdict.
+    unkeyed = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    if hmac.compare_digest(unkeyed, stored_hash):
+        return "unkeyed"
+    for key in _seal_keys():
+        keyed = hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(keyed, stored_hash):
+            return "keyed"
+    return None
 
 
 def _canonical_payload(data: dict) -> str:
