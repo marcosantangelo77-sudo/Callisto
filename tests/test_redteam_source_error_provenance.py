@@ -161,7 +161,7 @@ def _retriever(reg, routes):
             "bls": ("works_search", ("term",), {"limit": 3}),
             "beta": ("works_search", ("term",), {"limit": 3}),
             "bea": ("get_data", ("NIPA",), {}),
-            "cftc": ("query", ("6dca-aqww",), {}),
+            "cftc_cot": ("query", ("6dca-aqww",), {}),
         }), ledger
 
 
@@ -268,29 +268,81 @@ class TestValidEnvelopesUnchanged:
 
 
 # ── HTTP-200 BEA / CFTC-Socrata error envelopes: fail, never replay ────────
+#
+# These run the REAL adapters (BeaAdapter.get_data, CftcCotAdapter.query)
+# against their actual wire shapes through an injected transport — no
+# pre-wrapped bodies, no socket. BEA needs an API key (set via its spec's
+# key_env_var); CFTC needs none. Rate limiting is disabled so nothing sleeps.
 
-# Raw non-canonical envelope bytes: whitespace/key order deliberately differ
-# from any json.dumps(sort_keys=True) re-serialization.
-BEA_ERR_RAW = ('{\n  "BEAAPIs": { "Error": [ {\n'
-               '    "APIErrorDescription": "Invalid API KEY",\n'
-               '    "ErrorMessage": "An invalid API key was supplied." } ] } }')
-CFTC_ERR_RAW = ('{ "rows": { "error": true, "message": '
-                '"query.soql.noMatch" }, "_fetch": null }')
+BEA_ERR_RAW = ('{\n  "BEAAPI": { "Results": { "Error": {\n'
+               '    "APIErrorCode": "1",\n'
+               '    "APIErrorDescription": "bad key" } } } }')
+CFTC_ERR_RAW = ('{"code":"query.soql.noMatch","error":true,'
+                '"message":"No matching rows","status":400}')
+BEA_EMPTY_RAW = ('{\n  "BEAAPI": { "Results": { "Data": [] } } }')
+CFTC_EMPTY_RAW = "[]"
 
 
 class TestHttp200BeaCftcEnvelopesNeverProvenanced:
-    def _run(self, name, base_url, raw, routes=None):
-        reg = _registry((name, ["labor market data"], base_url))
-        retr, ledger = _retriever(reg, routes or {"?search=": (200, raw)})
-        trace = retr.retrieve(_q(), "", min_independent=1)
-        return trace, ledger
+    """Real-adapter retrieval regressions under the no-socket guard."""
+
+    def _bea(self, ledger, raw):
+        from tools.sources.bea import SPEC as BEA_SPEC, BeaAdapter
+
+        def make_adapter(source):
+            return BeaAdapter(source)
+
+        reg = SourceRegistry()
+        reg.register(SourceAdapter(spec=SourceSpec(
+            name=BEA_SPEC.name, base_url=BEA_SPEC.base_url,
+            description=BEA_SPEC.description,
+            answers=("unemployment rate labor market",), cannot_answer=("x",), tier=1,
+            min_interval_s=0.0,
+            key_env_var="CALLISTO_TEST_BEA_KEY"),
+            make_adapter=make_adapter))
+        os.environ["CALLISTO_TEST_BEA_KEY"] = "test-key"
+        retr = IterativeRetriever(
+            registry=reg, ledger=ledger,
+            transport=_routes_transport({"apps.bea.gov/api/data":
+                                         (200, raw)}),
+            gate=RelevanceGate(min_coverage=0.25), max_rounds=2,
+            generic_calls={"bea": ("get_data", ("NIPA",), {})})
+        return retr
+
+    def _cftc(self, ledger, raw):
+        from tools.sources.cftc import LEGACY_FUTURES_ONLY
+        from tools.sources.cftc import SPEC as CFTC_SPEC, CftcCotAdapter
+
+        def make_adapter(source):
+            return CftcCotAdapter(source)
+
+        reg = SourceRegistry()
+        reg.register(SourceAdapter(spec=SourceSpec(
+            name=CFTC_SPEC.name, base_url=CFTC_SPEC.base_url,
+            description=CFTC_SPEC.description,
+            answers=("unemployment rate labor market",), cannot_answer=("x",), tier=1,
+            min_interval_s=0.0),
+            make_adapter=make_adapter))
+        retr = IterativeRetriever(
+            registry=reg, ledger=ledger,
+            transport=_routes_transport({"/6dca-aqww.json": (200, raw)}),
+            gate=RelevanceGate(min_coverage=0.25), max_rounds=2,
+            generic_calls={"cftc_cot": (
+                "query", (LEGACY_FUTURES_ONLY,), {"limit": 5})})
+        return retr
+
+    def _entries(self, trace, name):
+        return [r for rnd in trace.rounds for r in rnd["sources"]
+                if r.get("name") == name]
 
     def test_bea_200_error_envelope_reported_and_not_replayed(self):
-        trace, ledger = self._run("bea", "https://apps.bea.gov", BEA_ERR_RAW)
-        entries = [r for rnd in trace.rounds for r in rnd["sources"]
-                   if r.get("name") == "bea"]
+        ledger = ProvenanceLedger()
+        trace = self._bea(ledger, BEA_ERR_RAW).retrieve(_q(), "",
+                                                        min_independent=1)
+        entries = self._entries(trace, "bea")
         assert any("error" in e for e in entries), entries
-        assert any("BEA" in (e.get("error") or "") for e in entries)
+        assert any("BEA" in (e.get("error") or "") and "bad key"
+                   in (e.get("error") or "") for e in entries), entries
         assert trace.rejected == []          # honest error, not gate rejection
         assert trace.n_admitted == 0
         # RAW wire body AND canonicalized form absent; URL absent.
@@ -300,19 +352,44 @@ class TestHttp200BeaCftcEnvelopesNeverProvenanced:
         assert not ledger.has_observation(canonical)
         assert all("apps.bea.gov" not in u for u in ledger.observed_urls())
 
-    def test_cftc_socrata_200_envelope_reported_and_not_replayed(self):
-        trace, ledger = self._run("cftc", "https://api.cftc.gov", CFTC_ERR_RAW)
-        entries = [r for rnd in trace.rounds for r in rnd["sources"]
-                   if r.get("name") == "cftc"]
+    def test_bea_valid_empty_data_stays_admissible_path_non_error(self):
+        """Positive control: valid empty BEA Results.Data is NOT an error.
+        It flows through the gate like ordinary data."""
+        ledger = ProvenanceLedger()
+        trace = self._bea(ledger, BEA_EMPTY_RAW).retrieve(_q(), "",
+                                                          min_independent=1)
+        entries = self._entries(trace, "bea")
+        assert not any("error" in e for e in entries), entries
+        # Not classified as a failure: it was fetched and judged normally.
+        assert trace.rejected or trace.admitted or \
+            any("rejected" in e or "admitted" in e for e in entries)
+
+    def test_cftc_200_socrata_envelope_reported_and_not_replayed(self):
+        ledger = ProvenanceLedger()
+        trace = self._cftc(ledger, CFTC_ERR_RAW).retrieve(_q(), "",
+                                                          min_independent=1)
+        entries = self._entries(trace, "cftc_cot")
         assert any("error" in e for e in entries), entries
-        assert any("Socrata" in (e.get("error") or "") for e in entries)
+        errs = [e.get("error") or "" for e in entries]
+        assert any("Socrata" in e and "query.soql.noMatch" in e
+                   for e in errs), errs
         assert trace.rejected == []
         assert trace.n_admitted == 0
         assert not ledger.has_observation(CFTC_ERR_RAW)
         assert not ledger.is_primary_bytes(CFTC_ERR_RAW)
         canonical = json.dumps(json.loads(CFTC_ERR_RAW), sort_keys=True)
         assert not ledger.has_observation(canonical)
-        assert all("api.cftc.gov" not in u for u in ledger.observed_urls())
+        assert all("publicreporting.cftc.gov" not in u
+                   for u in ledger.observed_urls())
+
+    def test_cftc_valid_empty_rows_list_is_not_an_error(self):
+        """Positive control: legitimate empty rows LIST stays non-error."""
+        ledger = ProvenanceLedger()
+        trace = self._cftc(ledger, CFTC_EMPTY_RAW).retrieve(_q(), "",
+                                                            min_independent=1)
+        entries = self._entries(trace, "cftc_cot")
+        errs = [e for e in entries if "error" in e]
+        assert not errs, entries
 
 
 # ── SEAM C: a 200 fetch the ledger cannot record must fail closed ─────────
