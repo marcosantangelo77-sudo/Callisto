@@ -224,6 +224,8 @@ class RestSource:
                 else:
                     status, body = self._http_transport(url, headers)
                 self._record(url, status, body, time.monotonic() - started)
+                if status != 200:
+                    raise SourceError(f"HTTP {status} for {url}")
                 return status, body
             except urllib.error.HTTPError as exc:
                 last_err = f"HTTP {exc.code} for {url}"
@@ -272,6 +274,13 @@ class RestSource:
                     status, text = _do()
                 self._record(url, status, text, time.monotonic() - started)
                 return status, text
+                if status != 200:
+                    err = f"HTTP {status} for {url}"
+                    if status == 429 or 500 <= status < 600:
+                        time.sleep(min(2 ** attempt, MAX_RETRY_AFTER_S))
+                        last_err = err
+                        continue
+                    raise SourceError(err) from None
             except urllib.error.HTTPError as exc:
                 last_err = f"HTTP {exc.code} for {url}"
                 if exc.code == 429 or 500 <= exc.code < 600:
@@ -307,6 +316,14 @@ class RestSource:
             duration_s=round(dur, 3),
         )
         self.last_record = rec
+        # Source-provenance integrity: error bytes never enter the ledger.
+        # A non-200 response is a fetch failure, not an observation of the
+        # world — recording it (even as SECONDARY) would let a 503 JSON/HTML
+        # body mint provenance or verify a citation. The FetchRecord above
+        # keeps the honest diagnostic (status, sha, url); the ledger simply
+        # never hears about failed fetches.
+        if status != 200:
+            return rec
         if self.ledger is not None:
             try:
                 self.ledger.record_tool_result(

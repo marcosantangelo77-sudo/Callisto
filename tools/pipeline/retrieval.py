@@ -796,6 +796,13 @@ class IterativeRetriever:
                 # serial loop wrote them into self.ledger interleaved with
                 # this same order, so the scratch chain must be merged here
                 # identically before anything else observes it.
+                # Source-provenance integrity: a source whose outcome is a
+                # FAILURE contributed no admissible observation. Its scratch
+                # records (e.g. a BLS HTTP-200 REQUEST_NOT_PROCESSED envelope
+                # recorded by RestSource before classify_fetch_failure saw
+                # it) must never reach the real ledger — drop them here.
+                if res[0] == "fail":
+                    continue
                 for tool, body_r, primary, urls in rec.calls:
                     self.ledger.record_tool_result(tool, body_r,
                                                    primary=primary,
