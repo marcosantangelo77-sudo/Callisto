@@ -1286,17 +1286,22 @@ def _trace_from_payload(question_id: str, payload: dict):
                 continue
             rr = copy.deepcopy(r)
             sources = rr.get("sources")
-            rr["sources"] = [copy.deepcopy(src)
-                             for src in sources
-                             if isinstance(src, dict)] \
-                if isinstance(sources, list) else []
+            rr["sources"] = (
+                [norm for norm in
+                 (_normalize_round_source(src) for src in sources)
+                 if norm is not None]
+                if isinstance(sources, list) else [])
             norm_rounds.append(rr)
         trace.rounds = norm_rounds
     skipped = payload.get("skipped_sources")
     if isinstance(skipped, list):
-        trace.skipped_sources = [copy.deepcopy(_normalize_skipped_source(sk))
-                                 for sk in skipped
-                                 if _normalize_skipped_source(sk) is not None]
+        for sk in skipped:
+            safe = _normalize_skipped_source(sk)
+            if safe is not None:
+                safe = copy.deepcopy(safe)
+                if "reason" in safe:
+                    safe["reason"] = _normalize_skipped_reason(safe["reason"])
+                trace.skipped_sources.append(safe)
     gain_skipped = payload.get("gain_skipped")
     if isinstance(gain_skipped, list):
         trace.gain_skipped = [copy.deepcopy(gk)
@@ -1319,8 +1324,14 @@ def _trace_from_payload(question_id: str, payload: dict):
                  and n_admitted >= 0)
     if marker_ok:
         raw_fetches = payload.get("fetches")
-        fetch_records = ([r for r in raw_fetches if isinstance(r, dict)]
-                         if isinstance(raw_fetches, list) else [])
+        # A modern checkpoint's `fetches` must be a HOMOGENEOUS list of
+        # dicts whose original length exactly equals the admitted count.
+        # Filtering malformed elements before comparing would let a valid
+        # prefix masquerade as complete evidence — any non-dict element or
+        # count mismatch voids the whole admission set (fail closed).
+        fetch_records = (raw_fetches if isinstance(raw_fetches, list)
+                         and all(isinstance(r, dict) for r in raw_fetches)
+                         else [])
         if len(fetch_records) == n_admitted:
             try:
                 hydrated = [_fetch_from_payload(rec)
@@ -1346,6 +1357,38 @@ def _normalize_skipped_source(sk: Any) -> Optional[dict]:
     if not isinstance(name, str) or not name.strip():
         return None
     return sk
+
+
+def _normalize_skipped_reason(reason: Any) -> Any:
+    """Return a safe planner-skip `reason` value.
+
+    classify_gap() slices skipped reasons with `x["reason"][:60]`; a
+    non-string reason would raise TypeError there. Valid strings pass
+    through unchanged; anything else is dropped to "" — never stringified
+    into invented evidence.
+    """
+    return reason if isinstance(reason, str) else ""
+
+
+def _normalize_round_source(src: Optional[dict]) -> Optional[dict]:
+    """Return a safe round-source record, or None to drop it.
+
+    classify_gap() reads `s.get("skipped")`, `"error"`, and indexes
+    `s["name"]`. Round outcomes that are not plain strings would raise
+    downstream (`err[:120]` on a dict). A usable name must be a nonblank
+    string; malformed `skipped`/`error` audit values are dropped (set to
+    "") rather than stringified. Records without a usable name are
+    discarded entirely.
+    """
+    if not isinstance(src, dict):
+        return None
+    name = src.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    for k in ("skipped", "error"):
+        if k in src and not isinstance(src[k], str):
+            del src[k]
+    return src
 
 
 def _fetch_from_payload(rec: dict) -> FetchResult:

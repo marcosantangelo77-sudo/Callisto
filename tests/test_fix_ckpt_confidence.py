@@ -226,3 +226,95 @@ def test_trace_roundtrip_preserves_rejections():
     assert r.content_sha256 == "cd" * 32
     assert abs(r.relevance_score - 0.08) < 1e-9
     assert tr.independent_keys == {"api.openalex.org"}
+
+
+# ── 5: final validation-gap regressions ────────────────────────────────────
+
+def _gap_registry():
+    """Minimal real registry so classify_gap can resolve 'openalex'."""
+    from tools.sources.registry import (SourceAdapter, SourceRegistry,
+                                        SourceSpec)
+    reg = SourceRegistry()
+
+    def make_adapter(source):
+        class _Ad:
+            def __getattr__(self, method_name):
+                return lambda *a, **k: {}
+        return _Ad()
+
+    reg.register(SourceAdapter(
+        spec=SourceSpec(name="openalex", base_url="https://api.openalex.org",
+                        description="", answers=("scholarly work search",),
+                        tier=1, min_interval_s=0.0),
+        make_adapter=make_adapter))
+    return reg
+
+
+def _gap_question():
+    from agp.research_program import QuestionKind, ResearchQuestion
+    rq = ResearchQuestion(text=QUESTION, kind=QuestionKind.DESCRIPTIVE)
+    rq.question_id = "q1"
+    return rq
+
+
+def test_non_dict_fetch_element_voids_admission_head_and_tail():
+    """A valid dict prefix/suffix plus junk elements must not hydrate even
+    when `admitted_fetch_count` matches only the dict subset."""
+    good = {"source_name": "openalex", "url": "https://u/1",
+            "content_sha256": "ab" * 32, "body": "", "question_id": "q1"}
+    for fetches in (
+            ["junk", good, good],
+            [good, good, 42],
+            [good, None, good]):
+        tr = _trace_from_payload("q1", {
+            "fetches": fetches,
+            "admitted_fetch_count": 2})   # matches the dict subset exactly
+        assert tr.admitted == [], fetches
+
+
+def test_homogeneous_fetch_list_still_hydrates():
+    good = {"source_name": "openalex", "url": "https://u/1",
+            "content_sha256": "ab" * 32, "body": "", "question_id": "q1"}
+    tr = _trace_from_payload("q1", {"fetches": [good],
+                                    "admitted_fetch_count": 1})
+    assert len(tr.admitted) == 1
+    assert tr.admitted[0].source_name == "openalex"
+
+
+def test_malformed_outcome_values_cannot_crash_classify_gap():
+    """Skipped-reason / round-source outcome shapes that are not strings
+    must be dropped during hydration so classify_gap() cannot raise on
+    their types; valid data is preserved verbatim."""
+    from tools.gaps import classify_gap
+    payload = {
+        "skipped_sources": [
+            {"name": "openalex", "reason": {"not": "text"}},
+            {"name": "crossref", "reason": "planner could not author"},
+        ],
+        "rounds": [{
+            "round": 1, "query": "chips",
+            "sources": [
+                # valid source data preserved
+                {"name": "openalex", "admitted": True},
+                # malformed round outcomes
+                {"name": "openalex", "skipped": {"bad": 1}},
+                {"name": "openalex", "error": {"bad": 1}},
+                # unusable name dropped entirely
+                {"name": "   ", "error": "boom"},
+            ],
+        }],
+        "queries": [],
+        "stop_reason": "",
+    }
+    tr = _trace_from_payload("q1", json.loads(json.dumps(payload)))
+    gap = classify_gap(_gap_registry(), tr, _gap_question())
+    # malformed reason stringified away: no invented evidence text
+    planner_skips = {s["name"]: s.get("reason") for s in tr.skipped_sources}
+    assert planner_skips["openalex"] == ""
+    assert planner_skips["crossref"] == "planner could not author"
+    srcs = tr.rounds[0]["sources"]
+    assert all(s["name"].strip() for s in srcs)
+    assert all(not isinstance(s.get("skipped"), dict) for s in srcs)
+    assert all(not isinstance(s.get("error"), dict) for s in srcs)
+    # and the classification itself produced sane output
+    assert gap.question_id == "q1"
