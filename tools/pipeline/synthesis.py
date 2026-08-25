@@ -105,6 +105,14 @@ class EvidenceItem:
     def __post_init__(self):
         if not self.indep_key:
             self.indep_key = independence_key(self.source_name, self.base_url)
+        # S1 (redteam synthesis): numbers stated INSIDE the claim text must
+        # participate in contradiction detection. Previously values came only
+        # from the fetch body via from_fetch; a claim like "share is 60
+        # percent" carried values=() and two items stating 60% vs 20% grouped
+        # into ONE group with no contradiction and full agreement confidence.
+        # Extraction here is additive-only: explicit values always win.
+        if not self.values:
+            self.values = extract_values(self.claim)
 
     @classmethod
     def from_fetch(cls, fetch: Any, claim: str, source_class: str,
