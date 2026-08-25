@@ -23,6 +23,7 @@ STAGES = []  # (label, t0, t1, role/task_class)
 
 class TimedRouter:
     """Wraps ProviderRouter, recording per-call wall time + task class."""
+    _run_t0 = 0.0
     def __init__(self, inner):
         self.inner = inner
         self.calls = []
@@ -31,8 +32,13 @@ class TimedRouter:
         try:
             return await self.inner.complete(task_class, messages, **kw)
         finally:
-            self.calls.append((task_class, t0, time.monotonic(),
+            t1 = time.monotonic()
+            self.calls.append((task_class, t0, t1,
                                sum(len(m.get("content") or "") for m in messages)))
+            print(f"  [call] {task_class} start=+{t0-self._run_t0:6.2f}s "
+                  f"dur={t1-t0:6.2f}s prompt~"
+                  f"{sum(len(m.get('content') or '') for m in messages)}B",
+                  flush=True)
     def __getattr__(self, name):
         return getattr(self.inner, name)
 
