@@ -1242,12 +1242,27 @@ class ProviderRouter:
             "sampled_effective_loss": decision.sampled_effective_loss,
             "scores": decision.scores_used,
         })
-        if decision.tier in candidate_names:
-            # Chosen model first; the rest keep their failover order so a
-            # dead winner still degrades exactly as before.
-            ordered = [decision.tier] + [n for n in candidate_names
-                                         if n != decision.tier]
-            return ordered, meta
+        winner_identity: Optional[str] = None
+        tier_ep = self.endpoints.get(decision.tier)
+        if tier_ep is not None and tier_ep.model_identity:
+            winner_identity = tier_ep.model_identity
+
+        def _is_winner_rail(n: str) -> bool:
+            if n == decision.tier:
+                return True
+            if winner_identity is None:
+                return False
+            ep = self.endpoints.get(n)
+            return ep is not None and ep.model_identity == winner_identity
+
+        if any(_is_winner_rail(n) for n in candidate_names):
+            # Chosen model's ENTIRE rail group moves to the front as one
+            # contiguous block (configured order preserved), so a proxy/CLI
+            # failover pair is never separated. The rest keep their failover
+            # order so a dead winner still degrades exactly as before.
+            winners = [n for n in candidate_names if _is_winner_rail(n)]
+            rest = [n for n in candidate_names if not _is_winner_rail(n)]
+            return winners + rest, meta
         return candidate_names, meta
 
     # ── vocabulary ──
@@ -1333,7 +1348,7 @@ class ProviderRouter:
                     f"All endpoints for task_class={task_class!r} cooling "
                     f"down; using {fallback[0]} anyway"
                 )
-                return fallback
+                return self._group_by_identity(fallback)
         return self._group_by_identity(out)
 
     def _group_by_identity(self, names: list[str]) -> list[str]:
@@ -1344,22 +1359,27 @@ class ProviderRouter:
         Endpoints WITHOUT model_identity keep legacy per-endpoint behaviour."""
         if len(names) < 2:
             return names
-        seen: dict[str, int] = {}
-        out: list[str] = []
+        # group index per identity / standalone endpoint, assigned at FIRST
+        # appearance in the configured order.
+        group_of: dict[str, int] = {}  # identity -> group index
+        standalone_group: dict[str, int] = {}  # endpoint -> group index
+        next_group = 0
         for n in names:
             ident = self.endpoints[n].model_identity if n in self.endpoints else None
             if ident is None:
-                out.append(n)
-                continue
-            anchor = seen.get(ident)
-            if anchor is None:
-                seen[ident] = len(out)
-                out.append(n)
-            else:
-                # insert right after the last rail already grouped under ident
-                out.insert(seen[ident] + 1, n)
-                seen[ident] += 1
-        return out
+                standalone_group[n] = next_group
+                next_group += 1
+            elif ident not in group_of:
+                group_of[ident] = next_group
+                next_group += 1
+        # Stable sort by group index preserves configured order WITHIN every
+        # group while keeping each identity contiguous at its first
+        # appearance; no-identity endpoints remain standalone.
+        return sorted(names, key=lambda n: (
+            group_of[self.endpoints[n].model_identity]
+            if n in self.endpoints and self.endpoints[n].model_identity
+            else standalone_group[n]))
+
 
     def scoring_model_name(self, endpoint_name: str) -> str:
         """Canonical name to record/lookup in the score store for an endpoint.

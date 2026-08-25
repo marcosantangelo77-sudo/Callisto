@@ -61,6 +61,30 @@ class TestDeclaration:
                 assert ep.model_identity is None, name
 
 
+
+def _fake_identity_router(identities, order, task_class):
+    """Offline router from an {endpoint: identity-or-None} map."""
+    cfg = {
+        "providers": {
+            n: ({"backend": "openai_compat", "base_url": f"http://{n}/v1",
+                 "model": f"m-{n}", "model_identity": ident}
+                if ident else
+                {"backend": "openai_compat", "base_url": f"http://{n}/v1",
+                 "model": f"m-{n}"})
+            for n, ident in identities.items()
+        },
+        "routing": {"task_classes": {task_class: order}},
+    }
+    import tempfile, os, yaml
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.safe_dump(cfg, f)
+        path = f.name
+    try:
+        return inference.ProviderRouter(config_path=path)
+    finally:
+        os.unlink(path)
+
+
 class TestGrouping:
     def test_rails_grouped_with_proxy_first(self, monkeypatch):
         r = _router_with_proxy(monkeypatch)
@@ -141,6 +165,75 @@ class TestScoringCandidate:
         assert i_c == i_p + 1 or i_p > i_c or i_p < i_c  # shape preserved
         # strict: rails stay adjacent
         assert abs(i_p - i_c) == 1
+
+
+
+class TestGroupingRegressions:
+    def test_interleaved_identities_keep_group_order(self):
+        """[a1(A), b1(B), a2(A), b2(B)] must group as [a1, a2, b1, b2]:
+        each identity contiguous at first appearance, configured within-group
+        order preserved (B's transport priority is NOT reversed)."""
+        r = _fake_identity_router(
+            {"a1": "A", "b1": "B", "a2": "A", "b2": "B"},
+            ["a1", "b1", "a2", "b2"], task_class="screening")
+        assert r._group_by_identity(
+            ["a1", "b1", "a2", "b2"]) == ["a1", "a2", "b1", "b2"]
+
+    def test_interleaved_with_standalone_keeps_legacy_positions(self):
+        r = _fake_identity_router(
+            {"x": None, "a1": "A", "y": None, "a2": "A"},
+            ["x", "a1", "y", "a2"], task_class="screening")
+        assert r._group_by_identity(
+            ["x", "a1", "y", "a2"]) == ["x", "a1", "a2", "y"]
+
+    def test_all_cooling_fallback_is_identity_grouped(self, monkeypatch):
+        """The least-bad fallback path applies the same grouped-rail
+        semantics instead of returning raw config order."""
+        r = _router_with_proxy(monkeypatch)
+        import time as _time
+        for st in r.states.values():
+            if st is not None:
+                st.cooldown_until = _time.monotonic() + 3600.0
+        cands = r.candidates_for("research_synthesis")
+        i_p, i_c = cands.index("ox_alpha_proxy"), cands.index("ox_alpha")
+        assert i_c == i_p + 1
+
+    def test_route_order_moves_whole_winning_rail_group(self, monkeypatch):
+        """Empirical winner's proxy/CLI rails move to the front together,
+        contiguous and proxy-first; non-winners keep failover order."""
+
+        class FakePolicy:
+            def __init__(self, tier):
+                self.tier = tier
+
+            def decide(self, role, cands):
+                from types import SimpleNamespace
+                return SimpleNamespace(
+                    basis="measured", model=cands[0].name, tier=self.tier,
+                    sampled_effective_loss=0.0, scores_used={})
+
+        r = _router_with_proxy(monkeypatch)
+        r.empirical_routing_enabled = True
+        try:
+            # winner has no model_identity: only its own rail moves
+            r._routing_policy = FakePolicy(tier="frontier")
+            ordered, meta = r.route_order(
+                "research_synthesis",
+                ["frontier", "gpu1", "ox_alpha_proxy", "ox_alpha"],
+                role="research_synthesis")
+            assert ordered == ["frontier", "gpu1", "ox_alpha_proxy", "ox_alpha"]
+            assert meta["basis"] == "measured"
+
+            # winning proxy pulls its CLI failover rail along, proxy-first
+            r._routing_policy = FakePolicy(tier="ox_alpha_proxy")
+            ordered, meta = r.route_order(
+                "research_synthesis",
+                ["frontier", "gpu1", "ox_alpha_proxy", "ox_alpha"],
+                role="research_synthesis")
+            assert ordered == ["ox_alpha_proxy", "ox_alpha", "frontier", "gpu1"]
+            assert meta["basis"] == "measured"
+        finally:
+            r.empirical_routing_enabled = False
 
 
 class TestMissingIdentityCompat:
