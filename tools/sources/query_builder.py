@@ -817,7 +817,11 @@ def _plan_wikidata_concept(question: str) -> tuple[dict, dict]:
     low = question.lower()
     matched = [(c, h) for h, c in _WIKIDATA_HINTS.items() if h in low]
     if matched:
-        matched.sort(key=lambda p: -p[1])
+        # Sort by hint length descending — longer hints are more specific
+        # ('companies' beats 'company'). The tuples are (Q-id str, hint str);
+        # negating p[1] directly raised TypeError on every hit (battery R1,
+        # findings/battery_rerun.md).
+        matched.sort(key=lambda p: -len(p[1]))
         best = matched[0][0]
         others = [c for c, _ in matched[1:] if c != best]
         if not others:
