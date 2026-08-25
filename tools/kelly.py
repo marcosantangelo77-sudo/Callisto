@@ -120,6 +120,29 @@ def _american_to_decimal(american: int | float) -> float:
         return 2.0  # even money
 
 
+def _validate_american_odds(odds: int | float) -> float:
+    """Reject anything that cannot be American odds BEFORE it reaches sizing.
+
+    Unit confusion (Family 4, MIN_CLV_RATE class): kelly_full(edge, 1.91)
+    from a decimal-odds caller used to read implied = 100/101 = 99%, clamp
+    p to 1.0 and return a full-bankroll Kelly fraction — silently. American
+    odds are integers (or integral floats) with |value| >= 100; even money
+    is +/-100. Anything else raises rather than sizing on a misread unit.
+    """
+    if isinstance(odds, bool) or not isinstance(odds, (int, float)):
+        raise ValueError(f"odds must be American odds, got {odds!r}")
+    if not math.isfinite(float(odds)):
+        raise ValueError(f"odds must be finite, got {odds!r}")
+    f = float(odds)
+    if abs(f - round(f)) > 1e-9 or abs(f) < 100:
+        raise ValueError(
+            f"odds={odds!r} is not valid American odds (integer, |v| >= 100). "
+            f"If you have decimal odds convert first: american = "
+            f"round(100*(d-1)) for d>=2, else -100/(d-1) for 1<d<2."
+        )
+    return f
+
+
 def _confidence_tier_from_score(score: float) -> str:
     """Map a 0-1 confidence score to its AGP tier string."""
     if score >= 0.90:
@@ -137,6 +160,24 @@ def _confidence_tier_from_score(score: float) -> str:
 # =========================================================================
 # 1. Full Kelly
 # =========================================================================
+def _round_down(x: float, ndigits: int = 6) -> float:
+    """Round HALF-DOWN and never upward in magnitude.
+
+    A stake quantiser may only LOSE information. round() is half-up (and
+    banker's elsewhere), which lets an automated actor RAISE its own Kelly
+    fraction — the exact Family-6 defect this module exists to prevent.
+    Ties go to the smaller stake; everything below the tie boundary rounds
+    to itself via float repr, and any value that would display as a larger
+    6dp number than the true fraction is truncated toward zero instead.
+    """
+    if x == 0.0:
+        return 0.0
+    scale = 10.0 ** ndigits
+    # Truncate toward zero at ndigits: for x>0 result <= x, for x<0
+    # result >= x, so |reported| never exceeds the exact fraction.
+    return math.trunc(x * scale) / scale
+
+
 def kelly_full(edge: float, odds: int | float) -> float:
     """
     Classic Kelly criterion: optimal fraction of bankroll to wager.
@@ -151,11 +192,15 @@ def kelly_full(edge: float, odds: int | float) -> float:
     Args:
         edge: Your estimated edge as a decimal (e.g., 0.05 for 5% edge).
               This is true_probability - implied_probability.
-        odds: American odds being offered.
+        odds: American odds being offered. ONLY American odds are accepted;
+              a decimal-odds value like 1.91 silently reads as +191 cents of
+              payout with implied probability 99% and produces a FULL-
+              BANKROLL stake. Values that cannot be American odds raise.
 
     Returns:
         Optimal fraction of bankroll (0.0 if no edge).  Never negative.
     """
+    odds = _validate_american_odds(odds)
     implied = calculate_implied_probability(int(odds))
     p = implied + edge  # true probability
     p = max(0.0, min(1.0, p))  # clamp
@@ -168,7 +213,7 @@ def kelly_full(edge: float, odds: int | float) -> float:
         return 0.0
 
     fraction = (b * p - q) / b
-    return max(0.0, round(fraction, 6))
+    return max(0.0, _round_down(fraction))
 
 
 # =========================================================================
@@ -196,7 +241,7 @@ def kelly_fractional(
         Reduced fraction of bankroll to wager.
     """
     full = kelly_full(edge, odds)
-    return round(full * fraction, 6)
+    return _round_down(full * fraction)
 
 
 # =========================================================================

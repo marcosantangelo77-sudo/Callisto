@@ -1,0 +1,136 @@
+{
+  "generated_at": "2026-08-24T10:03:14.839249+00:00",
+  "n_total": 22,
+  "n_scored": 22,
+  "n_null": 0,
+  "null_rate": 0.0,
+  "mean_brier": 0.25,
+  "brier_ci95": [
+    0.25,
+    0.25
+  ],
+  "mean_absolute_error_vs_half": 0.0,
+  "sealed_rate": 0.2273,
+  "mean_elapsed_s": 169.3,
+  "magnitude": {
+    "n_with_market": 19,
+    "mean_edge_taken": -0.077368,
+    "mean_directional_edge": -0.191053,
+    "beat_market_rate": 0.1579
+  },
+  "brier_decomposition": {
+    "reliability": 0.051653,
+    "resolution": 0.0,
+    "uncertainty": 0.198347,
+    "brier_from_parts": 0.25,
+    "n": 22,
+    "base_rate": 0.727273
+  },
+  "calibration_overall": [
+    {
+      "bin_low": 0.0,
+      "bin_high": 0.2,
+      "n": 0,
+      "n_no_truth": 0,
+      "mean_p": null,
+      "realised": null
+    },
+    {
+      "bin_low": 0.2,
+      "bin_high": 0.4,
+      "n": 0,
+      "n_no_truth": 0,
+      "mean_p": null,
+      "realised": null
+    },
+    {
+      "bin_low": 0.4,
+      "bin_high": 0.6,
+      "n": 22,
+      "n_no_truth": 0,
+      "mean_p": 0.5,
+      "realised": 0.7273
+    },
+    {
+      "bin_low": 0.6,
+      "bin_high": 0.8,
+      "n": 0,
+      "n_no_truth": 0,
+      "mean_p": null,
+      "realised": null
+    },
+    {
+      "bin_low": 0.8,
+      "bin_high": 1.0,
+      "n": 0,
+      "n_no_truth": 0,
+      "mean_p": null,
+      "realised": null
+    }
+  ],
+  "slices": {
+    "by_domain": {
+      "FINANCIAL": {
+        "n": 11,
+        "brier": 0.25,
+        "mean_directional_edge": -0.1573
+      },
+      "TECHNICAL": {
+        "n": 4,
+        "brier": 0.25,
+        "mean_directional_edge": -0.1625
+      },
+      "SIGNAL": {
+        "n": 2,
+        "brier": 0.25,
+        "mean_directional_edge": null
+      },
+      "GENERAL": {
+        "n": 5,
+        "brier": 0.25,
+        "mean_directional_edge": -0.3125
+      }
+    },
+    "by_horizon": {
+      "short": {
+        "n": 12,
+        "brier": 0.25,
+        "mean_directional_edge": -0.266
+      },
+      "medium": {
+        "n": 8,
+        "brier": 0.25,
+        "mean_directional_edge": -0.1171
+      },
+      "long": {
+        "n": 2,
+        "brier": 0.25,
+        "mean_directional_edge": -0.075
+      }
+    },
+    "by_question_type": {
+      "beat_or_miss": {
+        "n": 8,
+        "brier": 0.25,
+        "mean_directional_edge": -0.2288
+      },
+      "event_outcome": {
+        "n": 10,
+        "brier": 0.25,
+        "mean_directional_edge": -0.2278
+      },
+      "threshold_cross": {
+        "n": 4,
+        "brier": 0.25,
+        "mean_directional_edge": 0.125
+      }
+    },
+    "nulls_by_domain": {},
+    "errors_by_domain": {}
+  },
+  "failures": {
+    "refusals": [],
+    "errors": []
+  },
+  "verdict": "at or worse than chance \u2014 do not trust these predictions yet"
+}

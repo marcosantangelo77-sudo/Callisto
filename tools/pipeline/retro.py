@@ -45,12 +45,12 @@ class PipelineResearcher(Researcher):
 
     name = "pipeline"
 
-    def __init__(self, *, model, routes: dict[str, str],
+    def __init__(self, *, model, routes: Optional[dict[str, str]] = None,
                  adversary_router=None, store=None,
                  descendant_resolutions: Optional[list] = None,
                  claim_date: Optional[date] = None):
         self.model = model
-        self.routes = dict(routes)
+        self.routes = dict(routes) if routes is not None else None
         self.adversary_router = adversary_router or _AdversaryRouterStub()
         self.store = store
         self.descendant_resolutions = list(descendant_resolutions or [])
@@ -72,14 +72,18 @@ class PipelineResearcher(Researcher):
 
     async def answer_async(self, prompts, evidence, loops=1) -> list[Prediction]:
         # Cutoff enforcement already happened in the harness (CutoffEnforcer);
-        # records arriving here are proven-admitted. We surface their URLs as
-        # fixture routes so the source layer can serve exactly those bytes.
+        # records arriving here are proven-admitted.
+        # routes=dict -> fixture_transport serves exactly those bytes (tests)
+        # routes=None -> real HTTP transport through the source registry
+        #                (live batch runs)
+        transport = (fixture_transport(self.routes)
+                     if self.routes is not None else None)
         out: list[Prediction] = []
         for p in prompts:
             pipeline = ResearchPipeline(
                 model=self.model,
                 adversary_router=self.adversary_router,
-                transport=fixture_transport(self.routes),
+                transport=transport,
                 store=self.store,
                 descendant_resolutions=self.descendant_resolutions,
             )

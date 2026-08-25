@@ -47,17 +47,31 @@ def kelly_binary(fair_prob: float, decimal_odds: float) -> float:
 
 def kelly_with_push(p_win: float, p_push: float, decimal_odds: float) -> float:
     """
-    For spreads/totals at whole numbers.
-    f* = (b*p_win - p_loss) / b  where p_loss = 1 - p_win - p_push
+    For spreads/totals at whole numbers (push returns the stake).
 
-    CRITICAL: Ignoring push HALVES the Kelly fraction.
-    Verified: p_win=0.54, p_push=0.04, odds=1.909 -> f*=0.078
+    Exact Kelly for the three-outcome lottery win/push/loss. Utility with
+    fraction f:  U(f) = p_win*ln(1+b f) + p_loss*ln(1-f) + p_push*ln(1).
+    dU/df = 0 gives:
+
+        f* = (b*p_win - p_loss) / (b*(p_win + p_loss))
+
+    where p_loss = 1 - p_win - p_push. The denominator (p_win+p_loss) is
+    what a naive binary-Kelly port drops; without it the fraction is scaled
+    by exactly (p_win+p_loss), i.e. it UNDERsizes every push-market bet by
+    the no-push probability (1% at p_push=0.04, 30% at p_push=0.30).
+
+    Verified numerically vs argmax of U(f): p_win=.54 p_push=.04 b=10/11
+    -> f*=0.081202 (the old formula returned 0.078 and its docstring
+    enshrined that wrong vector as "verified").
     """
     b = decimal_odds - 1
     if b <= 0:
         return 0.0
     p_loss = 1 - p_win - p_push
-    f = (b * p_win - p_loss) / b
+    denom = b * (p_win + p_loss)
+    if denom <= 0:
+        return 0.0
+    f = (b * p_win - p_loss) / denom
     return max(f, 0)
 
 

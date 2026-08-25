@@ -100,9 +100,10 @@ class ProvenanceLedger:
             urls=frozenset(urls or ()),
             primary=primary,
         )
-        if obs.content_hash in self._rejected_hashes:
-            # Bytes the gate already rejected are being re-recorded (a retry
-            # or a replay); keep them superseded rather than re-minting.
+        if self._fully_rejected(obs.content_hash):
+            # Every URL that observed these bytes has been gate-rejected
+            # (or the bytes were rejected with no URLs): keep them
+            # superseded rather than re-minting.
             return obs
         self._by_hash.setdefault(obs.content_hash, []).append(obs)
         for u in obs.urls:
@@ -116,13 +117,25 @@ class ProvenanceLedger:
         """Bind the relevance gate's REJECT verdict to these bytes/URLs.
 
         Call when the ingestion gate refuses a fetch. Afterwards the content
-        cannot mint PRIMARY/SECONDARY via exact-hash match, and the URL can
-        no longer verify a citation as SECONDARY. This is the only direction
-        a post-fetch judgment may move provenance: down.
+        cannot mint PRIMARY/SECONDARY via exact-hash match while ANY of its
+        observed URLs was rejected, and a rejected URL can no longer verify
+        a citation as SECONDARY. This is the only direction a post-fetch
+        judgment may move provenance: down.
+
+        Scope note (improve 2026-08-24): rejection is judged per-URL. The
+        previous implementation popped the content hash from _by_hash
+        outright, so when identical bytes were fetched at TWO urls and only
+        one was rejected, the rejection LAUNDERED the admitted fetch's
+        PRIMARY status out of the ledger — a sealed run's own evidence
+        failed is_primary_bytes (reproduced end-to-end by
+        tests/test_improve_provenance_seal.py). Now the hash is marked
+        tainted and is_primary/has_observation consult whether every URL
+        that observed these bytes was rejected; an admitted URL keeps its
+        observation. Late replays of rejected bytes with no surviving URL
+        are still refused.
         """
         h = _content_hash(content or "")
         self._rejected_hashes.add(h)
-        self._by_hash.pop(h, None)
         for u in urls or ():
             self._rejected_urls.add(u)
             self._urls.pop(u, None)
@@ -138,14 +151,27 @@ class ProvenanceLedger:
     def observed_urls(self) -> set[str]:
         return set(self._urls.keys())
 
+    def _fully_rejected(self, content_hash: str) -> bool:
+        """True iff these bytes were gate-rejected and NO admitted URL
+        observation of them survives. Only then do the bytes count as
+        superseded; a rejection at one URL must not erase a sibling
+        observation at another (improve 2026-08-24)."""
+        if content_hash not in self._rejected_hashes:
+            return False
+        for obs in self._by_hash.get(content_hash, ()):
+            if not any(u in self._rejected_urls for u in obs.urls):
+                return False
+        return True
+
     def has_observation(self, content: str) -> bool:
-        return _content_hash(content or "") in self._by_hash
+        h = _content_hash(content or "")
+        return h in self._by_hash and not self._fully_rejected(h)
 
     def is_primary_bytes(self, content: str) -> bool:
-        for obs in self._by_hash.get(_content_hash(content or ""), ()):
-            if obs.primary:
-                return True
-        return False
+        h = _content_hash(content or "")
+        if h not in self._by_hash or self._fully_rejected(h):
+            return False
+        return any(obs.primary for obs in self._by_hash[h])
 
     def cites_verified_url(self, text: str) -> bool:
         """True iff *text* contains at least one URL the session fetched.
