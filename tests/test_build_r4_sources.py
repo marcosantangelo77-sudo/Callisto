@@ -242,6 +242,105 @@ class TestRestSource:
         assert data == {"ok": True} and rec.status == 200
         assert not ledger.has_observation(JSON_503)
 
+    def test_post_injected_transport_403_retried_then_200(self, monkeypatch):
+        """Parity with GET: a transient POST 403 (temporary WAF/edge block,
+        as BLS/USPTO can produce) is retried with the bounded policy; only
+        the eventual 200 body enters the provenance ledger."""
+        self._no_sleep(monkeypatch)
+
+        class ForbiddenThenOk:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, url, headers):
+                self.calls += 1
+                if self.calls == 1:
+                    return 403, JSON_403
+                return 200, json.dumps({"ok": True})
+
+        t = ForbiddenThenOk()
+        ledger = ProvenanceLedger()
+        src = make_source(MACRO_SPEC, t, ledger=ledger)
+        data, rec = src.post_json("https://api.example.test/fred/x",
+                                  {"seriesid": ["LNS14000000"]})
+
+        assert t.calls == 2                      # retried exactly once
+        assert data == {"ok": True} and rec.status == 200
+        # The 403 error body never minted provenance.
+        assert not ledger.has_observation(JSON_403)
+        assert ledger.is_primary_bytes(json.dumps({"ok": True}))
+
+    def test_post_injected_transport_403_exhausts_retries(self, monkeypatch):
+        """Persistent POST 403 performs exactly MAX_RETRIES attempts then
+        raises SourceError."""
+        self._no_sleep(monkeypatch)
+
+        class Always403:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, url, headers):
+                self.calls += 1
+                return 403, JSON_403
+
+        t = Always403()
+        with pytest.raises(SourceError, match="exhausted retries"):
+            make_source(MACRO_SPEC, t).post_json(
+                "https://api.example.test/fred/x", {"a": 1})
+        assert t.calls == MAX_RETRIES
+
+    def test_post_native_httperror_403_retried_then_200(self, monkeypatch):
+        """Parity with the native GET HTTPError path: urllib raising
+        HTTPError(403) once then succeeding is retried under the same
+        bounded policy."""
+        import tools.sources.base as base
+
+        self._no_sleep(monkeypatch)
+
+        class FlakyUrlopen:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, req, timeout=None, context=None):
+                self.calls += 1
+                if self.calls == 1:
+                    raise base.urllib.error.HTTPError(
+                        req.full_url, 403, "Forbidden",
+                        hdrs={"Retry-After": "0"}, fp=None)
+                resp = FakeHTTPResponse(json.dumps({"ok": True}).encode())
+                return resp
+
+        opener = FlakyUrlopen()
+        monkeypatch.setattr(base.urllib.request, "urlopen", opener)
+        ledger = ProvenanceLedger()
+        src = make_source(MACRO_SPEC, None, ledger=ledger)
+        data, rec = src.post_json("https://api.example.test/bls/timeseries",
+                                  {"seriesid": ["LNS14000000"]})
+
+        assert opener.calls == 2                 # retried exactly once
+        assert data == {"ok": True} and rec.status == 200
+        assert not ledger.has_observation(JSON_403)
+
+
+class FakeHTTPResponse:
+    """Minimal context-manager response for native urlopen mocking."""
+
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    @property
+    def status(self):
+        return 200
+
+    def read(self):
+        return self._body
+
 
 # ── adapters against fixtures ─────────────────────────────────────────────
 

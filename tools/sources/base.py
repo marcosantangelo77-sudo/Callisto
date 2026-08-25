@@ -329,8 +329,14 @@ class RestSource:
                 # data — same contract as get(): retry transient statuses,
                 # otherwise surface a SourceError to JSON-helper callers.
                 if status != 200:
+                    # Same transient set as get()'s injected-transport path:
+                    # 403 (temporary WAF/edge blocks on BLS/USPTO), 429 and
+                    # 5xx retry with the bounded exponential fallback; other
+                    # 4xx are terminal. The non-200 body never reaches the
+                    # ledger (_record skips it above).
                     err = f"HTTP {status} for {url}"
-                    if status == 429 or 500 <= status < 600:
+                    if status == 403 or status == 429 or \
+                            500 <= status < 600:
                         time.sleep(min(2 ** attempt, MAX_RETRY_AFTER_S))
                         last_err = err
                         continue
@@ -338,8 +344,18 @@ class RestSource:
                 return status, text
             except urllib.error.HTTPError as exc:
                 last_err = f"HTTP {exc.code} for {url}"
-                if exc.code == 429 or 500 <= exc.code < 600:
-                    time.sleep(2 ** attempt)
+                if exc.code in (403, 429):
+                    # Parity with get()'s native HTTPError path: honor
+                    # Retry-After when present, bounded exponential fallback.
+                    try:
+                        retry_after = float(exc.headers.get("Retry-After", 0) or 0)
+                    except (TypeError, ValueError):
+                        retry_after = 0.0
+                    time.sleep(min(max(retry_after, 2 ** attempt),
+                                   MAX_RETRY_AFTER_S))
+                    continue
+                if 500 <= exc.code < 600:
+                    time.sleep(min(2 ** attempt, MAX_RETRY_AFTER_S))
                     continue
                 raise SourceError(last_err) from exc
             except SourceError:
