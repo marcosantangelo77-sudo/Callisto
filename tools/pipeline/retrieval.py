@@ -196,8 +196,10 @@ class RelevanceGate:
     def judge(self, question_text: str, question_type: str,
               parsed: Any) -> tuple[bool, float, str]:
         """(admitted, coverage 0..1, reason)."""
-        q_tokens = set(_tokens(question_text)) | set(_tokens(question_type))
-        if not q_tokens:
+        q_tokens = set(_tokens(question_text))
+        type_tokens = set(_tokens(question_type))
+        all_tokens = q_tokens | type_tokens
+        if not all_tokens:
             return False, 0.0, "question has no judgeable topical words"
         # A question with only ONE topical token cannot be relevance-judged
         # on coverage: any document containing that one word admits at 100%
@@ -206,6 +208,15 @@ class RelevanceGate:
         # The prefix floor below (>=4 chars both sides) is the other half of
         # the R2b fix: short-prefix collisions can no longer manufacture
         # matches.
+        #
+        # DENOMINATOR = the QUESTION's tokens only. Coverage answers "how
+        # much of what was ASKED does this document speak to"; padding the
+        # denominator with routing-label words deflates every real score.
+        # question_type tokens may still MATCH (they count in the numerator)
+        # — a document about the asked-about kind of evidence is relevant —
+        # but they never dilute the demand. A one-word-overlap document now
+        # scores exactly 1/n of the question's own words, which is below any
+        # honest threshold once n >= 4 and exactly at the bar it deserves.
         if len(q_tokens) < 2:
             return False, 0.0, (
                 "question has fewer than two topical words; coverage "
@@ -214,7 +225,7 @@ class RelevanceGate:
         for w in _WORD_RE.findall(extract_text(parsed).lower()):
             if len(w) >= 3:
                 hay.add(w)
-        matched = [t for t in q_tokens
+        matched = [t for t in all_tokens
                    if any(h == t or _prefix_ok(t, h) for h in hay)]
         coverage = len(matched) / len(q_tokens)
         # D4 structural route: a numeric body whose observation window is
@@ -226,7 +237,7 @@ class RelevanceGate:
                 return True, max(coverage, self.min_coverage), (
                     "structured data whose observation years match the "
                     "years named in the question")
-            missed = sorted(q_tokens - set(matched))
+            missed = sorted(all_tokens - set(matched))
             return False, coverage, (
                 f"content covers {coverage:.0%} of the question's topical "
                 f"words (need {self.min_coverage:.0%}); missing: "
