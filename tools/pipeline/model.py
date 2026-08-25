@@ -217,7 +217,13 @@ ANSWER_SYSTEM = (
     "whenever you are not answering the question asked — it is a real "
     "answer, not a failure. "
     "or {\"compute\": {\"code\":..., \"inputs\":...}, \"answer\": null} when "
-    "computation must run before an answer exists."
+    "computation must run before an answer exists. Also return "
+    "\"answers_question\": true | false — DECLARED, structural, and read "
+    "as-is: does the evidence actually bear on and settle THIS question? "
+    "Excellent provenance does not make evidence an answer; if the items "
+    "determine nothing about the question asked (wrong period, wrong "
+    "measure, intraday asked but only daily published), say false even if "
+    "they are authentic and topically adjacent. Never leave it absent."
 )
 
 
