@@ -232,6 +232,21 @@ class RestSource:
                         retry_after = float(exc.headers.get("Retry-After", 0) or 0)
                     except (TypeError, ValueError):
                         retry_after = 0.0
+                    # SPEED run 18 (2026-08-25): a Retry-After LARGER than
+                    # our cap means the source is cooling down for longer
+                    # than we may ever wait (CourtListener live-measured:
+                    # Retry-After: 916 → three capped 30s sleeps ≈ 90s of
+                    # guaranteed-futile blind waiting per fetch attempt,
+                    # ~65% of a real run's wall across retrieval rounds).
+                    # Sleeping cannot out-wait the window; decline now and
+                    # let the leaf proceed without this source. Bounded-RA
+                    # and missing-header paths below are unchanged.
+                    if retry_after > MAX_RETRY_AFTER_S:
+                        raise SourceError(
+                            f"{last_err}; server cooling down "
+                            f"(Retry-After: {retry_after:.0f}s > cap "
+                            f"{MAX_RETRY_AFTER_S}s) — declining retry"
+                        ) from exc
                     time.sleep(min(max(retry_after, 2 ** attempt),
                                    MAX_RETRY_AFTER_S))
                     continue

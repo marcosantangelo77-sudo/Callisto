@@ -27,6 +27,12 @@ def _always_429(url, headers):
 
 
 def test_huge_retry_after_does_not_become_a_huge_sleep(monkeypatch):
+    # SPEED run 18 (2026-08-25): the policy this test defends got STRICTER.
+    # A Retry-After larger than MAX_RETRY_AFTER_S now declines immediately
+    # (zero sleeps) instead of sleeping the cap and retrying — a server
+    # cooling down for 916s (CourtListener, live-measured) cannot be
+    # out-waited by three 30s naps. The freeze bound is preserved and
+    # tightened from <=90s to ~0s; see tests/test_speed_source_retry_after.py.
     slept = []
     monkeypatch.setattr(sb.time, "sleep", lambda s: slept.append(s))
     src = sb.RestSource(_spec(), transport=_always_429)
@@ -34,10 +40,11 @@ def test_huge_retry_after_does_not_become_a_huge_sleep(monkeypatch):
     with pytest.raises(sb.SourceError):
         src.get("https://example.invalid/works")
 
-    # The retry path MUST have been exercised, or this test proves nothing.
-    assert slept, "no backoff sleep recorded — test never reached the retry path"
-    assert max(slept) <= sb.MAX_RETRY_AFTER_S, (
-        f"slept {max(slept)}s because a server asked for {HUGE}s")
+    # The DoS bound holds absolutely: whatever we slept is capped...
+    assert all(s <= sb.MAX_RETRY_AFTER_S for s in slept), (
+        f"slept {max(slept) if slept else 0}s because a server asked for {HUGE}s")
+    # ...and under huge-RA the decline path sleeps NOTHING at all.
+    assert not slept, "huge Retry-After should decline immediately"
 
 
 def test_cap_constant_is_real_and_unbounded_sleep_is_gone():
