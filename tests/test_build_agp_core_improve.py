@@ -73,14 +73,25 @@ def _answer(conf=0.9) -> str:
 
 
 class _QuietRouter:
-    """Stands in for a ProviderRouter endpoint pool; approves everything."""
+    """Stands in for a ProviderRouter endpoint pool; answers every AGP role
+    by task class (decompose / answer / approve) reporting one model name."""
 
-    def __init__(self, model: str = "stub-model"):
+    ARCHITECT_TCS = ("hypothesis_generation", "research_synthesis")
+    MANAGER_TCS = ("extraction", "classification", "screening")
+
+    def __init__(self, model: str = "stub-model", answer_conf: float = 0.9):
         self.model_name = model
+        self.answer_conf = answer_conf
 
     async def complete(self, task_class, messages, schema=None, **_ig):
-        return {"parsed_json": {"objections": []},
-                "model": self.model_name, "content": ""}
+        if task_class in self.ARCHITECT_TCS:
+            body = {"content": _decompose()}
+        elif task_class in self.MANAGER_TCS:
+            body = {"content": _answer(self.answer_conf)}
+        else:
+            body = {"parsed_json": {"objections": []}, "content": ""}
+        body["model"] = self.model_name
+        return body
 
 
 def _pipeline(tmp_path, *, model, adversary_router):
@@ -123,11 +134,13 @@ def test_structural_self_review_ceiling_enforced(tmp_path):
 
 def test_shared_router_critic_counts_as_self_review(tmp_path):
     router = _QuietRouter("one-model")
-    pipe = _strong_pipeline(tmp_path, adversary_router=router)
     # production `ask` shape: RouterModel wraps the SAME router object that
     # reviews the conclusion.
-    pipe.model = RouterModel(router)
-    pipe._adversary_router = router
+    pipe = ResearchPipeline(
+        model=RouterModel(router), adversary_router=router,
+        transport=fixture_transport(_routes()),
+        store=ArtifactStore(root=tmp_path / "art"),
+        ledger=ProvenanceLedger())
     result = _run(pipe)
     assert result.sealed, result.refusal_reason
     assert result.confidence_score <= SELF_REVIEW_CEILING, (
@@ -225,7 +238,7 @@ def test_ask_parser_accepts_repeated_adversary_backend():
     import callisto
     parser = callisto.build_parser()
     args = parser.parse_args([
-        "ask", "--question", "q", "--backend", "ox_alpha",
+        "ask", "q", "--backend", "ox_alpha",
         "--adversary-backend", "local", "--adversary-backend", "ox_alpha"])
     assert args.adversary_backend == ["local", "ox_alpha"]
 

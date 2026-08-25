@@ -71,13 +71,50 @@ def _load_router(config_path: str):
     return ProviderRouter(config_path=config_path)
 
 
-def _make_engine(router, self_review: bool):
-    """Seam for tests; production wires RouterModel + ResearchPipeline."""
+def _make_engine(router, self_review: bool, extra_adversaries=None):
+    """Seam for tests; production wires RouterModel + ResearchPipeline.
+
+    extra_adversaries: endpoint names that become ADDITIONAL critics in an
+    AdversaryPanel (agp.ensemble). Each critic routes its attack through a
+    dedicated task-class alias so providers.yaml can send it to a different
+    model than the author — cross-model review is the point; same-model
+    panels are still allowed and are labelled (and capped) as self-review
+    by reported model name.
+    """
     from tools.pipeline.engine import ResearchPipeline
     from tools.pipeline.model import RouterModel
-    return ResearchPipeline(
-        model=RouterModel(router),
-        adversary_router=(None if self_review else router))
+    extras = list(extra_adversaries or [])
+    kwargs = dict(model=RouterModel(router))
+    if not extras:
+        kwargs["adversary_router"] = None if self_review else router
+        return ResearchPipeline(**kwargs)
+    from agp.adversary import Adversary, AGPRole
+    from agp.ensemble import AdversaryPanel
+    base_tc = AGPRole.ROLE_TASK_CLASSES[AGPRole.ADVERSARY][0]
+    members: list = []
+    if not self_review:
+        members.append(Adversary(router))
+    task_classes = getattr(router, "task_classes", None)
+    for i, name in enumerate(extras):
+        alias = f"{base_tc}#panel{i + 1}"
+        if isinstance(task_classes, dict):
+            # Registered BEFORE any run traffic: candidates_for() resolves
+            # aliases strictly, and this mapping is static for the run.
+            task_classes[alias] = name
+        members.append(Adversary(router, task_class=alias))
+    kwargs["adversary_router"] = AdversaryPanel(members)
+    return ResearchPipeline(**kwargs)
+
+
+def _validate_adversary_backends(router, names) -> int:
+    """0 when every requested critic backend is configured; else print and
+    return 2, mirroring --backend's refusal contract."""
+    unknown = [n for n in names if n not in router.endpoints]
+    if unknown:
+        print(f"unknown adversary backend '{unknown[0]}'. configured: "
+              f"{', '.join(router.endpoints) or '(none)'}")
+        return 2
+    return 0
 
 
 def _result_record(result, question: str) -> dict:
@@ -150,7 +187,11 @@ async def _cmd_ask(args: argparse.Namespace) -> int:
               f"{json.dumps(health)[:300]}")
         return 2
 
-    engine = _make_engine(router, self_review=args.self_review)
+    rc = _validate_adversary_backends(router, args.adversary_backend)
+    if rc:
+        return rc
+    engine = _make_engine(router, self_review=args.self_review,
+                          extra_adversaries=args.adversary_backend)
     result = await engine.run(args.question)
     print("=" * 72)
     if result.sealed:
@@ -426,6 +467,12 @@ def build_parser() -> argparse.ArgumentParser:
                        help="let the adversary run on the same model as the "
                             "author (visible, capped) instead of a separate "
                             "adversary router")
+    p_ask.add_argument("--adversary-backend", action="append",
+                       dest="adversary_backend", default=[],
+                       help="add a critic routed at this provider tier; "
+                            "repeat for a multi-critic panel (agp.ensemble). "
+                            "Distinctness is judged on reported model name, "
+                            "so same-model panels are labelled self-review")
     p_ask.add_argument("--providers", default=_default_providers_path(),
                        help="path to providers.yaml")
 

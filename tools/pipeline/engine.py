@@ -1032,7 +1032,7 @@ class ResearchPipeline:
             clamped, reason = verdict.apply(clamped)
             result.notes.append(
                 "review provenance: "
-                f"{verdict.provenance.mode} (reviewers: "
+                f"{verdict.provenance.mode.replace('_', '-')} (reviewers: "
                 f"{verdict.provenance.reviewer_models})")
             if reason:
                 result.notes.append(f"adversary panel: {reason}")
@@ -1079,6 +1079,11 @@ class ResearchPipeline:
         # adversary ran, so a penalty crossing a band boundary left the
         # seal carrying the higher tier's label.
         tier = ConfidenceTier.from_score(max(0.0, clamped)).value
+        # One dissent ledger for the whole review step: a panel shares its
+        # members' ledger; the single critic owns its own. Refusal paths
+        # below must not lazily build a phantom second reviewer.
+        rev_ledger = (panel.adversaries[0].ledger if panel is not None
+                      else self.adversary.ledger)
 
         session.summary = SessionSummary(
             scope=question, domain=domain, conclusion=conclusion,
