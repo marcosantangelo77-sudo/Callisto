@@ -35,6 +35,7 @@ from tools.sources.base import (  # noqa: E402
 from tools.sources.registry import SourceAdapter, SourceRegistry  # noqa: E402
 
 
+JSON_403 = '{"error": "forbidden by WAF rule", "code": 403}'
 JSON_503 = ('{"error": "upstream capacity exceeded",'
             ' "hint": "retry later", "code": 503}')
 HTML_503 = ("<html><body><h1>503 Service Unavailable</h1>"
@@ -151,6 +152,34 @@ class TestRestSource:
         assert not ledger.has_observation(HTML_503)
         assert ledger.is_primary_bytes(json.dumps({"a": 1}))
         assert "https://api.example.test/fred/x" in ledger.observed_urls()
+
+    def test_get_injected_transport_403_retried_then_200(self, monkeypatch):
+        """Parity with the native HTTPError GET path: 403 from the injected
+        transport is retried (bounded exponential fallback — this seam has
+        no headers), not treated as terminal. The 403 error body never
+        enters the provenance ledger; only the eventual 200 body does."""
+        self._no_sleep(monkeypatch)
+
+        class ForbiddenThenOk:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, url, headers):
+                self.calls += 1
+                if self.calls == 1:
+                    return 403, JSON_403
+                return 200, json.dumps({"a": 1})
+
+        t = ForbiddenThenOk()
+        ledger = ProvenanceLedger()
+        src = make_source(MACRO_SPEC, t, ledger=ledger)
+        data, rec = src.get_json("https://api.example.test/fred/x")
+
+        assert t.calls == 2                      # retried exactly once
+        assert data == {"a": 1} and rec.status == 200
+        # The 403 error body never minted provenance.
+        assert not ledger.has_observation(JSON_403)
+        assert ledger.is_primary_bytes(json.dumps({"a": 1}))
 
     def test_get_injected_transport_429_retried_then_exhausts(self, monkeypatch):
         """Persistent transient failures exhaust retries into SourceError."""

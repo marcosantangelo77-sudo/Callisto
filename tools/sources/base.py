@@ -228,10 +228,14 @@ class RestSource:
                     # Same status semantics as the native HTTPError path
                     # below: the injected transport seam (documented for
                     # tests/offline use) must preserve GET's retry contract.
-                    # 429/5xx are transient — back off and retry; anything
-                    # else is terminal. The non-200 body still never reaches
-                    # the ledger (_record skips it above).
-                    if status == 429 or 500 <= status < 600:
+                    # 403, 429 and 5xx are transient — back off and retry;
+                    # anything else is terminal. This seam has no headers,
+                    # so a 403 uses only the bounded exponential fallback
+                    # (the native path's max(Retry-After, 2**attempt) with
+                    # no Retry-After available). The non-200 body still never
+                    # reaches the ledger (_record skips it above).
+                    if status == 403 or status == 429 or \
+                            500 <= status < 600:
                         last_err = f"HTTP {status} for {url}"
                         time.sleep(min(2 ** attempt, MAX_RETRY_AFTER_S))
                         continue
