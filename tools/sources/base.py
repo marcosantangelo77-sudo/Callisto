@@ -118,6 +118,39 @@ class _RateLimiter:
             time.sleep(min(delay, 1.0))
 
 
+_shared_limiter_lock = threading.Lock()
+_shared_limiters: dict[tuple[str, str, float], "_RateLimiter"] = {}
+
+
+def _identity_key(spec: "SourceSpec") -> tuple[str, str, float]:
+    """Stable identity for shared-limiter caching.
+
+    Keyed by (name, base_url, min_interval_s): two specs that differ in any
+    of these could legitimately need different pacing, so they must not
+    share. Deliberately excludes ephemeral instance identity (id(), object
+    address) — those would defeat sharing entirely.
+    """
+    return (spec.name, spec.base_url, float(spec.min_interval_s))
+
+
+def _shared_rate_limiter(spec: "SourceSpec") -> "_RateLimiter":
+    key = _identity_key(spec)
+    with _shared_limiter_lock:
+        lim = _shared_limiters.get(key)
+        if lim is None:
+            lim = _RateLimiter(spec.min_interval_s)
+            _shared_limiters[key] = lim
+        return lim
+
+
+def reset_shared_rate_limiters() -> None:
+    """Test isolation hook: drop all cached shared limiters."""
+    with _shared_limiter_lock:
+        _shared_limiters.clear()
+
+
+
+
 @dataclass
 class FetchRecord:
     url: str
@@ -158,7 +191,12 @@ class RestSource:
         self.user_agent = user_agent or _default_agent()
         self.timeout_s = timeout_s
         self._transport = transport
-        self._limiter = _limiter or _RateLimiter(spec.min_interval_s)
+        # Default limiters are shared process-wide per stable source identity
+        # (name + base_url + min_interval_s), so parallel leaves and
+        # independently constructed clients cannot bypass each other's
+        # declared min_interval_s. An explicit _limiter is an intentional
+        # per-instance test/override and is NOT cached.
+        self._limiter = _limiter or _shared_rate_limiter(spec)
         self.last_record: Optional[FetchRecord] = None
         self._ssl_ctx: Any = None
         if transport is None:
