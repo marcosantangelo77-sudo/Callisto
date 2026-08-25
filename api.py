@@ -887,7 +887,10 @@ async def lifespan(app: FastAPI):
     monitor = HealthMonitor()
     await monitor.start()
 
-    # Line movement monitor — autonomous odds tracking
+    # Line movement monitor — autonomous odds tracking.
+    # Sole owner of the application-lifespan odds WebSocket: the provider
+    # allows one connection per API key, so nothing else may start
+    # start_odds_stream() or a competing OddsWebSocket here.
     line_monitor = LineMonitor()
     await line_monitor.initialize()
     await line_monitor.start()
@@ -979,14 +982,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Event bus audit drain failed: {e}")
 
-    # Odds WebSocket — real-time odds streaming from Odds-API.io Pro
-    try:
-        from tools.odds_ws import start_odds_stream
-        await start_odds_stream()
-        logger.info("Odds WebSocket stream started (15 books, real-time)")
-    except Exception as e:
-        logger.warning(f"Odds WebSocket failed to start: {e}")
-
     # Live in-game state collector — polls ESPN every 30s for games
     # in progress, stores snapshots, and fires live-edge detectors.
     # Env-gated (default ON) and wrapped in try/except so a failure
@@ -1054,11 +1049,6 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     await telegram.alert_system("Callisto shutting down.", is_error=True)
-    try:
-        from tools.odds_ws import stop_odds_stream
-        await stop_odds_stream()
-    except Exception:
-        pass
     await telegram_listener.stop()
     if system_health:
         system_health.write_health_file()
