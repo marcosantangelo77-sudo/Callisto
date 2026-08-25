@@ -952,7 +952,12 @@ class ResearchPipeline:
                     trace.stages.append(_answer_saved[i])
             result.leaves.append(outcome)
         self.artifact_refs.extend(self._pending_artifact_refs)
-
+        # Defect Q (improve 2026-08-24, test_improve_provenance_seal): the
+        # keyed seal must COVER the artifacts. Refs attach to the session
+        # BEFORE the seal call, so the sealed payload carries them instead
+        # of sealing an always-empty artifact layer.
+        if self._pending_artifact_refs:
+            session.add_artifacts(list(self._pending_artifact_refs))
 
         session.advance_to(SessionStep.PRIMARY_COLLECTION)
         session.advance_to(SessionStep.CONTRADICTION_CHECK)

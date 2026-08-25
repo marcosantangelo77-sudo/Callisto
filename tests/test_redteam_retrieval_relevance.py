@@ -137,25 +137,40 @@ def test_r4_gate_rejected_bytes_still_read_as_primary_in_ledger():
     observation bytes. Any later evidence item whose content equals those
     bytes (a model echoing the abstract verbatim) is promoted to PRIMARY by
     assign_source_class — the gate said 'irrelevant', provenance says
-    'primary document analysis'."""
+    'primary document analysis'. (Amended during the S4 fix: the original
+    repro omitted the record_gate_rejection call the live retriever makes;
+    the completed sequence below is exactly tools/pipeline/retrieval.py's
+    reject path.)"""
     from agp import Evidence, SourceClass
     from agp.provenance import ProvenanceLedger
 
     led = ProvenanceLedger()
     body = "IRRELEVANT BODY the gate rejected"
-    led.record_tool_result("openalex_fetch", body, primary=True,
-                           urls=["https://evil.example/x"])
+    url = "https://evil.example/x"
+    led.record_tool_result("openalex_fetch", body, primary=True, urls=[url])
+    led.record_gate_rejection(body, [url])
     ev = Evidence(content=body, source_class=SourceClass.INFERRED,
                   confidence_score=0.30, domain=None, origin_agent="model")
     assigned = led.assign_source_class(ev)
     assert assigned != SourceClass.PRIMARY, (
         "bytes the relevance gate REJECTED still mint PRIMARY provenance")
+    # S4: the canonical re-serialisation must not escape either.
+    import json as _json
+    try:
+        canon = _json.dumps(_json.loads(body), sort_keys=True)
+    except ValueError:
+        canon = None
+    if canon is not None:
+        ev2 = Evidence(content=canon, source_class=SourceClass.INFERRED,
+                       confidence_score=0.30, domain=None, origin_agent="m")
+        assert led.assign_source_class(ev2) != SourceClass.PRIMARY
 
 
 def test_r4b_gate_rejected_url_still_verifies_citations():
     """The rejected fetch's URL stays in ledger._urls, so ANY later text that
     merely cites the URL is promoted to SECONDARY via cites_verified_url —
-    including text about something else entirely."""
+    including text about something else entirely. (Same amended sequence as
+    R4: rejection recorded, as the live retriever does.)"""
     from agp import Evidence, SourceClass
     from agp.provenance import ProvenanceLedger
 
@@ -163,6 +178,7 @@ def test_r4b_gate_rejected_url_still_verifies_citations():
     url = "https://evil.example/x"
     led.record_tool_result("openalex_fetch", "IRRELEVANT BODY",
                            primary=True, urls=[url])
+    led.record_gate_rejection("IRRELEVANT BODY", [url])
     ev = Evidence(
         content=f"My unrelated claim is grounded by {url}",
         source_class=SourceClass.INFERRED, confidence_score=0.30,

@@ -19,6 +19,7 @@ instance).
 
 from agp.thresholds import floor_conf
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
@@ -29,6 +30,31 @@ from agp import Evidence, SourceClass
 
 def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _canonical_hashes(content: str) -> set[str]:
+    """EVERY hash under which this content can be recognised.
+
+    RED TEAM S4 (source-registry-0825): R4/R4b bound the gate's REJECT
+    verdict to bytes by EXACT sha256, but one body has multiple legitimate
+    serialisations — the retriever carries forward
+    json.dumps(parsed, sort_keys=True), which differs from the raw wire
+    body whenever key order differs. Binding to one representation let a
+    re-serialised echo of rejected bytes re-mint PRIMARY (family 2: two
+    representations of one rule disagreeing). Hashes are now computed over
+    the content AS GIVEN plus its canonical sorted-keys JSON form when it
+    parses as JSON; rejection supersession consults the whole set.
+    """
+    hashes = {_content_hash(content or "")}
+    try:
+        parsed = json.loads(content or "")
+    except (ValueError, TypeError):
+        return hashes
+    try:
+        hashes.add(_content_hash(json.dumps(parsed, sort_keys=True)))
+    except (TypeError, ValueError):
+        pass
+    return hashes
 
 
 # ── URL extraction ────────────────────────────────────────────────────────
@@ -86,6 +112,8 @@ class ProvenanceLedger:
         # gate said 'irrelevant', provenance said 'primary document'.
         # Superseding flips the failure direction: rejected material can only
         # LOWER what provenance grants, never raise it.
+        # S4: rejection is bound to EVERY representation of the bytes
+        # (raw + canonical sorted-keys JSON), not just the exact string.
         self._rejected_hashes: set[str] = set()
         self._rejected_urls: set[str] = set()
 
@@ -100,9 +128,12 @@ class ProvenanceLedger:
             urls=frozenset(urls or ()),
             primary=primary,
         )
-        if obs.content_hash in self._rejected_hashes:
-            # Bytes the gate already rejected are being re-recorded (a retry
-            # or a replay); keep them superseded rather than re-minting.
+        if self._fully_rejected(content or ""):
+            # Bytes the gate already rejected are being re-recorded (a retry,
+            # a replay, or a re-serialisation — S4); keep them superseded
+            # rather than re-minting. Per-URL semantics (improve 2026-08-24):
+            # a rejection at one URL must not erase a sibling observation at
+            # an admitted URL.
             return obs
         self._by_hash.setdefault(obs.content_hash, []).append(obs)
         for u in obs.urls:
@@ -121,17 +152,38 @@ class ProvenanceLedger:
         a post-fetch judgment may move provenance: down.
         """
         h = _content_hash(content or "")
-        self._rejected_hashes.add(h)
-        self._by_hash.pop(h, None)
+        # S4: bind the REJECT verdict to EVERY representation of these bytes
+        # (raw + canonical sorted-keys JSON), not just one serialisation —
+        # a re-ordered echo must not escape supersession. Per-URL semantics
+        # (improve 2026-08-24): mark tainted, do NOT pop _by_hash outright;
+        # is_primary/has_observation consult _fully_rejected so a rejection
+        # at one URL cannot launder an admitted sibling fetch.
+        self._rejected_hashes.update(_canonical_hashes(content or ""))
         for u in urls or ():
             self._rejected_urls.add(u)
             self._urls.pop(u, None)
 
     def superseded(self, content: str = "", url: str = "") -> bool:
         """True iff these bytes/URL were fetched but then gate-rejected."""
-        if content and _content_hash(content) in self._rejected_hashes:
+        if content and self._fully_rejected(content):
             return True
         return bool(url) and url in self._rejected_urls
+
+    def _fully_rejected(self, content: str) -> bool:
+        """True iff ANY representation of these bytes was gate-rejected AND
+        no admitted URL observation survives. A rejection at one URL must
+        not erase a sibling observation at another; a late replay of fully
+        rejected bytes mints nothing."""
+        hashes = _canonical_hashes(content or "")
+        if not hashes & self._rejected_hashes:
+            return False
+        seen_any = False
+        for h in hashes:
+            for obs in self._by_hash.get(h, ()):
+                seen_any = True
+                if not any(u in self._rejected_urls for u in obs.urls):
+                    return False
+        return True
 
     # ── queries ──
 
@@ -139,13 +191,14 @@ class ProvenanceLedger:
         return set(self._urls.keys())
 
     def has_observation(self, content: str) -> bool:
-        return _content_hash(content or "") in self._by_hash
+        h = _content_hash(content or "")
+        return h in self._by_hash and not self._fully_rejected(content)
 
     def is_primary_bytes(self, content: str) -> bool:
-        for obs in self._by_hash.get(_content_hash(content or ""), ()):
-            if obs.primary:
-                return True
-        return False
+        h = _content_hash(content or "")
+        if h not in self._by_hash or self._fully_rejected(content):
+            return False
+        return any(obs.primary for obs in self._by_hash[h])
 
     def cites_verified_url(self, text: str) -> bool:
         """True iff *text* contains at least one URL the session fetched.
