@@ -141,6 +141,74 @@ def test_d3_empty_fetch_digest_displayed_without_warning(
         "provenance — absence passed as success")
 
 
+# ── D3 repair-pinning: digest validation matrix ───────────────────────────
+
+def _show_fetch(rec, runs_dir, tmp_path, monkeypatch):
+    arts = tmp_path / "arts"
+    monkeypatch.setenv("CALLISTO_ARTIFACT_DIR", str(arts))
+    rec["artifacts"] = []
+    p = callisto._persist_run(rec)
+    args = callisto.build_parser().parse_args(["show", p.stem])
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = callisto._cmd_show(args)
+    return buf.getvalue(), rc
+
+
+def test_d3_malformed_nonhex_digest_flagged(runs_dir, tmp_path, monkeypatch):
+    rec = _record()
+    rec["fetches"] = [{"source": "fred",
+                       "url": "https://example/y",
+                       "content_sha256": "z" * 64}]   # right length, not hex
+    out, rc = _show_fetch(rec, runs_dir, tmp_path, monkeypatch)
+    low = out.lower()
+    assert ("malformed" in low or "invalid" in low or "unverified" in low
+            or "missing" in low), (
+        "show printed a NON-HEX 64-char content_sha256 as ordinary provenance")
+    assert rc != 0, "malformed fetch digest must make show exit non-zero"
+
+
+def test_d3_wrong_length_digest_flagged(runs_dir, tmp_path, monkeypatch):
+    rec = _record()
+    rec["fetches"] = [{"source": "fred",
+                       "url": "https://example/z",
+                       "content_sha256": "abc123"}]   # truthy but wrong length
+    out, rc = _show_fetch(rec, runs_dir, tmp_path, monkeypatch)
+    low = out.lower()
+    assert ("malformed" in low or "invalid" in low or "unverified" in low), (
+        "show printed a wrong-length content_sha256 as ordinary provenance")
+    assert rc != 0
+
+
+def test_d3_valid_digest_with_local_body_verified(
+        runs_dir, tmp_path, monkeypatch):
+    import hashlib as _hashlib
+    body = "the exact fetched body"
+    rec = _record()
+    rec["fetches"] = [{"source": "fred", "url": "https://example/v",
+                       "content_sha256": _hashlib.sha256(
+                           body.encode()).hexdigest(),
+                       "body": body}]
+    out, rc = _show_fetch(rec, runs_dir, tmp_path, monkeypatch)
+    assert "[ok]" in out, f"valid digest+matching body not shown ok: {out}"
+    assert "mismatch" not in out.lower() and "unverified" not in out.lower()
+    assert rc == 0
+
+
+def test_d3_tampered_local_body_mismatch_flagged(
+        runs_dir, tmp_path, monkeypatch):
+    body = "original body"
+    rec = _record()
+    rec["fetches"] = [{"source": "fred", "url": "https://example/t",
+                       "content_sha256": hashlib.sha256(
+                           body.encode()).hexdigest(),
+                       "body": "TAMPERED BODY"}]
+    out, rc = _show_fetch(rec, runs_dir, tmp_path, monkeypatch)
+    assert "mismatch" in out.lower(), (
+        "local body contradicting its recorded digest displayed without "
+        "a mismatch warning")
+
+
 # ── D4: doctor cannot fail on reachability ────────────────────────────────
 
 def test_d4_doctor_reports_ok_with_dead_default_tier_and_garbage_db(
