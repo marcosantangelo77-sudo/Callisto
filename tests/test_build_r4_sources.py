@@ -321,6 +321,60 @@ class TestRestSource:
         assert data == {"ok": True} and rec.status == 200
         assert not ledger.has_observation(JSON_403)
 
+    def test_post_native_httperror_403_no_headers_retried(self, monkeypatch):
+        """HTTPError with hdrs=None must follow the same bounded transient-403
+        policy instead of raising AttributeError on the first attempt."""
+        import tools.sources.base as base
+
+        self._no_sleep(monkeypatch)
+
+        class Headerless403:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, req, timeout=None, context=None):
+                self.calls += 1
+                if self.calls <= MAX_RETRIES - 1:
+                    raise base.urllib.error.HTTPError(
+                        req.full_url, 403, "Forbidden", hdrs=None, fp=None)
+                resp = FakeHTTPResponse(json.dumps({"ok": True}).encode())
+                return resp
+
+        opener = Headerless403()
+        monkeypatch.setattr(base.urllib.request, "urlopen", opener)
+        ledger = ProvenanceLedger()
+        src = make_source(MACRO_SPEC, None, ledger=ledger)
+        data, rec = src.post_json("https://api.example.test/bls/timeseries",
+                                  {"seriesid": ["LNS14000000"]})
+
+        assert opener.calls == MAX_RETRIES - 1 + 1
+        assert data == {"ok": True} and rec.status == 200
+        assert not ledger.has_observation(JSON_403)
+
+    def test_post_native_httperror_403_no_headers_exhausts(self, monkeypatch):
+        import tools.sources.base as base
+
+        self._no_sleep(monkeypatch)
+
+        class Always403NoHeaders:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, req, timeout=None, context=None):
+                self.calls += 1
+                raise base.urllib.error.HTTPError(
+                    req.full_url, 403, "Forbidden", hdrs=None, fp=None)
+
+        opener = Always403NoHeaders()
+        monkeypatch.setattr(base.urllib.request, "urlopen", opener)
+        ledger = ProvenanceLedger()
+        src = make_source(MACRO_SPEC, None, ledger=ledger)
+        with pytest.raises(SourceError, match="exhausted retries"):
+            src.post_json("https://api.example.test/bls/timeseries",
+                          {"seriesid": ["LNS14000000"]})
+        assert opener.calls == MAX_RETRIES
+        assert not ledger.has_observation(JSON_403)
+
 
 class FakeHTTPResponse:
     """Minimal context-manager response for native urlopen mocking."""

@@ -283,7 +283,11 @@ class RestSource:
                 last_err = f"HTTP {exc.code} for {url}"
                 if exc.code in (403, 429):
                     try:
-                        retry_after = float(exc.headers.get("Retry-After", 0) or 0)
+                        # hdrs may be None on a legitimate HTTPError; do not
+                        # invent a Retry-After value in that case.
+                        retry_after = float(
+                            exc.headers.get("Retry-After", 0) or 0
+                        ) if exc.headers is not None else 0.0
                     except (TypeError, ValueError):
                         retry_after = 0.0
                     time.sleep(min(max(retry_after, 2 ** attempt),
@@ -348,7 +352,11 @@ class RestSource:
                     # Parity with get()'s native HTTPError path: honor
                     # Retry-After when present, bounded exponential fallback.
                     try:
-                        retry_after = float(exc.headers.get("Retry-After", 0) or 0)
+                        # hdrs may be None on a legitimate HTTPError; do not
+                        # invent a Retry-After value in that case.
+                        retry_after = float(
+                            exc.headers.get("Retry-After", 0) or 0
+                        ) if exc.headers is not None else 0.0
                     except (TypeError, ValueError):
                         retry_after = 0.0
                     time.sleep(min(max(retry_after, 2 ** attempt),
