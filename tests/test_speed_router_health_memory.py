@@ -63,16 +63,19 @@ routing:
 """
 
 
-def _router(tmp_path, state_dir):
+def _router(tmp_path, state_dir, monkeypatch=None):
+    if monkeypatch is not None:
+        monkeypatch.setenv("CALLISTO_STATE_DIR", str(state_dir))
+        monkeypatch.setenv("CALLISTO_ROUTER_HEALTH", "1")
     cfg = tmp_path / "pool.yaml"
     cfg.write_text(CFG)
     return inference.ProviderRouter(
         config_path=str(cfg), health_state_dir=str(state_dir))
 
 
-def test_a_failure_persists_and_loads(tmp_path):
+def test_a_failure_persists_and_loads(tmp_path, monkeypatch):
     sd = tmp_path / "state"
-    r1 = _router(tmp_path, sd)
+    r1 = _router(tmp_path, sd, monkeypatch)
     r1.states["gpu1"].record_failure()
     r1._save_health_state()
     assert (sd / "router_health.json").exists()
@@ -84,7 +87,7 @@ def test_a_failure_persists_and_loads(tmp_path):
     assert not st.available
 
 
-def test_b_loaded_dead_hop_skipped_in_candidates(tmp_path):
+def test_b_loaded_dead_hop_skipped_in_candidates(tmp_path, monkeypatch):
     sd = tmp_path / "state"
     r1 = _router(tmp_path, sd)
     for _ in range(3):
@@ -96,7 +99,7 @@ def test_b_loaded_dead_hop_skipped_in_candidates(tmp_path):
     assert r2.candidates_for("research_synthesis") == ["proxy"]
 
 
-def test_c_record_success_clears_persisted_state(tmp_path):
+def test_c_record_success_clears_persisted_state(tmp_path, monkeypatch):
     sd = tmp_path / "state"
     r1 = _router(tmp_path, sd)
     r1.states["gpu1"].record_failure()
@@ -110,7 +113,7 @@ def test_c_record_success_clears_persisted_state(tmp_path):
     assert r2.states["gpu1"].available
 
 
-def test_d_corrupt_file_degrades_to_fresh(tmp_path):
+def test_d_corrupt_file_degrades_to_fresh(tmp_path, monkeypatch):
     sd = tmp_path / "state"
     sd.mkdir(parents=True)
     (sd / "router_health.json").write_text("{not json")

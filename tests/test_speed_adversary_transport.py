@@ -52,6 +52,11 @@ def _no_proxy_env(monkeypatch) -> None:
     for v in ("OX_ALPHA_PROXY_BASE_URL", "OX_ALPHA_PROXY_API_KEY",
               "OX_ALPHA_PROXY_MODEL"):
         monkeypatch.delenv(v, raising=False)
+    # SPEED run 17: isolate health persistence from the real user state dir.
+    import tempfile
+    monkeypatch.setenv("CALLISTO_STATE_DIR",
+                       tempfile.mkdtemp(prefix="adv_transport_state_"))
+    monkeypatch.setenv("CALLISTO_ROUTER_HEALTH", "1")
 
 
 class TestAdmission:
@@ -159,7 +164,9 @@ routing:
 
 
 @pytest.fixture
-def pool_router(tmp_path):
+def pool_router(tmp_path, monkeypatch):
+    monkeypatch.setenv("CALLISTO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CALLISTO_ROUTER_HEALTH", "1")
     cfg = tmp_path / "pool.yaml"
     cfg.write_text(POOL_CFG)
     return inference.ProviderRouter(config_path=str(cfg))

@@ -43,6 +43,12 @@ def _no_proxy_env(monkeypatch) -> None:
     for v in ("OX_ALPHA_PROXY_BASE_URL", "OX_ALPHA_PROXY_API_KEY",
               "OX_ALPHA_PROXY_MODEL"):
         monkeypatch.delenv(v, raising=False)
+    # SPEED run 17: keep health persistence OUT of the real user state dir —
+    # tests must not read or write ~/.local/state/callisto/router_health.json.
+    import tempfile
+    monkeypatch.setenv("CALLISTO_STATE_DIR",
+                       tempfile.mkdtemp(prefix="proxy_default_state_"))
+    monkeypatch.setenv("CALLISTO_ROUTER_HEALTH", "1")
 
 
 class TestResolution:

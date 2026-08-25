@@ -54,7 +54,9 @@ routing:
 
 
 @pytest.fixture
-def router(tmp_path):
+def router(tmp_path, monkeypatch):
+    monkeypatch.setenv("CALLISTO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CALLISTO_ROUTER_HEALTH", "1")
     cfg = tmp_path / "pool.yaml"
     cfg.write_text(POOL_CFG)
     return inference.ProviderRouter(config_path=str(cfg))
