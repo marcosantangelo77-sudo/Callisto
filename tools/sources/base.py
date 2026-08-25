@@ -224,6 +224,22 @@ class RestSource:
                 else:
                     status, body = self._http_transport(url, headers)
                 self._record(url, status, body, time.monotonic() - started)
+                if status != 200:
+                    # Same status semantics as the native HTTPError path
+                    # below: the injected transport seam (documented for
+                    # tests/offline use) must preserve GET's retry contract.
+                    # 403, 429 and 5xx are transient — back off and retry;
+                    # anything else is terminal. This seam has no headers,
+                    # so a 403 uses only the bounded exponential fallback
+                    # (the native path's max(Retry-After, 2**attempt) with
+                    # no Retry-After available). The non-200 body still never
+                    # reaches the ledger (_record skips it above).
+                    if status == 403 or status == 429 or \
+                            500 <= status < 600:
+                        last_err = f"HTTP {status} for {url}"
+                        time.sleep(min(2 ** attempt, MAX_RETRY_AFTER_S))
+                        continue
+                    raise SourceError(f"HTTP {status} for {url}") from None
                 return status, body
             except urllib.error.HTTPError as exc:
                 last_err = f"HTTP {exc.code} for {url}"
@@ -271,6 +287,16 @@ class RestSource:
                 else:
                     status, text = _do()
                 self._record(url, status, text, time.monotonic() - started)
+                # Non-200 wire bodies are fetch failures, never successful
+                # data — same contract as get(): retry transient statuses,
+                # otherwise surface a SourceError to JSON-helper callers.
+                if status != 200:
+                    err = f"HTTP {status} for {url}"
+                    if status == 429 or 500 <= status < 600:
+                        time.sleep(min(2 ** attempt, MAX_RETRY_AFTER_S))
+                        last_err = err
+                        continue
+                    raise SourceError(err) from None
                 return status, text
             except urllib.error.HTTPError as exc:
                 last_err = f"HTTP {exc.code} for {url}"
@@ -307,6 +333,14 @@ class RestSource:
             duration_s=round(dur, 3),
         )
         self.last_record = rec
+        # Source-provenance integrity: error bytes never enter the ledger.
+        # A non-200 response is a fetch failure, not an observation of the
+        # world — recording it (even as SECONDARY) would let a 503 JSON/HTML
+        # body mint provenance or verify a citation. The FetchRecord above
+        # keeps the honest diagnostic (status, sha, url); the ledger simply
+        # never hears about failed fetches.
+        if status != 200:
+            return rec
         if self.ledger is not None:
             try:
                 self.ledger.record_tool_result(
