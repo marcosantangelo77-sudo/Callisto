@@ -1564,6 +1564,24 @@ class ProviderRouter:
                     "task_class": task_class,
                     "routing_basis": routing_meta.get("basis", "configured"),
                 }
+            except _RateLimitExhausted as e:
+                # SPEED run 15: rate-limit exhaustion means the endpoint is
+                # healthy but the SHARED upstream capacity pool is
+                # saturated. record_failure()'s exponential cooldown would
+                # escalate the fast endpoint OUT of the rotation (2s → 60s)
+                # for a condition every tier shares, sending later calls to
+                # fresh-fork tiers that queue on the same upstream. A flat,
+                # non-escalating cooldown damps hammering while letting the
+                # next call re-probe; the endpoint's consecutive-failure
+                # count is untouched and this call still fails over.
+                state.cooldown_until = max(
+                    state.cooldown_until, _time.monotonic() + 5.0)
+                errors.append(f"{name}: {e}")
+                logger.warning(
+                    f"ProviderRouter: endpoint {name} rate-limited "
+                    f"(upstream capacity, endpoint healthy) — failing "
+                    f"over: {e}"
+                )
             except Exception as e:
                 state.record_failure()
                 errors.append(f"{name}: {e}")
@@ -1609,7 +1627,7 @@ class ProviderRouter:
 
 
 async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
-                           timeout: float, attempts: int = 2) -> tuple[str, dict]:
+                           timeout: float, attempts: int = 5) -> tuple[str, dict]:
     """Retry transient failures within one endpoint before failing over.
     Connection errors and 5xx retry; other HTTP errors do not.
 
@@ -1623,6 +1641,17 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
     existing failover chain. A Retry-After header is honoured; the TOTAL
     time spent sleeping on 429s for one call is bounded (_429_PATIENCE_S,
     run 10) so a hostile/lazy server cannot stall a call.
+
+    SPEED run 15 (2026-08-24): attempts must never bind before the budget.
+    With attempts=2 at most ONE Retry-After window could be honoured —
+    attempt 1 sleeps RA:30, attempt 2 sees another 429 and the budget
+    check (30+30 > 35) raises. Portal under load serves CONSECUTIVE ~30s
+    windows (measured stacks of 60–128s), so those calls abandoned the
+    warm proxy and paid sequential patience-then-fork (~35s + 48–78s)
+    for a tier that queues on the SAME upstream. attempts=5 lets the
+    budget be the binding constraint (four RA:30 windows fit); exhaustion
+    raises _RateLimitExhausted so complete() can spare the healthy
+    endpoint its exponential cooldown.
     """
     last_exc: Optional[Exception] = None
     waited = 0.0  # total seconds slept on 429s for THIS call (run 10)
@@ -1638,7 +1667,10 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
             if status == 429:
                 retry_after = _retry_after_seconds(e.response)
                 if waited + retry_after > _429_PATIENCE_S:
-                    raise  # 429-patience budget for THIS CALL spent
+                    raise _RateLimitExhausted(
+                        f"429 patience budget ({_429_PATIENCE_S:.0f}s) "
+                        f"spent after {waited:.0f}s in place; last "
+                        f"Retry-After {retry_after:.0f}s") from e
                 waited += retry_after
                 await _asyncio.sleep(retry_after)
                 slept = True
@@ -1652,14 +1684,30 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
 
 _router: Optional[ProviderRouter] = None
 
-# ── SPEED run 8/10: 429 retry-in-place constants ──────────────────────────
+# ── SPEED run 8/10/15: 429 retry-in-place constants ───────────────────────
 # A 429 with no Retry-After waits this long before the next in-place attempt.
 _429_DEFAULT_BACKOFF_S = 1.0
 # Run 10: patience is PER CALL, not per sleep. Total time spent sleeping on
 # 429s for one completion is bounded by this; a Retry-After may exceed what
 # remains only while the running total stays within budget. When the budget
 # is spent, failover — never wait longer than a fork would have cost.
-_429_PATIENCE_S = 35.0
+# Run 15: 120s, measured against Portal's stacked-window pattern (raw-curl
+# controls saw consecutive Retry-After:30 windows totalling 60–128s). Both
+# the proxy and the CLI fork queue on the SAME upstream capacity, so in-place
+# waiting strictly dominates patience-then-fork; the only cost of a larger
+# budget is a longer worst-case stall on a hard-down upstream, bounded here
+# and by the caller's timeout (300s default).
+_429_PATIENCE_S = 120.0
+
+
+class _RateLimitExhausted(RuntimeError):
+    """429 patience budget spent for one call (run 15).
+
+    Distinct from other failures because the endpoint is HEALTHY — the
+    upstream capacity pool is shared by every tier, so exponential
+    cooldown escalation against the fast endpoint only locks later calls
+    out of it and onto fresh-fork paths."""
+
 
 
 def _retry_after_seconds(response: httpx.Response) -> float:
