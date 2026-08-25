@@ -117,11 +117,11 @@ def host_transport(bodies_by_host):
 
 
 def retrieve_over(registry, question, transport, min_independent=2,
-                  max_rounds=3):
+                  max_rounds=3, question_type="rules"):
     r = IterativeRetriever(registry=registry, ledger=NullLedger(),
                            transport=transport, adaptive_gain=False,
                            max_rounds=max_rounds)
-    return r.retrieve(question, question.question_id and "rules",
+    return r.retrieve(question, question_type,
                       min_independent=min_independent)
 
 
@@ -180,10 +180,10 @@ class TestS1ZeroResultAdmission:
             assert n, f"{f.source_name} admitted a body with {n} results"
 
     def test_refinement_refetches_empty_bodies(self, registry):
-        """The refine loop re-fetches the SAME empties: echoed metadata
-        feeds relevant_titles/refinement, so rounds burn budget re-admitting
-        nothing. Admissions must never grow across rounds for empty hosts."""
-        t = host_transport({"api.openalex.org": OPENALEX_EMPTY_ECHO})
+        """The refine loop re-fetches the SAME empties when the requirement
+        is still unmet: echoed metadata never satisfies anything, yet every
+        round re-admits the identical zero-result body. min_independent=5
+        keeps the loop running so the repeat admissions are observable."""
         q = FakeQuestion()
         q.text = ("What does recent research say about semiconductor "
                   "supply chain resilience?")
@@ -192,10 +192,11 @@ class TestS1ZeroResultAdmission:
                 "meta": {"query": "semiconductor supply chain resilience "
                                   "research scholarly", "count": 0},
                 "results": []}),
-        }), min_independent=1, max_rounds=3)
-        assert trace.n_admitted <= 1, (
+        }), min_independent=5, max_rounds=3,
+            question_type="scholarly work search")
+        assert trace.n_admitted == 0, (
             f"{trace.n_admitted} admissions across rounds, all of them "
-            f"zero-result bodies")
+            f"zero-result bodies: {[f.body[:60] for f in trace.admitted]}")
 
     def test_numeric_route_admits_empty_envelope_with_date(self):
         """The strict structural route exists to admit REAL data windows;
@@ -436,6 +437,7 @@ class TestHonestNegatives:
     BODY_FRED_OBS = json.dumps({
         "observations": [{"date": "2023-01-01", "value": "3.4"}],
     })
+    BODY_BEA_ERROR = json.loads(BEA_ERROR_BODY)
 
     def _corruptions(self, obj):
         """Every single-field corruption of a nested structure, from a
@@ -471,7 +473,8 @@ class TestHonestNegatives:
                     "supply chain resilience?")
         qtype = "scholarly work search"
         cases = 0
-        for body_s in (self.BODY_OPENALEX_HIT, self.BODY_FRED_OBS):
+        for body_s in (self.BODY_OPENALEX_HIT, self.BODY_FRED_OBS,
+                       BEA_ERROR_BODY):
             body = json.loads(body_s)
             base_ok, base_cov, _ = gate.judge(question, qtype, body)
             for path, corrupted in self._corruptions(body):
