@@ -31,8 +31,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime
+import hashlib
 import json
 import os
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -372,6 +374,45 @@ def _cmd_runs(args: argparse.Namespace) -> int:
     return 0
 
 
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _fetch_digest_status(f: dict) -> tuple[str, bool]:
+    """Validate one persisted fetch's content_sha256.
+
+    Returns (status, hard_fail). "ok" means verified; hard_fail marks a
+    missing/non-string/wrong-length/non-hex digest — absence is failure
+    (red-team C1/D3), and it makes `show` exit non-zero. A syntactically
+    valid digest with no local payload cannot be checked against bytes here
+    (no network fetch), so it is flagged unverified but keeps legacy
+    compatibility (soft).
+    """
+    digest = f.get("content_sha256")
+    if not isinstance(digest, str) or not digest:
+        return "MISSING DIGEST", True
+    d = digest.strip().lower()
+    if len(d) != 64:
+        return f"MALFORMED DIGEST ({len(d)} chars)", True
+    if not _HEX64_RE.match(d):
+        return "MALFORMED DIGEST (non-hex)", True
+    body = None
+    for k in ("body", "content", "payload"):
+        v = f.get(k)
+        if isinstance(v, str):
+            body = v.encode("utf-8")
+            break
+        if isinstance(v, (bytes, bytearray)):
+            body = bytes(v)
+            break
+    if body is None:
+        # No local payload to hash — remote content is not fetched here, so
+        # the recorded digest cannot be verified, only syntax-checked.
+        return "unverified (no local payload)", False
+    if hashlib.sha256(body).hexdigest() != d:
+        return "DIGEST MISMATCH", True
+    return "ok", False
+
+
 def _cmd_show(args: argparse.Namespace) -> int:
     rec, path = _load_run(args.run_id)
     if rec is None:
@@ -396,22 +437,34 @@ def _cmd_show(args: argparse.Namespace) -> int:
             print(f"  [{status:<12}] {a['kind']:<5} "
                   f"{a['sha256'][:16]}…  {a.get('name', '')}")
     fetches = rec.get("fetches", [])
+    bad_fetches = 0
     if fetches:
-        print(f"\n--- fetches ({len(fetches)}) ---")
+        print(f"\n--- fetches ({len(fetches)}) — provenance digests checked ---")
         seen = set()
-        for f in fetches:
+        # Validate EVERY persisted record first — deduplication must never
+        # hide an invalid sibling behind an earlier valid (source, url).
+        results = [(f, *_fetch_digest_status(f)) for f in fetches]
+        for f, status, hard_fail in results:
             key = (f.get("source", "?"), f.get("url", ""))
-            if key in seen:
+            if key in seen and status == "ok":
                 continue
             seen.add(key)
-            print(f"  {key[0]:<18} {key[1][:90]}")
+            if status != "ok":
+                if hard_fail:
+                    bad_fetches += 1
+                print(f"  [{status:<22}] {key[0]:<18} {key[1][:70]}")
+            else:
+                print(f"  [ok]                  {key[0]:<18} {key[1][:70]}")
+        if bad_fetches:
+            print(f"  WARNING: {bad_fetches} fetch(es) have missing or "
+                  "malformed content_sha256 provenance — UNVERIFIED.")
     obs = rec.get("objections", [])
     if obs:
         print(f"\nobjections ({len(obs)}):")
         for o in obs[:5]:
             print(f"  - {str(o)[:200]}")
     print(f"\nrecord   : {path}")
-    return 0
+    return 1 if bad_fetches else 0
 
 
 # ── parser ────────────────────────────────────────────────────────────────
