@@ -157,6 +157,35 @@ class WriteCoordinator:
                     await self._task
                 except (asyncio.CancelledError, Exception):
                     pass
+        # Forced-shutdown settlement: if the drain task was cancelled/timed
+        # out, anything still sitting in the queue has a future that no one
+        # will ever resolve — its caller would hang forever after stop().
+        # Sweep the queue and settle every remaining entry with an explicit
+        # shutdown error (never silently swallowed: callers see it raise).
+        if self._queue is not None:
+            shutdown_err = RuntimeError(
+                "WriteCoordinator shut down before this write could be applied"
+            )
+            abandoned = 0
+            while True:
+                try:
+                    item = self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if isinstance(item, tuple) and len(item) >= 4:
+                    fut = item[3]
+                    if isinstance(fut, asyncio.Future) and not fut.done():
+                        fut.set_exception(shutdown_err)
+                        abandoned += 1
+            if abandoned:
+                logger.warning(
+                    f"WriteCoordinator stopped with {abandoned} queued op(s) "
+                    f"unsettled; rejected each caller with a shutdown error"
+                )
+            self._writes_failed += abandoned
+        # Clear lifecycle references so a later start() is a clean restart.
+        self._task = None
+        self._queue = None
         if self._db is not None:
             try:
                 await self._db.close()

@@ -240,3 +240,105 @@ async def test_concurrent_raw_writers_no_lock_errors_after_install(tmp_db):
         )
     finally:
         await stop_all()
+
+@pytest.mark.asyncio
+async def test_forced_shutdown_settles_queued_callers(tmp_db):
+    """Regression: if stop() times out while one _apply() is blocked, queued
+    callers must not hang forever. After stop() returns, every caller task
+    submitted before/during shutdown has reached a terminal state.
+    """
+    coord = WriteCoordinator(tmp_db)
+    await coord.start()
+
+    gate = asyncio.Event()
+    first_started = asyncio.Event()
+    release = {"on": False}
+
+    # Patch _apply so the FIRST write blocks until we allow it through,
+    # simulating a stuck writer (e.g. cross-process lock). Later writes
+    # queue behind it and are never applied once we force shutdown.
+    original_apply = coord._apply
+
+    async def slow_apply(op_type, sql, payload):
+        if not release["on"]:
+            first_started.set()
+            await gate.wait()
+        return await original_apply(op_type, sql, payload)
+
+    coord._apply = slow_apply
+
+    results = {}
+
+    async def caller(name, coro):
+        try:
+            results[name] = ("ok", await coro)
+        except asyncio.CancelledError:
+            results[name] = ("cancelled", None)
+        except Exception as e:
+            results[name] = ("error", e)
+
+    t1 = asyncio.create_task(caller("first", coord.execute("INSERT INTO t (v, who) VALUES (?, ?)", (1, "blocked"))))
+    await asyncio.wait_for(first_started.wait(), timeout=5)
+
+    # This one lands in the queue behind the blocked write.
+    t2 = asyncio.create_task(caller("second", coord.execute("INSERT INTO t (v, who) VALUES (?, ?)", (2, "queued"))))
+    t3 = asyncio.create_task(caller("third", coord.transaction([
+        ("INSERT INTO t (v, who) VALUES (?, ?)", (3, "tx")),
+    ])))
+    await asyncio.sleep(0.05)  # let them enqueue deterministically
+    assert coord._queue.qsize() >= 2, "queued ops should be pending behind blocked write"
+
+    # Force a short shutdown timeout while the first write is still blocked.
+    await coord.stop(drain_timeout_s=0.1)
+
+    # Every caller must reach a terminal state promptly.
+    done, pending = await asyncio.wait({t1, t2, t3}, timeout=2.0)
+    assert not pending, f"callers hung after stop(): {pending}"
+
+    outcomes = list(results.values())
+    kinds = {k for k, _ in outcomes}
+    assert kinds <= {"ok", "cancelled", "error"}, f"unexpected outcome: {results}"
+    assert any(k == "error" for k in kinds), (
+        "queued-but-unapplied ops should fail with an explicit shutdown error, "
+        f"got {results}"
+    )
+    for k, v in outcomes:
+        if k == "error":
+            assert isinstance(v, RuntimeError) and "shut down" in str(v)
+
+    # No unresolved futures left anywhere in lifecycle state.
+    assert coord._task is None, "drain task reference should be cleared"
+    assert coord._queue is None, "queue reference should be cleared"
+    assert not coord._running
+
+    # A clean restart works afterwards.
+    await coord.start()
+    try:
+        rid = await coord.execute("INSERT INTO t (v, who) VALUES (?, ?)", (9, "post-restart"))
+        assert rid > 0
+    finally:
+        coord._apply = original_apply
+        await coord.stop()
+
+
+@pytest.mark.asyncio
+async def test_graceful_drain_still_applies_all_writes(tmp_db):
+    """Normal graceful stop (no forced timeout) must still flush the queue."""
+    coord = WriteCoordinator(tmp_db)
+    await coord.start()
+    try:
+        tasks = [
+            asyncio.create_task(coord.execute(
+                "INSERT INTO t (v, who) VALUES (?, ?)", (i, "graceful")
+            ))
+            for i in range(50)
+        ]
+        await coord.stop(drain_timeout_s=10.0)
+        rids = await asyncio.gather(*tasks)
+        assert all(r > 0 for r in rids)
+        async with aiosqlite.connect(tmp_db) as db:
+            cur = await db.execute("SELECT COUNT(*) FROM t WHERE who='graceful'")
+            n = (await cur.fetchone())[0]
+        assert n == 50
+    finally:
+        pass  # already stopped
