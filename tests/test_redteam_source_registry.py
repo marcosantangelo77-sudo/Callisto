@@ -213,7 +213,7 @@ def _fake_ledger():
     return L()
 
 
-def _retriever(body, max_rounds=1, use_planner=False):
+def _retriever(body, max_rounds=1, use_planner=True):
     import json
     from tools.pipeline.retrieval import IterativeRetriever
     from tools.sources.registry import get_source_registry
@@ -221,10 +221,7 @@ def _retriever(body, max_rounds=1, use_planner=False):
         registry=get_source_registry(), ledger=_fake_ledger(),
         transport=lambda url, h: (200, json.dumps(body)),
         max_rounds=max_rounds, max_sources_per_leaf=5,
-        use_planner=use_planner,
-        **({} if use_planner else {"generic_calls": {
-            "openalex": ("works_search", (), {"query": "term"}),
-            "clinicaltrials": ("works_search", (), {"query": "term"})}}))
+        use_planner=use_planner)
 
 
 class _Q:
@@ -258,9 +255,9 @@ def test_s11_zero_result_bodies_neither_admitted_nor_counted_independent():
     """Family 3 (absence treated as success), retriever edition: an API
     that echoes the query parameters inside a ZERO-RESULT envelope scores
     ~75% token coverage and is ADMITTED; its host's independence key is
-    then minted and the round can declare 'sufficient: N independent
-    sources'. An honest null (zero hits) becomes manufactured corroboration.
-    The gate judges TEXT, never whether the result set was non-empty."""
+    then minted and the round declared 'sufficient: 3 independent sources'
+    on bodies containing ZERO results. The gate judges TEXT, never whether
+    the result set was non-empty. Production default path (planner mode)."""
     tr = _retriever({"results": [], "meta": {
         "query": "semiconductor supply chain resilience research"}}).retrieve(
             _Q(), "scholarly works", min_independent=2)
