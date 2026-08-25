@@ -485,9 +485,15 @@ class TestSealDurability:
         loaded["session"]["summary"]["confidence_score"] = 0.90
         path.write_text(json.dumps(loaded))
 
+        from callisto import _seal_status
+        rec2, _ = _load_run(path.stem)
+        st, _sess = _seal_status(rec2)
+        from callisto import _seal_status
+        rec2, _ = _load_run(path.stem)
+        st, _sess = _seal_status(rec2)
         rc = _cmd_show(build_parser().parse_args(["show", path.stem]))
         out = capsys.readouterr().out
-        assert rc == 1
+        assert rc == 1, f"status={st!r} out={out!r}"
         assert "TAMPERED" in out
         assert "forged or corrupted" in out
 
