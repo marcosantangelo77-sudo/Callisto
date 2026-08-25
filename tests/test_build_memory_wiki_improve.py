@@ -73,8 +73,8 @@ SPORTS_SCHEMA = [
      " result TEXT, clv_implied REAL, placed_at TEXT, notes TEXT)"),     # bets
     ("(sport TEXT, team TEXT, market TEXT, bookmaker TEXT, american_odds INTEGER,"
      " edge REAL, expected_value REAL, kelly_fraction REAL, detected_at TEXT)"),  # ev_opportunities
-    ("(session_id TEXT PRIMARY KEY, query TEXT, conclusion TEXT,"
-     " confidence_score REAL, confidence_tier TEXT, sealed_at TEXT)"),   # sessions
+    ("(session_id TEXT PRIMARY KEY, query TEXT, domain TEXT, conclusion TEXT,"
+     " confidence_score REAL, confidence_tier TEXT, sealed_at TEXT)"),    # sessions
     ("(hypothesis_id INTEGER PRIMARY KEY, name TEXT, sport TEXT, market_type TEXT,"
      " thesis TEXT, status TEXT, updated_at TEXT)"),                     # hypotheses
     ("(event_id INTEGER PRIMARY KEY, hypothesis_id INTEGER,"
@@ -184,3 +184,78 @@ class TestDecayReachesThePrompt:
             expected = float(decay_confidence(
                 0.55, _iso(age_days), datetime.now(timezone.utc)))
             assert eff / 100 <= max(expected, MIN_EFFECTIVE_CONFIDENCE) + 0.01
+
+
+# ── Wiki compile admission honours the same decay clock ────────────────────
+
+WIKI_GATE = 0.5
+
+
+class TestWikiAdmissionDecays:
+    """knowledge_wiki._get_uncompiled_sources admitted learnings on RAW stored
+    confidence forever. The escalator fix capped writes at 0.55 but the wiki
+    gate sits at 0.5 — BELOW the ceiling — so any self-reported >=0.5 guess
+    stayed a compile source indefinitely regardless of staleness. Family #2:
+    the read-time-decay rule landed in hermes_memory's prompt path but not in
+    the wiki's admission path."""
+
+    @pytest.mark.asyncio
+    async def test_fresh_guess_still_admitted(self, tmp_path):
+        import aiosqlite
+        from tools.knowledge_wiki import KnowledgeWiki
+        db_path = _make_db(tmp_path, [
+            ("fresh_guess", "fresh claim", _iso(0), 0.55)])
+        async with aiosqlite.connect(db_path) as conn:
+            wiki = KnowledgeWiki(db_path)
+            await wiki.initialize(conn)
+            srcs = await wiki._get_uncompiled_sources(conn)
+        assert any(s["type"] == "learning" and s["id"] == "fresh_guess"
+                   for s in srcs)
+
+    @pytest.mark.asyncio
+    async def test_three_day_old_guess_rejected(self, tmp_path):
+        """0.55 decays below the 0.5 gate in ~1.9 days un-re-observed.
+        Before the fix this learning entered the wiki FOREVER."""
+        import aiosqlite
+        from tools.knowledge_wiki import KnowledgeWiki
+        db_path = _make_db(tmp_path, [
+            ("stale_guess", "stale claim", _iso(3), 0.55)])
+        async with aiosqlite.connect(db_path) as conn:
+            wiki = KnowledgeWiki(db_path)
+            await wiki.initialize(conn)
+            srcs = await wiki._get_uncompiled_sources(conn)
+        learnings = [s for s in srcs if s["type"] == "learning"]
+        assert learnings == [], (
+            f"3-day-old unverified guess still admitted: {learnings}")
+
+    @pytest.mark.asyncio
+    async def test_admitted_confidence_is_the_decayed_value(self, tmp_path):
+        """Article min-of-sources must consume the decayed value, so stale-but-
+        admissible input weakens the article rather than riding at full 0.55."""
+        import aiosqlite
+        from tools.knowledge_wiki import KnowledgeWiki
+        age = 1.0  # ~1 day: still above gate, clearly below 0.55
+        db_path = _make_db(tmp_path, [
+            ("aging_guess", "claim", _iso(age), 0.55)])
+        async with aiosqlite.connect(db_path) as conn:
+            wiki = KnowledgeWiki(db_path)
+            await wiki.initialize(conn)
+            srcs = await wiki._get_uncompiled_sources(conn)
+        mine = [s for s in srcs if s.get("id") == "aging_guess"]
+        assert len(mine) == 1
+        expected = float(decay_confidence(
+            0.55, _iso(age), datetime.now(timezone.utc)))
+        assert mine[0]["confidence"] == pytest.approx(expected, abs=1e-3)
+        assert mine[0]["confidence"] < 0.55
+
+    @pytest.mark.asyncio
+    async def test_boundary_fresh_half_still_admitted(self, tmp_path):
+        import aiosqlite
+        from tools.knowledge_wiki import KnowledgeWiki
+        db_path = _make_db(tmp_path, [
+            ("half_guess", "claim", _iso(0), WIKI_GATE)])
+        async with aiosqlite.connect(db_path) as conn:
+            wiki = KnowledgeWiki(db_path)
+            await wiki.initialize(conn)
+            srcs = await wiki._get_uncompiled_sources(conn)
+        assert any(s.get("id") == "half_guess" for s in srcs)
