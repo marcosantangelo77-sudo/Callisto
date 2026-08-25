@@ -119,6 +119,46 @@ def test_d2_same_second_same_bucket_overwrites(tmp_path, monkeypatch):
         "record was silently destroyed (os.replace over it, no error)")
 
 
+# ── D2 repair-pinning: collision-safe run ids ─────────────────────────────
+
+def test_d2_fix_distinct_questions_same_second_both_survive(runs_dir):
+    """Two different questions with identical recorded_at must each keep
+    their own record, each retaining its own conclusion."""
+    a = _record(q="question alpha", conclusion="ALPHA CONCLUSION")
+    b = _record(q="question beta", conclusion="BETA CONCLUSION")
+    pa = callisto._persist_run(a)
+    pb = callisto._persist_run(b)
+    assert pa != pb
+    assert json.loads(pa.read_text())["conclusion"] == "ALPHA CONCLUSION"
+    assert json.loads(pb.read_text())["conclusion"] == "BETA CONCLUSION"
+
+
+def test_d2_fix_identical_question_repeated_in_same_second(runs_dir):
+    """Even the SAME question recorded twice in one second must produce two
+    distinct files, both intact (no reliance on hash() randomization)."""
+    rec = _record(q="same question", conclusion="first write")
+    p1 = callisto._persist_run(rec)
+    rec2 = _record(q="same question", conclusion="second write")
+    p2 = callisto._persist_run(rec2)
+    assert p1 != p2
+    c1 = json.loads(p1.read_text())["conclusion"]
+    c2 = json.loads(p2.read_text())["conclusion"]
+    assert {c1, c2} == {"first write", "second write"}
+
+
+def test_d2_fix_id_is_stable_across_processes(runs_dir):
+    """Identity must not come from Python's randomized hash(): the id for a
+    given question must be reproducible in a fresh interpreter."""
+    p = callisto._persist_run(_record(q="stability probe"))
+    import subprocess
+    code = (
+        "import hashlib;print(hashlib.sha256("
+        "b'stability probe').hexdigest()[:8])")
+    out = subprocess.run([sys.executable, "-c", code],
+                         capture_output=True, text=True).stdout.strip()
+    assert out and out in p.stem
+
+
 # ── D3: show never checks fetch provenance digests ────────────────────────
 
 def test_d3_empty_fetch_digest_displayed_without_warning(

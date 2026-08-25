@@ -120,14 +120,43 @@ def _result_record(result, question: str) -> dict:
 
 def _persist_run(record: dict) -> Path:
     """Write the run record atomically; returns its path. The filename is
-    the timestamped run id — `callisto runs` / `callisto show` read it."""
+    the timestamped run id — `callisto runs` / `callisto show` read it.
+
+    The id is timestamp + SHA-256(question) prefix + a short sequence
+    suffix, so identical recorded_at values and identical questions can
+    never map to one path. The final filename is claimed with O_EXCL
+    *before* writing, so concurrent writers cannot silently replace one
+    another's record either; each caller gets a unique id via the seq.
+    """
     stamp = record["recorded_at"].replace(":", "").replace("-", "")
-    run_id = f"{stamp}_{abs(hash(record['question'])) % 10000:04d}"
-    path = _runs_dir() / f"{run_id}.json"
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
-    return path
+    qhash = hashlib.sha256(
+        str(record.get("question", "")).encode("utf-8")).hexdigest()[:8]
+    base = _runs_dir()
+    for seq in range(1000):
+        run_id = f"{stamp}_{qhash}_{seq:03d}"
+        path = base / f"{run_id}.json"
+        # Atomic claim: fails with FileExistsError if another writer holds
+        # this exact id (same second, same question, same seq).
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            continue
+        try:
+            payload = json.dumps(record, indent=2).encode("utf-8")
+            tmp = path.with_suffix(".json.tmp")
+            with open(tmp, "wb") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)          # atomic content swap
+            os.fsync(fd)                   # durability of the claim itself
+        finally:
+            os.close(fd)
+            tmp.unlink(missing_ok=True)
+        return path
+    raise RuntimeError(
+        "could not allocate a unique run id after 1000 attempts "
+        f"for stamp {stamp}")
 
 
 async def _cmd_ask(args: argparse.Namespace) -> int:
