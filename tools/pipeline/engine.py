@@ -162,6 +162,14 @@ class LeafOutcome:
     #: Classification ONLY: this field must never move a confidence score.
     gap_kind: str = ""
     gap_explanation: str = ""
+    #: DECLARED answer-bearing signal (task 212 / defect R3). The answering
+    #: model states structurally whether the evidence ANSWERS the leaf's
+    #: question — a fourth axis, orthogonal to provenance tier (where the
+    #: bytes came from) and to gap_kind (why we lack usable evidence). A
+    #: VERIFIED 0.90 fetch of the wrong period is answers_question=False.
+    #: Declared, never inferred from conclusion prose. Absence of usable
+    #: answer may only refuse or lower; nothing here raises a score.
+    answers_question: bool = True
     sandbox_status: Optional[str] = None
     artifact_sha256s: list[str] = field(default_factory=list)
 
@@ -533,6 +541,14 @@ class ResearchPipeline:
             proposal = parse_model_json(resp) or {}
 
         out.answer = str(proposal.get("answer", "")).strip()
+        # DECLARED answer-bearing signal (task 212, defect R3). The model
+        # states structurally whether the evidence ANSWERS the question —
+        # distinct from provenance tier (where bytes came from) and from
+        # gap_kind (why we have no usable evidence). Read AS DECLARED; the
+        # conclusion prose is never parsed for meaning (forecast-sign
+        # defect class). Absent field defaults to True so legacy models
+        # are unchanged: this signal may only refuse or lower.
+        out.answers_question = bool(proposal.get("answers_question", True))
         _st = str(proposal.get("stance", "")).strip().upper()
         # Unknown/absent stance is UNDETERMINED, never a lean. An unparseable
         # answer must not silently become a confident YES, which is exactly
@@ -985,16 +1001,35 @@ class ResearchPipeline:
         #     SPECULATIVE: a parent with unanswered siblings is a weaker
         #     claim than one standing on five proven legs, and the cap says
         #     so numerically. Only ever refuses or LOWERS — never raises.
-        provable = [l for l in result.leaves if l.answer and not l.gap_kind]
+        #
+        # ONE predicate (task 212 / defect R3): provable = the leaf carries
+        # an answer AND declares answers_question AND is gap-free. The
+        # declared answer-bearing signal lives on the SAME predicate rather
+        # than in a competing seal rule — duplicated rules have drifted
+        # every time in this repo. A VERIFIED 0.90 leaf that determines
+        # nothing fails this predicate exactly as an unprovable one does:
+        # provenance measures where bytes came from, not whether they
+        # answer anything.
+        provable = [l for l in result.leaves
+                    if l.answer and not l.gap_kind and l.answers_question]
         if not provable:
             from collections import Counter
-            counts = Counter(l.gap_kind or "(no gap verdict)" for l in result.leaves)
+
+            def _why_not_provable(l) -> str:
+                if not l.answer:
+                    return "(no answer written)"
+                if l.gap_kind:
+                    return l.gap_kind
+                if not l.answers_question:
+                    return "non-answering"
+                return "(no gap verdict)"
+
+            counts = Counter(_why_not_provable(l) for l in result.leaves)
             breakdown = ", ".join(
                 f"{kind} x{n}" for kind, n in sorted(counts.items()))
             result.refusal_reason = (
-                f"no provable leaf: every leaf is gap-classified "
-                f"({breakdown}) — nothing was established, so there is "
-                f"nothing to seal")
+                f"no provable leaf: nothing was established ({breakdown}) — "
+                f"there is nothing to seal")
             return result
 
         best_leaf = max(provable, key=lambda l: l.confidence)
