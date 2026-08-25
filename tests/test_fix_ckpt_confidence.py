@@ -471,3 +471,106 @@ def test_empty_sources_round_preserved_but_all_corrupt_dropped():
     tr = _trace_from_payload("q1", json.loads(json.dumps(payload)))
     assert len(tr.rounds) == 1
     assert tr.rounds[0]["round"] == 1
+
+
+@pytest.mark.parametrize("bad_admitted", [
+    {"bad": 1}, [1, 2], 7, 1.0, ("t",), {True}, "yes",
+])
+def test_truthy_non_bool_admitted_fails_closed(bad_admitted):
+    """Regression: `admitted` used to accept any truthy non-string value
+    (containers, ints). Only the precise boolean True is canonical live
+    format; anything else drops the whole record — no crash, no laundering,
+    no fabricated admission."""
+    import json as _json
+
+    from tools.gaps import GapKind, classify_gap, classify_null_kind
+
+    payload = {
+        "fetches": [], "rejections": [], "admitted_fetch_count": 0,
+        "rounds": [{"round": 1, "query": "q", "admitted": 0, "sources": [
+            {"name": "openalex", "admitted": bad_admitted},
+        ]}],
+        "skipped_sources": [], "gain_skipped": [],
+        "independent_keys": [], "queries": ["q"],
+        "stop_reason": "budget"}
+    tr = _trace_from_payload("q1", _json.loads(_json.dumps(payload)))
+    assert tr.rounds == [], bad_admitted
+
+    gap = classify_gap(_gap_registry(), tr, _gap_question())
+    assert gap.kind is not GapKind.HONEST_NULL
+    for c in gap.candidates:
+        if c.name == "openalex":
+            assert not c.tried
+    kind, expl = classify_null_kind(tr)
+    assert kind != "honest_null"
+
+
+_VALID_OUTCOMES = {
+    "admitted": True,
+    "error": "HTTP 503",
+    "skipped": "no authored query",
+    "rejected": "below coverage",
+}
+
+
+@pytest.mark.parametrize("valid_key", list(_VALID_OUTCOMES))
+@pytest.mark.parametrize("bad_key,bad_value", [
+    ("skipped", {"bad": 1}),
+    ("error", {"bad": 1}),
+    ("rejected", {"bad": 1}),
+    ("admitted", {"bad": 1}),
+    ("admitted", 5),
+])
+def test_valid_plus_malformed_outcome_pairing_dropped(valid_key, bad_key,
+                                                      bad_value):
+    """Regression: a record with one valid outcome plus another MALFORMED
+    outcome key used to have the malformed key stripped silently, keeping
+    the valid-only remainder. Schema incoherence must drop the whole
+    record: no crash, no honest-null laundering, no fabricated attempt."""
+    import json as _json
+
+    from tools.gaps import GapKind, classify_gap, classify_null_kind
+
+    rec = {"name": "openalex", valid_key: _VALID_OUTCOMES[valid_key],
+           bad_key: bad_value}
+    payload = {
+        "fetches": [], "rejections": [], "admitted_fetch_count": 0,
+        "rounds": [{"round": 1, "query": "q", "admitted": 0,
+                    "sources": [rec]}],
+        "skipped_sources": [], "gain_skipped": [],
+        "independent_keys": [], "queries": [],
+        "stop_reason": "budget"}
+    tr = _trace_from_payload("q1", _json.loads(_json.dumps(payload)))
+    # whole record dropped -> whole round dropped; nothing survives stripped
+    assert tr.rounds == [], (valid_key, bad_key, bad_value)
+
+    gap = classify_gap(_gap_registry(), tr, _gap_question())
+    assert gap.kind is not GapKind.HONEST_NULL
+    for c in gap.candidates:
+        if c.name == "openalex":
+            assert not c.tried, \
+                f"{valid_key}+malformed {bad_key} fabricated a tried query"
+    kind, expl = classify_null_kind(tr)
+    assert kind != "honest_null"
+
+
+def test_two_valid_outcomes_still_incoherent():
+    """Even two individually-canonical outcomes on one record are an
+    ambiguous combination and must fail closed."""
+    import json as _json
+
+    from tools.gaps import classify_null_kind
+
+    payload = {
+        "fetches": [], "rejections": [], "admitted_fetch_count": 0,
+        "rounds": [{"round": 1, "query": "q", "admitted": 0, "sources": [
+            {"name": "openalex", "error": "HTTP 503",
+             "rejected": "below coverage"},
+        ]}],
+        "skipped_sources": [], "gain_skipped": [],
+        "independent_keys": [], "queries": [],
+        "stop_reason": "budget"}
+    tr = _trace_from_payload("q1", _json.loads(_json.dumps(payload)))
+    assert tr.rounds == []
+    kind, expl = classify_null_kind(tr)
+    assert kind != "honest_null"

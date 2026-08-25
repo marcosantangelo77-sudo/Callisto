@@ -1382,19 +1382,21 @@ def _normalize_skipped_reason(reason: Any) -> Any:
     return reason if isinstance(reason, str) else ""
 
 
-#: The outcome keys a live round-source record may carry. Exactly one
-#: coherent outcome per record: `error`, `skipped`, and `rejected` must be
-#: strings; `admitted` must be a truthy marker (live format is
+#: The outcome keys a live round-source record may carry. A coherent
+#: record carries EXACTLY ONE PRESENT outcome key whose value has the
+#: canonical live shape: `error`/`skipped`/`rejected` are plain strings;
+#: `admitted` is precisely the boolean `True` (live format is
 #: `{"name": ..., "admitted": True, "relevance": <float>}`).
 _ROUND_OUTCOME_KEYS = ("error", "skipped", "rejected", "admitted")
 
 
 def _round_outcome_is_valid(key: str, value: Any) -> bool:
-    """Is this (outcome key, value) pair a well-formed round outcome?"""
+    """Is this (outcome key, value) pair the canonical live-format shape?"""
     if key == "admitted":
-        # Live writer emits True (+ optional numeric relevance); accept any
-        # truthy non-string marker as an admission, never a bare name.
-        return bool(value) and not isinstance(value, str)
+        # Live writer emits exactly True (+ optional numeric relevance).
+        # Arbitrary truthy containers/integers are corrupt data, not
+        # admission evidence.
+        return value is True
     return isinstance(value, str)
 
 
@@ -1405,8 +1407,8 @@ def _normalize_round_source(src: Optional[dict]) -> Optional[dict]:
     deletion: classify_gap() treats any source with no `skipped` value as
     tried, and classify_null_kind() reads outcomes to split honest_null
     from retrieval failure. So a record whose outcome key is malformed
-    (e.g. `skipped`/`error`/`rejected` not a string, or `admitted` not a
-    truthy non-string marker), or that carries NO valid outcome at all,
+    (e.g. `skipped`/`error`/`rejected` not a string, or `admitted` not
+    precisely `True`), or that carries zero or multiple outcome keys at all,
     must be DROPPED entirely — keeping the name alone would fabricate a
     successful query for a source we have no evidence about.
     """
@@ -1416,16 +1418,16 @@ def _normalize_round_source(src: Optional[dict]) -> Optional[dict]:
     if not isinstance(name, str) or not name.strip():
         return None
     present = [k for k in _ROUND_OUTCOME_KEYS if k in src]
-    valid = [k for k in present if _round_outcome_is_valid(k, src[k])]
-    if len(valid) != 1:
-        # zero outcomes (name-only pseudo-success) or multiple/ambiguous
-        # outcomes -> unusable audit evidence; drop the whole record.
+    # Fail closed on schema incoherence: the record must have EXACTLY ONE
+    # present outcome key AND that key's value must be canonical. Stripping
+    # malformed keys while keeping a surviving valid one would silently
+    # normalize corrupt conflicting fields into clean-looking evidence.
+    if len(present) != 1 or not _round_outcome_is_valid(present[0], src[present[0]]):
+        # zero outcomes (name-only pseudo-success), multiple outcomes,
+        # or a single malformed outcome -> unusable audit evidence;
+        # drop the whole record.
         return None
-    out = copy.deepcopy(src)
-    for k in present:
-        if k not in valid:
-            del out[k]
-    return out
+    return copy.deepcopy(src)
 
 
 def _fetch_from_payload(rec: dict) -> FetchResult:
