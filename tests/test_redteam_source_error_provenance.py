@@ -160,6 +160,8 @@ def _retriever(reg, routes):
         generic_calls={
             "bls": ("works_search", ("term",), {"limit": 3}),
             "beta": ("works_search", ("term",), {"limit": 3}),
+            "bea": ("get_data", ("NIPA",), {}),
+            "cftc": ("query", ("6dca-aqww",), {}),
         }), ledger
 
 
@@ -262,6 +264,55 @@ class TestValidEnvelopesUnchanged:
         assert ledger.is_primary_bytes(GOOD_BODY)
         assert URL in ledger.observed_urls()
         assert ledger.cites_verified_url(f"cites {URL} for the claim")
+
+
+
+# ── HTTP-200 BEA / CFTC-Socrata error envelopes: fail, never replay ────────
+
+# Raw non-canonical envelope bytes: whitespace/key order deliberately differ
+# from any json.dumps(sort_keys=True) re-serialization.
+BEA_ERR_RAW = ('{\n  "BEAAPIs": { "Error": [ {\n'
+               '    "APIErrorDescription": "Invalid API KEY",\n'
+               '    "ErrorMessage": "An invalid API key was supplied." } ] } }')
+CFTC_ERR_RAW = ('{ "rows": { "error": true, "message": '
+                '"query.soql.noMatch" }, "_fetch": null }')
+
+
+class TestHttp200BeaCftcEnvelopesNeverProvenanced:
+    def _run(self, name, base_url, raw, routes=None):
+        reg = _registry((name, ["labor market data"], base_url))
+        retr, ledger = _retriever(reg, routes or {"?search=": (200, raw)})
+        trace = retr.retrieve(_q(), "", min_independent=1)
+        return trace, ledger
+
+    def test_bea_200_error_envelope_reported_and_not_replayed(self):
+        trace, ledger = self._run("bea", "https://apps.bea.gov", BEA_ERR_RAW)
+        entries = [r for rnd in trace.rounds for r in rnd["sources"]
+                   if r.get("name") == "bea"]
+        assert any("error" in e for e in entries), entries
+        assert any("BEA" in (e.get("error") or "") for e in entries)
+        assert trace.rejected == []          # honest error, not gate rejection
+        assert trace.n_admitted == 0
+        # RAW wire body AND canonicalized form absent; URL absent.
+        assert not ledger.has_observation(BEA_ERR_RAW)
+        assert not ledger.is_primary_bytes(BEA_ERR_RAW)
+        canonical = json.dumps(json.loads(BEA_ERR_RAW), sort_keys=True)
+        assert not ledger.has_observation(canonical)
+        assert all("apps.bea.gov" not in u for u in ledger.observed_urls())
+
+    def test_cftc_socrata_200_envelope_reported_and_not_replayed(self):
+        trace, ledger = self._run("cftc", "https://api.cftc.gov", CFTC_ERR_RAW)
+        entries = [r for rnd in trace.rounds for r in rnd["sources"]
+                   if r.get("name") == "cftc"]
+        assert any("error" in e for e in entries), entries
+        assert any("Socrata" in (e.get("error") or "") for e in entries)
+        assert trace.rejected == []
+        assert trace.n_admitted == 0
+        assert not ledger.has_observation(CFTC_ERR_RAW)
+        assert not ledger.is_primary_bytes(CFTC_ERR_RAW)
+        canonical = json.dumps(json.loads(CFTC_ERR_RAW), sort_keys=True)
+        assert not ledger.has_observation(canonical)
+        assert all("api.cftc.gov" not in u for u in ledger.observed_urls())
 
 
 # ── SEAM C: a 200 fetch the ledger cannot record must fail closed ─────────

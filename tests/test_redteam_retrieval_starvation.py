@@ -191,3 +191,46 @@ class TestD2BlsPlanner:
 
     def test_non_bls_payloads_unaffected(self):
         assert qb.classify_fetch_failure("fred", {"status": "weird"}) is None
+
+
+# ── HTTP-200 error envelopes: BEA and CFTC/Socrata ─────────────────────────
+
+class TestHttp200ErrorEnvelopes:
+    """BEA and CFTC also return 200-OK bodies that are really ERROR
+    ENVELOPES. The classifier must flag them narrowly while never rejecting
+    legitimate (even empty) data payloads."""
+
+    def test_bea_error_envelope_flagged(self):
+        body = {"BEAAPIs": {"Error": [{
+            "APIErrorDescription": "Invalid API KEY",
+            "ErrorMessage": "An invalid API key was supplied."}]}}
+        reason = qb.classify_fetch_failure("bea", body)
+        assert reason is not None and "BEA" in reason, reason
+
+    def test_bea_valid_data_payload_not_an_error(self):
+        body = {"BEAAPIs": {"Results": {"Data": [
+            {"CL_UNIT": "Level", "DataValue": "2153.606"}]}}}
+        assert qb.classify_fetch_failure("bea", body) is None
+
+    def test_bea_valid_empty_data_list_not_an_error(self):
+        body = {"BEAAPIs": {"Results": {"Data": []}}}
+        assert qb.classify_fetch_failure("bea", body) is None
+
+    def test_cftc_socrata_error_mapping_flagged(self):
+        # The CftcCotAdapter normalizes whatever Socrata returned under
+        # 'rows'; a Socrata error arrives as an error MAPPING there.
+        body = {"rows": {"error": True,
+                         "message": "Query resulted in zero records",
+                         "code": "query.soql.noMatch"},
+                "_fetch": {}}
+        reason = qb.classify_fetch_failure("cftc", body)
+        assert reason is not None and "CFTC" in reason, reason
+
+    def test_cftc_legitimate_empty_rows_list_not_an_error(self):
+        assert qb.classify_fetch_failure("cftc", {"rows": []}) is None
+
+    def test_generic_error_key_heuristic_rejected(self):
+        """A source whose ordinary data contains an 'error'-ish key stays
+        untouched — no broad generic heuristics."""
+        body = {"data": [{"error_rate": "0.01"}]}
+        assert qb.classify_fetch_failure("fred", body) is None

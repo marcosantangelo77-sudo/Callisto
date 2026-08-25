@@ -239,9 +239,49 @@ _BLS_FAILURE_STATUSES = {
 
 def classify_fetch_failure(source_name: str, parsed_body: Any) -> Optional[str]:
     """Human-readable failure reason when a source's 200-OK payload is really
-    an ERROR ENVELOPE; None when it is (or may be) genuine data. Only BLS is
-    known to do this today; other sources return None unchanged."""
-    if source_name != "bls" or not isinstance(parsed_body, dict):
+    an ERROR ENVELOPE; None when it is (or may be) genuine data.
+
+    Known unambiguous envelopes only: BLS (status array), BEA (BEAAPIs
+    wrapper carrying Error instead of Results.Data), and CFTC/Socrata as the
+    adapter normalizes it ({rows: {error: ...}}). Legitimate payloads —
+    including valid EMPTY data — return None. No generic 'error' heuristics:
+    sources whose ordinary bodies contain error-ish keys stay untouched.
+    """
+    if not isinstance(parsed_body, dict):
+        return None
+    if source_name == "bea":
+        bea = parsed_body.get("BEAAPIs")
+        if isinstance(bea, dict):
+            err = bea.get("Error")
+            if isinstance(err, list) and err:
+                detail = ""
+                first = err[0]
+                if isinstance(first, dict):
+                    msg = first.get("ErrorMessage") or ""
+                    detail = f": {msg}" if msg else ""
+                    code = first.get("APIErrorDescription") or ""
+                    if code:
+                        detail = f"{code}{detail}"
+                elif isinstance(first, str):
+                    detail = f": {first}"
+                return f"BEA API error envelope{detail}"
+            # A Results.Data payload (even an empty Data list) is NOT an
+            # error envelope; fall through untouched.
+            results = bea.get("Results")
+            if isinstance(results, dict) and "Data" in results:
+                return None
+        return None
+    if source_name == "cftc":
+        rows = parsed_body.get("rows")
+        if isinstance(rows, dict) and "error" in rows:
+            # Socrata errors arrive as {"error": <message-or-flag>, ...};
+            # any non-None 'error' key here is unambiguous.
+            err = rows.get("error")
+            detail = err if isinstance(err, str) and err.strip() else repr(err)
+            return f"CFTC Socrata error: {detail}"
+        # A legitimate empty rows list is NOT an error; fall through.
+        return None
+    if source_name != "bls":
         return None
     statuses = parsed_body.get("status")
     if not isinstance(statuses, list):
