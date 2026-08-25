@@ -50,17 +50,15 @@ async def main() -> None:
     # Early-fork leg: shrink ONLY the patience budget via the module constant
     # the retry loop reads, restored after — isolates the policy variable.
     import inference as inf
+    order = sys.argv[2] if len(sys.argv) > 2 else "P,E"
     rows = []
     for i in range(n_pairs):
-        inf._429_PATIENCE_S = 120.0
-        w, tier, ok = await time_call(patient)
-        rows.append(("PATIENT", i, w, tier, ok))
-        print(f"PATIENT {i}: {w:6.1f}s  tier={tier}  ok={ok}", flush=True)
-        inf._429_PATIENCE_S = 45.0
-        w, tier, ok = await time_call(early)
-        rows.append(("EARLYFORK", i, w, tier, ok))
-        print(f"EARLYFORK {i}: {w:6.1f}s  tier={tier}  ok={ok}", flush=True)
-    inf._429_PATIENCE_S = 120.0
+        for leg in [s.strip() for s in order.split(",")]:
+            inf._429_PATIENCE_S = 120.0 if leg == "PATIENT" else 45.0
+            router = patient if leg == "PATIENT" else early
+            w, tier, ok = await time_call(router)
+            rows.append((leg, i, w, tier, ok))
+            print(f"{leg} {i}: {w:6.1f}s  tier={tier}  ok={ok}", flush=True)
     for leg in ("PATIENT", "EARLYFORK"):
         ws = [r[2] for r in rows if r[0] == leg]
         oks = [r[4] for r in rows if r[0] == leg]
