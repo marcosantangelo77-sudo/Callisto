@@ -170,3 +170,132 @@ def test_s8_error_envelopes_classified_for_all_json_sources():
         "BEAAPIs": {"Error": [{"error_code": "100", "error_message":
                                "invalid params"}]}}) is not None, (
         "a 200-OK BEA error envelope reached the relevance gate as data")
+
+
+# ── Second pass (same day, later rotation): S9-S12 ────────────────────────
+# Method shift per rotation rule: corrupt-one-field replay + empty-input
+# probes against the live retriever, rather than another selection sweep.
+
+
+# ── S9: registered sources the query builder has never heard of ───────────
+
+def test_s9_every_registered_source_is_known_to_the_query_builder():
+    """Family 2 (naming drift) + family 3: kalshi, cmefedfut and
+    sec_fulltext are REGISTERED and SELECTED by the registry for ordinary
+    questions ('prediction market contracts', 'futures market prices'),
+    but _KEYWORD_PLANNERS and _HONEST_GAPS contain none of them, so
+    build_plan answers "unknown source". The module docstring claims
+    'every registered source now has a planner; the remaining entries are
+    the honest residue'. Three sources are neither planned nor honestly
+    gapped: they are selected, fanned out to, skipped as 'unknown', then
+    EXCLUDED — a silent dead end dressed as an honest gap."""
+    from tools.sources import adapters, query_builder as qb
+    from tools.sources.registry import SourceRegistry
+
+    reg = SourceRegistry()
+    adapters.register_all(reg)
+    known = set(qb.plannable_sources()) | set(qb.honest_gaps())
+    orphan = [n for n in reg.names() if n not in known]
+    assert not orphan, (
+        f"registered sources unknown to the query builder: {orphan} — "
+        f"each needs a planner or an entry in _HONEST_GAPS")
+
+
+# ── S10: identical bytes from two hosts = two "independent" voices ────────
+
+def _fake_ledger():
+    class L:
+        def record_tool_result(self, *a, **k):
+            pass
+
+        def record_gate_rejection(self, *a, **k):
+            pass
+    return L()
+
+
+def _retriever(body, max_rounds=1, use_planner=False):
+    import json
+    from tools.pipeline.retrieval import IterativeRetriever
+    from tools.sources.registry import get_source_registry
+    return IterativeRetriever(
+        registry=get_source_registry(), ledger=_fake_ledger(),
+        transport=lambda url, h: (200, json.dumps(body)),
+        max_rounds=max_rounds, max_sources_per_leaf=5,
+        use_planner=use_planner,
+        **({} if use_planner else {"generic_calls": {
+            "openalex": ("works_search", (), {"query": "term"}),
+            "clinicaltrials": ("works_search", (), {"query": "term"})}}))
+
+
+class _Q:
+    question_id = "rt"
+    text = "scholarly literature about semiconductor supply chains"
+
+
+def test_s10_byte_identical_bodies_do_not_count_as_two_independent_sources():
+    """Family 5 (structural property standing in for agreement):
+    independence_key() collapses openalex+semanticscholar by NAME, but two
+    hosts returning IDENTICAL payloads mint two distinct keys. A mirror,
+    a proxy, or one lying endpoint duplicated under a second host satisfies
+    min_independent_sources=2 with one voice. The trace never records that
+    both admitted fetches share one content_sha256."""
+    tr = _retriever({"results": [
+        {"title": {"display_name":
+                   "semiconductor supply chain resilience study"}}]}
+    ).retrieve(_Q(), "scholarly works", min_independent=2)
+    assert len(tr.admitted) >= 2, "test setup: need two admitted fetches"
+    hashes = {f.content_sha256 for f in tr.admitted}
+    assert len(hashes) > 1 or len(tr.independent_keys) == 1, (
+        f"{len(tr.independent_keys)} independent keys minted from "
+        f"{len(tr.admitted)} BYTE-IDENTICAL bodies "
+        f"({sorted(tr.independent_keys)}) — duplicate content must not "
+        f"manufacture corroboration")
+
+
+# ── S11: zero-hit result sets count toward sufficiency ────────────────────
+
+def test_s11_zero_result_bodies_neither_admitted_nor_counted_independent():
+    """Family 3 (absence treated as success), retriever edition: an API
+    that echoes the query parameters inside a ZERO-RESULT envelope scores
+    ~75% token coverage and is ADMITTED; its host's independence key is
+    then minted and the round can declare 'sufficient: N independent
+    sources'. An honest null (zero hits) becomes manufactured corroboration.
+    The gate judges TEXT, never whether the result set was non-empty."""
+    tr = _retriever({"results": [], "meta": {
+        "query": "semiconductor supply chain resilience research"}}).retrieve(
+            _Q(), "scholarly works", min_independent=2)
+    zero_hit = [f for f in tr.admitted]
+    # whichever sources returned zero hits must NOT sit in trace.admitted
+    # with their independence key minted off the back of them:
+    if any(f.source_name == "openalex" for f in zero_hit):
+        assert "scholarly-aggregator" not in tr.independent_keys, (
+            "a zero-hit body minted an independent key")
+    assert not (tr.stop_reason or "").startswith("sufficient") or \
+        len(tr.independent_keys) < 2 or all(
+            f.source_name != "openalex" for f in tr.admitted), (
+        f"sufficiency declared ({tr.stop_reason}) with zero-hit bodies "
+        f"admitted: {[f.source_name for f in tr.admitted]}")
+
+
+# ── S12: the D4 structural route admits off-topic numeric bodies ──────────
+
+def test_s12_structural_route_requires_more_than_matching_years():
+    """CONTRADICTS an honest-negative in the first-pass findings, which
+    called numeric_window_matches 'stricter than I expected'. At the GATE
+    level the route is looser than documented: extract_text() keeps strings
+    only, so values arrive as strings and ANY series whose ISO dates fall
+    inside the question's years is admitted regardless of TOPIC. A
+    30-year-mortgage-rate table answers an unemployment question at full
+    min_coverage=1.0. Dates-in-window is a property of time-series data
+    in general, not of the asked-about quantity."""
+    from tools.pipeline.retrieval import RelevanceGate
+    g = RelevanceGate(min_coverage=1.0)  # token route made impossible
+    q = "What was the US unemployment rate in 2023?"
+    off_topic = {"observations": [
+        {"date": "2023-01-01", "value": "6.48"},
+        {"date": "2023-06-01", "value": "6.10"}]}   # mortgage rates
+    ok, cov, reason = g.judge(q, "", off_topic)
+    assert not ok, (
+        f"off-topic numeric body admitted via the structural route "
+        f"(coverage {cov:.2f}, reason {reason!r}) — dates matching the "
+        f"question's years cannot be the ONLY relevance test")
