@@ -90,6 +90,12 @@ def _brentq(f, a, b, xtol=1e-12, maxiter=200):
 
 logger = logging.getLogger("callisto.devig")
 
+# Ceiling on the total hold of a book we are willing to devig. Real retail
+# sportsbooks hold 2-8%; even the widest prediction-market spreads stay far
+# below this. A hold at/above 20 points means the sides cannot belong to one
+# live market — a stale snapshot mix or malformed input.
+MAX_SANE_OVERROUND = 0.20
+
 
 def multiplicative_devig(odds_list: list[float]) -> list[float]:
     """
@@ -225,9 +231,32 @@ def devig_market(
     """
     if not odds_list:
         return {"error": "Empty odds list", "fair_probabilities": [], "overround": 0.0}
-    if any(o <= 0 for o in odds_list):
-        return {"error": "Non-positive odds in list", "fair_probabilities": [], "overround": 0.0}
-    overround = sum(1 / o for o in odds_list) - 1.0
+    if any(not isinstance(o, (int, float)) or isinstance(o, bool)
+           or not math.isfinite(o) for o in odds_list):
+        return {"error": "Non-finite or non-numeric odds in list",
+                "fair_probabilities": [], "overround": 0.0}
+    if any(o <= 1.0 for o in odds_list):
+        return {"error": "Non-positive implied probability (decimal odds must exceed 1.0)",
+                "fair_probabilities": [], "overround": 0.0}
+    implied = [1 / o for o in odds_list]
+    if any(not math.isfinite(ip) or not 0.0 < ip < 1.0 for ip in implied):
+        return {"error": "Implied probability out of (0, 1)",
+                "fair_probabilities": [], "overround": 0.0}
+    overround = sum(implied) - 1.0
+    # Market-sanity gate on the book as a whole. A real two-sided book has a
+    # small POSITIVE hold (the vig/spread). overround <= 0 means crossed asks
+    # or a stale snapshot mix (free-lunch book); a hold at or above 50% means
+    # the sides cannot belong to one live market. Neither may be devigged into
+    # a precise-looking "fair" price.
+    if not math.isfinite(overround) or overround < -1e-9:
+        return {"error": f"Invalid book: overround {overround:.4f} is not positive "
+                         "(crossed asks or stale/mismatched sides)",
+                "fair_probabilities": [], "overround": round(overround, 6)}
+    if overround >= MAX_SANE_OVERROUND:
+        return {"error": f"Invalid book: overround {overround:.4f} exceeds the "
+                         f"{MAX_SANE_OVERROUND:.0%} market-sanity ceiling "
+                         "(stale mix or absurd hold)",
+                "fair_probabilities": [], "overround": round(overround, 6)}
     param = None
 
     if method == "auto":
@@ -276,6 +305,12 @@ def devig_american(
     dec_a = american_to_decimal(side_a_american)
     dec_b = american_to_decimal(side_b_american)
     result = devig_market([dec_a, dec_b], method=method)
+    if "error" in result:
+        # Propagate the invalid-book audit instead of indexing into an
+        # empty fair_probabilities list.
+        result["side_a"] = {"american": side_a_american}
+        result["side_b"] = {"american": side_b_american}
+        return result
     result["side_a"] = {
         "american": side_a_american,
         "fair_prob": result["fair_probabilities"][0],

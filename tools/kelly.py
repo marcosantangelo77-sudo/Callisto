@@ -168,7 +168,8 @@ def kelly_full(edge: float, odds: int | float) -> float:
         return 0.0
 
     fraction = (b * p - q) / b
-    return max(0.0, round(fraction, 6))
+    # FLOOR, never round(): rounding can raise the stake (red-team M2).
+    return max(0.0, math.floor(fraction * 1_000_000.0) / 1_000_000.0)
 
 
 # =========================================================================
@@ -196,7 +197,8 @@ def kelly_fractional(
         Reduced fraction of bankroll to wager.
     """
     full = kelly_full(edge, odds)
-    return round(full * fraction, 6)
+    # Floor here too: double rounding must never raise the quarter-Kelly stake.
+    return math.floor(full * fraction * 1_000_000.0) / 1_000_000.0
 
 
 # =========================================================================

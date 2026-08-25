@@ -64,10 +64,20 @@ def _american_to_implied(american: int) -> float:
 
 def _continuous_to_prob(p: float) -> float:
     """Continuous representations: implied prob in [0,1], decimal odds > 1,
-    or a contract price quoted in cents (e.g. 47 for $0.47)."""
+    or a contract price quoted in cents (e.g. 47 for $0.47).
+
+    CONVENTION: an integral value in [2, 100) under kind='auto' is read as a
+    CENT-QUOTED CONTRACT (Kalshi/Polymarket style), never as decimal odds.
+    Decimal odds are conventionally quoted with decimals (1.91, 2.40); an
+    exact integer in this range read as decimal odds would imply a 1-50%
+    probability from what is almost certainly a 2-99 cent contract price
+    (a ~22x error on a 47-cent quote). Callers with genuinely integral
+    decimal odds must pass kind='decimal' explicitly."""
     if 0.0 < p <= 1.0:
         return p                      # already a probability
     if p > 1.0:
+        if float(p).is_integer() and 2.0 <= p < 100.0:
+            return p / 100.0          # cent-quoted contract
         return 1.0 / p                # decimal odds
     raise ValueError(
         f"cannot interpret {p!r} as a probability or decimal odds; "
@@ -110,10 +120,28 @@ class MarketQuote:
         if self.counter_price is None:
             return raw, {"devigged": False, "method": "none",
                          "note": "no counter-quote; raw implied carries the vig"}
-        counter = MarketQuote(price=self.counter_price, kind=self.kind)
-        result = devig_market(
-            [1.0 / raw, 1.0 / counter.implied_probability()]
-        )
+        try:
+            counter = MarketQuote(price=self.counter_price, kind=self.kind)
+            counter_implied = counter.implied_probability()
+        except ValueError as e:
+            return raw, {"devigged": False, "method": "none", "invalid_book": str(e),
+                         "note": "counter-quote unparseable; raw implied carries the vig"}
+        if not (math.isfinite(raw) and 0.0 < raw < 1.0
+                and math.isfinite(counter_implied) and 0.0 < counter_implied < 1.0):
+            return raw, {"devigged": False, "method": "none",
+                         "invalid_book": "implied probabilities out of (0, 1)",
+                         "note": "malformed two-sided quote; not devigged"}
+        result = devig_market([1.0 / raw, 1.0 / counter_implied])
+        if "error" in result:
+            # Crossed / stale / absurd book: never manufacture a fair price.
+            return raw, {
+                "devigged": False,
+                "invalid_book": result["error"],
+                "overround": result.get("overround"),
+                "raw_implied": raw,
+                "note": "two-sided book failed the market-sanity gate; "
+                        "raw implied returned but NOT fit for sizing",
+            }
         fair = result["fair_probabilities"][0]
         return fair, {
             "devigged": True,
@@ -141,6 +169,11 @@ MAX_FRACTION_FULL_KELLY = 0.25
 MIN_EDGE_TO_ACT = 0.005          # half a point of probability
 
 
+def _floor6(x: float) -> float:
+    """Round DOWN to 6 dp. Reporting must never nudge a stake or edge upward."""
+    return math.floor(x * 1_000_000.0) / 1_000_000.0
+
+
 @dataclass
 class EdgeAssessment:
     """Everything a sealed conclusion needs before it becomes a position."""
@@ -163,11 +196,17 @@ class EdgeAssessment:
             "claim_id": self.claim_id,
             "calibrated_prob": round(self.calibrated_prob, 6),
             "market_prob_raw": round(self.market_prob_raw, 6),
-            "market_prob_fair": round(self.market_prob_fair, 6),
-            "edge": round(self.edge, 6),
-            "kelly_full": round(self.kelly_fraction_full, 6),
-            "kelly_quarter": round(self.kelly_fraction_quarter, 6),
-            "ev_per_unit": round(self.ev_per_unit, 6),
+            "market_prob_fair": (
+                round(self.market_prob_fair, 6)
+                if math.isfinite(self.market_prob_fair) else self.market_prob_fair
+            ),
+            "edge": _floor6(self.edge) if math.isfinite(self.edge) else self.edge,
+            "kelly_full": _floor6(self.kelly_fraction_full)
+                if math.isfinite(self.kelly_fraction_full) else self.kelly_fraction_full,
+            "kelly_quarter": _floor6(self.kelly_fraction_quarter)
+                if math.isfinite(self.kelly_fraction_quarter) else self.kelly_fraction_quarter,
+            "ev_per_unit": round(self.ev_per_unit, 6)
+                if math.isfinite(self.ev_per_unit) else self.ev_per_unit,
             "actionable": self.actionable,
             "quote": {
                 "source": self.quote.source,
@@ -199,6 +238,26 @@ def assess_edge(
     market_fair, audit = quote.fair_probability()
     market_raw = quote.implied_probability()
 
+    # Fail safe on invalid books: an unsanitary two-sided book must not yield
+    # an actionable assessment or positive Kelly stake. Keep the existing
+    # public shape — return an EdgeAssessment flagged invalid and inert.
+    if audit.get("invalid_book") or not math.isfinite(market_fair)             or not 0.0 < market_fair < 1.0:
+        return EdgeAssessment(
+            claim_id=claim_id,
+            calibrated_prob=calibrated_prob,
+            quote=quote,
+            market_prob_raw=market_raw,
+            market_prob_fair=float("nan"),
+            devig_audit=audit,
+            edge=float("nan"),
+            kelly_fraction_full=0.0,
+            kelly_fraction_quarter=0.0,
+            ev_per_unit=float("nan"),
+            actionable=False,
+            notes=["invalid market book: no fair probability; sizing refused"]
+                  + [audit[k] for k in ("invalid_book",) if k in audit],
+        )
+
     edge = calibrated_prob - market_fair
     notes = []
     if not audit.get("devigged"):
@@ -211,7 +270,13 @@ def assess_edge(
     decimal = _to_decimal(quote.price)
     b = decimal - 1.0
     q = 1.0 - calibrated_prob
-    kelly_full_frac = max(0.0, (b * calibrated_prob - q) / b)
+    # Kelly is only meaningful for a claim that beats the DEVIGGED market
+    # price. A negative-fair-edge assessment must never carry a positive
+    # stake, even if the raw payout arithmetic alone looks profitable.
+    if edge <= 0.0:
+        kelly_full_frac = 0.0
+    else:
+        kelly_full_frac = max(0.0, (b * calibrated_prob - q) / b)
     kelly_full_capped = min(kelly_full_frac, MAX_FRACTION_FULL_KELLY)
 
     ev_per_unit = calibrated_prob * b - q      # stake 1, win b*p - q expectation
@@ -255,6 +320,8 @@ def clv_points(claim_quote: MarketQuote, close_quote: MarketQuote) -> Optional[f
     f_claim, a_claim = claim_quote.fair_probability()
     f_close, a_close = close_quote.fair_probability()
     if not (a_claim.get("devigged") and a_close.get("devigged")):
+        return None
+    if a_claim.get("invalid_book") or a_close.get("invalid_book"):
         return None
     return f_close - f_claim
 

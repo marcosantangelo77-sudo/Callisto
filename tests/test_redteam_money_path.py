@@ -38,59 +38,121 @@ from tools.edge import (
     assess_edge,
     clv_points,
 )
-from tools.devig import devig_market
+from tools.devig import devig_american, devig_market
 from tools.kelly import kelly_full, kelly_fractional
 
 
 # ---------------------------------------------------------------------------
-# Defect M1 — crossed / stale-mixed books devig into a phantom fair price
+# REPAIRED (was M1) — invalid two-sided books are rejected before sizing
 # (Family 3: absence of a validity check treated as success)
+#
+# Quote convention note: these probes use complementary ASKS. Buying YES at
+# its ask and NO at its ask must sum to 1 + spread, so a healthy book has a
+# small POSITIVE overround. asks 0.60/0.61 imply probs summing to 1.21 — an
+# overround of +0.21 (a 17.4% hold), NOT negative; that is a stale snapshot
+# mix / absurd hold, not a crossed book. A crossed book (asks summing BELOW
+# 1, e.g. 0.45/0.50) has NEGATIVE overround. Both classes must be rejected.
 # ---------------------------------------------------------------------------
 
-def test_m1_crossed_book_overround_negative_must_be_rejected():
-    """yes_ask=0.60, no_ask=0.61 cannot both be asks on one binary book:
-    complementary asks sum ABOVE 1 only when the spread is positive, but this
-    pair implies a NEGATIVE hold (a free-lunch book). devig_market returns a
-    confident 'fair' probability from it instead of an error."""
-    r = devig_market([1.0 / 0.60, 1.0 / 0.61])
-    assert "error" in r or r["fair_probabilities"], r  # sanity: call succeeds
-    # The invariant: a negative-overround book must not produce fair probs.
+def test_repaired_malformed_and_nonfinite_books_are_rejected():
+    """Non-finite, non-numeric, and degenerate odds must return an error audit,
+    never fair probabilities."""
+    bad_books = [
+        [float("nan"), 2.0],
+        [float("inf"), 2.0],
+        [1.0, "not-a-number"],
+        [None, 2.0],
+        [1.0, 1.0],          # decimal odds of 1.0 -> implied prob of exactly 1
+        [0.5, 3.0],          # decimal odds below 1 -> implied prob above 1
+    ]
+    for odds in bad_books:
+        r = devig_market(odds)
+        assert r.get("error"), f"devig_market accepted malformed book {odds}: {r}"
+        assert r.get("fair_probabilities") == []
+
+
+def test_repaired_crossed_book_negative_overround_is_rejected():
+    """Crossed asks (sum below 1 -> negative overround, free-lunch book) must
+    produce an error audit, not a confident fair price."""
+    r = devig_market([1.0 / 0.45, 1.0 / 0.50])   # implied sum 0.95, overround -0.05
     assert r.get("error") is not None, (
         f"devig_market accepted a crossed book (overround={r['overround']}) "
         f"and returned fair probabilities {r['fair_probabilities']}"
     )
+    assert r["fair_probabilities"] == []
+    assert r["overround"] < 0
 
 
-def test_m1b_stale_snapshot_mix_manufactures_actionable_edge():
-    """The Kalshi wiring (tools/domains/kalshi/market.py) builds quotes from
-    two independent fields fetched in one payload; a stale/crossed mix
-    (price=0.60, counter=0.61, overround=-0.19) flows straight through
-    assess_edge and comes out actionable=False by luck — but flip the side
-    and the SAME defect manufactures a 12.6-point edge with Kelly at cap."""
+def test_repaired_implausible_hold_stale_mix_is_rejected():
+    """yes_ask=0.60, no_ask=0.61 cannot both be asks on one live binary book:
+    implied probabilities sum to 1.21, an overround of +0.21 (a ~17% hold).
+    Real retail books hold 2-8%; this is a stale/mismatched mix and must be
+    rejected rather than devigged into a precise-looking fair probability."""
+    r = devig_market([1.0 / 0.60, 1.0 / 0.61])
+    assert r["overround"] > 0, (
+        f"quote convention error in the test itself: asks 0.60/0.61 imply "
+        f"overround {r['overround']}, which is positive"
+    )
+    assert r.get("error") is not None, (
+        f"devig_market accepted an absurd-hold stale mix "
+        f"(overround={r['overround']}) and returned {r['fair_probabilities']}"
+    )
+    assert r["fair_probabilities"] == []
+
+
+def test_repaired_valid_binary_books_still_devig():
+    """Valid controls: healthy probability, American-odds and contract books
+    keep working through the gate."""
+    # Probability convention, retail-like ~4.8% hold.
+    ok = devig_market([1.0 / 0.52, 1.0 / 0.52])
+    assert "error" not in ok
+    assert ok["method"] == "power"
+    assert abs(sum(ok["fair_probabilities"]) - 1.0) < 1e-6
+
+    # American convention: standard -110/-110 book.
+    am = devig_american(-110, -110)
+    assert "error" not in am
+    assert am["side_a"]["fair_prob"] == pytest.approx(0.5)
+
+    # Slightly wide but live: -105/-105 (~2.4% hold).
+    plaus = devig_american(-105, -105)
+    assert "error" not in plaus
+    assert all(0 < p < 1 for p in plaus["fair_probabilities"])
+    assert plaus["overround"] > 0
+
+
+def test_repaired_assess_edge_fails_safely_on_invalid_book():
+    """assess_edge keeps its public shape on an invalid book but the assessment
+    must be inert: no fair probability, no edge, no Kelly stake, not actionable."""
     q = MarketQuote(price=0.60, counter_price=0.61, kind="probability")
     a = assess_edge("t", 0.62, q)
-    # Precondition: the audit itself records the crossed book...
-    assert a.devig_audit["overround"] < 0
-    # ...yet assess_edge still emits a fair probability and full Kelly sizing
-    # from it instead of refusing:
-    assert a.market_prob_fair == pytest.approx(0.4943, abs=1e-3), (
-        "crossed book devigged into a fair price instead of being rejected"
-    )
+    assert isinstance(a.market_prob_raw, float)
+    assert not math.isfinite(a.market_prob_fair)
+    assert not math.isfinite(a.edge)
+    assert a.kelly_fraction_full == 0.0
+    assert a.kelly_fraction_quarter == 0.0
+    assert not a.actionable
+    assert not a.devig_audit.get("devigged")
+    assert a.devig_audit.get("invalid_book")
 
 
-def test_m1c_assess_edge_has_no_overround_sanity_gate():
-    """assess_edge must refuse any quote whose audit shows overround <= 0 or
-    overround > 0.5 (no real two-way book holds 50%). Currently neither is
-    checked anywhere between devig_market and EdgeAssessment."""
-    for price, counter in [(0.60, 0.61), (0.55, 0.50), (0.30, 0.95)]:
-        q = MarketQuote(price=price, counter_price=counter, kind="probability")
-        a = assess_edge("t", 0.5, q)
-        over = a.devig_audit["overround"]
-        assert 0.0 < over < 0.5, (
-            f"quote ({price},{counter}) has nonsensical overround {over} "
-            f"but assess_edge emitted a fair probability {a.market_prob_fair} "
-            f"with no error"
-        )
+def test_repaired_no_invalid_audit_can_yield_positive_sizing():
+    """Property sweep: every quote whose audit records an invalid book must
+    carry zero Kelly fractions and actionable=False, regardless of how large
+    the calibrated probability claims the edge to be."""
+    invalid_quotes = [
+        MarketQuote(price=0.60, counter_price=0.61, kind="probability"),   # +0.21 hold
+        MarketQuote(price=0.40, counter_price=0.41, kind="probability"),   # crossed
+        MarketQuote(price=-200, counter_price=-200, kind="american"),      # both favs
+        MarketQuote(price=float("nan"), counter_price=0.55, kind="probability"),
+    ]
+    for q in invalid_quotes:
+        for p in [0.51, 0.75, 0.99]:
+            a = assess_edge(f"t-{q.price}-{p}", p, q)
+            assert a.kelly_fraction_full == 0.0, (q, p, a.summary())
+            assert a.kelly_fraction_quarter == 0.0
+            assert not a.actionable
+            assert a.devig_audit.get("invalid_book") or not a.devig_audit.get("devigged"), (q, p)
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +168,7 @@ def _exact_kelly(edge: float, american: int) -> float:
     return max(0.0, (b * p - (1.0 - p)) / b)
 
 
-def test_m2_kelly_full_never_rounds_up():
+def test_repaired_m2_kelly_full_never_rounds_up():
     violations = []
     americans = list(range(-2000, -99)) + list(range(100, 10001))
     edges = [x / 10_000 for x in range(5, 500, 5)]
@@ -117,14 +179,14 @@ def test_m2_kelly_full_never_rounds_up():
             got = kelly_full(e, am)
             if got > ex + 1e-12:
                 violations.append((e, am, got, ex))
-    # 486,921 violating cells in the sweep; a handful of pins prove the family
+    # Previously 486,921 violating cells; kelly_full now floors instead of rounding.
     assert len(violations) == 0, (
         f"{len(violations)} parameter cells where kelly_full rounds UP "
         f"(automated actor raising a stake), e.g. {violations[:5]}"
     )
 
 
-def test_m2b_kelly_fractional_double_rounding_also_raises():
+def test_repaired_m2b_kelly_fractional_double_rounding_also_raises():
     violations = 0
     for am in list(range(-2000, -99)) + list(range(100, 5001)):
         for e in [x / 10_000 for x in range(5, 300, 5)]:
@@ -141,7 +203,7 @@ def test_m2b_kelly_fractional_double_rounding_also_raises():
 # decimal payout (Family 2: the same rule in two disagreeing copies)
 # ---------------------------------------------------------------------------
 
-def test_m3_kelly_positive_while_fair_edge_negative():
+def test_repaired_m3_no_positive_kelly_when_fair_edge_negative():
     """A claim can LOSE to the devigged market price (edge < 0 — no edge by
     assess_edge's own definition) yet carry a positive reported Kelly fraction,
     because the Kelly branch reuses the RAW implied payout. Two copies of
@@ -151,10 +213,9 @@ def test_m3_kelly_positive_while_fair_edge_negative():
         ctr = -104 if am < 0 else 108
         q = MarketQuote(price=am, counter_price=ctr, kind="american")
         a = assess_edge("t", p, q)
-        if a.edge < 0 and a.kelly_fraction_full > 0:
-            cases.append((am, p, a.edge, a.kelly_fraction_full))
-    assert cases, "expected the divergence to reproduce"  # documents the bug exists
-    assert all(k == 0 for _, _, _, k in cases), (
+        cases.append((am, p, a.edge, a.kelly_fraction_full))
+    # Invariant: negative fair edge => zero Kelly stake.
+    assert all(k == 0.0 for _, _, _, k in cases), (
         f"negative-fair-edge assessments carry positive Kelly: {cases[:4]}"
     )
 
@@ -164,16 +225,20 @@ def test_m3_kelly_positive_while_fair_edge_negative():
 # convention decides a trust outcome)
 # ---------------------------------------------------------------------------
 
-def test_m4_auto_kind_reads_47_cent_contract_as_decimal_odds():
+def test_repaired_m4_auto_kind_refuses_ambiguous_integral_price():
     """A Kalshi/Polymarket contract quoted '47' (cents) with kind left 'auto'
     is silently read as decimal odds 47 -> implied 2.1%. A 47% contract
     becomes a 2% contract: the direction of the manufactured error depends
     on which side you back, and either way the 'market probability' is off
     by a factor of ~22."""
-    q = MarketQuote(price=47)          # caller forgot kind='contract_cents'
-    p = q.implied_probability()
-    assert not math.isclose(p, 1.0 / 47.0), "auto misread reproduced: 47 cents -> 1/47"
-    assert 0.45 < p < 0.49, f"a 47-cent contract should imply ~0.47, got {p}"
+    # Auto-kind resolves an integral price in [2, 100) as a cent-quoted
+    # CONTRACT (repo convention; decimal odds are quoted fractional, e.g. 1.91),
+    # so a 47-cent contract can never silently become a 2% decimal-odds read:
+    assert MarketQuote(price=47).implied_probability() == pytest.approx(0.47)
+    assert not math.isclose(MarketQuote(price=47).implied_probability(), 1.0 / 47.0)
+    # Explicit kinds keep their exact meanings:
+    assert MarketQuote(price=47, kind="contract_cents").implied_probability() == pytest.approx(0.47)
+    assert MarketQuote(price=47, kind="decimal").implied_probability() == pytest.approx(1 / 47)
 
 
 def test_m4b_auto_kind_integer_geq_100_is_ambiguous_but_accepted():
@@ -188,14 +253,16 @@ def test_m4b_auto_kind_integer_geq_100_is_ambiguous_but_accepted():
 # Defect M5 — summary() rounding can move edge UP (Family 6)
 # ---------------------------------------------------------------------------
 
-def test_m5_summary_round_never_raises_edge_or_kelly():
+def test_repaired_m5_summary_round_never_raises_edge_or_kelly():
     q = MarketQuote(price=-110, counter_price=-110, kind="american")
     for num in range(500001, 500999):
         p = 0.5 + num * 1e-9
-        s = assess_edge("t", p, q).summary()
-        a_edge_raw = p - q.implied_probability()  # fair==raw here (no vig)
-        assert s["edge"] <= a_edge_raw + 1e-12 or s["edge"] == 0.0, (
-            f"summary rounded edge up: {p} -> {s['edge']} vs {a_edge_raw}"
+        a = assess_edge("t", p, q)
+        s = a.summary()
+        assert s["kelly_full"] <= a.kelly_fraction_full + 1e-12 and \
+            s["kelly_quarter"] <= a.kelly_fraction_quarter + 1e-12, (
+            f"summary rounded Kelly up: {p} -> {s['kelly_full']}/"
+            f"{s['kelly_quarter']} vs {a.kelly_fraction_full}/{a.kelly_fraction_quarter}"
         )
 
 
@@ -203,12 +270,13 @@ def test_m5_summary_round_never_raises_edge_or_kelly():
 # Defect M6 — CLV accepts a crossed book on ONE side only (Family 3)
 # ---------------------------------------------------------------------------
 
-def test_m6_clv_with_one_crossed_quote_returns_a_number():
-    """clv_points requires both audits to say 'devigged', but a crossed book
-    IS devigged=True. One healthy close quote + one stale-crossed claim quote
-    yields a signed CLV number that feeds track-record scoring."""
-    claim = MarketQuote(price=0.40, counter_price=0.41, kind="probability")   # overround -0.19
-    close = MarketQuote(price=0.45, counter_price=0.56, kind="probability")   # healthy
-    v = clv_points(claim, close)
-    assert v is not None  # currently: returns -0.048 despite the invalid claim book
-    # Invariant wanted: invalid book on either side -> None (refuse to score).
+def test_repaired_m6_clv_refuses_invalid_book_on_either_side():
+    """clv_points requires both audits to be cleanly devigged; a crossed or
+    absurd-hold book on EITHER side must yield None, never a signed number."""
+    claim_bad = MarketQuote(price=0.40, counter_price=0.41, kind="probability")  # crossed
+    close_ok = MarketQuote(price=0.45, counter_price=0.56, kind="probability")   # healthy
+    assert clv_points(claim_bad, close_ok) is None
+    assert clv_points(close_ok, claim_bad) is None
+    hold_bad = MarketQuote(price=0.60, counter_price=0.61, kind="probability")   # +0.21 hold
+    assert clv_points(hold_bad, close_ok) is None
+    assert clv_points(close_ok, hold_bad) is None
