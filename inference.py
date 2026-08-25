@@ -943,6 +943,10 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     the Hermes CLI (Nous Portal OAuth lives in the keychain) and serves the
     hosted stealth-ox-alpha model, so base_url stays "" and model defaults
     to "ox-alpha". Such an endpoint is never _unresolved.
+
+    Routing target binding: extra.provider / extra.model (if configured) are
+    passed to the CLI as --provider / -m before `-z`. Endpoints without them
+    keep relying on external Hermes defaults (backward compatible).
     """
     backend = raw.get("backend", "openai_compat")
     base_url = raw.get("base_url")
@@ -1518,6 +1522,12 @@ class ProviderRouter:
                                 msgs,
                                 role=str(task_class),
                                 timeout_s=float(timeout),
+                                # Bind the explicitly configured provider/
+                                # model as the CLI routing target (mirrors
+                                # the supervisor's --provider/-m); absent
+                                # fields mean no flag is passed.
+                                provider=endpoint.extra.get("provider"),
+                                model=endpoint.extra.get("model"),
                             )
                             content = res["content"]
                             usage: dict = {}
