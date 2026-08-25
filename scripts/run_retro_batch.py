@@ -97,6 +97,12 @@ def main() -> int:
     ap.add_argument("--checkpoints", default=None)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--label", default="batch")
+    # SPEED run 20: bounded cross-question concurrency on the SCORED path.
+    # Run 19 landed the knob in RetrodictionBatch (default 1 = serial) and
+    # measured 2.50x at mc=3 with byte-identical answers; the scored script
+    # stayed serial pending a live checkpoint-safety run under load. Default
+    # here is 3; --max-concurrency 1 restores the exact serial behaviour.
+    ap.add_argument("--max-concurrency", type=int, default=3)
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO,
@@ -118,6 +124,7 @@ def main() -> int:
         checkpointer=cp,
         results_path=results_path,
         config=BatchConfig(label=args.label, limit=args.limit,
+                           max_concurrency=max(1, args.max_concurrency),
                            model_name=HermesCliModel.name))
 
     done_before = len(batch.load_completed())

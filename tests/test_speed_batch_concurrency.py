@@ -154,3 +154,64 @@ def test_errors_stay_rows_under_concurrency(tmp_path):
     results = asyncio.run(b.run())
     assert results["bad"].status == "error"
     assert results["good"].status == "scored"
+
+# ── SPEED run 20: the SCORED script wires the knob through ─────────────────
+
+def test_scored_script_defaults_to_mc3_and_forwards():
+    """run_retro_batch.py must default --max-concurrency to 3 and forward it
+    into BatchConfig (the scored path was serial through runs 18-19)."""
+    import ast
+
+    src = (ROOT / "scripts" / "run_retro_batch.py").read_text()
+    tree = ast.parse(src)
+    mc_default = None
+    forwarded = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            name = getattr(fn, "attr", getattr(fn, "id", ""))
+            if name == "add_argument":
+                if any(getattr(a, "value", None) == "--max-concurrency"
+                       for a in node.args):
+                    for kw in node.keywords:
+                        if kw.arg == "default":
+                            mc_default = ast.literal_eval(kw.value)
+            elif name == "BatchConfig":
+                kwnames = {kw.arg for kw in node.keywords}
+                assert "max_concurrency" in kwnames, (
+                    "run_retro_batch.py builds BatchConfig without forwarding "
+                    "max_concurrency — the scored batch silently regressed to "
+                    "serial")
+                forwarded = True
+    assert mc_default == 3, f"scored script default moved: {mc_default}"
+    assert forwarded
+
+
+def test_scored_script_mc_contract_end_to_end(tmp_path):
+    """The contract the scored script now relies on, driven end-to-end:
+    mc=3 overlaps five ~1s questions with results identical to mc=1."""
+    qs = [_q(f"q{i}") for i in range(5)]
+
+    def build(mc):
+        r = SlowResearcher(latency=1.0,
+                           probs={q.question_id: 0.5 + 0.01 * i
+                                  for i, q in enumerate(qs)})
+        return _batch(qs, r, tmp_path / f"mc{mc}", mc=mc), r
+
+    b1, _ = build(1)
+    b3, _ = build(3)
+    t0 = time.monotonic()
+    res1 = asyncio.run(b1.run())
+    wall_serial = time.monotonic() - t0
+    t0 = time.monotonic()
+    res3 = asyncio.run(b3.run())
+    wall_conc = time.monotonic() - t0
+
+    ids = sorted(q.question_id for q in qs)
+    probs1 = [b1.results[k].predicted_probability for k in ids]
+    probs3 = [b3.results[k].predicted_probability for k in ids]
+    assert probs1 == probs3, "answers changed under concurrency"
+    assert all(r.status == "scored" for r in list(res1.values()) + list(res3.values()))
+    assert wall_conc < wall_serial / 2.0, (
+        f"mc=3 must overlap 5 x 1s questions: serial {wall_serial:.2f}s vs "
+        f"concurrent {wall_conc:.2f}s")
