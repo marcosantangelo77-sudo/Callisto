@@ -342,13 +342,20 @@ class RestSource:
         if status != 200:
             return rec
         if self.ledger is not None:
+            # Fail closed: a successful (HTTP 200) fetch that cannot be
+            # recorded is unverified evidence. Returning its body would let a
+            # caller consume data with no provenance behind it, so surface a
+            # SourceError identifying the source and URL instead of logging
+            # and swallowing the ledger failure.
             try:
                 self.ledger.record_tool_result(
                     f"{self.spec.name}_fetch", body, primary=True, urls=[url]
                 )
-            except Exception:  # pragma: no cover - ledger must not break fetches
-                logger.exception("provenance ledger rejected %s observation",
-                                 self.spec.name)
+            except Exception as exc:
+                raise SourceError(
+                    f"provenance ledger failed to record 200 fetch from "
+                    f"{self.spec.name} ({url}): {exc}"
+                ) from exc
         return rec
 
     def get_json(self, url: str) -> tuple[Any, FetchRecord]:
