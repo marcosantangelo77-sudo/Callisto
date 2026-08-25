@@ -191,3 +191,85 @@ class TestD2BlsPlanner:
 
     def test_non_bls_payloads_unaffected(self):
         assert qb.classify_fetch_failure("fred", {"status": "weird"}) is None
+
+
+# ── HTTP-200 error envelopes: BEA and CFTC/Socrata ─────────────────────────
+
+class TestHttp200ErrorEnvelopes:
+    """BEA and CFTC also return 200-OK bodies that are really ERROR
+    ENVELOPES. The classifier must flag them narrowly while never rejecting
+    legitimate (even empty) data payloads."""
+
+    # Documented singular wire shape from the live BEA API:
+    def test_bea_singular_error_envelope_flagged(self):
+        body = {"BEAAPI": {"Results": {"Error": {
+            "APIErrorCode": "1",
+            "APIErrorDescription": "bad key"}}}}
+        reason = qb.classify_fetch_failure("bea", body)
+        assert reason is not None and "BEA" in reason, reason
+
+    def test_bea_singular_error_envelope_carries_detail(self):
+        body = {"BEAAPI": {"Results": {"Error": {
+            "APIErrorCode": "1",
+            "APIErrorDescription": "bad key",
+            "ErrorMessage": "An invalid API key was supplied."}}}}
+        reason = qb.classify_fetch_failure("bea", body)
+        assert reason is not None and "bad key" in reason, reason
+
+    def test_bea_legacy_plural_error_list_still_flagged(self):
+        body = {"BEAAPIs": {"Error": [{
+            "APIErrorDescription": "Invalid API KEY",
+            "ErrorMessage": "An invalid API key was supplied."}]}}
+        reason = qb.classify_fetch_failure("bea", body)
+        assert reason is not None and "BEA" in reason, reason
+
+    def test_bea_plural_non_error_list_not_flagged(self):
+        """The legacy plural wrapper is honored only while narrowly
+        structured: a non-list Error is not recognized."""
+        body = {"BEAAPIs": {"Error": {"oops": True}}}
+        assert qb.classify_fetch_failure("bea", body) is None
+
+    def test_bea_singular_valid_data_payload_not_an_error(self):
+        body = {"BEAAPI": {"Results": {"Data": [
+            {"CL_UNIT": "Level", "DataValue": "2153.606"}]}}}
+        assert qb.classify_fetch_failure("bea", body) is None
+
+    def test_bea_singular_valid_empty_data_list_not_an_error(self):
+        body = {"BEAAPI": {"Results": {"Data": []}}}
+        assert qb.classify_fetch_failure("bea", body) is None
+
+    def test_cftc_cot_socrata_error_mapping_flagged(self):
+        # CftcCotAdapter normalizes whatever Socrata returned under 'rows';
+        # its real source identity is cftc_cot (not the old 'cftc' alias).
+        body = {"rows": {"error": True,
+                         "message": "no matching rows",
+                         "code": "query.soql.noMatch"},
+                "_fetch": {}}
+        reason = qb.classify_fetch_failure("cftc_cot", body)
+        assert reason is not None and "CFTC" in reason, reason
+        assert "query.soql.noMatch" in reason, reason
+
+    def test_cftc_alias_no_longer_recognized(self):
+        """The retired alias must not silently keep working."""
+        body = {"rows": {"error": True,
+                         "message": "no matching rows",
+                         "code": "query.soql.noMatch"}}
+        assert qb.classify_fetch_failure("cftc", body) is None
+
+    def test_cftc_rows_without_documented_shape_not_flagged(self):
+        # error=True alone without a string message is not the documented
+        # failure shape; neither is an error mapping with empty message.
+        assert qb.classify_fetch_failure(
+            "cftc_cot", {"rows": {"error": True}}) is None
+        assert qb.classify_fetch_failure(
+            "cftc_cot", {"rows": {"error": False,
+                                  "message": "x"}}) is None
+
+    def test_cftc_cot_legitimate_empty_rows_list_not_an_error(self):
+        assert qb.classify_fetch_failure("cftc_cot", {"rows": []}) is None
+
+    def test_generic_error_key_heuristic_rejected(self):
+        """A source whose ordinary data contains an 'error'-ish key stays
+        untouched — no broad generic heuristics."""
+        body = {"data": [{"error_rate": "0.01"}]}
+        assert qb.classify_fetch_failure("fred", body) is None

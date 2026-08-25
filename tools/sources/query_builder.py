@@ -239,9 +239,73 @@ _BLS_FAILURE_STATUSES = {
 
 def classify_fetch_failure(source_name: str, parsed_body: Any) -> Optional[str]:
     """Human-readable failure reason when a source's 200-OK payload is really
-    an ERROR ENVELOPE; None when it is (or may be) genuine data. Only BLS is
-    known to do this today; other sources return None unchanged."""
-    if source_name != "bls" or not isinstance(parsed_body, dict):
+    an ERROR ENVELOPE; None when it is (or may be) genuine data.
+
+    Known unambiguous envelopes only: BLS (status array), BEA
+    ({BEAAPI: {Results: {Error: {...}}}} — with narrow compatibility for a
+    legacy plural BEAAPIs.Error LIST), and CFTC/Socrata as CftcCotAdapter
+    normalizes it ({rows: {error: True, message: "...", code?}}).
+    Legitimate payloads — including valid EMPTY data (Results.Data [],
+    rows []) — return None. No generic 'error' heuristics: sources whose
+    ordinary bodies contain error-ish keys stay untouched.
+    """
+    if not isinstance(parsed_body, dict):
+        return None
+    if source_name == "bea":
+        # Documented singular wrapper: BEAAPI.Results.Error (dict).
+        api = parsed_body.get("BEAAPI")
+        if isinstance(api, dict):
+            results = api.get("Results")
+            if isinstance(results, dict):
+                err = results.get("Error")
+                if isinstance(err, dict):
+                    desc = err.get("APIErrorDescription") or ""
+                    code = err.get("APIErrorCode") or ""
+                    msg = err.get("ErrorMessage") or ""
+                    parts = [p for p in (desc, code, msg) if p]
+                    detail = ": ".join(parts)
+                    return "BEA API error envelope" + (
+                        f": {detail}" if detail else "")
+                # Valid Results.Data (including an empty Data list) is
+                # genuine data — NOT an error.
+                if "Data" in results:
+                    return None
+            return None
+        # Legacy plural wrapper retained only while narrowly structured:
+        # BEAAPIs.Error must be a non-empty LIST of error objects/strings;
+        # anything else under the plural key is not recognized as an error.
+        bea = parsed_body.get("BEAAPIs")
+        if isinstance(bea, dict):
+            err = bea.get("Error")
+            if isinstance(err, list) and err:
+                first = err[0]
+                if isinstance(first, dict):
+                    msg = first.get("ErrorMessage") or ""
+                    code = first.get("APIErrorDescription") or ""
+                    detail = ": ".join(p for p in (code, msg) if p)
+                elif isinstance(first, str):
+                    detail = first
+                else:
+                    return None
+                return f"BEA API error envelope: {detail}"
+            return None
+        return None
+    if source_name == "cftc_cot":
+        rows = parsed_body.get("rows")
+        # The adapter normalizes whatever Socrata returned under 'rows'.
+        # A Socrata failure arrives as an error MAPPING with error=True
+        # plus a string 'message'; anything else is not recognized.
+        if isinstance(rows, dict) and rows.get("error") is True \
+                and isinstance(rows.get("message"), str) \
+                and rows["message"].strip():
+            detail = rows["message"]
+            code = rows.get("code")
+            if isinstance(code, str) and code.strip():
+                detail = f"{code}: {detail}"
+            return f"CFTC Socrata error: {detail}"
+        # A legitimate rows LIST (including empty) is NOT an error.
+        return None
+    if source_name != "bls":
         return None
     statuses = parsed_body.get("status")
     if not isinstance(statuses, list):
