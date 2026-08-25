@@ -814,7 +814,7 @@ async def order_cron_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle manager."""
-    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task, order_cron_task, order_manager_instance, live_state_collector, live_state_task, prop_resolver_task
+    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task, order_cron_task, order_manager_instance, live_state_collector, live_state_task, prop_resolver_task, heartbeat, game_scheduler
 
     # Start memory profiling only when explicitly requested — tracemalloc tracks every
     # allocation in C-level metadata (~50-100 bytes each), which adds 55-110 MB of invisible
@@ -955,6 +955,7 @@ async def lifespan(app: FastAPI):
     from tools.self_repair import Heartbeat
     heartbeat = Heartbeat()
     await heartbeat.start()
+    app.state.heartbeat = heartbeat
 
     # Telegram listener — bidirectional communication from phone
     telegram_listener = TelegramListener(
@@ -970,6 +971,7 @@ async def lifespan(app: FastAPI):
         from tools.event_bus import get_event_bus
         game_scheduler = GameScheduler(event_bus=get_event_bus())
         await game_scheduler.start()
+        app.state.game_scheduler = game_scheduler
         logger.info(f"Game scheduler started — {len(game_scheduler._games)} upcoming games")
     except Exception as e:
         logger.warning(f"Game scheduler failed to start: {e}")
@@ -1106,6 +1108,33 @@ async def lifespan(app: FastAPI):
             await _restart_task
         except (asyncio.CancelledError, Exception):
             pass
+    # Stop periodic producers and the event-bus audit drain BEFORE the write
+    # coordinator: each owns a background task that may still write, and the
+    # coordinator must outlive them all so their final writes can drain.
+    try:
+        if game_scheduler:
+            await game_scheduler.stop()
+            app.state.game_scheduler = None
+    except Exception:
+        logger.exception("Game scheduler shutdown error (non-fatal)")
+    try:
+        await get_event_bus().stop()
+        logger.info("Event bus audit drain stopped")
+    except Exception:
+        logger.exception("Event bus shutdown error (non-fatal)")
+    try:
+        if heartbeat:
+            await heartbeat.stop()
+            task = getattr(heartbeat, "_task", None)
+            if task is not None and not task.done():
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            app.state.heartbeat = None
+    except Exception:
+        logger.exception("Heartbeat shutdown error (non-fatal)")
+
     # Stop every WriteCoordinator last so any final writes from the shutdown
     # path above were able to drain through it.
     try:
