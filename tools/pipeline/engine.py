@@ -940,9 +940,22 @@ class ResearchPipeline:
             nonlocal refs_failed
             if refs_failed is not None:
                 return
+            leaf_refs = []
             try:
-                leaf_refs = [ArtifactRef.from_dict(rd) if isinstance(rd, dict)
-                             else rd for rd in outcome.artifact_refs]
+                for rd in outcome.artifact_refs or []:
+                    # Accept only real ArtifactRef instances (fresh paths) or
+                    # dict payloads that rebuild cleanly via from_dict()
+                    # (resumed paths). Anything else — junk strings, malformed
+                    # dicts, bare hashes — fails closed here instead of
+                    # crashing the run or sealing artifactlessly.
+                    if isinstance(rd, ArtifactRef):
+                        leaf_refs.append(rd)
+                    elif isinstance(rd, dict):
+                        leaf_refs.append(ArtifactRef.from_dict(rd))
+                    else:
+                        raise ValueError(
+                            f"entry is neither an ArtifactRef nor a dict: "
+                            f"{rd!r}")
             except (KeyError, TypeError, ValueError) as e:
                 refs_failed = (
                     f"artifact refs for leaf '{qid}' cannot be rebuilt from "
