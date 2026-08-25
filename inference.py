@@ -1088,7 +1088,7 @@ class ProviderRouter:
     escalation to frontier must be deliberate, visible, budgeted.
     """
 
-    def __init__(self, config_path=None):
+    def __init__(self, config_path=None, health_state_dir: Optional[str] = None):
         cfg = load_providers_config(config_path)
         self.default_tier_name = cfg.get("default_tier", "local")
         self._raw_providers = cfg.get("providers") or {}
@@ -1137,6 +1137,83 @@ class ProviderRouter:
         # bound to the first running event loop that uses it; a test can force
         # re-creation with _reset_shared_client() after changing loops.
         self._http_client: Optional[httpx.AsyncClient] = None
+
+        # ── SPEED run 17: persistent endpoint-health memory ──
+        # A fresh process re-probes endpoints another process just recorded
+        # as dead (gpu1/gpu1_fast first in every routing list, llama-server
+        # ports down ⇒ one connect-refused probe per call per process).
+        # Persisting {endpoint: {consecutive_failures, cooldown_until}} lets
+        # a new instance skip a hop that died seconds ago in its sibling.
+        # TRANSPORT HEALTH ONLY crosses this file — no question content, no
+        # evidence, no model output; nothing retrodiction-cutoff-relevant.
+        if health_state_dir is None:
+            base = os.environ.get("CALLISTO_STATE_DIR")
+            if not base:
+                base = os.path.join(
+                    os.path.expanduser("~"), ".local", "state", "callisto")
+            health_state_dir = base
+        self._health_state_dir: Optional[str] = (
+            health_state_dir
+            if os.environ.get("CALLISTO_ROUTER_HEALTH", "1") == "1" else None)
+        self._load_health_state()
+
+    # ── health-state persistence (speed run 17) ──
+    _HEALTH_FILE = "router_health.json"
+
+    @property
+    def _health_state_path(self) -> Optional[str]:
+        if self._health_state_dir is None:
+            return None
+        return os.path.join(self._health_state_dir, self._HEALTH_FILE)
+
+    def _load_health_state(self) -> None:
+        path = self._health_state_path
+        if path is None:
+            return
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            for name, rec in (data.get("endpoints") or {}).items():
+                st = self.states.get(name)
+                if st is None or not isinstance(rec, dict):
+                    continue
+                st.consecutive_failures = int(
+                    rec.get("consecutive_failures") or 0)
+                until = float(rec.get("cooldown_until") or 0.0)
+                # cooldown_until was written against ANOTHER process's
+                # monotonic clock — meaningless here. Convert the recorded
+                # failure count into an equivalent fresh cooldown instead:
+                # same suppression semantics, no cross-process clock trust.
+                if st.consecutive_failures > 0:
+                    delay = min(60.0, 2.0 * (2 ** (st.consecutive_failures - 1)))
+                    st.cooldown_until = _time.monotonic() + delay
+                else:
+                    st.cooldown_until = 0.0
+                del until  # not trusted cross-process
+        except FileNotFoundError:
+            pass
+        except Exception as e:  # noqa: BLE001 — corrupt state degrades to fresh
+            logger.warning(f"router health state unreadable ({e}); "
+                           "starting fresh")
+
+    def _save_health_state(self) -> None:
+        path = self._health_state_path
+        if path is None:
+            return
+        try:
+            os.makedirs(self._health_state_dir or ".", exist_ok=True)
+            data = {"saved_at": _time.time(), "endpoints": {
+                n: {"consecutive_failures": s.consecutive_failures,
+                    "cooldown_remaining_s": max(
+                        0.0, s.cooldown_until - _time.monotonic())}
+                for n, s in self.states.items()}}
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp, path)
+        except Exception as e:  # noqa: BLE001 — persistence must never
+            logger.warning(f"router health state write failed: {e}")
+            raise
 
     def _shared_client(self) -> httpx.AsyncClient:
         """Process/router-wide pooled AsyncClient. Rebuilt if the running
@@ -1561,6 +1638,7 @@ class ProviderRouter:
                     finally:
                         state.in_flight -= 1
                 state.record_success()
+                self._save_health_state()
 
                 in_tok = int(usage.get("prompt_tokens", 0) or 0)
                 out_tok = int(usage.get("completion_tokens", 0) or 0)
@@ -1603,6 +1681,7 @@ class ProviderRouter:
                 )
             except Exception as e:
                 state.record_failure()
+                self._save_health_state()
                 errors.append(f"{name}: {e}")
                 logger.warning(
                     f"ProviderRouter: endpoint {name} failed "
