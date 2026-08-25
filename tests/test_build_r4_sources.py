@@ -432,3 +432,102 @@ class TestPlugin:
         assert result["ok"] is True
         assert result["sources"] == []  # honest: nothing registered does this
         assert "do NOT fall back" in result["note"]
+
+
+# ── shared per-identity rate limiter ──────────────────────────────────────
+
+
+class TestSharedRateLimiter:
+    """Default RestSource instances for one stable source identity must share
+    a single _RateLimiter process-wide, with no sockets and no real sleeps."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate(self):
+        from tools.sources import base as base_mod
+
+        base_mod.reset_shared_rate_limiters()
+        yield
+        base_mod.reset_shared_rate_limiters()
+
+    @pytest.fixture()
+    def clock(self, monkeypatch):
+        """Deterministic fake monotonic clock + sleep recorder."""
+        from tools.sources import base as base_mod
+
+        state = {"now": 1000.0}
+
+        def fake_monotonic():
+            return state["now"]
+
+        slept: list[float] = []
+
+        def fake_sleep(d):
+            assert d <= 1.0 + 1e-9  # bounded chunking preserved
+            state["now"] += d
+            slept.append(d)
+
+        monkeypatch.setattr(base_mod.time, "monotonic", fake_monotonic)
+        monkeypatch.setattr(base_mod.time, "sleep", fake_sleep)
+        return state, slept
+
+    def _spec(self, name="shared_fixture_src"):
+        return SourceSpec(
+            name=name,
+            base_url=f"https://{name}.test/api",
+            description="shared-limiter fixture",
+            answers=("macro time series",),
+            tier=1,
+            min_interval_s=0.5,
+        )
+
+    def test_cross_instance_spacing(self, clock):
+        state, slept = clock
+        url_a = "https://shared_fixture_src.test/api/a"
+        url_b = "https://shared_fixture_src.test/api/b"
+        t = FakeTransport()
+        t.stage(url_a, {})
+        t.stage(url_b, {})
+        a = RestSource(self._spec(), transport=t)
+        b = RestSource(self._spec(), transport=t)
+
+        # Same limiter object is shared across independently built instances.
+        assert a._limiter is b._limiter
+
+        a.get_json(url_a)
+        state["now"] += 0.0  # immediate second request from another instance
+        b.get_json(url_b)
+        # Instance B was delayed by the declared interval (one bounded sleep).
+        assert sum(slept) == pytest.approx(0.5)
+        assert len(t.calls) == 2
+
+    def test_distinct_identities_do_not_share(self, clock):
+        state, slept = clock
+        s1 = self._spec("shared_fixture_src")
+        s2 = self._spec("shared_fixture_other")
+        t = FakeTransport()
+        t.stage("https://shared_fixture_src.test/api/x", {})
+        t.stage("https://shared_fixture_other.test/api/x", {})
+        a = RestSource(s1, transport=t)
+        b = RestSource(s2, transport=t)
+        assert a._limiter is not b._limiter
+        a.get_json("https://shared_fixture_src.test/api/x")
+        b.get_json("https://shared_fixture_other.test/api/x")
+        assert slept == []  # no cross-identity delay
+
+    def test_interval_change_is_part_of_identity(self, clock):
+        from tools.sources.base import _shared_rate_limiter
+
+        fast = SourceSpec(name="shared_fixture_src", base_url="https://s.test",
+                          description="", min_interval_s=0.1)
+        slow = SourceSpec(name="shared_fixture_src", base_url="https://s.test",
+                          description="", min_interval_s=0.9)
+        assert _shared_rate_limiter(fast) is not _shared_rate_limiter(slow)
+
+    def test_explicit_limiter_not_replaced_by_cache(self, clock):
+        custom = _RateLimiter(0.25)
+        src = RestSource(self._spec(), transport=FakeTransport(),
+                         _limiter=custom)
+        assert src._limiter is custom
+        # and the cache did not grow with the override
+        from tools.sources import base as base_mod
+        assert all(l is not custom for l in base_mod._shared_limiters.values())
