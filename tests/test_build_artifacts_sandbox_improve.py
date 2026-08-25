@@ -119,3 +119,345 @@ class TestStoreChartDoesNotMutateSpec:
         r1 = store_chart(spec, store)
         r2 = store_chart(spec, store)  # would differ if 'code' had been popped
         assert r1["chart"].sha256 == r2["chart"].sha256
+
+
+# ── Checkpoint artifact-ref integrity ──────────────────────────────────────
+#
+# Invariant: for every sealed run, session.to_dict()["artifact_refs"] exactly
+# represents PipelineResult.artifact_refs and the keyed seal covers them —
+# for fresh compute runs AND runs resumed from the same checkpointer/store.
+# A hash-only (legacy/malformed) checkpoint must never produce a sealed
+# artifactless session: the pipeline fails closed, unsealed.
+
+def _load_ckpt_helpers():
+    """Reuse the real checkpoint harness fixtures from test_fix_ckpt_confidence
+    patterns but drive the file-producing compute model directly."""
+    from tools.pipeline.checkpoint import FileCheckpointer  # noqa: F401
+
+
+def _compute_model_and_pipeline(tp, tmp_path, checkpointer=None, store=None):
+    code = ("import json\n"
+            "series = json.load(open('series.json'))\n"
+            "json.dump({'mean': sum(series) / len(series)}, open('out.json','w'))\n"
+            "result = {'mean': sum(series) / len(series)}")
+    model = tp.ScriptedModel({
+        "Architect": [{"content": tp._decompose_response()}],
+        "Manager": [{"content": json.dumps(
+                        {"answer": None,
+                         "compute": {"code": code,
+                                     "inputs": {"series": [1.0, 2.0, 3.0]}}})},
+                    {"content": json.dumps(
+                        {"answer": "mean computed as 2.0",
+                         "proposed_confidence": 0.8})},
+                    {"content": tp._answer(0.7)}],
+    })
+    if store is None:
+        store = tp.ArtifactStore(root=tmp_path / "artifacts")
+    pipeline = tp.ResearchPipeline(
+        model=model, adversary_router=tp._QuietAdversary(),
+        transport=tp.fixture_transport(tp._routes()), store=store,
+        ledger=tp.ProvenanceLedger(), checkpointer=checkpointer)
+    return pipeline
+
+
+def _run(pipe, question="Compute question?"):
+    return asyncio.new_event_loop().run_until_complete(
+        pipe.run(question, today=date(2026, 8, 22)))
+
+
+class TestCheckpointArtifactRefIntegrity:
+    def test_fresh_run_session_refs_match_result_refs_and_seal(self, tmp_path):
+        tp = _load_pipeline_test_module()
+        from agp import AGPSession
+        pipeline = _compute_model_and_pipeline(tp, tmp_path)
+        result = _run(pipeline)
+        assert result.sealed, result.refusal_reason
+        assert result.artifact_refs, "no refs produced by compute"
+        session_refs = [r["sha256"] for r in
+                        result.session.to_dict()["artifact_refs"]]
+        assert session_refs == [r.sha256 for r in result.artifact_refs]
+        # Full fidelity: kind/name/meta ride through, not just hashes.
+        assert result.session.to_dict()["artifact_refs"] == \
+            [r.to_dict() for r in result.artifact_refs]
+        assert AGPSession.verify_seal(result.session.to_dict())
+        # Tampering with a serialized ref breaks seal verification.
+        d = result.session.to_dict()
+        d["artifact_refs"][0]["name"] = "tampered.json"
+        assert not AGPSession.verify_seal(d)
+
+    def test_resumed_run_same_store_restores_refs_and_verifies(self, tmp_path):
+        tp = _load_pipeline_test_module()
+        from tools.pipeline.checkpoint import FileCheckpointer
+        from agp import AGPSession
+        cp = FileCheckpointer(root=tmp_path / "ckpt")
+        shared_store = tp.ArtifactStore(root=tmp_path / "artifacts")
+        fresh = _compute_model_and_pipeline(
+            tp, tmp_path, checkpointer=cp, store=shared_store)
+        r1 = _run(fresh)
+        assert r1.sealed, r1.refusal_reason
+
+        # Same question/domain/date + same checkpointer + same store.
+        resumed = _compute_model_and_pipeline(
+            tp, tmp_path / "r2", checkpointer=cp, store=shared_store)
+        r2 = _run(resumed)
+        assert r2.sealed, r2.refusal_reason
+        answer_stages = [s for s in (r2.trace.stages or [])
+                         if getattr(s, "stage", "") == "answer_leaf"]
+        assert any(getattr(s, "resumed", False) for s in answer_stages), (
+            "expected the compute answer stage to be resumed, not recomputed")
+        assert [r.to_dict() for r in r2.artifact_refs] == \
+            [r.to_dict() for r in r1.artifact_refs]
+        assert r2.session.to_dict()["artifact_refs"] == \
+            [r.to_dict() for r in r2.artifact_refs]
+        assert AGPSession.verify_seal(r2.session.to_dict())
+
+    def test_resume_with_empty_store_refuses_instead_of_sealing(self, tmp_path):
+        tp = _load_pipeline_test_module()
+        from tools.pipeline.checkpoint import FileCheckpointer
+        cp = FileCheckpointer(root=tmp_path / "ckpt")
+        fresh = _compute_model_and_pipeline(tp, tmp_path, checkpointer=cp)
+        r1 = _run(fresh)
+        assert r1.sealed, r1.refusal_reason
+        assert r1.artifact_refs
+
+        # New/empty store: cited bytes are gone -> A6 gate must refuse.
+        resumed = _compute_model_and_pipeline(
+            tp, tmp_path / "r2", checkpointer=cp,
+            store=tp.ArtifactStore(root=tmp_path / "empty_art"))
+        r2 = _run(resumed)
+        assert not r2.sealed
+        assert "artifact verification failed" in (r2.refusal_reason or "")
+
+    def test_hash_only_checkpoint_cannot_seal_artifactlessly(self, tmp_path):
+        tp = _load_pipeline_test_module()
+        from tools.pipeline.checkpoint import FileCheckpointer
+        cp = FileCheckpointer(root=tmp_path / "ckpt")
+        shared_store = tp.ArtifactStore(root=tmp_path / "artifacts")
+        fresh = _compute_model_and_pipeline(
+            tp, tmp_path, checkpointer=cp, store=shared_store)
+        r1 = _run(fresh)
+        assert r1.sealed and r1.artifact_refs
+
+        # Rewrite the saved answer_leaf checkpoints to legacy hash-only form:
+        # artifact_sha256s present, full artifact_refs stripped.
+        n_stripped = 0
+        for ck in cp.list_all():
+            if ck.stage != "answer_leaf":
+                continue
+            leaf = dict(ck.payload.get("leaf") or {})
+            if leaf.get("artifact_sha256s"):
+                leaf.pop("artifact_refs", None)
+                ck.payload["leaf"] = leaf
+                cp.save(ck.run, ck.stage, ck.input_hash, ck.payload,
+                        claim_ids=ck.claim_ids)
+                n_stripped += 1
+        assert n_stripped, "no hash-only checkpoint produced"
+
+        resumed = _compute_model_and_pipeline(
+            tp, tmp_path / "r2", checkpointer=cp, store=shared_store)
+        r2 = _run(resumed)
+        assert not r2.sealed, (
+            "a legacy hash-only checkpoint led to a sealed session with "
+            f"refs={[(r.sha256) for r in r2.artifact_refs]}")
+        assert r2.refusal_reason, "fail-closed must carry an honest reason"
+        assert "refus" in r2.refusal_reason.lower()
+
+    def test_junk_artifact_refs_checkpoint_refuses_not_crashes(self, tmp_path):
+        """A resumed answer checkpoint whose artifact_refs is a non-dict junk
+        value must fail closed (unsealed + refusal reason), never raise."""
+        tp = _load_pipeline_test_module()
+        from tools.pipeline.checkpoint import FileCheckpointer
+        cp = FileCheckpointer(root=tmp_path / "ckpt")
+        shared_store = tp.ArtifactStore(root=tmp_path / "artifacts")
+        fresh = _compute_model_and_pipeline(
+            tp, tmp_path, checkpointer=cp, store=shared_store)
+        r1 = _run(fresh)
+        assert r1.sealed and r1.artifact_refs
+
+        n_rewritten = 0
+        for ck in cp.list_all():
+            if ck.stage != "answer_leaf":
+                continue
+            leaf = dict(ck.payload.get("leaf") or {})
+            if leaf.get("artifact_sha256s"):
+                leaf["artifact_refs"] = ["not-a-ref"]
+                ck.payload["leaf"] = leaf
+                cp.save(ck.run, ck.stage, ck.input_hash, ck.payload,
+                        claim_ids=ck.claim_ids)
+                n_rewritten += 1
+        assert n_rewritten, "no artifact-bearing answer checkpoint rewritten"
+
+        resumed = _compute_model_and_pipeline(
+            tp, tmp_path / "r2", checkpointer=cp, store=shared_store)
+        r2 = _run(resumed)
+        assert not r2.sealed
+        assert r2.refusal_reason, "fail-closed must carry an honest reason"
+        assert "refus" in r2.refusal_reason.lower()
+        assert not r2.artifact_refs
+
+    def test_non_list_artifact_sha256s_checkpoint_refuses_not_crashes(self, tmp_path):
+        """A resumed answer checkpoint whose artifact_sha256s is not a list
+        (e.g. an integer) must fail closed (unsealed + refusal reason),
+        never raise TypeError/AttributeError during hydration or assembly."""
+        tp = _load_pipeline_test_module()
+        from tools.pipeline.checkpoint import FileCheckpointer
+        cp = FileCheckpointer(root=tmp_path / "ckpt")
+        shared_store = tp.ArtifactStore(root=tmp_path / "artifacts")
+        fresh = _compute_model_and_pipeline(
+            tp, tmp_path, checkpointer=cp, store=shared_store)
+        r1 = _run(fresh)
+        assert r1.sealed and r1.artifact_refs
+
+        n_rewritten = 0
+        for ck in cp.list_all():
+            if ck.stage != "answer_leaf":
+                continue
+            leaf = dict(ck.payload.get("leaf") or {})
+            if leaf.get("artifact_sha256s"):
+                leaf["artifact_sha256s"] = 42  # raw non-list malformed field
+                ck.payload["leaf"] = leaf
+                cp.save(ck.run, ck.stage, ck.input_hash, ck.payload,
+                        claim_ids=ck.claim_ids)
+                n_rewritten += 1
+        assert n_rewritten, "no artifact-bearing answer checkpoint rewritten"
+
+        resumed = _compute_model_and_pipeline(
+            tp, tmp_path / "r2", checkpointer=cp, store=shared_store)
+        r2 = _run(resumed)
+        assert not r2.sealed
+        assert r2.refusal_reason, "fail-closed must carry an honest reason"
+        assert "refus" in r2.refusal_reason.lower()
+        assert not r2.artifact_refs
+
+    def test_malformed_int_refs_with_empty_shas_refuse_not_seal(self, tmp_path):
+        """Independently reproduced counterexample: a resumed answer
+        checkpoint with leaf artifact_refs=42 and artifact_sha256s=[]
+        must NOT seal with empty refs and empty refusal reason. A present
+        non-list field is malformed (not legacy-absent) -> fail closed."""
+        tp = _load_pipeline_test_module()
+        from tools.pipeline.checkpoint import FileCheckpointer
+        cp = FileCheckpointer(root=tmp_path / "ckpt")
+        shared_store = tp.ArtifactStore(root=tmp_path / "artifacts")
+        fresh = _compute_model_and_pipeline(
+            tp, tmp_path, checkpointer=cp, store=shared_store)
+        r1 = _run(fresh)
+        assert r1.sealed and r1.artifact_refs
+
+        n_rewritten = 0
+        for ck in cp.list_all():
+            if ck.stage != "answer_leaf":
+                continue
+            leaf = dict(ck.payload.get("leaf") or {})
+            if leaf.get("artifact_sha256s"):
+                leaf["artifact_refs"] = 42
+                leaf["artifact_sha256s"] = []
+                ck.payload["leaf"] = leaf
+                cp.save(ck.run, ck.stage, ck.input_hash, ck.payload,
+                        claim_ids=ck.claim_ids)
+                n_rewritten += 1
+        assert n_rewritten, "no artifact-bearing answer checkpoint rewritten"
+
+        resumed = _compute_model_and_pipeline(
+            tp, tmp_path / "r2", checkpointer=cp, store=shared_store)
+        r2 = _run(resumed)
+        assert not r2.sealed, (
+            "artifactless seal from malformed refs=42/shas=[] must be "
+            f"impossible; got sealed=True refusal={r2.refusal_reason!r}")
+        assert r2.refusal_reason, "fail-closed must carry an honest reason"
+        assert "refus" in r2.refusal_reason.lower()
+        assert not r2.artifact_refs
+
+    def test_malformed_int_refs_with_int_shas_refuse_not_seal(self, tmp_path):
+        """Both fields present as non-list ints: fail closed too."""
+        tp = _load_pipeline_test_module()
+        from tools.pipeline.checkpoint import FileCheckpointer
+        cp = FileCheckpointer(root=tmp_path / "ckpt")
+        shared_store = tp.ArtifactStore(root=tmp_path / "artifacts")
+        fresh = _compute_model_and_pipeline(
+            tp, tmp_path, checkpointer=cp, store=shared_store)
+        r1 = _run(fresh)
+        assert r1.sealed and r1.artifact_refs
+
+        n_rewritten = 0
+        for ck in cp.list_all():
+            if ck.stage != "answer_leaf":
+                continue
+            leaf = dict(ck.payload.get("leaf") or {})
+            if leaf.get("artifact_sha256s"):
+                leaf["artifact_refs"] = 42
+                leaf["artifact_sha256s"] = 42
+                ck.payload["leaf"] = leaf
+                cp.save(ck.run, ck.stage, ck.input_hash, ck.payload,
+                        claim_ids=ck.claim_ids)
+                n_rewritten += 1
+        assert n_rewritten
+
+        resumed = _compute_model_and_pipeline(
+            tp, tmp_path / "r2", checkpointer=cp, store=shared_store)
+        r2 = _run(resumed)
+        assert not r2.sealed
+        assert r2.refusal_reason and "refus" in r2.refusal_reason.lower()
+        assert not r2.artifact_refs
+
+    def test_non_list_artifact_refs_checkpoint_refuses_not_crashes(self, tmp_path):
+        """artifact_refs stored as a non-list (e.g. a dict) must fail closed,
+        never crash during checkpoint hydration."""
+        tp = _load_pipeline_test_module()
+        from tools.pipeline.checkpoint import FileCheckpointer
+        cp = FileCheckpointer(root=tmp_path / "ckpt")
+        shared_store = tp.ArtifactStore(root=tmp_path / "artifacts")
+        fresh = _compute_model_and_pipeline(
+            tp, tmp_path, checkpointer=cp, store=shared_store)
+        r1 = _run(fresh)
+        assert r1.sealed and r1.artifact_refs
+
+        n_rewritten = 0
+        for ck in cp.list_all():
+            if ck.stage != "answer_leaf":
+                continue
+            leaf = dict(ck.payload.get("leaf") or {})
+            if leaf.get("artifact_refs"):
+                leaf["artifact_refs"] = {"sha": "x"}
+                ck.payload["leaf"] = leaf
+                cp.save(ck.run, ck.stage, ck.input_hash, ck.payload,
+                        claim_ids=ck.claim_ids)
+                n_rewritten += 1
+        assert n_rewritten, "no artifact-bearing answer checkpoint rewritten"
+
+        resumed = _compute_model_and_pipeline(
+            tp, tmp_path / "r2", checkpointer=cp, store=shared_store)
+        r2 = _run(resumed)
+        assert not r2.sealed
+        assert r2.refusal_reason and "refus" in r2.refusal_reason.lower()
+        assert not r2.artifact_refs
+
+    def test_resumed_dict_refs_hydrated_on_leaf_outcomes(self, tmp_path):
+        """Valid same-store resume: restored dict refs are rebuilt into
+        ArtifactRef instances on the public LeafOutcome.artifact_refs too,
+        not only on the assembled result/session list."""
+        tp = _load_pipeline_test_module()
+        from tools.pipeline.checkpoint import FileCheckpointer
+        cp = FileCheckpointer(root=tmp_path / "ckpt")
+        shared_store = tp.ArtifactStore(root=tmp_path / "artifacts")
+        fresh = _compute_model_and_pipeline(
+            tp, tmp_path, checkpointer=cp, store=shared_store)
+        r1 = _run(fresh)
+        assert r1.sealed and r1.artifact_refs
+
+        resumed = _compute_model_and_pipeline(
+            tp, tmp_path / "r2", checkpointer=cp, store=shared_store)
+        pipe2, r2 = resumed, _run(resumed)
+        assert r2.sealed, r2.refusal_reason
+        assert [r.to_dict() for r in r2.artifact_refs] == \
+            [r.to_dict() for r in r1.artifact_refs]
+        # Duplicates preserved in leaf order.
+        assert len(r2.artifact_refs) == len(r1.artifact_refs)
+        from tools.pipeline.engine import ArtifactRef
+        resumed_leaves = [l for l in r2.leaves if l.artifact_sha256s]
+        assert resumed_leaves, "expected at least one artifact-bearing leaf"
+        for leaf in resumed_leaves:
+            assert all(isinstance(r, ArtifactRef) for r in leaf.artifact_refs), (
+                "resumed LeafOutcome.artifact_refs must be hydrated to "
+                "ArtifactRef instances, not raw dicts")
+            assert [r.sha256 for r in leaf.artifact_refs] == \
+                list(leaf.artifact_sha256s)

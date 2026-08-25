@@ -172,6 +172,9 @@ class LeafOutcome:
     answers_question: bool = True
     sandbox_status: Optional[str] = None
     artifact_sha256s: list[str] = field(default_factory=list)
+    #: Full refs (leaf-local) so a checkpoint-resumed run can restore what
+    #: the seal must cover — hashes alone cannot rebuild an ArtifactRef.
+    artifact_refs: list[ArtifactRef] = field(default_factory=list)
 
 
 @dataclass
@@ -515,6 +518,7 @@ class ResearchPipeline:
                     refs = _store_sandbox(sbx, self.store)
                     _cleanup_workspace(sbx)
                     out.artifact_sha256s.extend(r.sha256 for r in refs)
+                    out.artifact_refs.extend(refs)
                     self._pending_artifact_refs.extend(refs)
                     # The computation itself is real executed output → recorded
                     # in the ledger; provenance assigns its class.
@@ -921,6 +925,65 @@ class ResearchPipeline:
                     produced_at=ck.produced_at))
 
         # ── Ordered assembly: identical observable state to the serial run ──
+        # Deterministic ordered artifact-ref assembly (BOTH fresh and
+        # resumed): full refs ride leaf-local through the answer checkpoint
+        # payload and are validated against LeafOutcome.artifact_sha256s in
+        # leaf order. Order and duplicates preserved; never derived from a
+        # bare hash, never de-duplicated. A hash-only (legacy/malformed)
+        # checkpoint cannot rebuild an ArtifactRef, so a leaf that declares
+        # hashes without full refs FAILS CLOSED below: the run returns
+        # unsealed with an honest reason instead of sealing artifactlessly.
+        refs_assembled: list[ArtifactRef] = []
+        refs_failed: Optional[str] = None
+
+        def _assemble_leaf_refs(qid: str, outcome) -> None:
+            nonlocal refs_failed
+            if refs_failed is not None:
+                return
+            leaf_refs = []
+            if not isinstance(outcome.artifact_refs, list):
+                refs_failed = (
+                    f"artifact refs for leaf '{qid}' are malformed "
+                    f"(not a list: {outcome.artifact_refs!r}); "
+                    "refusing artifactless seal")
+                return
+            if not isinstance(outcome.artifact_sha256s, list):
+                refs_failed = (
+                    f"artifact sha256s for leaf '{qid}' are malformed "
+                    f"(not a list: {outcome.artifact_sha256s!r}); "
+                    "refusing artifactless seal")
+                return
+            try:
+                for rd in outcome.artifact_refs:
+                    # Accept only real ArtifactRef instances (fresh paths) or
+                    # dict payloads that rebuild cleanly via from_dict()
+                    # (resumed paths). Anything else — junk strings, malformed
+                    # dicts, bare hashes — fails closed here instead of
+                    # crashing the run or sealing artifactlessly.
+                    if isinstance(rd, ArtifactRef):
+                        leaf_refs.append(rd)
+                    elif isinstance(rd, dict):
+                        leaf_refs.append(ArtifactRef.from_dict(rd))
+                    else:
+                        raise ValueError(
+                            f"entry is neither an ArtifactRef nor a dict: "
+                            f"{rd!r}")
+            except (KeyError, TypeError, ValueError) as e:
+                refs_failed = (
+                    f"artifact refs for leaf '{qid}' cannot be rebuilt from "
+                    f"checkpoint ({e}); refusing artifactless seal")
+                return
+            # Hydrate the public LeafOutcome too: resumed dict refs must be
+            # visible as ArtifactRef instances everywhere, matching fresh runs.
+            outcome.artifact_refs = list(leaf_refs)
+            sha_seq = [r.sha256 for r in leaf_refs]
+            if sha_seq != list(outcome.artifact_sha256s or []):
+                refs_failed = (
+                    f"artifact refs for leaf '{qid}' do not match its "
+                    "declared artifact_sha256s; refusing artifactless seal")
+                return
+            refs_assembled.extend(leaf_refs)
+
         for i, q in enumerate(leaves):
             if i in resumed_answer:
                 payload = resumed_answer[i]
@@ -951,7 +1014,22 @@ class ResearchPipeline:
                     # record the outcome on the trace in leaf order.
                     trace.stages.append(_answer_saved[i])
             result.leaves.append(outcome)
-        self.artifact_refs.extend(self._pending_artifact_refs)
+            _assemble_leaf_refs(q.question_id, outcome)
+
+        if refs_failed is not None:
+            result.refusal_reason = refs_failed
+            logger.warning("run %s: %s", question, refs_failed)
+            return result
+
+        self.artifact_refs.extend(refs_assembled)
+
+        # The seal must cover exactly what the run cites: attach the
+        # assembled refs to the session so to_dict()["artifact_refs"]
+        # matches PipelineResult.artifact_refs and the keyed seal covers
+        # them — for fresh AND resumed runs. Without this a resumed run
+        # could seal with empty session refs while its leaves cite hashes.
+        if self.artifact_refs:
+            session.add_artifacts(self.artifact_refs)
 
 
         session.advance_to(SessionStep.PRIMARY_COLLECTION)
@@ -1198,10 +1276,24 @@ def _fetch_from_payload(rec: dict) -> FetchResult:
 def _leaf_from_payload(d: dict) -> LeafOutcome:
     """Rebuild a LeafOutcome from its checkpointed asdict form."""
     d = dict(d)
-    d["source_classes"] = list(d.get("source_classes") or [])
-    d["requirement_reasons"] = list(d.get("requirement_reasons") or [])
-    d["artifact_sha256s"] = list(d.get("artifact_sha256s") or [])
+    d["source_classes"] = _as_list_or_empty(d.get("source_classes"))
+    d["requirement_reasons"] = _as_list_or_empty(d.get("requirement_reasons"))
+    # Malformed (non-list) checkpoint fields must not raise during
+    # hydration. A truly ABSENT field is the legacy form and falls back to
+    # the dataclass default (empty list); a PRESENT non-list value
+    # (None, int, dict, ...) is preserved verbatim so ordered assembly can
+    # distinguish "legacy checkpoint without this field" from "checkpoint
+    # with a malformed field" and fail closed on the latter.
+    for k in ("artifact_sha256s", "artifact_refs"):
+        if k in d and not isinstance(d[k], list):
+            pass  # preserve the malformed value for strict assembly checks
+    # Full refs may be absent on legacy checkpoints; the ordered-assembly
+    # SHA cross-check then fails closed rather than sealing artifactlessly.
     return LeafOutcome(**d)
+
+
+def _as_list_or_empty(v) -> list:
+    return list(v) if isinstance(v, list) else []
 
 
 def _make_adapter(registry, name: str, source: RestSource):
