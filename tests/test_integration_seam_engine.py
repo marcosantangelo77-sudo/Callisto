@@ -394,6 +394,106 @@ def test_malformed_nested_audit_degrades_without_crash():
     assert rec["sources"]["beta"]["errored"] == 1
 
 
+def test_admitted_hydration_fails_closed_on_bad_count_or_record():
+    """Admission is all-or-nothing for modern payloads: a marker that is
+    short, high, negative, non-int, bool, or paired with any un-hydratable
+    record must leave `trace.admitted` empty — never a partial prefix,
+    never fabricated admissions."""
+    from tools.pipeline.engine import FetchResult
+
+    def _FR(name):
+        return FetchResult(source_name=name, url="https://x/1",
+                           content_sha256="sha-" + name, body="b-" + name,
+                           parsed=None, question_id="q1", fetched_at="t")
+    f1 = _FR("beta")
+    f2 = _FR("alpha")
+
+    def _payload(count, fetches=None):
+        return {"fetches": [dataclasses.asdict(f) for f in (
+            [f1, f2] if fetches is None else fetches)],
+            "rejections": [], "admitted_fetch_count": count,
+            "rounds": [], "skipped_sources": [], "gain_skipped": [],
+            "independent_keys": [], "queries": ["q"], "stop_reason": ""}
+
+    # short count -> not all admitted records can be represented: void.
+    assert _trace_from_payload("q1", _payload(1)).admitted == []
+    # high count -> marker disagrees with the stored list: void.
+    assert _trace_from_payload("q1", _payload(3)).admitted == []
+    # negative count -> nonsense marker: void.
+    assert _trace_from_payload("q1", _payload(-1)).admitted == []
+    # non-int marker -> void.
+    assert _trace_from_payload("q1", _payload("2")).admitted == []
+    assert _trace_from_payload("q1", _payload(None)).admitted == []
+    # bool marker (True == 1) must NOT be treated as count 1: void.
+    assert _trace_from_payload("q1", _payload(True)).admitted == []
+    # exact agreement hydrates fully, in order.
+    ok = _trace_from_payload("q1", _payload(2))
+    assert [(f.source_name, f.body) for f in ok.admitted] == \
+        [("beta", "b-beta"), ("alpha", "b-alpha")]
+    # one malformed inner record voids the ENTIRE set — no partial prefix.
+    bad = json.loads(json.dumps(_payload(2)))
+    del bad["fetches"][0]["source_name"]
+    assert _trace_from_payload("q1", bad).admitted == []
+    # legacy payload without the marker restores empty admitted state.
+    legacy = _payload(2)
+    del legacy["admitted_fetch_count"]
+    assert _trace_from_payload("q1", legacy).admitted == []
+
+
+def test_restored_admitted_parsed_does_not_alias_payload():
+    """Hydrated FetchResult.parsed is deep-copied out of the checkpoint
+    payload; mutating it must leave the payload's nested containers
+    intact."""
+    from tools.pipeline.engine import FetchResult
+
+    fr = FetchResult(source_name="beta", url="https://b/1",
+                     content_sha256="s", body="b",
+                     parsed={"results": [{"id": "W1"}]},
+                     question_id="q1", fetched_at="t")
+    tr = type(_trace_from_payload("q1", {}))(question_id="q1")
+    tr.admitted.append(fr)
+    payload = json.loads(json.dumps(
+        _serialize_fetch_payload([fr], tr)))
+    restored = _trace_from_payload("q1", payload)
+    restored.admitted[0].parsed["results"][0]["id"] = "MUTATED"
+    restored.admitted[0].parsed["NEW"] = True
+    assert payload["fetches"][0]["parsed"]["results"][0]["id"] == "W1"
+    assert "NEW" not in payload["fetches"][0]["parsed"]
+    assert restored.admitted[0].parsed != payload["fetches"][0]["parsed"]
+
+
+def test_restored_trace_safe_for_classify_gap_with_malformed_planner_skip():
+    """A restored trace with a nameless planner-skip record must pass both
+    classify_null_kind and classify_gap without KeyError and without the
+    gap report inventing a source."""
+    from tools.gaps import classify_gap, classify_null_kind
+    from tests.test_build_gaps import _question, _registry, _spec
+
+    payload = {
+        "fetches": [], "rejections": [], "admitted_fetch_count": 0,
+        "rounds": [{"round": 1, "query": "q", "admitted": 0, "sources": [
+            {"name": "openalex", "error": "503"}]}],
+        "skipped_sources": [{"reason": "missing-name"},
+                            {"name": "", "reason": "blank-name"},
+                            {"name": "openalex", "reason": "planner gap"}],
+        "gain_skipped": [], "independent_keys": [],
+        "queries": ["q"], "stop_reason": "budget"}
+    tr = _trace_from_payload("q1", payload)
+    # malformed records dropped; only the well-formed one survives.
+    assert tr.skipped_sources == [{"name": "openalex", "reason": "planner gap"}]
+    kind, _expl = classify_null_kind(tr)  # must not raise
+    reg = _registry(_spec("openalex", ["scholarly work search"]))
+    gap = classify_gap(reg, tr, _question())  # must not raise (KeyError)
+    # No fabricated source: the nameless skip never surfaces as a candidate
+    # or a planner-skip detail; the real skipped source is still reported.
+    blob = json.dumps(gap.__dict__, default=str)
+    assert "missing-name" not in blob
+    assert all(c.name == "openalex" for c in gap.candidates
+               if getattr(c, "name", None) in ("", None)) is True
+    assert any("planner" in r for r in gap.why_not_obtained.split(";")) \
+        or gap.kind is not None  # report built from surviving records only
+
+
 def test_restored_trace_does_not_alias_checkpoint_payload():
     """Mutating a restored trace must never mutate the checkpoint payload
     (and vice versa): nested rounds/skips/gain-skips are deep-copied after

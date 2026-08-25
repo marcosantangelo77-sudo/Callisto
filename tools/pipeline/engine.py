@@ -1294,8 +1294,9 @@ def _trace_from_payload(question_id: str, payload: dict):
         trace.rounds = norm_rounds
     skipped = payload.get("skipped_sources")
     if isinstance(skipped, list):
-        trace.skipped_sources = [copy.deepcopy(sk)
-                                 for sk in skipped if isinstance(sk, dict)]
+        trace.skipped_sources = [copy.deepcopy(_normalize_skipped_source(sk))
+                                 for sk in skipped
+                                 if _normalize_skipped_source(sk) is not None]
     gain_skipped = payload.get("gain_skipped")
     if isinstance(gain_skipped, list):
         trace.gain_skipped = [copy.deepcopy(gk)
@@ -1306,20 +1307,54 @@ def _trace_from_payload(question_id: str, payload: dict):
     # bounded by `admitted_fetch_count`. One-to-one: duplicates and
     # same-source/same-URL records are preserved verbatim; nothing outside
     # the stored fetch records is ever fabricated into an admission.
+    # Fail-closed admission (modern format only): the marker must be a real
+    # non-bool nonnegative integer and must EXACTLY agree with the stored
+    # fetch records. Any shortfall — wrong type, negative count, count above
+    # or below the record list, or a single un-hydratable record — leaves
+    # `trace.admitted` empty as safe unknown state. Admission is all-or-
+    # nothing: a partial prefix can never masquerade as complete evidence.
     n_admitted = payload.get("admitted_fetch_count")
-    if isinstance(n_admitted, int) and not isinstance(n_admitted, bool):
-        fetch_records = [r for r in payload.get("fetches") or []
-                         if isinstance(r, dict)]
-        for rec in fetch_records[:max(n_admitted, 0)]:
+    marker_ok = (isinstance(n_admitted, int)
+                 and not isinstance(n_admitted, bool)
+                 and n_admitted >= 0)
+    if marker_ok:
+        raw_fetches = payload.get("fetches")
+        fetch_records = ([r for r in raw_fetches if isinstance(r, dict)]
+                         if isinstance(raw_fetches, list) else [])
+        if len(fetch_records) == n_admitted:
             try:
-                trace.admitted.append(_fetch_from_payload(rec))
+                hydrated = [_fetch_from_payload(rec)
+                            for rec in fetch_records]
             except (KeyError, TypeError, ValueError):
-                pass  # malformed fetch record: never fabricate an admission
+                hydrated = None  # any bad record voids the whole admission set
+            if hydrated is not None:
+                trace.admitted = hydrated  # fully hydrated, original order
     return trace
 
 
+def _normalize_skipped_source(sk: Any) -> Optional[dict]:
+    """Return a safe planner-skip record, or None to drop it.
+
+    Downstream consumers (tools.gaps.classify_gap / classify_null_kind)
+    index `x["name"]` directly; a restored trace without a "name" key would
+    raise KeyError there. Records lacking a usable name are dropped — never
+    fabricated.
+    """
+    if not isinstance(sk, dict):
+        return None
+    name = sk.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    return sk
+
+
 def _fetch_from_payload(rec: dict) -> FetchResult:
-    """Rebuild a FetchResult from its checkpointed asdict form."""
+    """Rebuild a FetchResult from its checkpointed asdict form.
+
+    `parsed` is deep-copied out of the checkpoint payload so mutating a
+    restored record's parsed data can never alias (and corrupt) the
+    payload still referenced by trace.stages / other holders.
+    """
     rec = dict(rec)
     parsed = rec.get("parsed")
     if isinstance(parsed, str):
@@ -1327,6 +1362,8 @@ def _fetch_from_payload(rec: dict) -> FetchResult:
             parsed = json.loads(parsed)
         except (ValueError, TypeError):
             pass
+    if parsed is not None:
+        parsed = copy.deepcopy(parsed)
     return FetchResult(source_name=rec["source_name"], url=rec["url"],
                        content_sha256=rec["content_sha256"],
                        body=rec["body"], parsed=parsed,
