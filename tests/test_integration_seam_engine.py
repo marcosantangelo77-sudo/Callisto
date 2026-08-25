@@ -232,16 +232,45 @@ def test_f4_control_empty_answer_zero_admitted_gets_classification():
 
 # ── F5: checkpoint restore drops rounds ─────────────────────────────────────
 
-def test_f5_checkpoint_restore_drops_rounds_crossrun_record_degrades():
-    """_trace_from_payload never rebuilds trace.rounds. Two consequences,
-    both asserted here: (a) classify_null_kind loses the error detail from
-    its explanation (partial-coverage NOTE vanishes); (b) crossrun.record_run
-    sees zero per-source counts on a restored trace, so resumed runs write
-    hollow memory records."""
+def test_f5_checkpoint_restores_rounds_null_and_crossrun_fidelity():
+    """Regression (was: checkpoint restore dropped rounds). A modern fetch
+    checkpoint restores the full retrieval audit state, so a resumed run's
+    classify_null_kind discloses partial/error coverage and crossrun.
+    record_run retains beta's errored count — same facts as the live run."""
     from tools.pipeline.crossrun import record_run
     from tools.gaps import classify_null_kind
-    from types import SimpleNamespace
 
+    payload = {
+        "fetches": [],
+        "rejections": [{"source_name": "alpha", "url": "u",
+                        "reason": "irrelevant", "relevance_score": 0.1,
+                        "content_sha256": "x"}],
+        "admitted_fetches": [],
+        "rounds": [
+            {"round": 1, "query": "q", "admitted": 0, "sources": [
+                {"name": "alpha", "rejected": "irrelevant"},
+                {"name": "beta", "error": "HTTP 503"}]},
+        ],
+        "skipped_sources": [], "gain_skipped": [],
+        "independent_keys": [], "queries": ["q"],
+        "stop_reason": "round budget exhausted"}
+    tr = _trace_from_payload("q1", payload)
+    assert tr.rounds and tr.rounds[0]["sources"][1] == \
+        {"name": "beta", "error": "HTTP 503"}
+
+    kind, expl = classify_null_kind(tr)
+    assert "errored" in expl.lower() or "partial" in expl.lower()
+
+    class _L:
+        fetches = []
+        leaves = []
+    rec = record_run(_L(), {"q1": tr}, "default", "Q")
+    assert rec["sources"]["beta"]["errored"] == 1
+
+
+def test_f5_legacy_checkpoint_without_rounds_stays_safe():
+    """Legacy-absence control: a checkpoint with no new fields degrades to
+    empty audit state — no invented rounds, admissions, or outcomes."""
     tr = _trace_from_payload("q1", {
         "fetches": [],
         "rejections": [{"source_name": "alpha", "url": "u",
@@ -249,15 +278,56 @@ def test_f5_checkpoint_restore_drops_rounds_crossrun_record_degrades():
                         "content_sha256": "x"}],
         "independent_keys": [], "queries": ["q"],
         "stop_reason": "round budget exhausted"})
-    # live equivalent had beta errored alongside alpha's rejection:
-    kind, expl = classify_null_kind(tr)
-    assert "errored" not in expl.lower() and "partial" not in expl.lower()
+    assert tr.rounds == [] and tr.admitted == []
+    assert tr.skipped_sources == [] and tr.gain_skipped == []
 
-    class _L:
-        fetches = []
-        leaves = []
-    rec = record_run(_L(), {"q1": tr}, "default", "Q")
-    assert rec["sources"] == {}, rec["sources"]   # hollow record
+
+def test_trace_roundtrip_preserves_full_audit_state():
+    """Modern payload round trip: rounds, planner skips, gain skips, stop
+    reason survive; `admitted` reflects only restored admitted fetches."""
+    from tools.pipeline.engine import FetchResult
+    from tools.pipeline.retrieval import RetrievalTrace
+
+    def _FR(name, url):
+        return FetchResult(source_name=name, url=url,
+                           content_sha256=name + "-sha",
+                           body="body-" + name, parsed=None,
+                           question_id="q1",
+                           fetched_at="2026-08-25T00:00:00Z")
+    live = RetrievalTrace(question_id="q1")
+    fr_beta = _FR("beta", "https://b/1")
+    live.admitted.append(fr_beta)
+    live.rounds = [
+        {"round": 1, "query": "q", "admitted": 1, "sources": [
+            {"name": "beta", "admitted": True, "relevance": 0.9},
+            {"name": "gamma", "skipped": "no route"}]},
+        {"round": 2, "query": "q2", "admitted": 0, "sources": []},
+    ]
+    live.skipped_sources = [{"name": "delta", "reason": "planner gap"}]
+    live.gain_skipped = [{"round": 2, "source": "epsilon",
+                          "reason": "duplicate independent voice"}]
+    trace_q = live
+    # serialize exactly as the engine does
+    payload = {
+        "fetches": [dataclasses.asdict(f) for f in trace_q.admitted],
+        "rejections": [dataclasses.asdict(r)
+                       for r in trace_q.rejected],
+        "admitted_fetches": [
+            {"source_name": f.source_name, "url": f.url}
+            for f in trace_q.admitted],
+        "rounds": list(trace_q.rounds),
+        "skipped_sources": list(trace_q.skipped_sources),
+        "gain_skipped": list(trace_q.gain_skipped),
+        "independent_keys": sorted(trace_q.independent_keys),
+        "queries": list(trace_q.queries),
+        "stop_reason": trace_q.stop_reason}
+    restored = _trace_from_payload("q1", json.loads(json.dumps(payload)))
+    assert restored.rounds == live.rounds
+    assert restored.skipped_sources == live.skipped_sources
+    assert restored.gain_skipped == live.gain_skipped
+    assert [f.source_name for f in restored.admitted] == ["beta"]
+    assert restored.admitted[0].url == fr_beta.url
+    assert restored.independent_keys == set()
 
 
 # ── Seam 5: crossrun store round-trip, all-on ───────────────────────────────
