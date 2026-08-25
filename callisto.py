@@ -409,7 +409,7 @@ def _fetch_digest_status(f: dict) -> tuple[str, bool]:
         # the recorded digest cannot be verified, only syntax-checked.
         return "unverified (no local payload)", False
     if hashlib.sha256(body).hexdigest() != d:
-        return "DIGEST MISMATCH", False
+        return "DIGEST MISMATCH", True
     return "ok", False
 
 
@@ -441,12 +441,14 @@ def _cmd_show(args: argparse.Namespace) -> int:
     if fetches:
         print(f"\n--- fetches ({len(fetches)}) — provenance digests checked ---")
         seen = set()
-        for f in fetches:
+        # Validate EVERY persisted record first — deduplication must never
+        # hide an invalid sibling behind an earlier valid (source, url).
+        results = [(f, *_fetch_digest_status(f)) for f in fetches]
+        for f, status, hard_fail in results:
             key = (f.get("source", "?"), f.get("url", ""))
-            if key in seen:
+            if key in seen and status == "ok":
                 continue
             seen.add(key)
-            status, hard_fail = _fetch_digest_status(f)
             if status != "ok":
                 if hard_fail:
                     bad_fetches += 1

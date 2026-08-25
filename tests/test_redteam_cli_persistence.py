@@ -322,3 +322,79 @@ def test_show_glob_metachar_is_clean_error_not_traceback(runs_dir):
         assert rc == 1
     except SystemExit:
         pass  # clean message path also acceptable post-fix
+
+
+def test_d3_valid_then_invalid_duplicate_source_url_fails_closed(
+        runs_dir, tmp_path, monkeypatch):
+    """A valid fetch followed by a same-(source,url) fetch with an empty
+    digest: dedup must not silently skip the invalid sibling."""
+    body = "good body"
+    rec = _record()
+    rec["fetches"] = [
+        {"source": "fred", "url": "https://example/dup",
+         "content_sha256": hashlib.sha256(body.encode()).hexdigest(),
+         "body": body},
+        {"source": "fred", "url": "https://example/dup",
+         "content_sha256": ""},
+    ]
+    out, rc = _show_fetch(rec, runs_dir, tmp_path, monkeypatch)
+    low = out.lower()
+    assert "missing" in low or "malformed" in low or "unverified" in low, (
+        "invalid duplicate (source,url) fetch suppressed by presentation "
+        f"dedup: {out}")
+    assert rc != 0, "valid sibling masked an invalid duplicate digest"
+
+
+def test_d3_malformed_duplicate_between_valid_records_fails_closed(
+        runs_dir, tmp_path, monkeypatch):
+    rec = _record()
+    rec["fetches"] = [
+        {"source": "fred", "url": "https://example/a",
+         "content_sha256": hashlib.sha256(b"a").hexdigest(), "body": "a"},
+        {"source": "fred", "url": "https://example/a",
+         "content_sha256": "nope"},
+    ]
+    out, rc = _show_fetch(rec, runs_dir, tmp_path, monkeypatch)
+    assert rc != 0, "malformed duplicate digest must fail show"
+
+
+def test_d3_digest_mismatch_exits_nonzero(
+        runs_dir, tmp_path, monkeypatch):
+    body = "original body"
+    rec = _record()
+    rec["fetches"] = [{"source": "fred", "url": "https://example/mm",
+                       "content_sha256": hashlib.sha256(
+                           body.encode()).hexdigest(),
+                       "body": "TAMPERED BODY"}]
+    out, rc = _show_fetch(rec, runs_dir, tmp_path, monkeypatch)
+    assert "mismatch" in out.lower()
+    assert rc != 0, "local body contradicting content_sha256 returned success"
+
+
+def test_d3_legacy_no_local_body_still_soft(
+        runs_dir, tmp_path, monkeypatch):
+    """Legacy record with valid-syntax digest but no stored body stays
+    non-failing (we do not claim remote bytes were verified)."""
+    rec = _record()
+    rec["fetches"] = [{"source": "fred", "url": "https://example/legacy",
+                       "content_sha256": hashlib.sha256(b"x").hexdigest()}]
+    out, rc = _show_fetch(rec, runs_dir, tmp_path, monkeypatch)
+    assert "unverified" in out.lower()
+    assert rc == 0
+
+
+def test_d3_valid_duplicate_still_deduplicated(
+        runs_dir, tmp_path, monkeypatch):
+    body = "dup ok"
+    rec = _record()
+    rec["fetches"] = [
+        {"source": "fred", "url": "https://example/same",
+         "content_sha256": hashlib.sha256(body.encode()).hexdigest(),
+         "body": body},
+        {"source": "fred", "url": "https://example/same",
+         "content_sha256": hashlib.sha256(body.encode()).hexdigest(),
+         "body": body},
+    ]
+    out, rc = _show_fetch(rec, runs_dir, tmp_path, monkeypatch)
+    assert out.count("[ok]") == 1, "valid duplicates should dedup presentation"
+    assert rc == 0
