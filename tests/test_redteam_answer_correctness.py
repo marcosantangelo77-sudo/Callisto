@@ -369,10 +369,9 @@ class TestNumericContradictionMachinery:
         self.g = ClaimGroup(claim="us unemployment rate january 2023")
         self.g.items = [self.a, self.b]
 
-    @pytest.mark.xfail(reason="max(abs)-based value selection turns one "
-                              "source's context figure (14.8% pandemic peak) "
-                              "into a MAJOR contradiction with an agreeing "
-                              "source", strict=True)
+    # PROMOTED from strict-xfail canary to passing pin: the S1b fix
+    # (all-pairs subject-figure comparison) stops max(abs) value selection
+    # from manufacturing a contradiction out of one source's context figure.
     def test_agreeing_sources_with_context_figures_do_not_conflict(self):
         assert detect_contradictions(self.g) == []
 
