@@ -205,10 +205,12 @@ def test_f4_gap_classification_skipped_when_answer_empty_but_fetches_exist():
                      max_spq=2, gate_cov=0.25)
     leaf = result.leaves[0]
     assert not result.sealed
-    assert leaf.gap_kind == "", leaf.gap_kind   # <- the hole
-    # D2 fix: the refusal now names the structured gap-kind breakdown.
+    # Fail-closed fix: admitted fetches + unmet requirements -> unprovable,
+    # even when the model's answer is empty. Never a silent fall-through.
+    assert leaf.gap_kind == "unprovable", leaf.gap_kind
+    assert "declared standard" in (leaf.gap_explanation or "")
     assert result.refusal_reason.startswith("every leaf came back unanswered")
-    assert "no gap verdict" in result.refusal_reason
+    assert "unprovable" in result.refusal_reason
 
 
 def test_f4_control_empty_answer_zero_admitted_gets_classification():

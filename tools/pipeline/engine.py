@@ -613,7 +613,11 @@ class ResearchPipeline:
         if not fetches:
             kind, expl = classify_null_kind(trace)
             out.gap_kind, out.gap_explanation = kind, expl
-        elif reasons and out.answer:
+        elif reasons:
+            # Fetches were admitted and requirements are unmet -> unprovable
+            # regardless of whether the model emitted prose; an empty answer
+            # on partial evidence is still an unprovable verdict, never a
+            # silent fall-through that dies as '(no gap verdict)'.
             out.gap_kind = NullKind.UNPROVABLE.value
             out.gap_explanation = (
                 "evidence was obtained but does not meet this question's "
