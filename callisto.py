@@ -139,16 +139,20 @@ async def _cmd_ask(args: argparse.Namespace) -> int:
         router.task_classes = {tc: args.backend
                                for tc in (router.task_classes or {})}
         router.default_tier_name = args.backend
-    try:
-        health = await router.check_health(router.default_tier_name)
-    except Exception as exc:                       # pragma: no cover
-        print(f"provider '{router.default_tier_name}' unreachable: {exc}")
-        print("run `python callisto.py doctor` to see what is configured")
-        return 2
-    if health.get("status") != "ok":
-        print(f"provider '{router.default_tier_name}' unhealthy: "
-              f"{json.dumps(health)[:300]}")
-        return 2
+        # A pinned backend disables failover, so refuse early if it is
+        # unreachable. With no --backend, skip the preflight and let the
+        # ProviderRouter candidate chain (which includes the OX fallback)
+        # make the routing decision per task.
+        try:
+            health = await router.check_health(router.default_tier_name)
+        except Exception as exc:                   # pragma: no cover
+            print(f"provider '{router.default_tier_name}' unreachable: {exc}")
+            print("run `python callisto.py doctor` to see what is configured")
+            return 2
+        if health.get("status") != "ok":
+            print(f"provider '{router.default_tier_name}' unhealthy: "
+                  f"{json.dumps(health)[:300]}")
+            return 2
 
     engine = _make_engine(router, self_review=args.self_review)
     result = await engine.run(args.question)

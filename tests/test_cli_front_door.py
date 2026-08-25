@@ -225,11 +225,47 @@ class TestAsk:
         router, engines = wired
         async def boom(tier): raise ConnectionError("refused")
         router.check_health = boom
-        rc = asyncio.run(_cmd_ask(self._args()))
+        args = build_parser().parse_args(
+            ["ask", "--backend", "gpu1", "q"])
+        rc = asyncio.run(_cmd_ask(args))
         out = capsys.readouterr().out
         assert rc == 2
         assert "unreachable" in out
         assert "doctor" in out                        # next step named
+
+    def test_pinned_dead_backend_exits_2_without_running_engine(
+            self, wired, capsys):
+        """--backend pins every task class to one provider and disables
+        failover, so a dead pinned backend must be refused up front with
+        doctor guidance instead of failing inside the pipeline."""
+        router, engines = wired
+        async def boom(tier): raise ConnectionError("refused")
+        router.check_health = boom
+        args = build_parser().parse_args(
+            ["ask", "--backend", "gpu1", "q"])
+        rc = asyncio.run(_cmd_ask(args))
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "unreachable" in out and "doctor" in out
+        assert engines == []                          # engine never built
+
+    def test_default_mode_skips_preflight_and_runs_engine(
+            self, wired, monkeypatch, capsys):
+        """Without --backend, a dead default tier must NOT preempt the run:
+        ProviderRouter's candidate chain (with ox_alpha failover) decides.
+        The CLI must not even probe check_health."""
+        router, engines = wired
+        calls = []
+        async def probe(tier):
+            calls.append(tier)
+            return {"status": "down"}
+        router.check_health = probe
+        rc = asyncio.run(_cmd_ask(self._args()))
+        out = capsys.readouterr().out
+        assert calls == []                            # no preflight probe
+        assert rc == 0
+        assert engines[0].ran_with == "test question"
+        assert "SEALED" in out
 
 
 # ── run persistence: runs / show ──────────────────────────────────────────
