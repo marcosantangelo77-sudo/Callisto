@@ -987,7 +987,7 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     # `resolved_model_identity` / `resolved_model_identity_env`; it is NEVER
     # inferred from the override's model string.
     model_identity = raw.get("model_identity") or None
-    if env_model and raw.get("model") and env_model != raw.get("model"):
+    if env_model and env_model != (raw.get("model") or None):
         model_identity = None
     resolved_identity = (
         os.getenv(raw["resolved_model_identity_env"], "") or None

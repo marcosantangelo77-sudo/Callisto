@@ -347,6 +347,19 @@ class TestDynamicProxyIdentity:
         })
         assert ep2.model_identity == "nous/beta/explicit"
 
+    def test_env_only_config_divergent_model_invalidates_identity(self, monkeypatch):
+        """Env-only config (no static model): a nonempty env value differing
+        from the absent static model must still invalidate the identity."""
+        monkeypatch.setenv("OX_ALPHA_PROXY_MODEL", "stealth/ox-alpha-beta")
+        ep = inference._endpoint_from_config("ox_alpha_proxy", {
+            "backend": "openai_compat",
+            "base_url": "http://x/v1",
+            "model_env": "OX_ALPHA_PROXY_MODEL",
+            "model_identity": IDENTITY,
+        })
+        assert ep.model == "stealth/ox-alpha-beta"
+        assert ep.model_identity is None
+
     def test_beta_proxy_and_cli_are_separate_scoring_candidates(self, monkeypatch):
         """With the proxy overridden to a different model, the router must NOT
         group/dedupe it with the Hermes CLI rail under the static identity."""
