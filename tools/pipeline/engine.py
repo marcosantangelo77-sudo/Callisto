@@ -941,6 +941,18 @@ class ResearchPipeline:
             if refs_failed is not None:
                 return
             leaf_refs = []
+            if not isinstance(outcome.artifact_refs or [], list):
+                refs_failed = (
+                    f"artifact refs for leaf '{qid}' are malformed "
+                    f"(not a list: {outcome.artifact_refs!r}); "
+                    "refusing artifactless seal")
+                return
+            if not isinstance(outcome.artifact_sha256s or [], list):
+                refs_failed = (
+                    f"artifact sha256s for leaf '{qid}' are malformed "
+                    f"(not a list: {outcome.artifact_sha256s!r}); "
+                    "refusing artifactless seal")
+                return
             try:
                 for rd in outcome.artifact_refs or []:
                     # Accept only real ArtifactRef instances (fresh paths) or
@@ -961,6 +973,9 @@ class ResearchPipeline:
                     f"artifact refs for leaf '{qid}' cannot be rebuilt from "
                     f"checkpoint ({e}); refusing artifactless seal")
                 return
+            # Hydrate the public LeafOutcome too: resumed dict refs must be
+            # visible as ArtifactRef instances everywhere, matching fresh runs.
+            outcome.artifact_refs = list(leaf_refs)
             sha_seq = [r.sha256 for r in leaf_refs]
             if sha_seq != list(outcome.artifact_sha256s or []):
                 refs_failed = (
@@ -1261,13 +1276,21 @@ def _fetch_from_payload(rec: dict) -> FetchResult:
 def _leaf_from_payload(d: dict) -> LeafOutcome:
     """Rebuild a LeafOutcome from its checkpointed asdict form."""
     d = dict(d)
-    d["source_classes"] = list(d.get("source_classes") or [])
-    d["requirement_reasons"] = list(d.get("requirement_reasons") or [])
-    d["artifact_sha256s"] = list(d.get("artifact_sha256s") or [])
+    d["source_classes"] = _as_list_or_empty(d.get("source_classes"))
+    d["requirement_reasons"] = _as_list_or_empty(d.get("requirement_reasons"))
+    # Malformed (non-list) checkpoint fields must not raise during
+    # hydration; keep them unset so ordered assembly can fail closed
+    # with a descriptive refusal reason instead of a TypeError.
+    for k in ("artifact_sha256s", "artifact_refs"):
+        if not isinstance(d.get(k), list):
+            d[k] = None
     # Full refs may be absent on legacy checkpoints; the ordered-assembly
     # SHA cross-check then fails closed rather than sealing artifactlessly.
-    d["artifact_refs"] = list(d.get("artifact_refs") or [])
     return LeafOutcome(**d)
+
+
+def _as_list_or_empty(v) -> list:
+    return list(v) if isinstance(v, list) else []
 
 
 def _make_adapter(registry, name: str, source: RestSource):
