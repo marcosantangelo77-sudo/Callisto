@@ -176,7 +176,8 @@ class TestDispatch:
 
         class FakeCli:
             async def complete(self, messages, *, role="", binary=None,
-                               cwd="/tmp", timeout_s=240.0):
+                               cwd="/tmp", timeout_s=240.0,
+                               provider=None, model=None):
                 return {"content": "{\"ok\": true}", "rc": 0, "stderr": ""}
 
         monkeypatch.setattr(hc, "hermes_complete", FakeCli().complete)

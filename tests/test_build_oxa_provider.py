@@ -120,12 +120,14 @@ class TestCliBackend:
         cur = 0
         orig = hermes_cli.hermes_run
 
-        async def counting_run(binary, prompt, cwd, timeout_s):
+        async def counting_run(binary, prompt, cwd, timeout_s,
+                               provider=None, model=None):
             nonlocal peak, cur
             cur += 1
             peak = max(peak, cur)
             try:
-                return await orig(binary, prompt, cwd, timeout_s)
+                return await orig(binary, prompt, cwd, timeout_s,
+                                  provider=provider, model=model)
             finally:
                 cur -= 1
 
@@ -175,6 +177,128 @@ class TestCliBackend:
             schema={"type": "object"}))  # schema accepted-and-ignored
         assert out["content"] == "hello"
         assert model.calls[0]["role"] == "architect"
+
+
+class TestTargetBinding:
+    """Configured provider/model must reach the CLI argv before `-z`
+    (offline: exact-argv assertions against a fake executable seam)."""
+
+    OX_YAML = (
+        "default_tier: oxa\n"
+        "providers:\n"
+        "  oxa:\n"
+        "    backend: hermes_cli\n"
+        "    model: ox-alpha\n"
+        "    extra:\n"
+        "      provider: nous\n"
+        "      model: stealth/ox-alpha\n"
+        "    structured_output: false\n"
+        "    tool_calls: false\n"
+        "    max_concurrency: 1\n"
+        "routing:\n"
+        "  task_classes:\n"
+        "    screening: oxa\n")
+
+    def test_build_argv_exact_for_configured_target(self):
+        argv = hermes_cli.build_argv(
+            "/fake/hermes", "PROMPT", "/tmp/cwd",
+            provider="nous", model="stealth/ox-alpha")
+        assert argv == ["/fake/hermes", "--provider", "nous",
+                        "-m", "stealth/ox-alpha",
+                        "-z", "PROMPT", "--in", "/tmp/cwd"]
+
+    def test_build_argv_backward_compatible_no_target(self):
+        assert hermes_cli.build_argv("h", "p", "/c") == ["h", "-z", "p", "--in", "/c"]
+        # each field independently optional
+        assert hermes_cli.build_argv(
+            "h", "p", "/c", provider="nous") \
+            == ["h", "--provider", "nous", "-z", "p", "--in", "/c"]
+        assert hermes_cli.build_argv(
+            "h", "p", "/c", model="m") \
+            == ["h", "-m", "m", "-z", "p", "--in", "/c"]
+
+    def _router_with_fake(self, tmp_path, monkeypatch, yaml_text):
+        cfg = tmp_path / "p.yaml"
+        cfg.write_text(yaml_text)
+        seen = {}
+
+        orig = hermes_cli.hermes_run
+
+        async def spy_run(binary, prompt, cwd, timeout_s,
+                          provider=None, model=None):
+            seen["argv"] = hermes_cli.build_argv(
+                binary, prompt, cwd, provider=provider, model=model)
+            return await orig(binary, prompt, cwd, timeout_s,
+                              provider=provider, model=model)
+
+        fake = tmp_path / "fake.sh"
+        fake.write_text("#!/bin/sh\necho '{\"answer\": 7}'\n")
+        fake.chmod(0o755)
+        monkeypatch.setattr(hermes_cli, "resolve_binary",
+                            lambda b=None: str(fake))
+        monkeypatch.setattr(hermes_cli, "hermes_run", spy_run)
+        return inference.ProviderRouter(config_path=str(cfg)), seen
+
+    def test_target_flows_through_router(self, tmp_path, monkeypatch):
+        router, seen = self._router_with_fake(
+            tmp_path, monkeypatch, self.OX_YAML)
+        ep = router.endpoints["oxa"]
+        assert ep.extra.get("provider") == "nous"
+        assert ep.extra.get("model") == "stealth/ox-alpha"
+
+        res = asyncio.run(router.complete(
+            "screening", [{"role": "user", "content": "q"}]))
+        assert res["parsed_json"] == {"answer": 7}
+        argv = seen["argv"]
+        assert argv[0].endswith("fake.sh")
+        # target flags precede -z and carry the wire values
+        zi = argv.index("-z")
+        assert argv[:zi] == [argv[0], "--provider", "nous",
+                             "-m", "stealth/ox-alpha"]
+        assert argv.index("--provider") < zi
+        assert argv[argv.index("--provider") + 1] == "nous"
+        assert argv.index("-m") < zi
+        assert argv[argv.index("-m") + 1] == "stealth/ox-alpha"
+
+    def test_legacy_endpoint_gets_no_flags(self, tmp_path, monkeypatch):
+        legacy_yaml = (
+            "default_tier: oxa\n"
+            "providers:\n"
+            "  oxa:\n"
+            "    backend: hermes_cli\n"          # no extra.provider / extra.model
+            "    structured_output: false\n"
+            "routing:\n"
+            "  task_classes:\n"
+            "    screening: oxa\n")
+        router, seen = self._router_with_fake(
+            tmp_path, monkeypatch, legacy_yaml)
+        res = asyncio.run(router.complete(
+            "screening", [{"role": "user", "content": "q"}]))
+        assert res["parsed_json"] == {"answer": 7}
+        argv = seen["argv"]
+        zi = argv.index("-z")
+        assert argv[:zi] == [argv[0]], "no target flags expected for legacy cfg"
+
+    def test_failure_failover_semantics_preserved(self, tmp_path,
+                                                  monkeypatch):
+        """One subprocess invocation per attempt; rc!=0 with empty stdout
+        still raises — the binding adds flags only, no retry loop."""
+        cfg = tmp_path / "p.yaml"
+        cfg.write_text(self.OX_YAML)
+        calls = {"n": 0}
+
+        async def failing_run(*a, **k):
+            calls["n"] += 1
+            return 3, "", "boom"
+
+        monkeypatch.setattr(hermes_cli, "hermes_run", failing_run)
+        monkeypatch.setattr(hermes_cli, "resolve_binary",
+                            lambda b=None: "/fake")
+        router = inference.ProviderRouter(config_path=str(cfg))
+        with pytest.raises(RuntimeError, match="rc=3"):
+            asyncio.run(router.complete(
+                "screening", [{"role": "user", "content": "q"}]))
+        assert calls["n"] == 1
 
 
 class TestRouterDispatch:

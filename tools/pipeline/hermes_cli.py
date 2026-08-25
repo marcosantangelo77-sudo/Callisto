@@ -92,8 +92,29 @@ def flatten_messages(role_or_none, messages: list[dict]) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
+def build_argv(binary: str, prompt: str, cwd: str,
+               provider: Optional[str] = None,
+               model: Optional[str] = None) -> list[str]:
+    """argv for one `hermes -z` invocation.
+
+    provider/model are OPTIONAL routing targets (e.g. --provider nous
+    -m stealth/ox-alpha). When either is unset the flag is simply omitted,
+    preserving legacy behavior for configurations that don't bind a target.
+    Flags precede `-z` so they can never be swallowed by the prompt.
+    """
+    argv = [binary]
+    if provider:
+        argv += ["--provider", provider]
+    if model:
+        argv += ["-m", model]
+    argv += ["-z", prompt, "--in", cwd]
+    return argv
+
+
 async def hermes_run(binary: str, prompt: str, cwd: str,
-                     timeout_s: float) -> tuple[int, str, str]:
+                     timeout_s: float,
+                     provider: Optional[str] = None,
+                     model: Optional[str] = None) -> tuple[int, str, str]:
     """One `hermes -z` invocation. Returns (returncode, stdout, stderr).
 
     Raises RuntimeError on timeout (after killing the child). Bounded by the
@@ -101,7 +122,7 @@ async def hermes_run(binary: str, prompt: str, cwd: str,
     rather than calling this directly, unless they manage their own bounding.
     """
     proc = await asyncio.create_subprocess_exec(
-        binary, "-z", prompt, "--in", cwd,
+        *build_argv(binary, prompt, cwd, provider=provider, model=model),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     try:
@@ -116,7 +137,9 @@ async def hermes_run(binary: str, prompt: str, cwd: str,
 
 async def hermes_complete(messages: list[dict], *, role: str = "",
                           binary: Optional[str] = None, cwd: str = "/tmp",
-                          timeout_s: float = 240.0) -> dict:
+                          timeout_s: float = 240.0,
+                          provider: Optional[str] = None,
+                          model: Optional[str] = None) -> dict:
     """Bounded, awaited CLI completion. Returns {'content', 'rc', 'stderr'}.
 
     Raises RuntimeError when the CLI failed AND produced nothing — partial
@@ -126,7 +149,8 @@ async def hermes_complete(messages: list[dict], *, role: str = "",
     prompt = flatten_messages(role, messages)
     sem = proc_semaphore()
     async with sem:
-        rc, out, err = await hermes_run(bin_path, prompt, cwd, timeout_s)
+        rc, out, err = await hermes_run(bin_path, prompt, cwd, timeout_s,
+                                        provider=provider, model=model)
     if rc != 0 and not out:
         raise RuntimeError(
             f"hermes failed (rc={rc}): {err[:300]}")
