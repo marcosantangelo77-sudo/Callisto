@@ -957,9 +957,12 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     api_key = None
     if raw.get("api_key_env"):
         api_key = os.getenv(raw["api_key_env"]) or None
+    # Model resolution precedence: a NONEMPTY configured model_env value
+    # overrides the static model; an unset or empty env value falls back to
+    # the static model (which may itself be absent for env-only configs).
     model = raw.get("model")
-    if not model and raw.get("model_env"):
-        model = os.getenv(raw["model_env"], "")
+    if raw.get("model_env"):
+        model = os.getenv(raw["model_env"], "") or model
     if backend == "hermes_cli":
         # No URL, no env vars, no keychain access — just the binary.
         unresolved = False

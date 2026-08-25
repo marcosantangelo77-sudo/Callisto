@@ -189,3 +189,74 @@ class TestDispatch:
         # served by the CLI tier after the proxy failed fast
         assert res["tier"] == "ox_alpha"
         assert r.states["ox_alpha_proxy"].consecutive_failures >= 1
+
+
+class TestModelEnvOverride:
+    """A nonempty OX_ALPHA_PROXY_MODEL must override the static
+    `model: stealth/ox-alpha` fallback; unset/empty falls back."""
+
+    def test_env_model_overrides_static(self, monkeypatch):
+        _router_with_proxy(monkeypatch)
+        monkeypatch.setenv("OX_ALPHA_PROXY_MODEL", "stealth/ox-alpha-beta")
+        r = inference.ProviderRouter()
+        ep = r.endpoints["ox_alpha_proxy"]
+        assert not ep.extra.get("_unresolved")
+        assert ep.model == "stealth/ox-alpha-beta"
+
+    def test_empty_env_falls_back_to_static(self, monkeypatch):
+        _router_with_proxy(monkeypatch)
+        monkeypatch.setenv("OX_ALPHA_PROXY_MODEL", "")
+        r = inference.ProviderRouter()
+        assert r.endpoints["ox_alpha_proxy"].model == "stealth/ox-alpha"
+
+    def test_unset_env_falls_back_to_static(self, monkeypatch):
+        _router_with_proxy(monkeypatch)
+        monkeypatch.delenv("OX_ALPHA_PROXY_MODEL", raising=False)
+        r = inference.ProviderRouter()
+        assert r.endpoints["ox_alpha_proxy"].model == "stealth/ox-alpha"
+
+    def test_dispatch_payload_uses_env_model(self, monkeypatch):
+        """The emitted HTTP payload must carry the env-resolved model."""
+        received: dict = {}
+
+        class FakeResp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"choices": [{"message": {"content": "{}"}}],
+                        "usage": {}}
+
+        class FakeClient:
+            is_closed = False
+
+            async def post(self, url, *, json=None, headers=None,
+                           timeout=None):
+                received["payload"] = json
+                return FakeResp()
+
+        r = _router_with_proxy(monkeypatch)
+        monkeypatch.setenv("OX_ALPHA_PROXY_MODEL", "stealth/ox-alpha-beta")
+        r = inference.ProviderRouter()  # rebuild with the env model set
+        r._http_client = FakeClient()
+
+        import asyncio as _aio
+
+        async def _bind():
+            FakeClient._bound_loop = _aio.get_running_loop()
+            return await r._post(r.endpoints["ox_alpha_proxy"],
+                                 {"model": r.endpoints["ox_alpha_proxy"].model,
+                                  "messages": []},
+                                 timeout=30.0)
+
+        _aio.run(_bind())
+        assert received["payload"]["model"] == "stealth/ox-alpha-beta"
+
+    def test_frontier_env_only_resolution_still_works(self, monkeypatch):
+        for v in ("FRONTIER_BASE_URL", "FRONTIER_API_KEY", "FRONTIER_MODEL"):
+            monkeypatch.setenv(v, {"FRONTIER_BASE_URL": "http://f.test/v1",
+                                   "FRONTIER_API_KEY": "k",
+                                   "FRONTIER_MODEL": "flagship-x"}[v])
+        r = inference.ProviderRouter()
+        if "frontier" in r.endpoints:
+            assert r.endpoints["frontier"].model == "flagship-x"
