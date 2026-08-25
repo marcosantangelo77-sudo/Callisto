@@ -165,16 +165,31 @@ class HermesMemory:
                 await db.execute("PRAGMA busy_timeout = 60000")
                 await self._ensure_tables(db)
 
-                # Build all sections
+                # Build all sections. One section failing must not blind the
+                # rest (improve/memory-wiki): previously _build_bet_history
+                # raised "no such table: bankroll" on any DB without the
+                # sports tables and the whole context degraded to an
+                # identity-only banner — losing learnings, messages and code
+                # state that ARE available. Measured before the fix: a
+                # hermes-only DB produced identity + DEGRADED banner only.
+                async def _safe_build(key: str, builder) -> str:
+                    try:
+                        return await builder(db)
+                    except Exception as sec_err:
+                        logger.warning(
+                            "Hermes section '%s' unavailable (%s); continuing "
+                            "without it", key, sec_err)
+                        return ""
+
                 all_sections = {
                     "identity": self._build_identity(),
-                    "bets": await self._build_bet_history(db),
-                    "edges": await self._build_edge_history(db),
-                    "patterns": await self._build_learned_patterns(db),
-                    "active": await self._build_active_state(db),
-                    "research": await self._build_research_state(db),
-                    "learnings": await self._build_learnings(db),
-                    "messages": await self._build_messages(db),
+                    "bets": await _safe_build("bets", self._build_bet_history),
+                    "edges": await _safe_build("edges", self._build_edge_history),
+                    "patterns": await _safe_build("patterns", self._build_learned_patterns),
+                    "active": await _safe_build("active", self._build_active_state),
+                    "research": await _safe_build("research", self._build_research_state),
+                    "learnings": await _safe_build("learnings", self._build_learnings),
+                    "messages": await _safe_build("messages", self._build_messages),
                     "code": self._build_code_changes(),
                 }
 

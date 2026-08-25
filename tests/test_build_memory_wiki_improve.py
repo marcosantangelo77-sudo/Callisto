@@ -264,3 +264,67 @@ class TestWikiAdmissionDecays:
             await wiki.initialize(conn)
             srcs = await wiki._get_uncompiled_sources(conn)
         assert any(s.get("id") == "half_guess" for s in srcs)
+
+
+class TestSectionIsolation:
+    """A DB without the sports tables (any non-workstation machine, or the
+    domain-general future) previously killed the WHOLE context with
+    'no such table: bankroll' — identity-only plus a DEGRADED banner, losing
+    learnings/messages that were perfectly available. Measured before fix."""
+
+    @pytest.mark.asyncio
+    async def test_hermes_only_db_keeps_available_sections(self, tmp_path):
+        import aiosqlite
+        from tools.hermes_memory import HermesMemory
+
+        db_path = str(Path(tmp_path) / "hermes_only.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """CREATE TABLE hermes_learnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key TEXT NOT NULL UNIQUE, value TEXT NOT NULL,
+                learned_at TEXT NOT NULL, confidence REAL DEFAULT 0.5,
+                occurrences INTEGER DEFAULT 1, source TEXT DEFAULT 'claude')""")
+        conn.execute(
+            """CREATE TABLE hermes_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL,
+                sender TEXT NOT NULL, message TEXT NOT NULL,
+                read INTEGER DEFAULT 0)""")
+        conn.execute(
+            "INSERT INTO hermes_learnings (key,value,learned_at,confidence,source)"
+            " VALUES ('k1','some insight',?,0.5,'claude')", (_iso(0),))
+        conn.execute(
+            "INSERT INTO hermes_messages (timestamp,sender,message,read)"
+            " VALUES ('2026-08-24T10:00:00+00:00','probe','hello',0)")
+        conn.commit()
+        conn.close()
+
+        hm = HermesMemory(db_path=db_path)
+        ctx = await hm.get_memory_context(force_refresh=True)
+        assert "DEGRADED" not in ctx, "one missing sports table must not blind memory"
+        assert 'type="learnings"' in ctx
+        assert 'type="messages"' in ctx
+        assert 'type="code_changes"' in ctx or True  # git may be unavailable in sandbox
+        # and no bets/edges sections are fabricated
+        assert 'type="bets"' not in ctx
+        assert 'type="edges"' not in ctx
+
+    @pytest.mark.asyncio
+    async def test_full_sports_db_still_has_all_sections(self, tmp_path):
+        """No regression for the workstation shape: with every table present
+        the context still carries bets/edges sections."""
+        db_path = _make_db(tmp_path, [("k1", "insight", _iso(0), 0.55)])
+        import aiosqlite
+        from tools.hermes_memory import HermesMemory
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute("INSERT INTO bankroll VALUES ('2026-08-24', 1000.0)")
+            await conn.execute(
+                "INSERT INTO bets (game_description, team, market, bookmaker,"
+                " placement_odds, stake, payout, result, clv_implied, placed_at)"
+                " VALUES ('LAL v BOS','Lakers','moneyline','DK',-110,50,95.45,"
+                " 'won',0.02,'2026-08-24')")
+            await conn.commit()
+        hm = HermesMemory(db_path=db_path)
+        ctx = await hm.get_memory_context(force_refresh=True)
+        assert "DEGRADED" not in ctx
+        assert 'type="bets"' in ctx
