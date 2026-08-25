@@ -939,6 +939,16 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     skipped by routing (LOUD log) rather than crashing construction — that
     keeps a local-only box constructible while a hosted tier is configured.
 
+    SPEED run 9 (2026-08-24): an env var that IS set overrides a static
+    value; a static value stands as the DEFAULT when the env var is unset.
+    Before this run an env-backed field with a static default could never
+    see its default honoured (static won, env was dead) — and ox_alpha_proxy
+    shipped with ONLY the env form, so on any machine where nobody exported
+    OX_ALPHA_PROXY_BASE_URL the endpoint resolved _unresolved and every
+    completion fell through to the fresh-fork CLI tier (~11-20s/call
+    measured) while the persistent proxy sat idle. Precedence affects only
+    entries declaring BOTH keys; today that is exactly one endpoint.
+
     backend="hermes_cli" needs NEITHER base_url nor model: it shells out to
     the Hermes CLI (Nous Portal OAuth lives in the keychain) and serves the
     hosted stealth-ox-alpha model, so base_url stays "" and model defaults
@@ -946,10 +956,14 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     """
     backend = raw.get("backend", "openai_compat")
     base_url = raw.get("base_url")
-    if not base_url and raw.get("base_url_env"):
-        base_url = os.getenv(raw["base_url_env"], "")
-        if not base_url:
-            raw = {**raw, "_unresolved": True}
+    if raw.get("base_url_env"):
+        # env-if-set wins over the static value (run 9); an unset env var
+        # leaves the static default standing instead of voiding it.
+        env_base = os.getenv(raw["base_url_env"], "")
+        if env_base:
+            base_url = env_base
+    if not base_url:
+        raw = {**raw, "_unresolved": True}
     api_key = None
     if raw.get("api_key_env"):
         api_key = os.getenv(raw["api_key_env"]) or None
@@ -1074,7 +1088,7 @@ class ProviderRouter:
     escalation to frontier must be deliberate, visible, budgeted.
     """
 
-    def __init__(self, config_path=None):
+    def __init__(self, config_path=None, health_state_dir: Optional[str] = None):
         cfg = load_providers_config(config_path)
         self.default_tier_name = cfg.get("default_tier", "local")
         self._raw_providers = cfg.get("providers") or {}
@@ -1123,6 +1137,83 @@ class ProviderRouter:
         # bound to the first running event loop that uses it; a test can force
         # re-creation with _reset_shared_client() after changing loops.
         self._http_client: Optional[httpx.AsyncClient] = None
+
+        # ── SPEED run 17: persistent endpoint-health memory ──
+        # A fresh process re-probes endpoints another process just recorded
+        # as dead (gpu1/gpu1_fast first in every routing list, llama-server
+        # ports down ⇒ one connect-refused probe per call per process).
+        # Persisting {endpoint: {consecutive_failures, cooldown_until}} lets
+        # a new instance skip a hop that died seconds ago in its sibling.
+        # TRANSPORT HEALTH ONLY crosses this file — no question content, no
+        # evidence, no model output; nothing retrodiction-cutoff-relevant.
+        if health_state_dir is None:
+            base = os.environ.get("CALLISTO_STATE_DIR")
+            if not base:
+                base = os.path.join(
+                    os.path.expanduser("~"), ".local", "state", "callisto")
+            health_state_dir = base
+        self._health_state_dir: Optional[str] = (
+            health_state_dir
+            if os.environ.get("CALLISTO_ROUTER_HEALTH", "1") == "1" else None)
+        self._load_health_state()
+
+    # ── health-state persistence (speed run 17) ──
+    _HEALTH_FILE = "router_health.json"
+
+    @property
+    def _health_state_path(self) -> Optional[str]:
+        if self._health_state_dir is None:
+            return None
+        return os.path.join(self._health_state_dir, self._HEALTH_FILE)
+
+    def _load_health_state(self) -> None:
+        path = self._health_state_path
+        if path is None:
+            return
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            for name, rec in (data.get("endpoints") or {}).items():
+                st = self.states.get(name)
+                if st is None or not isinstance(rec, dict):
+                    continue
+                st.consecutive_failures = int(
+                    rec.get("consecutive_failures") or 0)
+                until = float(rec.get("cooldown_until") or 0.0)
+                # cooldown_until was written against ANOTHER process's
+                # monotonic clock — meaningless here. Convert the recorded
+                # failure count into an equivalent fresh cooldown instead:
+                # same suppression semantics, no cross-process clock trust.
+                if st.consecutive_failures > 0:
+                    delay = min(60.0, 2.0 * (2 ** (st.consecutive_failures - 1)))
+                    st.cooldown_until = _time.monotonic() + delay
+                else:
+                    st.cooldown_until = 0.0
+                del until  # not trusted cross-process
+        except FileNotFoundError:
+            pass
+        except Exception as e:  # noqa: BLE001 — corrupt state degrades to fresh
+            logger.warning(f"router health state unreadable ({e}); "
+                           "starting fresh")
+
+    def _save_health_state(self) -> None:
+        path = self._health_state_path
+        if path is None:
+            return
+        try:
+            os.makedirs(self._health_state_dir or ".", exist_ok=True)
+            data = {"saved_at": _time.time(), "endpoints": {
+                n: {"consecutive_failures": s.consecutive_failures,
+                    "cooldown_remaining_s": max(
+                        0.0, s.cooldown_until - _time.monotonic())}
+                for n, s in self.states.items()}}
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp, path)
+        except Exception as e:  # noqa: BLE001 — persistence must never
+            logger.warning(f"router health state write failed: {e}")
+            raise
 
     def _shared_client(self) -> httpx.AsyncClient:
         """Process/router-wide pooled AsyncClient. Rebuilt if the running
@@ -1289,25 +1380,31 @@ class ProviderRouter:
                 continue
             if not st.available:
                 continue
-            # hermes_cli declares structured_output=False honestly — it
-            # cannot enforce a schema. It is still usable for schema-bearing
-            # calls on a BEST-EFFORT basis (JSON-in-text + _parse_json_response),
-            # which is what keeps a CLI-only laptop running the whole system.
-            # Callers needing a hard guarantee must not rely on it: check
-            # ep.structured_output themselves.
+            # SPEED run 16 (2026-08-24): the best-effort exemption is about
+            # the CAPABILITY CONTRACT, not the backend brand. An endpoint
+            # that honestly declares structured_output=False is JSON-in-text
+            # best-effort exactly like hermes_cli — same tolerant shared
+            # parser downstream, same battery-D3 fail-closed semantics. The
+            # ox_alpha_proxy serves THE SAME model as the CLI behind the SAME
+            # Portal OAuth; banning it from schema-bearing calls forced every
+            # adversary call onto a fresh ~12-14s fork on one of the three
+            # serial rounds of every sealed question. Callers needing a HARD
+            # guarantee must still check ep.structured_output themselves.
             if (schema is not None and not ep.structured_output
-                    and ep.backend != "hermes_cli"):
+                    and ep.backend not in ("hermes_cli", "openai_compat")):
                 continue
             out.append(n)
         if not out:
             # Everything cooling down (or filtered): prefer least-bad rather
-            # than raising — degrade, don't crash the loop.
+            # than raising — degrade, don't crash the loop. Same capability
+            # rule as above (run 16): keep the filters from drifting apart.
             fallback = [n for n in names
                         if n in self.states
                         and not self.endpoints[n].extra.get("_unresolved")
                         and (schema is None
                              or self.endpoints[n].structured_output
-                             or self.endpoints[n].backend == "hermes_cli")]
+                             or self.endpoints[n].backend in (
+                                 "hermes_cli", "openai_compat"))]
             if fallback:
                 logger.warning(
                     f"All endpoints for task_class={task_class!r} cooling "
@@ -1322,7 +1419,11 @@ class ProviderRouter:
         Prefers lowest current load, then declared order."""
         for name in self.candidates_for(task_class):
             ep = self.endpoints[name]
-            if schema is not None and not ep.structured_output:
+            # SPEED run 16: same capability rule as candidates_for — a
+            # best-effort JSON-in-text endpoint (declared False) is admissible
+            # exactly when the backend-brand exemption admits it there.
+            if (schema is not None and not ep.structured_output
+                    and ep.backend not in ("hermes_cli", "openai_compat")):
                 continue
             if tools and not ep.tool_calls:
                 continue
@@ -1403,9 +1504,18 @@ class ProviderRouter:
         }
         if max_tokens:
             payload["max_tokens"] = max_tokens
-        if schema is not None:
+        if schema is not None and getattr(
+                endpoint, "structured_output", True):
             # Structured output. llama-server supports json_schema in
             # response_format; hosted OpenAI-compat APIs accept it too.
+            # SPEED run 16: ONLY for endpoints that declare the capability.
+            # Attaching an enforcement block to an endpoint that honestly
+            # declared structured_output=False misrepresents the request
+            # (nothing upstream enforces it) and hard-400s on stricter
+            # OpenAI-compat providers; best-effort endpoints get the same
+            # contract as hermes_cli — no enforcement, tolerant parse
+            # downstream (battery D3). getattr default True keeps legacy
+            # config shapes (TierConfig) at pre-run-16 byte behaviour.
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "callisto_output", "schema": schema},
@@ -1528,6 +1638,7 @@ class ProviderRouter:
                     finally:
                         state.in_flight -= 1
                 state.record_success()
+                self._save_health_state()
 
                 in_tok = int(usage.get("prompt_tokens", 0) or 0)
                 out_tok = int(usage.get("completion_tokens", 0) or 0)
@@ -1550,8 +1661,27 @@ class ProviderRouter:
                     "task_class": task_class,
                     "routing_basis": routing_meta.get("basis", "configured"),
                 }
+            except _RateLimitExhausted as e:
+                # SPEED run 15: rate-limit exhaustion means the endpoint is
+                # healthy but the SHARED upstream capacity pool is
+                # saturated. record_failure()'s exponential cooldown would
+                # escalate the fast endpoint OUT of the rotation (2s → 60s)
+                # for a condition every tier shares, sending later calls to
+                # fresh-fork tiers that queue on the same upstream. A flat,
+                # non-escalating cooldown damps hammering while letting the
+                # next call re-probe; the endpoint's consecutive-failure
+                # count is untouched and this call still fails over.
+                state.cooldown_until = max(
+                    state.cooldown_until, _time.monotonic() + 5.0)
+                errors.append(f"{name}: {e}")
+                logger.warning(
+                    f"ProviderRouter: endpoint {name} rate-limited "
+                    f"(upstream capacity, endpoint healthy) — failing "
+                    f"over: {e}"
+                )
             except Exception as e:
                 state.record_failure()
+                self._save_health_state()
                 errors.append(f"{name}: {e}")
                 logger.warning(
                     f"ProviderRouter: endpoint {name} failed "
@@ -1595,7 +1725,7 @@ class ProviderRouter:
 
 
 async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
-                           timeout: float, attempts: int = 2) -> tuple[str, dict]:
+                           timeout: float, attempts: int = 5) -> tuple[str, dict]:
     """Retry transient failures within one endpoint before failing over.
     Connection errors and 5xx retry; other HTTP errors do not.
 
@@ -1606,10 +1736,33 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
     every such call on the ~12-20s fresh-fork CLI path. Retry-in-place
     changes only WHERE the identical completion is served; non-429 4xx
     still fail over immediately and exhaustion still propagates to the
-    existing failover chain. A Retry-After header is honoured, capped at
-    _429_RETRY_AFTER_CAP_S so a hostile/lazy server cannot stall a call.
+    existing failover chain. A Retry-After header is honoured; the TOTAL
+    time spent sleeping on 429s for one call is bounded (_429_PATIENCE_S,
+    run 10) so a hostile/lazy server cannot stall a call.
+
+    SPEED run 15 (2026-08-24): attempts must never bind before the budget.
+    With attempts=2 at most ONE Retry-After window could be honoured —
+    attempt 1 sleeps RA:30, attempt 2 sees another 429 and the budget
+    check (30+30 > 35) raises. Portal under load serves CONSECUTIVE ~30s
+    windows (measured stacks of 60–128s), so those calls abandoned the
+    warm proxy and paid sequential patience-then-fork (~35s + 48–78s)
+    for a tier that queues on the SAME upstream. attempts=5 lets the
+    budget be the binding constraint (four RA:30 windows fit); exhaustion
+    raises _RateLimitExhausted so complete() can spare the healthy
+    endpoint its exponential cooldown.
+
+    SPEED run 16 (2026-08-24): RESTORED run 12's connect-phase rule, which
+    the runs-14 recovery merge dropped from this function despite its
+    commit message claiming otherwise — caught by the tier5 pool suite
+    pinning dead-hop attempt counts. Connect-phase failures (ConnectError
+    /ConnectTimeout) send NO bytes anywhere; an immediate second attempt
+    against the same dead socket carries no information and only taxes
+    every dead-hop probe (~0.5s measured per probe, ×attempts after run
+    15 raised the ceiling). They propagate to the failover chain at once;
+    read/write-phase errors keep the retry.
     """
     last_exc: Optional[Exception] = None
+    waited = 0.0  # total seconds slept on 429s for THIS call (run 10)
     for i in range(attempts):
         slept = False
         try:
@@ -1621,10 +1774,20 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
             last_exc = e
             if status == 429:
                 retry_after = _retry_after_seconds(e.response)
-                if retry_after > _429_MAX_TOTAL_WAIT_S:
-                    raise  # server says: back off longer than we may wait
+                if waited + retry_after > _429_PATIENCE_S:
+                    raise _RateLimitExhausted(
+                        f"429 patience budget ({_429_PATIENCE_S:.0f}s) "
+                        f"spent after {waited:.0f}s in place; last "
+                        f"Retry-After {retry_after:.0f}s") from e
+                waited += retry_after
                 await _asyncio.sleep(retry_after)
                 slept = True
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            # Run 12 (restored run 16): nothing transient to recover within
+            # one endpoint when the CONNECT itself failed — fail over now,
+            # cooldown still records via record_failure, a recovered box is
+            # re-probed after cooldown exactly as before.
+            raise
         except (httpx.TransportError,) as e:
             last_exc = e
         if i < attempts - 1 and not slept:
@@ -1635,19 +1798,40 @@ async def _post_with_retry(post_fn, endpoint: EndpointConfig, payload: dict,
 
 _router: Optional[ProviderRouter] = None
 
-# ── SPEED run 8: 429 retry-in-place constants ─────────────────────────────
+# ── SPEED run 8/10/15: 429 retry-in-place constants ───────────────────────
 # A 429 with no Retry-After waits this long before the next in-place attempt.
 _429_DEFAULT_BACKOFF_S = 1.0
-# Never sleep longer than this on a Retry-After; a server demanding more
-# backoff than we may spend fails over instead of stalling the caller.
-_429_MAX_TOTAL_WAIT_S = 10.0
+# Run 10: patience is PER CALL, not per sleep. Total time spent sleeping on
+# 429s for one completion is bounded by this; a Retry-After may exceed what
+# remains only while the running total stays within budget. When the budget
+# is spent, failover — never wait longer than a fork would have cost.
+# Run 15: 120s, measured against Portal's stacked-window pattern (raw-curl
+# controls saw consecutive Retry-After:30 windows totalling 60–128s). Both
+# the proxy and the CLI fork queue on the SAME upstream capacity, so in-place
+# waiting strictly dominates patience-then-fork; the only cost of a larger
+# budget is a longer worst-case stall on a hard-down upstream, bounded here
+# and by the caller's timeout (300s default).
+_429_PATIENCE_S = 120.0
+
+
+class _RateLimitExhausted(RuntimeError):
+    """429 patience budget spent for one call (run 15).
+
+    Distinct from other failures because the endpoint is HEALTHY — the
+    upstream capacity pool is shared by every tier, so exponential
+    cooldown escalation against the fast endpoint only locks later calls
+    out of it and onto fresh-fork paths."""
+
 
 
 def _retry_after_seconds(response: httpx.Response) -> float:
-    """Retry-After from a 429 response, in seconds, capped.
+    """Retry-After from a 429 response, in seconds.
 
     Accepts delta-seconds (and ignores HTTP-date form — treat as default
     backoff rather than parsing dates). Missing/garbled header -> default.
+    NOT capped here: the per-call budget in _post_with_retry bounds total
+    waiting (run 9's fixed cap re-created the run-8 disease one level up —
+    a single 30s window passed but a second consecutive window did not).
     """
     raw = ""
     try:
@@ -1660,7 +1844,7 @@ def _retry_after_seconds(response: httpx.Response) -> float:
         return _429_DEFAULT_BACKOFF_S
     if val < 0:
         return _429_DEFAULT_BACKOFF_S
-    return min(val, _429_MAX_TOTAL_WAIT_S)
+    return val
 
 
 def get_router() -> ProviderRouter:

@@ -54,7 +54,9 @@ routing:
 
 
 @pytest.fixture
-def router(tmp_path):
+def router(tmp_path, monkeypatch):
+    monkeypatch.setenv("CALLISTO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CALLISTO_ROUTER_HEALTH", "1")
     cfg = tmp_path / "pool.yaml"
     cfg.write_text(POOL_CFG)
     return inference.ProviderRouter(config_path=str(cfg))
@@ -199,8 +201,10 @@ class TestHealthAndFailover:
         result = asyncio.run(router.complete(
             "research_synthesis", [{"role": "user", "content": "x"}]))
         assert result["tier"] == "spark"
-        # gpu1 got its in-place retry (2 attempts) before failing over.
-        assert calls["gpu1"] == 2
+        # SPEED run 12 (restored by run 16 after the runs-14 recovery merge
+        # dropped it): a CONNECT-phase refusal sends no bytes and is NOT
+        # retried in place — one attempt, then fail over.
+        assert calls["gpu1"] == 1
         assert router.states["gpu1"].consecutive_failures == 1
         # Next call skips the cooling gpu1 entirely.
         calls["gpu1"] = 0
