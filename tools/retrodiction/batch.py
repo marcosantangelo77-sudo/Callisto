@@ -158,6 +158,7 @@ class BatchConfig:
     role: str = "pipeline"           # routing-store role under which scores land
     signing_key: str = ""            # passed to proof minting, not required
     limit: int = 0                   # 0 = all questions
+    max_concurrency: int = 1         # SPEED run 19: parallel questions (1 = serial)
     on_progress: Optional[Callable[[int, int], None]] = None
 
 
@@ -305,7 +306,7 @@ class RetrodictionBatch:
             appended.add(res.question_id)
             self._append(res)
 
-        for i, q in enumerate(todo):
+        async def _process(q: RetrodictionQuestion, i: int) -> None:
             rk = self._run_key(q)
             ih = self._inputs_hash(q)
             hit = self.checkpointer.load(rk, self.STAGE, ih)
@@ -324,6 +325,25 @@ class RetrodictionBatch:
                 self.results[q.question_id] = result
             if self.config.on_progress:
                 self.config.on_progress(i + 1, len(todo))
+
+        # SPEED run 19: questions are independent — bounded concurrency across
+        # them instead of a strict serial loop. max_concurrency=1 (default)
+        # preserves today's exact serial behaviour and JSONL ordering. The
+        # per-question body is unchanged; appends are synchronous blocks on
+        # the event-loop thread so no interleaving is possible without awaits.
+        mc = max(1, int(getattr(self.config, "max_concurrency", 1) or 1))
+        if len(todo) <= 1 or mc == 1:
+            for i, q in enumerate(todo):
+                await _process(q, i)
+        else:
+            sem = asyncio.Semaphore(mc)
+
+            async def _bounded(q: RetrodictionQuestion, i: int) -> None:
+                async with sem:
+                    await _process(q, i)
+
+            await asyncio.gather(*(_bounded(q, i)
+                                   for i, q in enumerate(todo)))
         # merge resumed rows into self.results for reporting AND ensure the
         # results JSONL carries every completion (a run where everything was
         # already checkpointed still leaves a complete file behind).
