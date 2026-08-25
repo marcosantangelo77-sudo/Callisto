@@ -262,3 +262,47 @@ class TestValidEnvelopesUnchanged:
         assert ledger.is_primary_bytes(GOOD_BODY)
         assert URL in ledger.observed_urls()
         assert ledger.cites_verified_url(f"cites {URL} for the claim")
+
+
+# ── SEAM C: a 200 fetch the ledger cannot record must fail closed ─────────
+
+class _ExplodingLedger:
+    """Ledger whose record_tool_result always raises."""
+
+    def record_tool_result(self, *args, **kwargs):
+        raise RuntimeError("ledger disk sealed")
+
+
+class TestUnrecorded200FailsClosed:
+    def test_get_json_200_with_failing_ledger_raises_source_error(self):
+        src = _make(ledger=_ExplodingLedger(), status=200,
+                    body='{"ok": true}')
+        with pytest.raises(SourceError) as ei:
+            src.get_json(URL)
+        msg = str(ei.value)
+        assert MACRO_SPEC.name in msg
+        assert URL in msg
+        # The unverified body must not be handed to the caller.
+        assert src.last_record is not None
+        assert getattr(src.last_record, "url", None) == URL
+
+    def test_post_json_200_with_failing_ledger_raises_source_error(self):
+        src = _make(ledger=_ExplodingLedger(), status=200,
+                    body='{"ok": true}')
+        with pytest.raises(SourceError) as ei:
+            src.post_json(URL, {"q": "x"})
+        msg = str(ei.value)
+        assert MACRO_SPEC.name in msg
+        assert URL in msg
+
+    def test_ledger_failure_chains_original_exception(self):
+        src = _make(ledger=_ExplodingLedger(), status=200, body="{}")
+        with pytest.raises(SourceError) as ei:
+            src.get(URL)
+        assert isinstance(ei.value.__cause__, RuntimeError)
+
+    def test_ledger_none_still_returns_200_body(self):
+        src = _make(ledger=None, status=200, body='{"ok": true}')
+        data, rec = src.get_json(URL)
+        assert data == {"ok": True}
+        assert rec.url == URL
