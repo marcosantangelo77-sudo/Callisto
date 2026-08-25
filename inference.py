@@ -902,6 +902,11 @@ class EndpointConfig:
     max_concurrency: int = 1                # parallel in-flight requests
     cost_per_1k_input: float = 0.0          # USD; local = 0.0
     cost_per_1k_output: float = 0.0
+    # Stable canonical identity of the served model (e.g.
+    # "nous/stealth/ox-alpha"). Endpoints sharing an identity are ONE model
+    # choice for scoring/routing — different transports of the same weights.
+    # Absent => each endpoint stands alone (legacy behaviour).
+    model_identity: Optional[str] = None
     extra: dict = field(default_factory=dict)
 
 
@@ -984,6 +989,7 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
         max_concurrency=max(1, int(raw.get("max_concurrency", 1))),
         cost_per_1k_input=float(raw.get("cost_per_1k_input", 0) or 0),
         cost_per_1k_output=float(raw.get("cost_per_1k_output", 0) or 0),
+        model_identity=(raw.get("model_identity") or None),
         extra={**(raw.get("extra") or {}), **({"_unresolved": True} if unresolved else {})},
     )
 
@@ -1183,12 +1189,19 @@ class ProviderRouter:
     def _candidates_as_models(self, names: list[str]) -> list:
         from tools.routing.policy import CandidateModel
         out = []
+        seen_names: set[str] = set()
         for rank, n in enumerate(names):
             ep = self.endpoints.get(n)
             if ep is None:
                 continue
+            model_name = self.scoring_model_name(n)
+            if model_name in seen_names:
+                # Same canonical model via another transport rail: ONE
+                # scoring candidate, not several.
+                continue
+            seen_names.add(model_name)
             out.append(CandidateModel(
-                name=ep.model or n,
+                name=model_name,
                 tier=n,
                 cost_per_1k_input=ep.cost_per_1k_input,
                 cost_per_1k_output=ep.cost_per_1k_output,
@@ -1321,7 +1334,41 @@ class ProviderRouter:
                     f"down; using {fallback[0]} anyway"
                 )
                 return fallback
+        return self._group_by_identity(out)
+
+    def _group_by_identity(self, names: list[str]) -> list[str]:
+        """Collapse rails that share a canonical model identity so the same
+        physical model is ONE candidate, not several. The first-declared rail
+        keeps its position (preserving configured transport priority); later
+        rails of the same identity move to directly after it as failovers.
+        Endpoints WITHOUT model_identity keep legacy per-endpoint behaviour."""
+        if len(names) < 2:
+            return names
+        seen: dict[str, int] = {}
+        out: list[str] = []
+        for n in names:
+            ident = self.endpoints[n].model_identity if n in self.endpoints else None
+            if ident is None:
+                out.append(n)
+                continue
+            anchor = seen.get(ident)
+            if anchor is None:
+                seen[ident] = len(out)
+                out.append(n)
+            else:
+                # insert right after the last rail already grouped under ident
+                out.insert(seen[ident] + 1, n)
+                seen[ident] += 1
         return out
+
+    def scoring_model_name(self, endpoint_name: str) -> str:
+        """Canonical name to record/lookup in the score store for an endpoint.
+        Rails sharing a model identity share one scoring candidate; without
+        an identity the display model label is used (legacy behaviour)."""
+        ep = self.endpoints.get(endpoint_name)
+        if ep is not None and ep.model_identity:
+            return ep.model_identity
+        return ep.model if ep is not None else endpoint_name
 
     def pick_endpoint(self, task_class: str, schema: Optional[dict] = None,
                       tools: bool = False) -> Optional[EndpointConfig]:

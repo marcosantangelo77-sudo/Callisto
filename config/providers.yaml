@@ -76,6 +76,12 @@ providers:
     # Auth is the CLI's own keychain OAuth entry — no env vars, no keys,
     # no GPU. `git clone` + `hermes portal login` runs this whole file.
     backend: hermes_cli
+    model_identity: nous/stealth/ox-alpha   # canonical identity shared with
+                                            # ox_alpha_proxy — one model, two
+                                            # transports (proxy first, CLI
+                                            # failover). Display `model` and
+                                            # the Hermes wire target below
+                                            # stay unchanged.
     model: ox-alpha                 # display label (router metadata)
     # Explicit CLI routing target: flags are placed before `-z` so actual
     # Portal routing matches the supervisor's --provider nous -m form.
@@ -113,6 +119,7 @@ providers:
     base_url_env: OX_ALPHA_PROXY_BASE_URL   # e.g. http://127.0.0.1:8645/v1
     api_key_env: OX_ALPHA_PROXY_API_KEY     # any token; proxy attaches real creds
     model_env: OX_ALPHA_PROXY_MODEL
+    model_identity: nous/stealth/ox-alpha   # same canonical model as ox_alpha
     model: stealth/ox-alpha         # used when the env vars are unset
     context_tokens: 128000
     temperature: 0.2
