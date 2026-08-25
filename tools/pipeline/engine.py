@@ -348,8 +348,8 @@ class ResearchPipeline:
             # CONSTRUCTION ERGONOMICS (JOB 3): a live run used to die at
             # stage 6 — ~100 seconds in — because no adversary router was
             # wired. Defaulting to the SAME model as the author is safe by
-            # construction: agp.ensemble marks same-model review as
-            # self_review and caps it at SELF_REVIEW_CEILING, so this can
+            # construction: the seal path classifies shared-route review as
+            # self-review and ENFORCES the SELF_REVIEW_CEILING, so this can
             # only ever subtract confidence, never inflate independence.
             router = self._adversary_router or self.model
             self._adversary = Adversary(
@@ -1016,20 +1016,69 @@ class ResearchPipeline:
                 f"leaves (rest gap-classified: "
                 f"{sorted(result.gap_kinds.values())}); ceiling capped")
 
-        # 7. Adversary. When no dedicated router was injected, the author's
-        # own model attacks — recorded honestly as self-review in the notes.
-        if self._adversary_is_self_review:
-            result.notes.append(
-                "adversary running in self-review mode: no separate "
-                "adversary_router was wired; same-model review is capped "
-                "(SELF_REVIEW_CEILING) and counts as zero independent "
-                "reviewers")
-        objections = await self.adversary.attack(
-            claim_id=session.session_id, conclusion=conclusion,
-            evidence_items=[e.content for e in session.evidence])
-        result.objections = objections
+        # 7. Review. One critic by default; an AdversaryPanel (wired as
+        # adversary_router) reviews with N critics whose verdicts pool.
         from agp.adversary import Adversary
-        clamped, _ = Adversary.apply_verdict(clamped, objections)
+        from agp.ensemble import AdversaryPanel
+        panel = (self._adversary_router
+                 if isinstance(self._adversary_router, AdversaryPanel)
+                 else None)
+        if panel is not None:
+            verdict = await panel.attack(
+                claim_id=session.session_id, conclusion=conclusion,
+                evidence_items=[e.content for e in session.evidence])
+            objections = verdict.objections
+            result.objections = objections
+            clamped, reason = verdict.apply(clamped)
+            result.notes.append(
+                "review provenance: "
+                f"{verdict.provenance.mode} (reviewers: "
+                f"{verdict.provenance.reviewer_models})")
+            if reason:
+                result.notes.append(f"adversary panel: {reason}")
+            for d in verdict.disagreements:
+                result.notes.append(d.describe())
+        else:
+            # When no dedicated router was injected, the author's own model
+            # attacks — recorded as self-review in the notes AND capped
+            # below by the shared-route ceiling.
+            if self._adversary_is_self_review:
+                result.notes.append(
+                    "adversary running in self-review mode: no separate "
+                    "adversary_router was wired; same-model review counts "
+                    "as zero independent reviewers and is capped at "
+                    f"{SELF_REVIEW_CEILING}")
+            objections = await self.adversary.attack(
+                claim_id=session.session_id, conclusion=conclusion,
+                evidence_items=[e.content for e in session.evidence])
+            result.objections = objections
+            clamped, _ = Adversary.apply_verdict(clamped, objections)
+
+        # ── REVIEW PROVENANCE, enforced ────────────────────────────────
+        # A critic routed on the author's own route is a self-review even
+        # when an adversary_router OBJECT exists: the default `ask` wiring
+        # passed the same router to both roles and the conclusion sealed as
+        # if independently reviewed while the notes claimed a 0.54 cap no
+        # code applied (PATTERNS family 1/4). Wiring truth, not spelling,
+        # decides: same object, or the router the author's model wraps.
+        # The panel path needs no structural check — its distinctness is
+        # judged per member on the ROUTER-REPORTED model name instead.
+        arouter = self._adversary_router
+        shared_route = (
+            panel is None
+            and (arouter is None or arouter is self.model
+                 or getattr(self.model, "router", None) is arouter))
+        if shared_route and clamped > SELF_REVIEW_CEILING:
+            clamped = SELF_REVIEW_CEILING
+            result.notes.append(
+                "self-review ceiling ENFORCED: reviewer shares the "
+                f"author's route; confidence capped at {SELF_REVIEW_CEILING}")
+        # Recompute the tier AFTER every downward mechanism (inheritance
+        # clamp, mixed decomposition, adversary penalties, self-review
+        # ceiling). Previously the reported tier was frozen before the
+        # adversary ran, so a penalty crossing a band boundary left the
+        # seal carrying the higher tier's label.
+        tier = ConfidenceTier.from_score(max(0.0, clamped)).value
 
         session.summary = SessionSummary(
             scope=question, domain=domain, conclusion=conclusion,
@@ -1046,7 +1095,7 @@ class ResearchPipeline:
         blocking = next((ob for ob in objections if ob.is_blocking), None)
         if blocking is not None:
             result.refusal_reason = f"adversary veto: {blocking.text}"
-            self.adversary.ledger.record_sustained(
+            rev_ledger.record_sustained(
                 session.session_id, blocking.text)
             return result
         if session.summary.confidence_score < DB_CONFIDENCE_FLOOR:
@@ -1054,7 +1103,7 @@ class ResearchPipeline:
                 f"confidence {session.summary.confidence_score} below DB "
                 f"floor {DB_CONFIDENCE_FLOOR} after adversary penalties")
             for ob in objections:
-                self.adversary.ledger.record_sustained(
+                rev_ledger.record_sustained(
                     session.session_id, ob.text)
             return result
         if cp is not None:
@@ -1106,7 +1155,7 @@ class ResearchPipeline:
         result.artifact_refs = list(self.artifact_refs)
         result.trace = trace
         for ob in objections:
-            self.adversary.ledger.record_overrule(
+            rev_ledger.record_overrule(
                 session.session_id, ob.text,
                 "sealed after penalty applied; objection preserved per "
                 "dissent-logging policy")
