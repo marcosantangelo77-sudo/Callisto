@@ -275,35 +275,53 @@ def detect_contradictions(group: ClaimGroup,
 
     # numeric — one value per independence unit (first stated wins; the
     # provenance of that exact item is carried on the side).
+    #
+    # S1b (redteam synthesis): max(values, key=abs) cherry-picks ONE value
+    # per voice, so a genuine share disagreement (0.6 vs 0.2) is HIDDEN by
+    # similar large revenue figures (9e9 vs 9.05e9) that the max picks
+    # instead, and two agreeing documents can be convicted on unrelated big
+    # numbers. Fix: compare ALL cross-voice value pairs, but a pair counts
+    # as a CONTRADICTION only when both values are their voice's
+    # smallest-magnitude figure (the subject quantity a claim is about);
+    # large-magnitude context figures (revenues, totals) may differ without
+    # convicting the sources of disagreement, and agreement anywhere never
+    # masks a subject-figure conflict.
     by_ikey: dict[str, EvidenceItem] = {}
     for it in group.items:
         if it.values:
             by_ikey.setdefault(it.indep_key, it)
     voices = [(k, it) for k, it in by_ikey.items()]
+    small: dict[str, float] = {
+        k: min(abs(v) for v in it.values) for k, it in voices}
     for i in range(len(voices)):
         for j in range(i + 1, len(voices)):
             ka, ia = voices[i]
             kb, ib = voices[j]
-            va, vb = max(ia.values, key=abs), max(ib.values, key=abs)
-            denom = max(abs(va), abs(vb))
-            if denom > 0 and abs(va - vb) / denom > rel_tolerance:
-                out.append(Contradiction(
-                    claim=group.claim, kind="numeric",
-                    sides=[
-                        {"value": va, "sources": [ia.source_name],
-                         "indep_keys": [ka],
-                         "provenance": [{"sha256": ia.content_sha256,
-                                         "url": ia.url}]},
-                        {"value": vb, "sources": [ib.source_name],
-                         "indep_keys": [kb],
-                         "provenance": [{"sha256": ib.content_sha256,
-                                         "url": ib.url}]},
-                    ],
-                    what_would_settle_it=_settle_suggestion(
-                        "numeric", group.claim),
-                    severity="MAJOR" if abs(va - vb) / denom > 0.5
-                    else "MINOR",
-                ))
+            for va in ia.values:
+                for vb in ib.values:
+                    denom = max(abs(va), abs(vb))
+                    if denom <= 0 or abs(va - vb) / denom <= rel_tolerance:
+                        continue
+                    if not (abs(va) == small[ka] and abs(vb) == small[kb]):
+                        continue  # context-figure mismatch, not the subject
+                    out.append(Contradiction(
+                        claim=group.claim, kind="numeric",
+                        sides=[
+                            {"value": va, "sources": [ia.source_name],
+                             "indep_keys": [ka],
+                             "provenance": [{"sha256": ia.content_sha256,
+                                             "url": ia.url}]},
+                            {"value": vb, "sources": [ib.source_name],
+                             "indep_keys": [kb],
+                             "provenance": [{"sha256": ib.content_sha256,
+                                             "url": ib.url}]},
+                        ],
+                        what_would_settle_it=_settle_suggestion(
+                            "numeric", group.claim),
+                        severity="MAJOR" if abs(va - vb) / denom > 0.5
+                        else "MINOR",
+                    ))
+                break
 
     # stance
     sup = {it.indep_key: it for it in group.items if it.stance == "supports"}

@@ -510,6 +510,16 @@ def classify_null_kind(trace: Any) -> tuple[str, str]:
             for r in rejected) or "sources returned only irrelevant material"
         expl = (f"sources were queried and returned no relevant material "
                 f"({len(rejected)} rejected at the relevance gate): {det}")
+        # S4 (redteam synthesis): reachability here is only HTTP-200 + a
+        # gate verdict. A hostile or low-quality mirror answering junk to
+        # every query produces exactly this shape, and the verdict must not
+        # read as an authoritative absence-of-evidence finding. Name the
+        # sources' standing explicitly so the null is never more reassuring
+        # than the evidence for it.
+        expl += (" | standing: rejecting source(s) are "
+                 "not verified as authoritative or registry-selected for "
+                 "this claim; treat as coverage-limited, not as proof of "
+                 "absence")
         if errors:
             # Mixed: some sources answered, some errored. Still an honest
             # null on the evidence obtained, but coverage is disclosed —
