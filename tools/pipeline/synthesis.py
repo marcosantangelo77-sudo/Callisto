@@ -430,7 +430,10 @@ def confidence_from_agreement(group: ClaimGroup,
         cls_items = [it for it in group.items
                      if (it.source_class if it.source_class in _CLASS_RANK
                          else "INFERRED") == cls]
-        if not any(it.content_sha256 for it in cls_items):
+        if not any(it.content_sha256 for it in cls_items) and cls_voices > 3:
+            # Volume anomaly only: many same-claim voices with zero
+            # provenance. Small groups (2-3 voices) are the normal
+            # direct-construction case and keep full corroboration credit.
             unprovenanced_class.add(cls)
             reasons.append(
                 f"class {cls}: no content hashes on any item — distinct-"
