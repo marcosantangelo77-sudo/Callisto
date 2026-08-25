@@ -24,6 +24,7 @@ The pipeline can only ever lower what the model proposes.
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
 import hashlib
 import json
@@ -749,13 +750,19 @@ class ResearchPipeline:
             return {"fetches": [dataclasses.asdict(f) for f in fetches_q],
                     "rejections": [dataclasses.asdict(r)
                                    for r in trace_q.rejected],
-                    "admitted_fetches": [
-                        {"source_name": f.source_name, "url": f.url}
-                        for f in getattr(trace_q, "admitted", None) or []],
-                    "rounds": list(getattr(trace_q, "rounds", None) or []),
-                    "skipped_sources": list(
+                    # Modern-format marker: presence of this key (with the
+                    # full FetchResult records in `fetches`) means a resume
+                    # hydrates `trace.admitted` one-to-one from `fetches`
+                    # order. Legacy payloads lack it and restore zero
+                    # admissions. No (source, url) alias map: duplicate
+                    # admissions and same-key records are preserved.
+                    "admitted_fetch_count":
+                        len(getattr(trace_q, "admitted", None) or []),
+                    "rounds": copy.deepcopy(
+                        getattr(trace_q, "rounds", None) or []),
+                    "skipped_sources": copy.deepcopy(
                         getattr(trace_q, "skipped_sources", None) or []),
-                    "gain_skipped": list(
+                    "gain_skipped": copy.deepcopy(
                         getattr(trace_q, "gain_skipped", None) or []),
                     "independent_keys": sorted(trace_q.independent_keys),
                     "queries": list(trace_q.queries),
@@ -1267,31 +1274,43 @@ def _trace_from_payload(question_id: str, payload: dict):
     trace.queries = list(payload.get("queries") or [])
     trace.stop_reason = payload.get("stop_reason", "")
     # Full audit state. Legacy checkpoints lack these fields; degrade to
-    # empty rather than inventing admissions, rounds, or outcomes.
+    # empty rather than inventing admissions, rounds, or outcomes. Nested
+    # structures are normalized (only safe dict entries survive — malformed
+    # entries are dropped, no outcomes invented) and then deep-copied so a
+    # restored trace can never alias the checkpoint payload's objects.
     rounds = payload.get("rounds")
     if isinstance(rounds, list):
-        trace.rounds = [r for r in rounds if isinstance(r, dict)]
-        for r in trace.rounds:
-            if not isinstance(r.get("sources"), list):
-                r["sources"] = []
+        norm_rounds = []
+        for r in rounds:
+            if not isinstance(r, dict):
+                continue
+            rr = copy.deepcopy(r)
+            sources = rr.get("sources")
+            rr["sources"] = [copy.deepcopy(src)
+                             for src in sources
+                             if isinstance(src, dict)] \
+                if isinstance(sources, list) else []
+            norm_rounds.append(rr)
+        trace.rounds = norm_rounds
     skipped = payload.get("skipped_sources")
     if isinstance(skipped, list):
-        trace.skipped_sources = [s for s in skipped if isinstance(s, dict)]
+        trace.skipped_sources = [copy.deepcopy(sk)
+                                 for sk in skipped if isinstance(sk, dict)]
     gain_skipped = payload.get("gain_skipped")
     if isinstance(gain_skipped, list):
-        trace.gain_skipped = [g for g in gain_skipped
-                              if isinstance(g, dict)]
-    # `admitted` must mirror the checkpointed admitted fetches. Match on
-    # (source_name, url) against the checkpointed fetch records — never
-    # admit something that is not itself restored as a fetch.
-    by_key = {(r.get("source_name"), r.get("url")): r
-              for r in payload.get("fetches") or []
-              if isinstance(r, dict)}
-    for a in payload.get("admitted_fetches") or []:
-        if not isinstance(a, dict):
-            continue
-        rec = by_key.get((a.get("source_name"), a.get("url")))
-        if rec is not None:
+        trace.gain_skipped = [copy.deepcopy(gk)
+                              for gk in gain_skipped if isinstance(gk, dict)]
+    # Canonical `admitted` hydration (modern format only): hydrate from the
+    # full FetchResult records in checkpoint `fetches` order — the live
+    # pipeline checkpoints exactly `fetches_q == list(trace.admitted)` —
+    # bounded by `admitted_fetch_count`. One-to-one: duplicates and
+    # same-source/same-URL records are preserved verbatim; nothing outside
+    # the stored fetch records is ever fabricated into an admission.
+    n_admitted = payload.get("admitted_fetch_count")
+    if isinstance(n_admitted, int) and not isinstance(n_admitted, bool):
+        fetch_records = [r for r in payload.get("fetches") or []
+                         if isinstance(r, dict)]
+        for rec in fetch_records[:max(n_admitted, 0)]:
             try:
                 trace.admitted.append(_fetch_from_payload(rec))
             except (KeyError, TypeError, ValueError):

@@ -9,6 +9,7 @@ Run: python3 -m pytest tests/test_integration_seam_engine.py -q
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
 import datetime
 import json
@@ -232,6 +233,23 @@ def test_f4_control_empty_answer_zero_admitted_gets_classification():
 
 # ── F5: checkpoint restore drops rounds ─────────────────────────────────────
 
+def _serialize_fetch_payload(fetches_q, trace_q):
+    """Mirror tools.pipeline.engine._fetch_payload_dict exactly (the closure
+    is not reachable outside run()), then force a real JSON round trip so
+    these tests exercise actual serialization, not an idealized dict."""
+    payload = {
+        "fetches": [dataclasses.asdict(f) for f in fetches_q],
+        "rejections": [dataclasses.asdict(r) for r in trace_q.rejected],
+        "admitted_fetch_count": len(trace_q.admitted),
+        "rounds": copy.deepcopy(trace_q.rounds),
+        "skipped_sources": copy.deepcopy(trace_q.skipped_sources),
+        "gain_skipped": copy.deepcopy(trace_q.gain_skipped),
+        "independent_keys": sorted(trace_q.independent_keys),
+        "queries": list(trace_q.queries),
+        "stop_reason": trace_q.stop_reason}
+    return json.loads(json.dumps(payload))
+
+
 def test_f5_checkpoint_restores_rounds_null_and_crossrun_fidelity():
     """Regression (was: checkpoint restore dropped rounds). A modern fetch
     checkpoint restores the full retrieval audit state, so a resumed run's
@@ -245,7 +263,7 @@ def test_f5_checkpoint_restores_rounds_null_and_crossrun_fidelity():
         "rejections": [{"source_name": "alpha", "url": "u",
                         "reason": "irrelevant", "relevance_score": 0.1,
                         "content_sha256": "x"}],
-        "admitted_fetches": [],
+        "admitted_fetch_count": 0,
         "rounds": [
             {"round": 1, "query": "q", "admitted": 0, "sources": [
                 {"name": "alpha", "rejected": "irrelevant"},
@@ -254,7 +272,7 @@ def test_f5_checkpoint_restores_rounds_null_and_crossrun_fidelity():
         "skipped_sources": [], "gain_skipped": [],
         "independent_keys": [], "queries": ["q"],
         "stop_reason": "round budget exhausted"}
-    tr = _trace_from_payload("q1", payload)
+    tr = _trace_from_payload("q1", json.loads(json.dumps(payload)))
     assert tr.rounds and tr.rounds[0]["sources"][1] == \
         {"name": "beta", "error": "HTTP 503"}
 
@@ -283,8 +301,9 @@ def test_f5_legacy_checkpoint_without_rounds_stays_safe():
 
 
 def test_trace_roundtrip_preserves_full_audit_state():
-    """Modern payload round trip: rounds, planner skips, gain skips, stop
-    reason survive; `admitted` reflects only restored admitted fetches."""
+    """Modern payload round trip through REAL serialization: rounds,
+    planner skips, gain skips, stop reason survive; `admitted` hydrates
+    one-to-one from the checkpointed fetch records."""
     from tools.pipeline.engine import FetchResult
     from tools.pipeline.retrieval import RetrievalTrace
 
@@ -306,28 +325,168 @@ def test_trace_roundtrip_preserves_full_audit_state():
     live.skipped_sources = [{"name": "delta", "reason": "planner gap"}]
     live.gain_skipped = [{"round": 2, "source": "epsilon",
                           "reason": "duplicate independent voice"}]
-    trace_q = live
-    # serialize exactly as the engine does
-    payload = {
-        "fetches": [dataclasses.asdict(f) for f in trace_q.admitted],
-        "rejections": [dataclasses.asdict(r)
-                       for r in trace_q.rejected],
-        "admitted_fetches": [
-            {"source_name": f.source_name, "url": f.url}
-            for f in trace_q.admitted],
-        "rounds": list(trace_q.rounds),
-        "skipped_sources": list(trace_q.skipped_sources),
-        "gain_skipped": list(trace_q.gain_skipped),
-        "independent_keys": sorted(trace_q.independent_keys),
-        "queries": list(trace_q.queries),
-        "stop_reason": trace_q.stop_reason}
-    restored = _trace_from_payload("q1", json.loads(json.dumps(payload)))
+    payload = _serialize_fetch_payload([fr_beta], live)
+    restored = _trace_from_payload("q1", payload)
     assert restored.rounds == live.rounds
     assert restored.skipped_sources == live.skipped_sources
     assert restored.gain_skipped == live.gain_skipped
-    assert [f.source_name for f in restored.admitted] == ["beta"]
+    assert len(restored.admitted) == 1
+    assert restored.admitted[0].source_name == "beta"
     assert restored.admitted[0].url == fr_beta.url
-    assert restored.independent_keys == set()
+    assert restored.admitted[0].body == fr_beta.body
+    assert restored.stop_reason == live.stop_reason
+
+
+def test_admitted_hydration_preserves_duplicate_and_same_key_records():
+    """The old (source_name, url) alias map collapsed duplicate admissions
+    and same-key records. Canonical hydration must keep them one-to-one,
+    in checkpoint `fetches` order, with full fields."""
+    from tools.pipeline.engine import FetchResult
+
+    def _FR(name, url, body):
+        return FetchResult(source_name=name, url=url,
+                           content_sha256=body, body=body, parsed=None,
+                           question_id="q1", fetched_at="t")
+    f1 = _FR("beta", "https://b/1", "first")
+    f2 = _FR("beta", "https://b/1", "second-dup")
+    f3 = _FR("alpha", "https://a/1", "third")
+    tr = type(_trace_from_payload("q1", {}))(question_id="q1")
+    tr.admitted.extend([f1, f2, f3])
+    payload = _serialize_fetch_payload([f1, f2, f3], tr)
+    # sanity: the payload really contains three identical-key fetch records
+    keys = [(r["source_name"], r["url"]) for r in payload["fetches"]]
+    assert len(keys) == 3 and len(set(keys)) == 2
+    restored = _trace_from_payload("q1", payload)
+    assert [f.body for f in restored.admitted] == \
+        ["first", "second-dup", "third"]
+
+
+def test_malformed_nested_audit_degrades_without_crash():
+    """Junk inside the new nested fields must be dropped, not crash
+    classify_null_kind / record_run on `.get`. No outcomes are invented:
+    surviving entries are only the safe dicts verbatim."""
+    from tools.pipeline.crossrun import record_run
+    from tools.gaps import classify_null_kind
+
+    payload = json.loads(json.dumps({
+        "fetches": [], "rejections": [], "admitted_fetch_count": 0,
+        "rounds": [
+            {"round": 1, "query": "q", "admitted": 0,
+             "sources": ["junk", {"name": "beta", "error": "503"}, 42]},
+            "not-a-round",
+            {"round": 2, "sources": {"not": "a list"}},
+        ],
+        "skipped_sources": [7, "x", {"name": "delta", "reason": "gap"}],
+        "gain_skipped": [None, {"round": 2, "source": "epsilon"}],
+        "independent_keys": [], "queries": ["q"],
+        "stop_reason": "round budget exhausted"}))
+    tr = _trace_from_payload("q1", payload)
+    assert tr.rounds[0]["sources"] == [{"name": "beta", "error": "503"}]
+    assert tr.rounds[1]["sources"] == []
+    assert len(tr.rounds) == 2
+    assert tr.skipped_sources == [{"name": "delta", "reason": "gap"}]
+    assert tr.gain_skipped == [{"round": 2, "source": "epsilon"}]
+    kind, expl = classify_null_kind(tr)  # must not raise
+    class _L:
+        fetches = []
+        leaves = []
+    rec = record_run(_L(), {"q1": tr}, "default", "Q")
+    assert rec["sources"]["beta"]["errored"] == 1
+
+
+def test_restored_trace_does_not_alias_checkpoint_payload():
+    """Mutating a restored trace must never mutate the checkpoint payload
+    (and vice versa): nested rounds/skips/gain-skips are deep-copied after
+    validation."""
+    payload = json.loads(json.dumps({
+        "fetches": [], "rejections": [], "admitted_fetch_count": 0,
+        "rounds": [{"round": 1, "query": "q", "admitted": 0, "sources": [
+            {"name": "beta", "error": "503"}]}],
+        "skipped_sources": [{"name": "delta", "reason": "gap"}],
+        "gain_skipped": [{"round": 2, "source": "epsilon"}],
+        "independent_keys": [], "queries": ["q"], "stop_reason": "budget"}))
+    tr = _trace_from_payload("q1", payload)
+    tr.rounds[0]["sources"][0]["error"] = "MUTATED"
+    tr.rounds[0]["query"] = "MUTATED"
+    tr.skipped_sources[0]["reason"] = "MUTATED"
+    tr.gain_skipped[0]["source"] = "MUTATED"
+    assert payload["rounds"][0]["sources"][0]["error"] == "503"
+    assert payload["rounds"][0]["query"] == "q"
+    assert payload["skipped_sources"][0]["reason"] == "gap"
+    assert payload["gain_skipped"][0]["source"] == "epsilon"
+
+
+def test_real_resume_restores_full_trace_audit_without_transport(tmp_path):
+    """End-to-end: warm a real fetch_leaf checkpoint through
+    ResearchPipeline (FileCheckpointer round-trip included), resume in a
+    fresh pipeline whose transport counts calls, and compare live vs
+    resumed trace audit state, per-source counts, and n_fetches.
+    Preserved here: alpha's rejection AND beta's admission."""
+    from tools.pipeline.checkpoint import FileCheckpointer
+    from tools.pipeline.crossrun import record_run
+
+    routes = {"/fetch_alpha": GOOD, "/fetch_beta": IRRELEVANT}
+    cp = FileCheckpointer(root=tmp_path / "ckpt")
+
+    live_pipe, reg, calls = _pipeline(routes=routes, checkpointer=cp)
+    live_result, _ = _run(live_pipe, reg, calls, adaptive_gain=False)
+    live_tr = live_pipe._crossrun_traces
+    assert live_tr, "no leaf traces recorded"
+    qid = next(iter(live_tr))
+    lt = live_tr[qid]
+    # Preserved coverage shape: alpha's GOOD body is admitted (multiple
+    # rounds -> duplicate admissions), beta's IRRELEVANT body is gate-
+    # rejected, gamma has no route -> errored in the round audit.
+    assert [f.source_name for f in lt.admitted] == ["alpha", "alpha", "alpha"]
+    assert {r.source_name for r in lt.rejected} == {"beta"}
+    assert any("error" in src for rd in lt.rounds
+               for src in rd.get("sources", []))
+
+    # Resume: fresh ledger + a transport that records any call (must be 0).
+    resumed_ledger = ProvenanceLedger()
+    resumed_transport = fixture_transport({})
+    model = _model(DECOMPOSE_ONE)
+    resumed_pipe = ResearchPipeline(
+        model=model, adversary_router=_Quiet(),
+        transport=resumed_transport, store=None,
+        ledger=resumed_ledger, registry=reg, checkpointer=cp)
+    resumed_result = asyncio.run(resumed_pipe.run(
+        "What does research say about semiconductor supply chains?",
+        today=datetime.date(2026, 8, 22)))
+    # Zero transport calls proves every fetch came from the checkpoint
+    # (this scenario refuses to seal — thin evidence — so result.trace is
+    # only set on the sealed path; the fetch-stage resume is proven by the
+    # no-transport-call invariant plus the restored-trace comparisons).
+    assert resumed_transport.calls == [], \
+        "resumed pipeline hit transport; checkpoint did not cover fetch"
+
+    rt = resumed_pipe._crossrun_traces[qid]
+    assert rt.rounds == lt.rounds
+    assert rt.skipped_sources == lt.skipped_sources
+    assert rt.gain_skipped == lt.gain_skipped
+    assert rt.queries == lt.queries
+    assert rt.stop_reason == lt.stop_reason
+    assert rt.n_admitted == lt.n_admitted
+    assert [(f.source_name, f.url, f.content_sha256)
+            for f in rt.admitted] == \
+        [(f.source_name, f.url, f.content_sha256) for f in lt.admitted]
+    assert [(r.source_name, r.url, r.reason) for r in rt.rejected] == \
+        [(r.source_name, r.url, r.reason) for r in lt.rejected]
+
+    # Cross-run source counts identical live vs resumed.
+    class _Res:
+        fetches = live_result.fetches
+        leaves = live_result.leaves
+    rec_live = record_run(_Res(), live_tr, "default", "Q")
+    class _Res2:
+        fetches = resumed_result.fetches
+        leaves = resumed_result.leaves
+    rec_resumed = record_run(_Res2(), resumed_pipe._crossrun_traces,
+                             "default", "Q")
+    assert rec_resumed["sources"] == rec_live["sources"]
+    assert rec_live["sources"]["alpha"]["admitted"] == 3
+    assert rec_live["sources"]["beta"]["rejected_gate"] == 3
+    assert rec_live["sources"]["gamma"]["errored"] >= 1
 
 
 # ── Seam 5: crossrun store round-trip, all-on ───────────────────────────────
