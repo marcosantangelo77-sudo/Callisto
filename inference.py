@@ -1303,25 +1303,31 @@ class ProviderRouter:
                 continue
             if not st.available:
                 continue
-            # hermes_cli declares structured_output=False honestly — it
-            # cannot enforce a schema. It is still usable for schema-bearing
-            # calls on a BEST-EFFORT basis (JSON-in-text + _parse_json_response),
-            # which is what keeps a CLI-only laptop running the whole system.
-            # Callers needing a hard guarantee must not rely on it: check
-            # ep.structured_output themselves.
+            # SPEED run 16 (2026-08-24): the best-effort exemption is about
+            # the CAPABILITY CONTRACT, not the backend brand. An endpoint
+            # that honestly declares structured_output=False is JSON-in-text
+            # best-effort exactly like hermes_cli — same tolerant shared
+            # parser downstream, same battery-D3 fail-closed semantics. The
+            # ox_alpha_proxy serves THE SAME model as the CLI behind the SAME
+            # Portal OAuth; banning it from schema-bearing calls forced every
+            # adversary call onto a fresh ~12-14s fork on one of the three
+            # serial rounds of every sealed question. Callers needing a HARD
+            # guarantee must still check ep.structured_output themselves.
             if (schema is not None and not ep.structured_output
-                    and ep.backend != "hermes_cli"):
+                    and ep.backend not in ("hermes_cli", "openai_compat")):
                 continue
             out.append(n)
         if not out:
             # Everything cooling down (or filtered): prefer least-bad rather
-            # than raising — degrade, don't crash the loop.
+            # than raising — degrade, don't crash the loop. Same capability
+            # rule as above (run 16): keep the filters from drifting apart.
             fallback = [n for n in names
                         if n in self.states
                         and not self.endpoints[n].extra.get("_unresolved")
                         and (schema is None
                              or self.endpoints[n].structured_output
-                             or self.endpoints[n].backend == "hermes_cli")]
+                             or self.endpoints[n].backend in (
+                                 "hermes_cli", "openai_compat"))]
             if fallback:
                 logger.warning(
                     f"All endpoints for task_class={task_class!r} cooling "
@@ -1336,7 +1342,11 @@ class ProviderRouter:
         Prefers lowest current load, then declared order."""
         for name in self.candidates_for(task_class):
             ep = self.endpoints[name]
-            if schema is not None and not ep.structured_output:
+            # SPEED run 16: same capability rule as candidates_for — a
+            # best-effort JSON-in-text endpoint (declared False) is admissible
+            # exactly when the backend-brand exemption admits it there.
+            if (schema is not None and not ep.structured_output
+                    and ep.backend not in ("hermes_cli", "openai_compat")):
                 continue
             if tools and not ep.tool_calls:
                 continue
@@ -1417,9 +1427,16 @@ class ProviderRouter:
         }
         if max_tokens:
             payload["max_tokens"] = max_tokens
-        if schema is not None:
+        if schema is not None and endpoint.structured_output:
             # Structured output. llama-server supports json_schema in
             # response_format; hosted OpenAI-compat APIs accept it too.
+            # SPEED run 16: ONLY for endpoints that declare the capability.
+            # Attaching an enforcement block to an endpoint that honestly
+            # declared structured_output=False misrepresents the request
+            # (nothing upstream enforces it) and hard-400s on stricter
+            # OpenAI-compat providers; best-effort endpoints get the same
+            # contract as hermes_cli — no enforcement, tolerant parse
+            # downstream (battery D3).
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "callisto_output", "schema": schema},
