@@ -128,9 +128,14 @@ class RouterModel(PipelineModel):
         return getattr(self.router, "name", "router")
 
     async def complete(self, role: str, messages: list[dict],
-                       **_ignored) -> dict:
+                       schema=None, **_ignored) -> dict:
+        # SPEED run 18: forward the caller's JSON schema. Dropping it meant
+        # schema-bearing calls (adversary VERDICT_JSON_SCHEMA) lost upstream
+        # structured-output enforcement on endpoints that honestly declare
+        # the capability and would have honoured it; parse_model_json's
+        # tolerant fallback still covers endpoints without it.
         task_class = self._rtc.get(role, [role])[0]
-        return await self.router.complete(task_class, messages)
+        return await self.router.complete(task_class, messages, schema=schema)
 
 
 class ScriptedModel(PipelineModel):

@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -32,9 +33,52 @@ from tools.retrodiction.batch import (                          # noqa: E402
 from tools.routing.scores import ModelScoreStore                # noqa: E402
 
 
-def make_researcher_factory():
+def _make_model():
+    """SPEED run 18: transport selection for the scored batch.
+
+    The batch hardwired HermesCliModel — a fresh `hermes -z` process per
+    model call, measured at 16.2s on this machine (2026-08-25), of which
+    ~10.6s is interpreter/CLI startup. That was the original 43-minute
+    baseline's dominant term, still live on THIS path after the router
+    gained the persistent ox_alpha_proxy tier (warm 1.2-2.4s, tonight
+    3-15s under Portal capacity). Both transports serve the SAME
+    stealth/ox-alpha behind the SAME Portal OAuth — only WHERE the
+    identical completion is served differs; no caching, nothing crosses a
+    cutoff, the adversary stays its own call.
+
+    Default 'proxy': ProviderRouter with RouterModel (roles map to task
+    classes; schema now forwarded). Degrades to the CLI path when the
+    env var says so, or when no proxy endpoint resolves / the proxy
+    process is down — same fail-open-to-CLI behaviour as routing.
+    """
+    choice = os.environ.get("CALLISTO_RETRO_TRANSPORT", "proxy").lower()
+    if choice != "cli":
+        try:
+            import inference
+            from tools.pipeline.model import RouterModel
+
+            router = inference.ProviderRouter()
+            proxy_ok = any(
+                not ep.extra.get("_unresolved")
+                for name, ep in router.endpoints.items()
+                if name == "ox_alpha_proxy")
+            if proxy_ok:
+                m = RouterModel(router)
+                print("batch transport: ProviderRouter "
+                      "(persistent proxy tier)")
+                return m
+            print("batch transport: ox_alpha_proxy unresolved "
+                  "-> hermes CLI fallback")
+        except Exception as e:  # noqa: BLE001 — degrade, never crash batch
+            print(f"batch transport: router unavailable ({e}) "
+                  "-> hermes CLI fallback")
     assert hermes_available(), "hermes CLI not found"
-    model = HermesCliModel(timeout_s=300.0)
+    print("batch transport: hermes CLI (fresh fork per call)")
+    return HermesCliModel(timeout_s=300.0)
+
+
+def make_researcher_factory():
+    model = _make_model()
 
     def factory():
         return PipelineResearcher(
