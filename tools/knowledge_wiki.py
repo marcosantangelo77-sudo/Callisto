@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS wiki_articles (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     compile_count INTEGER NOT NULL DEFAULT 1,
-    content_hash TEXT NOT NULL DEFAULT ''
+    content_hash TEXT NOT NULL DEFAULT '',
+    provenance_class TEXT
 );
 
 CREATE TABLE IF NOT EXISTS wiki_contradictions (
@@ -160,6 +161,63 @@ def _merged_article_confidence(*, existing_confidence: float, compile_count: int
     return round(min(weighted, floor_of_inputs), 3)
 
 
+# ── Provenance classes: one admission policy for every source ──────────────
+#
+# Family-#2 closure (build/memory-wiki): the P4/R7 memory trust policy
+# landed in hermes record_learning and the compile path while sibling
+# copies kept the old behaviour — catalogue evidence flowed in unclamped,
+# ``conf or 0.5`` manufactured mid-confidence out of absence, and
+# write_lesson_article replaced article confidence with the caller's
+# number. These helpers are the ONE policy; every ingestion site calls them.
+
+_CLASS_ORDER = {"INFERRED": 0, "SIGNAL": 1, "SECONDARY": 2, "PRIMARY": 3}
+
+
+def _normalize_class(value) -> Optional[str]:
+    """Coerce a declared class to a known one; anything else is None."""
+    if value is None:
+        return None
+    v = str(value).strip().upper()
+    return v if v in _CLASS_ORDER else None
+
+
+def _as_confidence(value) -> float:
+    """Fail-closed numeric coercion: absent or garbage confidence is 0.0.
+
+    Replaces the historical ``conf or 0.5`` at the ingestion seam, which
+    raised NULL/0.0 scores to a passing 0.5 — the direction this
+    architecture must never move a trust number."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, f))
+
+
+def _class_ceiling(cls: Optional[str]) -> float:
+    from agp.thresholds import MAX_CONFIDENCE_BY_SOURCE
+    known = _normalize_class(cls)
+    if known is None:
+        # Unknown/unclassified ⇒ the INFERRED ceiling (fail closed).
+        return MAX_CONFIDENCE_BY_SOURCE["INFERRED"]
+    return MAX_CONFIDENCE_BY_SOURCE.get(known, MAX_CONFIDENCE_BY_SOURCE["INFERRED"])
+
+
+def _weakest_source_class(sources: list[dict]) -> Optional[str]:
+    """Weakest explicit provenance class among sources, or None when no
+    source declares one (today: wholly seal-verified-session articles).
+    This is what makes two INFERRED items distinguishable from two PRIMARY
+    items in the compiled article — the gap pinned open by
+    tests/test_redteam_prov_memory_wiki.py."""
+    known = [
+        c for c in (_normalize_class(s.get("provenance_class")) for s in sources)
+        if c is not None
+    ]
+    if not known:
+        return None
+    return min(known, key=lambda c: _CLASS_ORDER[c])
+
+
 class KnowledgeWiki:
     """LLM-compiled persistent knowledge base."""
 
@@ -175,6 +233,14 @@ class KnowledgeWiki:
         for stmt in (s.strip() for s in WIKI_SCHEMA_SQL.split(";") if s.strip()):
             await db.execute(stmt)
         await db.commit()
+        # Migration (build/memory-wiki): wiki_articles gains provenance_class
+        # so articles carry the weakest source class through to consumers
+        # instead of exposing a bare float. NULL = unclassified (legacy rows,
+        # or compiled wholly from seal-verified sessions). Reuse of the
+        # canonical _safe_add_column keeps "already exists" distinct from
+        # real errors — reimplementing it here is how family-#2 copies drift.
+        from tools.schema.engine import _safe_add_column
+        await _safe_add_column(db, "wiki_articles", "provenance_class", "TEXT")
         self._initialized = True
 
     # ──────────────────────────────────────────────────
@@ -281,17 +347,17 @@ class KnowledgeWiki:
                     rejected += 1
                     continue  # seal present but fails → tampered/corrupt
                 provenance_class = None  # seal-verified: keep stored confidence
+                conf = _as_confidence(conf)  # absent score is 0.0, never 0.5
             else:
                 provenance_class = "INFERRED"  # legacy unsealed row
-            if provenance_class == "INFERRED":
-                conf = min(float(conf or 0.5), inferred_cap)
+                conf = min(_as_confidence(conf), inferred_cap)
             sources.append({
                 "type": "session",
                 "id": sid,
                 "query": query,
                 "domain": domain,
                 "content": conclusion,
-                "confidence": conf or 0.5,
+                "confidence": conf,
                 "provenance_class": provenance_class,
                 "timestamp": sealed_at,
             })
@@ -300,25 +366,35 @@ class KnowledgeWiki:
                 f"Wiki compile: rejected {rejected} session(s) with failing seals"
             )
 
-        # Recent high-confidence evidence entries
+        # Recent high-confidence evidence entries. GATED (build/memory-wiki):
+        # catalogue was the last ingestion path with no admission policy — a
+        # bare number flowed straight into article confidence. Class travels
+        # with the row (agp SourceClass values); unknown/NULL class reads as
+        # INFERRED and takes the INFERRED ceiling.
         cursor = await db.execute(
-            "SELECT entry_id, content, domain, confidence_score, source_name, created_at "
+            "SELECT entry_id, content, domain, confidence_score, source_name, "
+            "created_at, source_class "
             "FROM catalogue WHERE created_at > ? AND confidence_score >= 0.6 "
             "ORDER BY created_at DESC LIMIT ?",
             (last_compile, MAX_SOURCES_PER_COMPILE),
         )
         for row in await cursor.fetchall():
+            ev_class = _normalize_class(row[6]) or "INFERRED"
             sources.append({
                 "type": "evidence",
                 "id": str(row[0]),
                 "query": "",
                 "domain": row[2],
                 "content": row[1],
-                "confidence": row[3],
+                "confidence": min(_as_confidence(row[3]), _class_ceiling(ev_class)),
+                "provenance_class": ev_class,
                 "timestamp": row[5],
             })
 
-        # Recent hermes learnings
+        # Recent hermes learnings. Every learning is model-produced
+        # (admit_learning caps storage at the INFERRED ceiling post-P4), so
+        # they enter as INFERRED and are clamped here too — pre-P4 rows on a
+        # DB where migration 015 has not run can still carry 0.9+.
         cursor = await db.execute(
             "SELECT key, value, confidence, learned_at "
             "FROM hermes_learnings WHERE learned_at > ? AND confidence >= 0.5 "
@@ -332,7 +408,8 @@ class KnowledgeWiki:
                 "query": row[0],
                 "domain": "GENERAL",
                 "content": row[1],
-                "confidence": row[2],
+                "confidence": min(_as_confidence(row[2]), inferred_cap),
+                "provenance_class": "INFERRED",
                 "timestamp": row[3],
             })
 
@@ -423,7 +500,7 @@ class KnowledgeWiki:
         cursor = await db.execute(
             "SELECT topic, title, content, summary, related_topics, "
             "source_sessions, source_entries, domain, confidence, "
-            "created_at, updated_at, compile_count, content_hash "
+            "created_at, updated_at, compile_count, content_hash, provenance_class "
             "FROM wiki_articles WHERE topic = ?",
             (topic,),
         )
@@ -438,6 +515,7 @@ class KnowledgeWiki:
             "domain": row[7], "confidence": row[8],
             "created_at": row[9], "updated_at": row[10],
             "compile_count": row[11], "content_hash": row[12],
+            "provenance_class": row[13] if len(row) > 13 else None,
         }
 
     async def _create_article(
@@ -454,6 +532,10 @@ class KnowledgeWiki:
         entry_ids = [s["id"] for s in sources if s["type"] in ("evidence", "learning")]
         # Min-of-sources: an article is only as strong as its weakest input.
         avg_confidence = _article_confidence(sources)
+        # Weakest explicit source class travels with the article so
+        # consumers can distinguish an INFERRED-compiled article from a
+        # PRIMARY-backed one (red-team gap, test_redteam_prov_memory_wiki).
+        provenance_class = _weakest_source_class(sources)
         domain = self._best_domain(sources)
         content_hash = hashlib.md5(compiled["content"].encode()).hexdigest()[:12]
 
@@ -463,12 +545,14 @@ class KnowledgeWiki:
             "topic", "title", "content", "summary", "related_topics",
             "source_sessions", "source_entries", "domain", "confidence",
             "created_at", "updated_at", "compile_count", "content_hash",
+            "provenance_class",
         ]
         base_vals = [
             topic, compiled["title"], compiled["content"], compiled["summary"],
             json.dumps(compiled.get("related_topics", [])),
             json.dumps(session_ids), json.dumps(entry_ids),
             domain, round(avg_confidence, 3), now, now, 1, content_hash,
+            provenance_class,
         ]
         if "source_task_id" in cols:
             base_cols.append("source_task_id")
@@ -548,6 +632,15 @@ class KnowledgeWiki:
             compile_count=existing["compile_count"],
             new_sources=new_sources,
         )
+        # Provenance class merges to the weakest of (existing, new) so a
+        # later INFERRED compile demotes the label with the number.
+        existing_class = _normalize_class(existing.get("provenance_class"))
+        incoming_class = _weakest_source_class(new_sources)
+        if existing_class and incoming_class:
+            merged_class = min(existing_class, incoming_class,
+                               key=lambda c: _CLASS_ORDER[c])
+        else:
+            merged_class = incoming_class or existing_class
 
         content_hash = hashlib.md5(compiled["content"].encode()).hexdigest()[:12]
 
@@ -556,22 +649,23 @@ class KnowledgeWiki:
                 "UPDATE wiki_articles SET content = ?, summary = ?, title = ?, "
                 "related_topics = ?, source_sessions = ?, source_entries = ?, "
                 "confidence = ?, updated_at = ?, compile_count = compile_count + 1, "
-                "content_hash = ?, source_task_id = ? WHERE topic = ?",
+                "content_hash = ?, provenance_class = ?, source_task_id = ? WHERE topic = ?",
                 (compiled["content"], compiled["summary"], compiled["title"],
                  json.dumps(compiled.get("related_topics", [])),
                  json.dumps(session_ids), json.dumps(entry_ids),
-                 round(merged_conf, 3), now, content_hash, source_task_id, topic),
+                 round(merged_conf, 3), now, content_hash, merged_class,
+                 source_task_id, topic),
             )
         else:
             await db.execute(
                 "UPDATE wiki_articles SET content = ?, summary = ?, title = ?, "
                 "related_topics = ?, source_sessions = ?, source_entries = ?, "
                 "confidence = ?, updated_at = ?, compile_count = compile_count + 1, "
-                "content_hash = ? WHERE topic = ?",
+                "content_hash = ?, provenance_class = ? WHERE topic = ?",
                 (compiled["content"], compiled["summary"], compiled["title"],
                  json.dumps(compiled.get("related_topics", [])),
                  json.dumps(session_ids), json.dumps(entry_ids),
-                 round(merged_conf, 3), now, content_hash, topic),
+                 round(merged_conf, 3), now, content_hash, merged_class, topic),
             )
         await db.commit()
         logger.info(
