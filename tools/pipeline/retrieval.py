@@ -217,7 +217,7 @@ class RelevanceGate:
         # but they never dilute the demand. A one-word-overlap document now
         # scores exactly 1/n of the question's own words, which is below any
         # honest threshold once n >= 4 and exactly at the bar it deserves.
-        if len(q_tokens) < 2:
+        if len(all_tokens) < 2:
             return False, 0.0, (
                 "question has fewer than two topical words; coverage "
                 "cannot distinguish relevant from irrelevant content")
@@ -227,7 +227,7 @@ class RelevanceGate:
                 hay.add(w)
         matched = [t for t in all_tokens
                    if any(h == t or _prefix_ok(t, h) for h in hay)]
-        coverage = len(matched) / len(q_tokens)
+        coverage = min(1.0, len(matched) / len(q_tokens))
         # D4 structural route: a numeric body whose observation window is
         # exactly the years the question names IS on-topic evidence even
         # with ~0 token coverage. This admits nothing prose-shaped and
