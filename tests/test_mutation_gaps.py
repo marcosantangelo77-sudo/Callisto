@@ -105,14 +105,19 @@ def test_kelly_full_reference_values():
     p = implied + 0.05
     b = 1.0 + 100.0 / 110.0 - 1.0  # decimal(−110) − 1 = 100/110
     expected = (b * p - (1 - p)) / b
-    assert abs(kelly_full(0.05, -110) - round(expected, 6)) < 1e-9
+    # kelly_full FLOORS to 6dp (never rounds a stake up), so the exact
+    # pin allows at most one 1e-6 quantum of shortfall vs the true f*.
+    assert -1e-9 < kelly_full(0.05, -110) - expected <= 0
 
 
 def test_kelly_fractional_is_exact_scaling():
     full = kelly_full(0.04, 150)
-    assert kelly_fractional(0.04, 150, 0.25) == pytest.approx(round(full * 0.25, 6))
-    # default is quarter Kelly
-    assert kelly_fractional(0.04, 150) == pytest.approx(round(full * 0.25, 6))
+    # kelly_fractional FLOORS to 6dp (never rounds a stake up); exact scaling
+    # allows at most one 1e-6 quantum of shortfall.
+    scaled = full * 0.25
+    got_frac = kelly_fractional(0.04, 150, 0.25)
+    got_default = kelly_fractional(0.04, 150)   # default is quarter Kelly
+    assert 0 <= scaled - got_frac < 1e-6 and got_frac == got_default
 
 
 # ---------------------------------------------------------------------------

@@ -241,7 +241,9 @@ def assess_edge(
     # Fail safe on invalid books: an unsanitary two-sided book must not yield
     # an actionable assessment or positive Kelly stake. Keep the existing
     # public shape — return an EdgeAssessment flagged invalid and inert.
-    if audit.get("invalid_book") or not math.isfinite(market_fair)             or not 0.0 < market_fair < 1.0:
+    if (audit.get("invalid_book")
+            or not math.isfinite(market_fair)
+            or not 0.0 < market_fair < 1.0):
         return EdgeAssessment(
             claim_id=claim_id,
             calibrated_prob=calibrated_prob,

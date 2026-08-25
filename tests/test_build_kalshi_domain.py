@@ -212,9 +212,12 @@ class TestEdgeWiring:
     def test_clv_between_claim_and_close(self):
         from tools.domains.kalshi.market import kalshi_edge_assessment
 
-        q_claim = MarketQuote(price=0.62, counter_price=0.61,
+        # Healthy two-sided asks (~2% hold each side): 0.63+0.39 and
+        # 0.80+0.22. The old 0.62/0.61 fixture was a 23%-hold stale mix and
+        # is now correctly rejected as an invalid book by the sanity gate.
+        q_claim = MarketQuote(price=0.63, counter_price=0.39,
                               kind="probability", source="kalshi")
-        q_close = MarketQuote(price=0.80, counter_price=0.79,
+        q_close = MarketQuote(price=0.80, counter_price=0.22,
                               kind="probability", source="kalshi")
         bp = kalshi_clv_basis_points(q_claim, q_close)
         assert bp is not None and bp > 0, "market moved toward YES -> +CLV"
@@ -322,7 +325,9 @@ class TestKalshiPlugin:
     def test_edge_tool_computes_and_never_trades(self):
         from tools.domains.kalshi import plugin as kp
 
-        quote = MarketQuote(price=0.62, counter_price=0.61,
+        # Healthy book: yes_ask 0.63 + no_ask 0.39 = 1.02 (~2% hold). The
+        # old 0.62/0.61 fixture was a 23%-hold stale mix, now rejected.
+        quote = MarketQuote(price=0.63, counter_price=0.39,
                             kind="probability", source="kalshi")
 
         class FixtureClient:
