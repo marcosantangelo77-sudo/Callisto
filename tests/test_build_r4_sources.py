@@ -25,6 +25,7 @@ import pytest  # noqa: E402
 
 from agp.provenance import ProvenanceLedger  # noqa: E402
 from tools.sources.base import (  # noqa: E402
+    MAX_RETRIES,
     PROVENANCE_TIERS,
     RestSource,
     SourceError,
@@ -32,6 +33,12 @@ from tools.sources.base import (  # noqa: E402
     _RateLimiter,
 )
 from tools.sources.registry import SourceAdapter, SourceRegistry  # noqa: E402
+
+
+JSON_503 = ('{"error": "upstream capacity exceeded",'
+            ' "hint": "retry later", "code": 503}')
+HTML_503 = ("<html><body><h1>503 Service Unavailable</h1>"
+            "<p>No server is available for this request.</p></body></html>")
 
 
 class FakeTransport:
@@ -111,6 +118,100 @@ class TestRestSource:
 
     def test_missing_key_env_is_empty(self):
         assert make_source(MACRO_SPEC, FakeTransport()).api_key() == ""
+
+    def _no_sleep(self, monkeypatch):
+        import tools.sources.base as base
+        monkeypatch.setattr(base.time, "sleep", lambda s: None)
+
+    def test_get_injected_transport_retries_transient_503(self, monkeypatch):
+        """The transport seam must preserve native GET retry semantics:
+        a transient 503 from the injected transport is retried, not fatal,
+        and the eventual 200 body is the only thing provenanced."""
+        self._no_sleep(monkeypatch)
+
+        class FlakyTransport:
+            def __init__(self):
+                self.calls = 0
+                self.bodies = []
+
+            def __call__(self, url, headers):
+                self.calls += 1
+                if self.calls == 1:
+                    return 503, HTML_503
+                return 200, json.dumps({"a": 1})
+
+        t = FlakyTransport()
+        ledger = ProvenanceLedger()
+        src = make_source(MACRO_SPEC, t, ledger=ledger)
+        data, rec = src.get_json("https://api.example.test/fred/x")
+
+        assert t.calls == 2                      # retried exactly once
+        assert data == {"a": 1} and rec.status == 200
+        # The error body never minted provenance.
+        assert not ledger.has_observation(HTML_503)
+        assert ledger.is_primary_bytes(json.dumps({"a": 1}))
+        assert "https://api.example.test/fred/x" in ledger.observed_urls()
+
+    def test_get_injected_transport_429_retried_then_exhausts(self, monkeypatch):
+        """Persistent transient failures exhaust retries into SourceError."""
+        self._no_sleep(monkeypatch)
+
+        class Always429:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, url, headers):
+                self.calls += 1
+                return 429, '{"error": "rate limited"}'
+
+        t = Always429()
+        with pytest.raises(SourceError, match="exhausted retries"):
+            make_source(MACRO_SPEC, t).get_json(
+                "https://api.example.test/fred/x")
+        assert t.calls == MAX_RETRIES
+
+    def test_get_injected_terminal_status_is_not_retried(self, monkeypatch):
+        """A non-transient status (e.g. 404) fails immediately."""
+        self._no_sleep(monkeypatch)
+
+        class NotFound:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, url, headers):
+                self.calls += 1
+                return 404, '{"error": "not found"}'
+
+        t = NotFound()
+        with pytest.raises(SourceError, match="404"):
+            make_source(MACRO_SPEC, t).get_json(
+                "https://api.example.test/fred/x")
+        assert t.calls == 1
+
+    def test_post_injected_transport_retries_transient_503(self, monkeypatch):
+        """POST's tuple-status path already retries transients; pin it so the
+        two seams cannot silently drift apart again."""
+        self._no_sleep(monkeypatch)
+
+        class FlakyTransport:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, url, headers):
+                self.calls += 1
+                if self.calls == 1:
+                    return 503, JSON_503
+                return 200, json.dumps({"ok": True})
+
+        t = FlakyTransport()
+        ledger = ProvenanceLedger()
+        src = make_source(MACRO_SPEC, t, ledger=ledger)
+        data, rec = src.post_json("https://api.example.test/fred/x",
+                                  {"seriesid": ["LNS14000000"]})
+
+        assert t.calls == 2
+        assert data == {"ok": True} and rec.status == 200
+        assert not ledger.has_observation(JSON_503)
 
 
 # ── adapters against fixtures ─────────────────────────────────────────────

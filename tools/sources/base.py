@@ -225,7 +225,17 @@ class RestSource:
                     status, body = self._http_transport(url, headers)
                 self._record(url, status, body, time.monotonic() - started)
                 if status != 200:
-                    raise SourceError(f"HTTP {status} for {url}")
+                    # Same status semantics as the native HTTPError path
+                    # below: the injected transport seam (documented for
+                    # tests/offline use) must preserve GET's retry contract.
+                    # 429/5xx are transient — back off and retry; anything
+                    # else is terminal. The non-200 body still never reaches
+                    # the ledger (_record skips it above).
+                    if status == 429 or 500 <= status < 600:
+                        last_err = f"HTTP {status} for {url}"
+                        time.sleep(min(2 ** attempt, MAX_RETRY_AFTER_S))
+                        continue
+                    raise SourceError(f"HTTP {status} for {url}") from None
                 return status, body
             except urllib.error.HTTPError as exc:
                 last_err = f"HTTP {exc.code} for {url}"
