@@ -273,7 +273,9 @@ class RestSource:
                 else:
                     status, text = _do()
                 self._record(url, status, text, time.monotonic() - started)
-                return status, text
+                # Non-200 wire bodies are fetch failures, never successful
+                # data — same contract as get(): retry transient statuses,
+                # otherwise surface a SourceError to JSON-helper callers.
                 if status != 200:
                     err = f"HTTP {status} for {url}"
                     if status == 429 or 500 <= status < 600:
@@ -281,6 +283,7 @@ class RestSource:
                         last_err = err
                         continue
                     raise SourceError(err) from None
+                return status, text
             except urllib.error.HTTPError as exc:
                 last_err = f"HTTP {exc.code} for {url}"
                 if exc.code == 429 or 500 <= exc.code < 600:

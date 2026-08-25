@@ -801,24 +801,28 @@ class IterativeRetriever:
                 # records (e.g. a BLS HTTP-200 REQUEST_NOT_PROCESSED envelope
                 # recorded by RestSource before classify_fetch_failure saw
                 # it) must never reach the real ledger — drop them here.
-                if res[0] == "fail":
-                    continue
-                for tool, body_r, primary, urls in rec.calls:
-                    self.ledger.record_tool_result(tool, body_r,
-                                                   primary=primary,
-                                                   urls=urls or None)
+                is_fail = res[0] == "fail"
+                # Condition ONLY the recorder replay on failure: a failed
+                # source contributed no admissible observation, so its scratch
+                # provenance must never reach the real ledger. The existing
+                # honest fail reporting below still runs.
+                if not is_fail:
+                    for tool, body_r, primary, urls in rec.calls:
+                        self.ledger.record_tool_result(tool, body_r,
+                                                       primary=primary,
+                                                       urls=urls or None)
                 kind = res[0]
+                if kind == "fail":
+                    excluded.add(spec.name)
+                    round_detail["sources"].append(
+                        {"name": spec.name, "error": res[1]})
+                    continue
                 if kind == "skip":
                     reason = res[1]
                     if legacy_calls is None:
                         excluded.add(spec.name)
                     round_detail["sources"].append(
                         {"name": spec.name, "skipped": reason})
-                    continue
-                if kind == "fail":
-                    excluded.add(spec.name)
-                    round_detail["sources"].append(
-                        {"name": spec.name, "error": res[1]})
                     continue
                 _, url, body, fetched, ok, cov, reason = res
                 fr = _mk_fetch(spec.name, url, body, fetched,
