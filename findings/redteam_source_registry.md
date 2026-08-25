@@ -151,3 +151,69 @@ RECURRING SUB-SHAPES are now confirmed often enough to name:
 S8 + S4 together close the "one lying endpoint manufactures independent
 primary corroboration" chain, which is the highest-severity composite.
 S6 is the cheapest fix (one lambda) and the biggest blast radius.
+
+---
+
+# SECOND PASS — same surface, later rotation (2026-08-25)
+
+Method rotated per the standing brief: corrupt-one-field replay against the
+LIVE retriever (planner mode, real registry, fake transport), plus empty-input
+probes at every gate — instead of another selection sweep. New tests S9–S12
+in `tests/test_redteam_source_registry.py`; all four FAIL on current code.
+
+## S9 — Three registered sources unknown to the query builder (MEDIUM)
+`kalshi`, `cmefedfut`, `sec_fulltext` are registered AND selected for real
+questions ("prediction market contracts" → kalshi+cmefedfut top-3; "futures
+market prices"), but `_KEYWORD_PLANNERS` and `_HONEST_GAPS` hold none of them:
+`build_plan` answers "unknown source". The docstring's claim "every registered
+source now has a planner" is false in both directions — not planned, and not
+honestly gapped. Each is fanned out to, skipped as unknown, then EXCLUDED from
+later rounds: a silent dead end wearing an honest gap's clothes. Family 2
+(third naming/keying drift in this cluster) × family 3.
+
+## S10 — Byte-identical bodies mint N independent voices (HIGH)
+`independence_key` collapses openalex+semanticscholar by NAME, but nothing
+ever compares CONTENT. Four hosts returning one identical payload → 4
+admitted fetches → 3 distinct independent keys → "sufficient: 3 >= 2".
+A mirror host, a proxy, or one liar duplicated under a second domain
+manufactures corroboration. Verified end-to-end through planner mode.
+Family 5: structural property (distinct keys) standing in for agreement
+(distinct evidence). Fix direction: collapse independent_keys whose admitted
+bodies share a content_sha256.
+
+## S11 — Zero-hit envelopes count toward sufficiency (CRITICAL)
+A source returning 200 with `{"results": [], "meta": {"query": "<the query>"}}`
+— an honest NULL — scores ~75% token coverage at the gate (the echo IS the
+topic) and is ADMITTED. In production-default planner mode with all-zero-hit
+bodies: 4 admitted, 3 independent keys, stop_reason "sufficient: 3 independent
+sources >= required 2". The pipeline then answers a question NO SOURCE
+ANSWERED and seals it. Family 9 at maximum strength: every internal signal
+green, externally empty. Related observation: legacy mode re-admitted the
+same zero-hit bodies SIX times over three rounds — exclusion only fires on
+skip/fail, never on admit-with-zero-hits.
+
+## S12 — D4 structural route admits off-topic data (HIGH; corrects pass 1)
+Pass 1 listed `numeric_window_matches` under honest negatives ("stricter than
+I expected"). At the GATE level it is LOOSER than its own docstring:
+`extract_text` keeps strings only, so `"value": "6.48"` arrives as text and
+ANY series whose ISO dates fall inside the question's years passes — topic
+never checked. A 30-year-mortgage table answers an unemployment question at
+min_coverage=1.0 via the structural route. Dates-in-window is a property of
+time-series data in general, not of the asked-about quantity. The gate needs
+at least one topical token match (series label/title) alongside the window,
+or the route admits whatever the calendar permits.
+
+## Honest negatives (pass 2)
+- FDIC filter guard holds: `NAME:*`, quotes, OR-injection all rejected at
+  planning (`_VALUE_OK`); CFTC passthrough requires the strict code shape.
+- FRED id passthrough behaves: bare ALL-CAPS words do NOT resolve (the
+  uppercase+digit/known-id rule works); 'GDP' resolving to nominal-GDP
+  series for "What is GDP" is defensible ambiguity handling, not a defect.
+- Gate refuses truly empty inputs ({} / {"results": []} without echoes).
+
+## Composite severity note
+S8 + S11 chain: any endpoint that echoes query words inside an error or
+zero-result envelope is ADMITTED, MINTED PRIMARY, and COUNTS INDEPENDENT.
+One lying endpoint can satisfy min_independent_sources alone. This is the
+highest-value fix on this surface: require non-empty result sets AND
+canonical-hash-deduped independence AND generalised envelope classification.
