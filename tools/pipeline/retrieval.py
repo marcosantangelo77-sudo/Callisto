@@ -586,7 +586,17 @@ class IterativeRetriever:
                 for s in all_specs:
                     if s.name not in unplannable:
                         from tools.sources import query_builder as _qb
-                        plan = _qb.build_plan(s.name, question.text)
+                        # R1 follow-up (findings/battery_rerun.md): a planner
+                        # BUG must not abort the whole question. Degrade this
+                        # source to an honest gap; other sources keep going.
+                        try:
+                            plan = _qb.build_plan(s.name, question.text)
+                        except Exception as exc:  # noqa: BLE001
+                            unplannable.add(s.name)
+                            trace.skipped_sources.append(
+                                {"name": s.name,
+                                 "reason": f"planner error: {exc}"[:120]})
+                            continue
                         if plan.plannable and plan.queries:
                             routable.append(s)
                         else:
