@@ -26,6 +26,7 @@ outcome, never inference from convenience.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -34,7 +35,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Iterable, Optional
 
-from agp import ConfidenceTier, Domain, Evidence, SourceClass
+from agp import ConfidenceTier, Domain, Evidence, SourceClass, _seal_digest
 from agp.preregistration import Preregistration, Verdict
 from agp.thresholds import MAX_CONFIDENCE_BY_SOURCE
 
@@ -380,6 +381,20 @@ class ClaimStore:
             raise ValueError(f"invalid claim_id {claim_id!r}")
         return os.path.join(self._dir, f"claim_{claim_id}.jsonl")
 
+    @staticmethod
+    def _entry_seal(prev_hash: str, saved_at: str, state: dict) -> str:
+        """Keyed integrity seal over an entry's canonical content.
+
+        Uses the project's existing _seal_digest machinery (HMAC-SHA256 when
+        CALLISTO_SEAL_KEY is set). Sealing {prev, saved_at, state} binds EVERY
+        entry's content — including a single-entry journal's first line and
+        every tail entry, which no successor exists to protect.
+        """
+        payload = json.dumps(
+            {"prev": prev_hash, "saved_at": saved_at, "state": state},
+            sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return _seal_digest(payload)
+
     def save(self, claim: Claim) -> int:
         """Append current state to the journal. Returns new entry count."""
         path = self._journal_path(claim.claim_id)
@@ -392,17 +407,31 @@ class ClaimStore:
             if lines:
                 prev_hash = hashlib.sha256(
                     lines[-1].encode("utf-8")).hexdigest()
-        entry = {"prev": prev_hash, "saved_at": _now_iso(),
-                 "state": claim.to_dict()}
+        saved_at = _now_iso()
+        state = claim.to_dict()
+        entry = {"prev": prev_hash, "saved_at": saved_at,
+                 "state": state,
+                 "seal": self._entry_seal(prev_hash, saved_at, state)}
         blob = json.dumps(entry, sort_keys=True, ensure_ascii=False)
         with open(path, "a", encoding="utf-8") as f:
             f.write(blob + "\n")
         return count + 1
 
-    def load(self, claim_id: str, verify: bool = True) -> Optional[Claim]:
-        """Replay the journal to latest verified state. With verify=True
-        (default) any break in the hash chain raises ClaimError — a tampered
-        claim never silently loads."""
+    def load(self, claim_id: str, verify: bool = True,
+             allow_legacy_unsigned: bool = False) -> Optional[Claim]:
+        """Replay the journal to latest verified state.
+
+        With verify=True (default) any break in the hash chain or ANY invalid
+        or missing per-entry integrity seal raises ClaimError — a tampered or
+        flattering history never silently loads.
+
+        Legacy policy (explicit, opt-in): journals written before per-entry
+        sealing carry only ``prev`` pointers; their FIRST/TAIL entries were
+        unverifiable. Callers may pass allow_legacy_unsigned=True to read such
+        journals — chain checks still apply, but their tail integrity is NOT
+        guaranteed and this must never be enabled on security-sensitive
+        paths. Unsigned entries fail closed by default.
+        """
         path = self._journal_path(claim_id)
         if not os.path.exists(path):
             return None
@@ -416,14 +445,29 @@ class ClaimStore:
             except json.JSONDecodeError as e:
                 raise ClaimError(f"journal line {i+1} corrupt: {e}")
             if verify:
-                expected = hashlib.sha256(ln.encode("utf-8")).hexdigest()
-                # The chain check: this line's own digest is what the NEXT
-                # line must reference, and line 1 must reference GENESIS.
-                if entry["prev"] != prev:
+                # Chain check: line 1 must reference GENESIS; each later
+                # line must reference its predecessor's raw-line digest.
+                if entry.get("prev") != prev:
                     raise ClaimError(
                         f"tampering detected in claim {claim_id}: journal "
                         f"line {i+1} does not chain to its predecessor "
                         f"(history is not trustworthy)")
+                seal = entry.get("seal")
+                if seal is None:
+                    if not allow_legacy_unsigned:
+                        raise ClaimError(
+                            f"tampering detected in claim {claim_id}: "
+                            f"journal line {i+1} has no integrity seal "
+                            f"(legacy unsigned journal; refusing to load "
+                            f"unverified history)")
+                elif not hmac.compare_digest(
+                        str(seal),
+                        self._entry_seal(entry["prev"], entry["saved_at"],
+                                         entry["state"])):
+                    raise ClaimError(
+                        f"tampering detected in claim {claim_id}: journal "
+                        f"line {i+1} failed its integrity seal (content "
+                        f"does not match the sealed record)")
             prev = hashlib.sha256(ln.encode("utf-8")).hexdigest()
             state = entry["state"]
         return Claim.from_dict(state)

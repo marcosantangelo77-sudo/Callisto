@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import json
+
 import pytest
 
 from tests.helpers.no_socket import NoSocket
@@ -280,3 +282,110 @@ def test_no_socket_held():
     import socket
     with pytest.raises(AssertionError):
         socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+
+# ── per-entry integrity seals: tail & single-entry tampering ─────────────
+
+def _write_journal(path, entries):
+    import json as _json
+    path.write_text(
+        "\n".join(_json.dumps(e, sort_keys=True, ensure_ascii=False)
+                  for e in entries) + "\n")
+
+
+def test_single_entry_journal_tampering_rejected(tmp_path):
+    # One-entry journal: no successor exists to bind the first line, so the
+    # per-entry seal is the ONLY thing standing between the attacker and a
+    # flattering state.
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Solo claim")
+    c.seal_preregistration(p)
+    store.save(c)
+
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    lines = path.read_text().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    entry["state"]["confidence"] = 0.99
+    lines[0] = json.dumps(entry, sort_keys=True, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ClaimError, match="integrity seal"):
+        store.load(c.claim_id)
+
+
+def test_final_entry_tampering_rejected(tmp_path):
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Tail claim")
+    c.seal_preregistration(p)
+    store.save(c)
+    c.attach_evidence(_ev("more observation"), note="n2")
+    store.save(c)
+
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    lines = path.read_text().splitlines()
+    entry = json.loads(lines[1])          # the TAIL entry
+    entry["state"]["confidence"] = 0.99   # flatter ourselves
+    entry["state"]["status"] = "confirmed"
+    lines[1] = json.dumps(entry, sort_keys=True, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ClaimError, match="integrity seal"):
+        store.load(c.claim_id)
+
+
+def test_sealed_entry_round_trips_and_intermediate_tampering_still_caught(tmp_path):
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Chain claim")
+    c.seal_preregistration(p)
+    store.save(c)
+    snapshot = c.to_dict()
+    c.attach_evidence(_ev("obs"), note="n")
+    store.save(c)
+
+    loaded = store.load(c.claim_id)
+    assert loaded.to_dict() == c.to_dict()
+
+    # Intermediate tampering: caught by BOTH chain and (if only line 0's own
+    # digest mattered) its seal.
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    lines = path.read_text().splitlines()
+    e0 = json.loads(lines[0])
+    e0["state"]["confidence"] = 0.95
+    lines[0] = json.dumps(e0, sort_keys=True, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n")
+    with pytest.raises(ClaimError, match="tampering"):
+        store.load(c.claim_id)
+    assert snapshot["status"] == "open"
+
+
+def test_legacy_unsigned_journal_fails_closed_by_default_opt_in_reads(tmp_path):
+    # Legacy policy evidence: a journal written by pre-seal code (entries with
+    # only prev/saved_at/state) FAILS CLOSED on default load(); an explicit
+    # allow_legacy_unsigned=True read still applies chain checks but accepts
+    # the unverifiable tail. Verification is never silently weakened.
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Legacy claim")
+    c.seal_preregistration(p)
+    legacy_entry = {"prev": "GENESIS", "saved_at": c.created_at,
+                    "state": c.to_dict()}
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    _write_journal(path, [legacy_entry])
+
+    with pytest.raises(ClaimError, match="no integrity seal"):
+        store.load(c.claim_id)
+
+    loaded = store.load(c.claim_id, allow_legacy_unsigned=True)
+    assert loaded is not None
+    assert loaded.confidence == c.confidence
+
+    # Even in legacy mode, a broken chain is still rejected.
+    bad = dict(legacy_entry, state=dict(c.to_dict(), confidence=0.99))
+    _write_journal(path, [{"prev": "WRONG", "saved_at": "x",
+                           "state": c.to_dict()}, legacy_entry])
+    with pytest.raises(ClaimError, match="chain to its predecessor"):
+        store.load(c.claim_id, allow_legacy_unsigned=True)
