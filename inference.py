@@ -902,6 +902,11 @@ class EndpointConfig:
     max_concurrency: int = 1                # parallel in-flight requests
     cost_per_1k_input: float = 0.0          # USD; local = 0.0
     cost_per_1k_output: float = 0.0
+    # Stable canonical identity of the served model (e.g.
+    # "nous/stealth/ox-alpha"). Endpoints sharing an identity are ONE model
+    # choice for scoring/routing — different transports of the same weights.
+    # Absent => each endpoint stands alone (legacy behaviour).
+    model_identity: Optional[str] = None
     extra: dict = field(default_factory=dict)
 
 
@@ -961,8 +966,11 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
     # overrides the static model; an unset or empty env value falls back to
     # the static model (which may itself be absent for env-only configs).
     model = raw.get("model")
+    env_model: Optional[str] = None
     if raw.get("model_env"):
-        model = os.getenv(raw["model_env"], "") or model
+        env_model = os.getenv(raw["model_env"], "") or None
+        if env_model:
+            model = env_model
     if backend == "hermes_cli":
         # No URL, no env vars, no keychain access — just the binary.
         unresolved = False
@@ -970,6 +978,24 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
         base_url = ""
     else:
         unresolved = bool(raw.get("_unresolved")) or not (base_url and model)
+    # Canonical-identity safety rule: a static `model_identity` is only
+    # trustworthy while the effective served model matches the configured
+    # static one. A nonempty `model_env` override pointing at a DIFFERENT
+    # model means we no longer know which weights actually run there, so the
+    # declared identity is invalidated (the endpoint becomes standalone).
+    # An explicit resolved identity may still be supplied via
+    # `resolved_model_identity` / `resolved_model_identity_env`; it is NEVER
+    # inferred from the override's model string.
+    model_identity = raw.get("model_identity") or None
+    if env_model and env_model != (raw.get("model") or None):
+        model_identity = None
+    resolved_identity = (
+        os.getenv(raw["resolved_model_identity_env"], "") or None
+        if raw.get("resolved_model_identity_env")
+        else (raw.get("resolved_model_identity") or None))
+    if resolved_identity:
+        model_identity = resolved_identity
+
     return EndpointConfig(
         name=name,
         backend=raw.get("backend", "openai_compat"),
@@ -984,6 +1010,7 @@ def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
         max_concurrency=max(1, int(raw.get("max_concurrency", 1))),
         cost_per_1k_input=float(raw.get("cost_per_1k_input", 0) or 0),
         cost_per_1k_output=float(raw.get("cost_per_1k_output", 0) or 0),
+        model_identity=model_identity,
         extra={**(raw.get("extra") or {}), **({"_unresolved": True} if unresolved else {})},
     )
 
@@ -1183,12 +1210,23 @@ class ProviderRouter:
     def _candidates_as_models(self, names: list[str]) -> list:
         from tools.routing.policy import CandidateModel
         out = []
+        seen_identities: set[str] = set()
         for rank, n in enumerate(names):
             ep = self.endpoints.get(n)
             if ep is None:
                 continue
+            model_name = self.scoring_model_name(n)
+            # Dedupe ONLY rails with an explicit canonical model identity.
+            # Identity-less endpoints keep legacy standalone behaviour even
+            # when their display `model` labels collide.
+            if ep.model_identity:
+                if ep.model_identity in seen_identities:
+                    # Same canonical model via another transport rail: ONE
+                    # scoring candidate, not several.
+                    continue
+                seen_identities.add(ep.model_identity)
             out.append(CandidateModel(
-                name=ep.model or n,
+                name=model_name,
                 tier=n,
                 cost_per_1k_input=ep.cost_per_1k_input,
                 cost_per_1k_output=ep.cost_per_1k_output,
@@ -1229,12 +1267,27 @@ class ProviderRouter:
             "sampled_effective_loss": decision.sampled_effective_loss,
             "scores": decision.scores_used,
         })
-        if decision.tier in candidate_names:
-            # Chosen model first; the rest keep their failover order so a
-            # dead winner still degrades exactly as before.
-            ordered = [decision.tier] + [n for n in candidate_names
-                                         if n != decision.tier]
-            return ordered, meta
+        winner_identity: Optional[str] = None
+        tier_ep = self.endpoints.get(decision.tier)
+        if tier_ep is not None and tier_ep.model_identity:
+            winner_identity = tier_ep.model_identity
+
+        def _is_winner_rail(n: str) -> bool:
+            if n == decision.tier:
+                return True
+            if winner_identity is None:
+                return False
+            ep = self.endpoints.get(n)
+            return ep is not None and ep.model_identity == winner_identity
+
+        if any(_is_winner_rail(n) for n in candidate_names):
+            # Chosen model's ENTIRE rail group moves to the front as one
+            # contiguous block (configured order preserved), so a proxy/CLI
+            # failover pair is never separated. The rest keep their failover
+            # order so a dead winner still degrades exactly as before.
+            winners = [n for n in candidate_names if _is_winner_rail(n)]
+            rest = [n for n in candidate_names if not _is_winner_rail(n)]
+            return winners + rest, meta
         return candidate_names, meta
 
     # ── vocabulary ──
@@ -1320,8 +1373,47 @@ class ProviderRouter:
                     f"All endpoints for task_class={task_class!r} cooling "
                     f"down; using {fallback[0]} anyway"
                 )
-                return fallback
-        return out
+                return self._group_by_identity(fallback)
+        return self._group_by_identity(out)
+
+    def _group_by_identity(self, names: list[str]) -> list[str]:
+        """Collapse rails that share a canonical model identity so the same
+        physical model is ONE candidate, not several. The first-declared rail
+        keeps its position (preserving configured transport priority); later
+        rails of the same identity move to directly after it as failovers.
+        Endpoints WITHOUT model_identity keep legacy per-endpoint behaviour."""
+        if len(names) < 2:
+            return names
+        # group index per identity / standalone endpoint, assigned at FIRST
+        # appearance in the configured order.
+        group_of: dict[str, int] = {}  # identity -> group index
+        standalone_group: dict[str, int] = {}  # endpoint -> group index
+        next_group = 0
+        for n in names:
+            ident = self.endpoints[n].model_identity if n in self.endpoints else None
+            if ident is None:
+                standalone_group[n] = next_group
+                next_group += 1
+            elif ident not in group_of:
+                group_of[ident] = next_group
+                next_group += 1
+        # Stable sort by group index preserves configured order WITHIN every
+        # group while keeping each identity contiguous at its first
+        # appearance; no-identity endpoints remain standalone.
+        return sorted(names, key=lambda n: (
+            group_of[self.endpoints[n].model_identity]
+            if n in self.endpoints and self.endpoints[n].model_identity
+            else standalone_group[n]))
+
+
+    def scoring_model_name(self, endpoint_name: str) -> str:
+        """Canonical name to record/lookup in the score store for an endpoint.
+        Rails sharing a model identity share one scoring candidate; without
+        an identity the display model label is used (legacy behaviour)."""
+        ep = self.endpoints.get(endpoint_name)
+        if ep is not None and ep.model_identity:
+            return ep.model_identity
+        return ep.model if ep is not None else endpoint_name
 
     def pick_endpoint(self, task_class: str, schema: Optional[dict] = None,
                       tools: bool = False) -> Optional[EndpointConfig]:
