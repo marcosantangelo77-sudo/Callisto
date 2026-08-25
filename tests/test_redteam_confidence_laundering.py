@@ -243,25 +243,35 @@ class TestInheritanceRule:
         out, tier = clamp_parent_confidence(0.99, recs)
         assert tier == "PROBABLE" and out <= 0.55
 
-    def test_stale_resolutions_earn_hit_rate_credit(self):
-        """REPRODUCIBLE BREAK (F7): 'stale' means UNRESOLVED AT DEADLINE —
-        the descendant never produced an outcome. Yet counted=True for stale,
-        n_resolved includes it, and hit_rate EXCLUDES stales from the
-        denominator while summarize feeds them brier=1.0... but wilson_lower_bound
-        is computed over n_resolved - n_stale. So a parent with 4 hits + 1
-        stale reaches n>=5 for the LIFT gate on the strength of a descendant
-        THAT NEVER RESOLVED. Four lucky hits plus one abandoned question
-        unlock the inheritance ramp toward PROBABLE/CORROBORATED."""
+    def test_stale_resolutions_do_not_earn_lift_credit(self):
+        """FIXED (F7): 'stale' means UNRESOLVED AT DEADLINE — the descendant
+        never produced an outcome. A stale record must never provide
+        sample-size credit toward MIN_RESOLVED_FOR_LIFT, Wilson/hit-rate
+        support, calibration credit, or a provenance cap upgrade. Four hits
+        + one stale stays pinned at the SPECULATIVE cap exactly like the
+        four genuine resolutions alone."""
         recs = [{"question_id": str(i), "outcome": "hit",
                  "resolved_at": "2026-01-01"} for i in range(4)]
         recs.append({"question_id": "stale", "outcome": "stale",
                      "resolved_at": "2026-01-01"})
         # without the stale, n=4 < MIN_RESOLVED_FOR_LIFT -> capped at 0.55:
         assert inherited_ceiling(recs[:4]) == 0.55
-        # WITH the never-resolved descendant the ceiling jumps to ~0.71 —
-        # past PROBABLE, nearly CORROBORATED, on credit from a question
-        # that was never answered:
-        assert inherited_ceiling(recs) > 0.70   # FAILS: stale shouldn't count toward lift
+        # the never-resolved descendant adds NOTHING: still 4 resolved,
+        # still below the lift gate, ceiling unchanged at 0.55.
+        assert inherited_ceiling(recs) == 0.55
+
+    def test_stale_records_cannot_upgrade_provenance_cap(self):
+        """A stale record's claimed best_source_class is not resolving
+        evidence; it must not raise the inherited source-class cap even
+        when the parent has enough genuine resolutions otherwise."""
+        base = [{"question_id": f"h{i}", "outcome": "hit",
+                 "resolved_at": "2026-01-01",
+                 "best_source_class": "SECONDARY"} for i in range(5)]
+        without = inherited_ceiling(base)
+        base.append({"question_id": "stale", "outcome": "stale",
+                     "resolved_at": "2026-01-01",
+                     "best_source_class": "PRIMARY"})
+        assert inherited_ceiling(base) <= without
 
     def test_pinball_none_on_quantile_style_record_scores_as_clean_hit(self):
         """A resolution carrying pinball_score=None and outcome='hit' earns
