@@ -15,8 +15,9 @@ The fix is two pieces:
      static value shadowed the env var entirely).
 
 Pins below. No caching anywhere near a cutoff; no gate moved; the adversary
-keeps its own separate call (it passes schema=..., so it never used this
-endpoint — structured_output stays false).
+keeps its own separate call. (Run 16 later admitted this endpoint to
+schema-bearing calls on the CLI's best-effort terms — same model, same
+upstream; see tests/test_speed_adversary_transport.py.)
 """
 from __future__ import annotations
 
@@ -129,13 +130,17 @@ class TestDegradation:
         assert res["tier"] == "ox_alpha"
         assert r.states["ox_alpha_proxy"].consecutive_failures >= 1
 
-    def test_adversary_capability_filter_unchanged(self, monkeypatch):
-        """Schema-bearing callers (agp.adversary) still skip the proxy — its
-        structured_output declaration stayed false. The adversary's own call
-        is untouched."""
+    def test_adversary_capability_filter_run16(self, monkeypatch):
+        """SPEED run 16 REVERSED the pre-run-16 exclusion this pin used to
+        assert: schema-bearing callers (agp.adversary) now ADMIT
+        best-effort openai_compat endpoints, because ox_alpha_proxy serves
+        the SAME model as the exempted CLI behind the same Portal OAuth and
+        banning it forced every critic call onto a ~12-14s fork. The
+        declaration stays honestly false; _payload sends no enforcement
+        block (see tests/test_speed_adversary_transport.py)."""
         _no_proxy_env(monkeypatch)
         r = inference.ProviderRouter()
         assert r.endpoints["ox_alpha_proxy"].structured_output is False
         schema = {"type": "object"}
         cands = r.candidates_for("adversarial_review", schema=schema)
-        assert "ox_alpha_proxy" not in cands
+        assert "ox_alpha_proxy" in cands
