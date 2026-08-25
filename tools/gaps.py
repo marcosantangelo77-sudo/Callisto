@@ -373,6 +373,21 @@ def classify_gap(registry, trace: Any, question, question_type: str = "",
         if gap.obstacle is Obstacle.NONE:
             gap.obstacle = Obstacle.NO_QUERY_ISSUED
 
+    # 1b. Queries were AUTHORED but no fetch outcome survives to prove any
+    #     of them ran: no tried source, no error, no rejection, no
+    #     admission. A genuine zero-source search records its round/source
+    #     activity; a checkpoint whose corrupt rounds were dropped during
+    #     restoration has queries but nothing else. Fail closed: this state
+    #     is a retrieval failure (unknown/corrupt), never an honest null.
+    if queries and not tried_names and not errors and not rejected \
+            and not admitted and not rounds:
+        failure_reasons.append(
+            "queries were issued but no fetch attempt is recorded — the "
+            "trace carries no provable retrieval activity (possibly "
+            "corrupt/lost checkpoint data)")
+        if gap.obstacle is Obstacle.NONE:
+            gap.obstacle = Obstacle.NO_QUERY_ISSUED
+
     # 2. A plausible source was never tried because the planner could not
     #    serve it (no authored query) — query authoring backlog — or, in
     #    legacy-call-table mode, because it has no fetch route.

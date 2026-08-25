@@ -375,6 +375,41 @@ def test_malformed_only_round_outcomes_fail_closed(
     assert kind != "honest_null"
 
 
+@pytest.mark.parametrize("outcome_key,bad_value", [
+    ("skipped", {"bad": 1}),
+    ("error", {"bad": 1}),
+    ("rejected", {"bad": 1}),
+    ("admitted", "yes-please"),
+])
+def test_malformed_only_round_outcomes_with_queries_fail_closed(
+        outcome_key, bad_value):
+    """Regression: even with a nonempty `queries` list, a checkpoint whose
+    every round outcome is malformed must not classify as honest_null once
+    the corrupt rounds are dropped at restoration. Queries alone are not
+    proof any fetch ran; the state stays retrieval failure/unknown."""
+    import json as _json
+
+    from tools.gaps import GapKind, classify_gap, classify_null_kind
+
+    payload = _json.loads(_json.dumps(
+        _corrupt_outcome_payload(outcome_key, bad_value)))
+    payload["queries"] = ["chips"]
+    tr = _trace_from_payload("q1", payload)
+    assert tr.rounds == [], (outcome_key, tr.rounds)
+
+    gap = classify_gap(_gap_registry(), tr, _gap_question())
+    assert gap.kind is not GapKind.HONEST_NULL, \
+        "corrupt checkpoint with queries must never launder into honest null"
+    assert gap.kind is GapKind.RETRIEVAL_FAILURE
+    for c in gap.candidates:
+        if c.name == "openalex":
+            assert not c.tried, \
+                f"{outcome_key} corruption fabricated a tried query"
+
+    kind, expl = classify_null_kind(tr)
+    assert kind != "honest_null"
+
+
 def test_malformed_outcome_among_valid_sources_dropped_not_laundered():
     """One malformed record beside valid ones: only the malformed one is
     dropped; valid outcomes survive verbatim and drive classification."""
