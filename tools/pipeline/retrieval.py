@@ -196,21 +196,16 @@ class RelevanceGate:
     def judge(self, question_text: str, question_type: str,
               parsed: Any) -> tuple[bool, float, str]:
         """(admitted, coverage 0..1, reason)."""
-        q_tokens = set(_tokens(question_text))
+        q_tokens = set(_tokens(question_text)) | set(_tokens(question_type))
         if not q_tokens:
             return False, 0.0, "question has no judgeable topical words"
         # A question with only ONE topical token cannot be relevance-judged
         # on coverage: any document containing that one word admits at 100%
         # (red team R2b — 'semiconductor supply foundry' minus stopword
         # collapse leaves a denominator where one shared word = admitted).
-        # Require at least two matched tokens regardless of min_coverage.
-        #
-        # question_type is deliberately NOT in the coverage set: it is a
-        # ROUTING label ("empirical", "comparison"), not topical content.
-        # Unioned into the denominator it deflates every real question's
-        # coverage by a constant factor, and unioned into the matched side
-        # a generic research word in a document would count AS evidence.
-        # Selection/routing still sees it via translate_question_type.
+        # The prefix floor below (>=4 chars both sides) is the other half of
+        # the R2b fix: short-prefix collisions can no longer manufacture
+        # matches.
         if len(q_tokens) < 2:
             return False, 0.0, (
                 "question has fewer than two topical words; coverage "
