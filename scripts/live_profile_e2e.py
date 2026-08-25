@@ -45,6 +45,7 @@ class TimedRouter:
 
 async def main():
     router = TimedRouter(inference.ProviderRouter())
+    router._run_t0 = time.monotonic()
     model = RouterModel(router)
 
     pipe = ResearchPipeline(model=model)   # adversary falls back to model (self-review, capped) — pricing only
