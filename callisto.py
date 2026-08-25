@@ -85,8 +85,19 @@ def _result_record(result, question: str) -> dict:
 
     Everything needed to re-check the conclusion later: the conclusion
     text itself, every artifact hash (resolvable against the artifact
-    store), and per-fetch source/URL provenance.
+    store), per-fetch source/URL provenance — and, for runs where a
+    session exists, the FULL sealed AGP payload including its seal_hash.
+    Without that payload the keyed HMAC computed at seal time is thrown
+    away at process exit and no one can ever verify the conclusion again
+    (the durability gap named in MORNING_REPORT 'WHAT IS STILL UNPROVEN').
     """
+    session = getattr(result, "session", None)
+    try:
+        session_dict = session.to_dict() if session is not None else None
+    except Exception:
+        # A session that cannot serialise must not kill record persistence;
+        # the record stays honest by carrying no seal rather than a broken one.
+        session_dict = None
     return {
         "recorded_at": datetime.datetime.now(
             datetime.timezone.utc).isoformat(timespec="seconds"),
@@ -113,6 +124,7 @@ def _result_record(result, question: str) -> dict:
         "objections": [getattr(o, "text", str(o))
                        for o in getattr(result, "objections", [])],
         "notes": list(getattr(result, "notes", [])),
+        "session": session_dict,
     }
 
 
@@ -368,6 +380,38 @@ def _cmd_runs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _seal_status(rec: dict) -> tuple[str, Optional[dict]]:
+    """Verify a run record's seal. Returns (status, verified_session_dict).
+
+    Statuses:
+      "VERIFIED (keyed)"     HMAC key (current or rotation) verified the seal
+      "VERIFIED (unkeyed)"   only the legacy public SHA-256 matched — the
+                             record predates keying or no key is configured;
+                             a DB/file writer could have forged it
+      "TAMPERED"             seal_hash present but nothing verified
+      "not sealed"           refused/failed run, nothing was ever minted
+      "not recorded"         legacy record written before sessions persisted
+    The returned dict, when non-None, is the payload whose bytes VERIFIED —
+    tier/score read from it are trustworthy; the record's top-level fields
+    are not.
+    """
+    sess = rec.get("session")
+    if not rec.get("sealed"):
+        return "not sealed", None
+    if not isinstance(sess, dict):
+        return "not recorded", None
+    try:
+        from agp import seal_verification_method
+        method = seal_verification_method(sess)
+    except Exception as exc:                    # pragma: no cover
+        return f"unverifiable: {exc}", None
+    if method == "keyed":
+        return "VERIFIED (keyed)", sess
+    if method == "unkeyed":
+        return "VERIFIED (unkeyed)", sess
+    return "TAMPERED", None
+
+
 def _cmd_show(args: argparse.Namespace) -> int:
     rec, path = _load_run(args.run_id)
     if rec is None:
@@ -378,7 +422,22 @@ def _cmd_show(args: argparse.Namespace) -> int:
     print(f"run      : {path.stem}")
     print(f"when     : {rec.get('recorded_at', '?')}")
     print(f"question : {rec.get('question', '?')}")
-    print(f"{verdict:<9}: {conf.get('tier', '?')} {conf.get('score', 0):.2f}")
+    # Trust-bearing values come from the VERIFIED session payload when one
+    # exists — the record's own confidence fields are editable JSON like any
+    # other line in the file (PATTERNS family #4: a label standing in for
+    # evidence). Only a keyed seal makes them evidence.
+    status, sess = _seal_status(rec)
+    shown = conf
+    if isinstance(sess, dict) and isinstance(sess.get("summary"), dict):
+        s = sess["summary"]
+        shown = {"tier": s.get("confidence_tier", "?"),
+                 "score": s.get("confidence_score", 0)}
+    print(f"{verdict:<9}: {shown.get('tier', '?')} "
+          f"{shown.get('score', 0):.2f}")
+    print(f"seal     : {status}")
+    if status == "TAMPERED":
+        print("         : the stored bytes do NOT match the recorded seal "
+              "hash — treat this conclusion as forged or corrupted")
     if rec.get("refusal_reason"):
         print(f"reason   : {rec['refusal_reason']}")
     if rec.get("conclusion"):
