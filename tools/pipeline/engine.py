@@ -1284,13 +1284,25 @@ def _trace_from_payload(question_id: str, payload: dict):
         for r in rounds:
             if not isinstance(r, dict):
                 continue
+            sources = r.get("sources")
+            had_sources = isinstance(sources, list) and len(sources) > 0
             rr = copy.deepcopy(r)
-            sources = rr.get("sources")
             rr["sources"] = (
                 [norm for norm in
                  (_normalize_round_source(src) for src in sources)
                  if norm is not None]
                 if isinstance(sources, list) else [])
+            # Fail closed at the ROUND level: a round that originally
+            # listed sources but whose outcomes were ALL malformed carries
+            # no trustworthy audit state. Keeping it would leave an empty
+            # sources list that classify_null_kind reads as "rounds ran,
+            # nothing rejected, nothing admitted" -> honest_null, i.e. a
+            # corrupt checkpoint laundering into a successful query.
+            # Drop the round so the unknown state stays unknown; a round
+            # that legitimately had no sources ([] in the live format,
+            # e.g. budget stop before fan-out) is preserved verbatim.
+            if had_sources and not rr["sources"]:
+                continue
             norm_rounds.append(rr)
         trace.rounds = norm_rounds
     skipped = payload.get("skipped_sources")
@@ -1370,25 +1382,50 @@ def _normalize_skipped_reason(reason: Any) -> Any:
     return reason if isinstance(reason, str) else ""
 
 
+#: The outcome keys a live round-source record may carry. Exactly one
+#: coherent outcome per record: `error`, `skipped`, and `rejected` must be
+#: strings; `admitted` must be a truthy marker (live format is
+#: `{"name": ..., "admitted": True, "relevance": <float>}`).
+_ROUND_OUTCOME_KEYS = ("error", "skipped", "rejected", "admitted")
+
+
+def _round_outcome_is_valid(key: str, value: Any) -> bool:
+    """Is this (outcome key, value) pair a well-formed round outcome?"""
+    if key == "admitted":
+        # Live writer emits True (+ optional numeric relevance); accept any
+        # truthy non-string marker as an admission, never a bare name.
+        return bool(value) and not isinstance(value, str)
+    return isinstance(value, str)
+
+
 def _normalize_round_source(src: Optional[dict]) -> Optional[dict]:
     """Return a safe round-source record, or None to drop it.
 
-    classify_gap() reads `s.get("skipped")`, `"error"`, and indexes
-    `s["name"]`. Round outcomes that are not plain strings would raise
-    downstream (`err[:120]` on a dict). A usable name must be a nonblank
-    string; malformed `skipped`/`error` audit values are dropped (set to
-    "") rather than stringified. Records without a usable name are
-    discarded entirely.
+    Fail-closed validation of the record's OUTCOME, not field-by-field
+    deletion: classify_gap() treats any source with no `skipped` value as
+    tried, and classify_null_kind() reads outcomes to split honest_null
+    from retrieval failure. So a record whose outcome key is malformed
+    (e.g. `skipped`/`error`/`rejected` not a string, or `admitted` not a
+    truthy non-string marker), or that carries NO valid outcome at all,
+    must be DROPPED entirely — keeping the name alone would fabricate a
+    successful query for a source we have no evidence about.
     """
     if not isinstance(src, dict):
         return None
     name = src.get("name")
     if not isinstance(name, str) or not name.strip():
         return None
-    for k in ("skipped", "error"):
-        if k in src and not isinstance(src[k], str):
-            del src[k]
-    return src
+    present = [k for k in _ROUND_OUTCOME_KEYS if k in src]
+    valid = [k for k in present if _round_outcome_is_valid(k, src[k])]
+    if len(valid) != 1:
+        # zero outcomes (name-only pseudo-success) or multiple/ambiguous
+        # outcomes -> unusable audit evidence; drop the whole record.
+        return None
+    out = copy.deepcopy(src)
+    for k in present:
+        if k not in valid:
+            del out[k]
+    return out
 
 
 def _fetch_from_payload(rec: dict) -> FetchResult:

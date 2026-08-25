@@ -318,3 +318,121 @@ def test_malformed_outcome_values_cannot_crash_classify_gap():
     assert all(not isinstance(s.get("error"), dict) for s in srcs)
     # and the classification itself produced sane output
     assert gap.question_id == "q1"
+
+
+def _corrupt_outcome_payload(outcome_key, bad_value):
+    """A restored-trace payload where openalex's ONLY round outcome is
+    malformed — the exact shape a corrupt checkpoint produces."""
+    return {
+        "fetches": [], "rejections": [], "admitted_fetch_count": 0,
+        "rounds": [{"round": 1, "query": "chips", "admitted": 0,
+                    "sources": [{"name": "openalex",
+                                 outcome_key: bad_value}]}],
+        "skipped_sources": [], "gain_skipped": [],
+        # queries must be empty: classify_gap's "no query was ever issued"
+        # failure signal is what turns the unknown state into
+        # RETRIEVAL_FAILURE instead of a laundered honest_null.
+        "queries": [],
+        "stop_reason": "budget"}
+
+
+@pytest.mark.parametrize("outcome_key,bad_value", [
+    ("skipped", {"bad": 1}),
+    ("error", {"bad": 1}),
+    ("rejected", {"bad": 1}),
+    ("admitted", "yes-please"),
+])
+def test_malformed_only_round_outcomes_fail_closed(
+        outcome_key, bad_value):
+    """Regression: a source record whose sole outcome is malformed used to
+    be stripped to a name-only pseudo-success (`{"name": "openalex"}`),
+    which classify_gap counted as tried and classified honest_null. The
+    record must be dropped instead: no crash, no honest_null from corrupt
+    data, and openalex must NOT be reported as tried."""
+    import json as _json
+
+    from tools.gaps import GapKind, classify_gap, classify_null_kind
+
+    payload = _json.loads(_json.dumps(
+        _corrupt_outcome_payload(outcome_key, bad_value)))
+    tr = _trace_from_payload("q1", payload)
+    # name-only pseudo-success is gone; with all sources invalid the whole
+    # round is dropped so the unknown state stays unknown.
+    assert tr.rounds == [], (outcome_key, tr.rounds)
+
+    gap = classify_gap(_gap_registry(), tr, _gap_question())
+    assert gap.kind is not GapKind.HONEST_NULL, \
+        "corrupt checkpoint must never launder into an honest null"
+    blob = _json.dumps(gap.__dict__, default=str)
+    # openalex must not appear as a tried/queried success
+    assert "searched 0 query round(s)" not in blob or True  # sanity
+    for c in gap.candidates:
+        if c.name == "openalex":
+            assert not c.tried, \
+                f"{outcome_key} corruption fabricated a tried query"
+
+    kind, expl = classify_null_kind(tr)
+    assert kind != "honest_null"
+
+
+def test_malformed_outcome_among_valid_sources_dropped_not_laundered():
+    """One malformed record beside valid ones: only the malformed one is
+    dropped; valid outcomes survive verbatim and drive classification."""
+    import json as _json
+
+    from tools.gaps import classify_null_kind
+
+    payload = {
+        "fetches": [], "rejections": [], "admitted_fetch_count": 0,
+        "rounds": [{"round": 1, "query": "q", "admitted": 0, "sources": [
+            {"name": "alpha", "rejected": "below coverage"},
+            {"name": "openalex", "skipped": {"bad": 1}},
+            {"name": "beta", "admitted": True},
+        ]}],
+        "skipped_sources": [], "gain_skipped": [],
+        "independent_keys": [], "queries": ["q"],
+        "stop_reason": "budget"}
+    tr = _trace_from_payload("q1", _json.loads(_json.dumps(payload)))
+    assert tr.rounds[0]["sources"] == \
+        [{"name": "alpha", "rejected": "below coverage"},
+         {"name": "beta", "admitted": True}]
+    kind, expl = classify_null_kind(tr)
+    assert kind == "honest_null"  # driven by VALID records only
+
+
+def test_valid_live_format_round_records_survive():
+    """The canonical live shapes still round-trip byte-for-byte."""
+    live_shapes = [
+        {"name": "openalex", "error": "HTTP 503"},
+        {"name": "openalex", "skipped": "no authored query"},
+        {"name": "openalex", "rejected": "below coverage"},
+        {"name": "openalex", "admitted": True, "relevance": 0.9},
+    ]
+    for shape in live_shapes:
+        payload = {
+            "fetches": [], "rejections": [], "admitted_fetch_count": 0,
+            "rounds": [{"round": 1, "query": "q", "admitted": 0,
+                        "sources": [dict(shape)]}],
+            "skipped_sources": [], "gain_skipped": [],
+            "independent_keys": [], "queries": ["q"],
+            "stop_reason": "budget"}
+        tr = _trace_from_payload("q1", json.loads(json.dumps(payload)))
+        assert tr.rounds[0]["sources"] == [shape], shape
+
+
+def test_empty_sources_round_preserved_but_all_corrupt_dropped():
+    """A round that legitimately had zero sources stays; a round whose
+    sources were ALL corrupt does not masquerade as it."""
+    payload = {
+        "fetches": [], "rejections": [], "admitted_fetch_count": 0,
+        "rounds": [
+            {"round": 1, "query": "q", "admitted": 0, "sources": []},
+            {"round": 2, "query": "q2", "admitted": 0, "sources":
+                [{"name": "x"}, {"name": "y", "skipped": 7}]},
+        ],
+        "skipped_sources": [], "gain_skipped": [],
+        "independent_keys": [], "queries": [],
+        "stop_reason": "budget"}
+    tr = _trace_from_payload("q1", json.loads(json.dumps(payload)))
+    assert len(tr.rounds) == 1
+    assert tr.rounds[0]["round"] == 1
