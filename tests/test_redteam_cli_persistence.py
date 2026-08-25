@@ -438,3 +438,104 @@ def test_d3_valid_duplicate_still_deduplicated(
     out, rc = _show_fetch(rec, runs_dir, tmp_path, monkeypatch)
     assert out.count("[ok]") == 1, "valid duplicates should dedup presentation"
     assert rc == 0
+
+
+# ── repair-pinning: safe publication + exact legacy lookup ────────────────
+
+def test_fix_replace_failure_leaves_no_broken_final_record(runs_dir, monkeypatch):
+    """An injected os.replace failure must not leave an empty/partial final
+    *.json behind; the writer retries cleanly on the next sequence slot."""
+    import os as _os
+    real_replace = _os.replace
+    state = {"failed": False}
+
+    def flaky_replace(src, dst):
+        if not state["failed"] and str(dst).endswith(".json"):
+            state["failed"] = True
+            raise OSError("simulated crashed publication")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(_os, "replace", flaky_replace)
+    p = callisto._persist_run(_record(q="flaky publish"))
+    # The published record is complete and loadable.
+    rec, loaded = callisto._load_run(p.stem)
+    assert rec is not None and rec["question"] == "flaky publish"
+    # No zero-byte or unparseable final json anywhere in the runs dir,
+    # and no leaked tmp/reservation siblings from the failed attempt.
+    finals = list(runs_dir.glob("*.json"))
+    assert len(finals) == 1
+    for f in finals:
+        json.loads(f.read_text(encoding="utf-8"))
+    assert not list(runs_dir.glob("*.tmp"))
+    assert not list(runs_dir.glob("*.resv"))
+
+
+def test_fix_reader_never_sees_partial_final_json(runs_dir, monkeypatch):
+    """The reservation marker is private (.json.resv): while content is being
+    written, no *.json glob can observe an empty final record."""
+    seen = []
+    real_open = open
+
+    def spy_open(file, mode="r", *a, **kw):
+        # Snapshot what any reader would see mid-publication.
+        seen.extend(list(runs_dir.glob("*.json")))
+        return real_open(file, mode, *a, **kw)
+
+    monkeypatch.setattr("builtins.open", spy_open)
+    p = callisto._persist_run(_record(q="window probe"))
+    for f in seen:
+        assert f != p  # final path not visible before atomic publish
+        json.loads(f.read_text(encoding="utf-8"))  # never empty/partial
+    rec, _ = callisto._load_run(p.stem)
+    assert rec["question"] == "window probe"
+
+
+def test_fix_exact_legacy_id_resolves_before_prefix_match(runs_dir):
+    """A legacy exact run id (`..._1234.json`) resolves its own record even
+    when a newer SHA-style id extends it (`..._1234c7dc_000.json`)."""
+    legacy = {"recorded_at": "2026-08-24T07:00:00+00:00",
+              "question": "legacy record"}
+    modern = dict(_record(q="modern record"),
+                  recorded_at="2026-08-24T07:00:00+00:00")
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    (runs_dir / "20260824T070000_abcd1234_1234.json").write_text(
+        json.dumps(legacy), encoding="utf-8")
+    pm = callisto._persist_run(modern)  # stamp/qhash differ; just add neighbor
+    (runs_dir / "20260824T070000_abcd1234_1234c7dc_000.json").write_text(
+        json.dumps({"question": "longer new id"}), encoding="utf-8")
+
+    rec, path = callisto._load_run("20260824T070000_abcd1234_1234")
+    assert path == runs_dir / "20260824T070000_abcd1234_1234.json"
+    assert rec["question"] == "legacy record"
+    # Prefix matching still works for the longer new id...
+    rec2, _ = callisto._load_run(pm.stem)
+    assert rec2["question"] == "modern record"
+    # ...and genuine prefix ambiguity stays an honest error.
+    with pytest.raises(SystemExit):
+        callisto._load_run("20260824T070000_abcd1234")
+
+
+def test_fix_concurrent_same_second_writers_all_survive(runs_dir):
+    """Threads publishing the identical record in the same second each get
+    their own distinct, fully-readable record; none overwrites another."""
+    import threading
+    rec = _record(q="thread race", ts="2026-08-24T07:00:01+00:00")
+    results, errors = [], []
+
+    def worker():
+        try:
+            results.append(callisto._persist_run(dict(rec)))
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    stems = {p.stem for p in results}
+    assert len(stems) == len(results) == 4
+    for p in sorted(runs_dir.glob("*.json")):
+        got = json.loads(p.read_text(encoding="utf-8"))
+        assert got["question"] == "thread race"

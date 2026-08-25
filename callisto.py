@@ -122,38 +122,70 @@ def _persist_run(record: dict) -> Path:
     """Write the run record atomically; returns its path. The filename is
     the timestamped run id — `callisto runs` / `callisto show` read it.
 
-    The id is timestamp + SHA-256(question) prefix + a short sequence
-    suffix, so identical recorded_at values and identical questions can
-    never map to one path. The final filename is claimed with O_EXCL
-    *before* writing, so concurrent writers cannot silently replace one
-    another's record either; each caller gets a unique id via the seq.
+    Publication sequence:
+      1. Reserve the id by O_EXCL-creating `<id>.json.resv` — a private
+         reservation marker that no `*.json` glob (runs/show/_load_run)
+         ever matches, so readers can never observe it as a run record,
+         let alone an empty final file.
+      2. Write the complete payload to a `.tmp` sibling and fsync the file.
+      3. os.replace() the tmp onto the final `<id>.json` — atomic swap,
+         so no reader ever sees a partial or empty final JSON — then fsync
+         both the published file and the directory for durability.
+
+    On any failure the reservation and tmp are removed and the next seq
+    candidate is tried; a crashed writer leaves at most a stale `.resv`
+    marker (never a malformed `*.json`). Concurrent same-second writers
+    each hold their own reservation, so neither can overwrite the other.
     """
     stamp = record["recorded_at"].replace(":", "").replace("-", "")
     qhash = hashlib.sha256(
         str(record.get("question", "")).encode("utf-8")).hexdigest()[:8]
     base = _runs_dir()
+    payload = json.dumps(record, indent=2).encode("utf-8")
     for seq in range(1000):
         run_id = f"{stamp}_{qhash}_{seq:03d}"
         path = base / f"{run_id}.json"
-        # Atomic claim: fails with FileExistsError if another writer holds
-        # this exact id (same second, same question, same seq).
+        resv = base / f"{run_id}.json.resv"
+        # Never reuse a slot whose record is already published.
+        if path.exists():
+            continue
+        # Atomic private claim: fails with FileExistsError if another writer
+        # holds this exact id (same second, same question, same seq).
         try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            fd = os.open(resv, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
             continue
         try:
-            payload = json.dumps(record, indent=2).encode("utf-8")
+            os.write(fd, b"")
+            os.fsync(fd)               # durable reservation
             tmp = path.with_suffix(".json.tmp")
             with open(tmp, "wb") as fh:
                 fh.write(payload)
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(tmp, path)          # atomic content swap
-            os.fsync(fd)                   # durability of the claim itself
-        finally:
-            os.close(fd)
-            tmp.unlink(missing_ok=True)
-        return path
+            try:
+                os.replace(tmp, path)  # atomic content publication
+                ffd = os.open(path, os.O_RDONLY)
+                try:
+                    os.fsync(ffd)      # durability of published content
+                finally:
+                    os.close(ffd)
+                dfd = os.open(base, os.O_RDONLY)
+                try:
+                    os.fsync(dfd)      # directory entry durability
+                finally:
+                    os.close(dfd)
+                os.close(fd)
+                fd = -1
+                return path
+            finally:
+                if fd != -1:
+                    os.close(fd)
+                    fd = -1
+                tmp.unlink(missing_ok=True)
+                resv.unlink(missing_ok=True)   # release failed claim
+        except OSError:
+            continue
     raise RuntimeError(
         "could not allocate a unique run id after 1000 attempts "
         f"for stamp {stamp}")
@@ -363,7 +395,11 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
 def _load_run(run_id: str) -> tuple[Optional[dict], Optional[Path]]:
     """Load a run record by id (filename stem) or unique prefix."""
-    runs = sorted(_runs_dir().glob(f"{run_id}*.json"))
+    runs_dir_ = _runs_dir()
+    exact = runs_dir_ / f"{run_id}.json"
+    if exact.is_file():
+        return json.loads(exact.read_text(encoding="utf-8")), exact
+    runs = sorted(runs_dir_.glob(f"{run_id}*.json"))
     if not runs:
         return None, None
     if len(runs) > 1:
