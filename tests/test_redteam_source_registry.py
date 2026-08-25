@@ -331,20 +331,13 @@ def test_ind1_base_independence_family_disagrees_with_the_live_rule():
             f"live rule says {independence_key(spelling, '')!r}")
 
 
-def test_ind1b_base_copy_has_no_production_callers():
-    """Family 1: a verifier nobody calls. The base module's comment claims
-    'consumers collapse on it'; grep shows zero callers outside tests —
-    the declaration actually flows through retrieval's derived map. Dead
-    code guarding nothing is how W5/A6 happened."""
-    import subprocess
-    out = subprocess.run(
-        ["grep", "-rn", "independence_family(", "--include=*.py",
-         "tools/", "agp/", "scripts/"], capture_output=True, text=True)
-    callers = [l for l in out.stdout.splitlines()
-               if "def independence_family(" not in l]
-    assert callers == [], (
-        f"base.independence_family called outside its own module: {callers}"
-    ) if False else True  # informational pin; the substantive check is IND1
+def test_ind1b_family_declaration_flows_only_through_retrieval():
+    """The declared families must be reachable from the LIVE rule (retrieval
+    derives its map from the base declaration) — the declaration itself is
+    honoured only via that one consumer; nothing else reads it."""
+    from tools.pipeline.retrieval import _OVERLAP_FAMILIES as derived
+    from tools.sources.base import INDEPENDENCE_FAMILIES as declared
+    assert {k: set(v) for k, v in declared.items()} == derived
 
 
 # ── IND2: honest-gap table keyed by a spelling the registry never uses ─────
@@ -416,7 +409,8 @@ def test_neg_worldbank_error_envelope_collapses_to_empty_fail_closed():
                            transport=dispatch, max_rounds=1,
                            generic_calls={"worldbank_probe":
                                           ("indicator", (), {})})
-    trace = _retrieve(r.registry, "gdp 2026", 1)
+    trace = _retrieve(r.registry, "gdp 2026", 1,
+                      transports={"api.worldbank.example": transport})
     assert len(trace.admitted) == 0
 
 
