@@ -16,7 +16,6 @@ The LineMonitor import path is unchanged.
 """
 
 import asyncio
-import json
 import logging
 import os
 import time
@@ -42,7 +41,7 @@ from tools.kl_divergence import kl_divergence, jensen_shannon, shannon_entropy, 
 from tools.parlay_scanner import find_correlated_parlay_edges, analyze_live_overreaction
 from tools import telegram
 from tools.dk_scraper import scrape_dk_odds
-from tools.action_network_scraper import scrape_action_network
+from tools.action_network_scraper import scrape_action_network  # noqa: F401 (back-compat re-export)
 from tools.fanduel_scraper import scrape_fd_odds
 from tools.betmgm_scraper import scrape_betmgm_odds
 from tools.fanatics_scraper import fetch_fanatics_odds
@@ -81,6 +80,15 @@ from tools.lines.movement import (
     MovementRecorder,
     extract_probs,
     filter_significant,
+)
+from tools.lines.snapshot_ops import (
+    cache_snapshot_for_backtest,
+    capture_closing_lines as _capture_closing_lines_impl,
+    default_closing_window,
+    insert_snapshot_record,
+    normalize_close_source,
+    record_line_movement as _record_movement_impl,
+    store_market_microstructure,
 )
 
 load_dotenv()
@@ -624,74 +632,20 @@ class LineMonitor:
         """Take an odds snapshot using all available sources.
 
         Called when Odds API credits are exhausted or unavailable.
-        Priority cascade:
-          1. Odds-API.io Pro (PRIMARY — 15 books, 30K req/hr)
-          2. DraftKings scraper (supplementary — DK-specific lines)
-          3. Action Network scraper (supplementary — up to 9 books)
-          4. FanDuel scraper (supplementary)
-          5. BetMGM scraper (supplementary)
-          6. OddsPapi (last resort — 250/month)
-        Merges all successful sources for maximum multi-book coverage.
+        Delegates the scraper cascade to tools.lines.fallback_cascade
+        (priority: odds-api.io Pro -> DK -> Action Network -> FD ->
+        Fanatics). Merges all successful sources for maximum
+        multi-book coverage. BetMGM is disabled and OddsPapi removed —
+        see fallback_cascade module docstring.
         """
-        scraped = {}  # source_name -> data
+        from tools.lines.fallback_cascade import collect_free_sources, merge_free_sources
 
-        # 1. Odds-API.io Pro — PRIMARY source (15 books, 30K req/hr)
-        # This is now the best multi-book source by far.
-        try:
-            usage = odds_api_io_usage()
-            if usage.get("requests_remaining_this_hour", usage.get("requests_remaining", 0)) > 0 and usage.get("api_key_set"):
-                io_data = await odds_api_io_get_odds(sport)
-                if not io_data.get("error") and io_data.get("game_count", 0) > 0:
-                    scraped["odds_api_io"] = io_data
-                    logger.info(f"Odds-API.io Pro {sport}: {io_data['game_count']} games ({len(io_data['games'][0]['bookmakers']) if io_data['games'] else 0} books/game)")
-        except Exception as e:
-            logger.warning(f"Odds-API.io Pro failed for {sport}: {e}")
+        scraped = await collect_free_sources(
+            sport,
+            odds_api_io_get_odds=odds_api_io_get_odds,
+            odds_api_io_usage=odds_api_io_usage,
+        )
 
-        # 2. DraftKings — free, supplementary for DK-specific alt lines
-        try:
-            dk_data = await scrape_dk_odds(sport)
-            if not dk_data.get("error") and dk_data.get("game_count", 0) > 0:
-                scraped["dk"] = dk_data
-        except Exception as e:
-            logger.warning(f"DK scraper failed for {sport}: {e}")
-
-        # 3. Action Network — free, up to 9 books per game
-        try:
-            an_data = await scrape_action_network(sport)
-            if not an_data.get("error") and an_data.get("game_count", 0) > 0:
-                scraped["action_network"] = an_data
-        except Exception as e:
-            logger.warning(f"Action Network scraper failed for {sport}: {e}")
-
-        # 4. FanDuel — free and unlimited
-        try:
-            fd_data = await scrape_fd_odds(sport)
-            if not fd_data.get("error") and fd_data.get("game_count", 0) > 0:
-                scraped["fd"] = fd_data
-        except Exception as e:
-            logger.warning(f"FanDuel scraper failed for {sport}: {e}")
-
-        # 4b. Fanatics — secondary book per project_sportsbooks. Free public
-        # endpoint; cookie-optional (CALLISTO_FANATICS_SESSION_COOKIE upgrades
-        # to authed reads). Skip sports Fanatics doesn't carry (golf, MLS).
-        try:
-            from tools.fanatics_scraper import FANATICS_LEAGUE_KEYS
-            if sport in FANATICS_LEAGUE_KEYS:
-                fan_data = await fetch_fanatics_odds(sport)
-                if not fan_data.get("error") and fan_data.get("game_count", 0) > 0:
-                    scraped["fanatics"] = fan_data
-        except Exception as e:
-            logger.warning(f"Fanatics scraper failed for {sport}: {e}")
-
-        # 5. BetMGM — DISABLED: redundant with odds-api.io Pro (includes BetMGM).
-        # Scraped endpoint returns 400/403 consistently, generating log noise.
-        # Re-enable only if odds-api.io loses BetMGM coverage.
-
-        # 6. OddsPapi — REMOVED 2026-04-18. odds-api.io Pro covers the same
-        # books at higher quota; the oddspapi free tier was throwing 429 on
-        # every call. Do not reintroduce without an explicit decision.
-
-        # Merge all successful sources
         if not scraped:
             # Track consecutive failures for self-healing alerts
             self._consecutive_failures[sport] = self._consecutive_failures.get(sport, 0) + 1
@@ -715,17 +669,7 @@ class LineMonitor:
         # Reset consecutive failure counter on success
         self._consecutive_failures[sport] = 0
 
-        sources = list(scraped.values())
-        new_snapshot = sources[0]
-        for extra in sources[1:]:
-            new_snapshot = merge_free_snapshots(new_snapshot, extra)
-
-        new_snapshot["source"] = f"free_cascade_{'_'.join(scraped.keys())}"
-        logger.info(
-            f"Fallback snapshot {sport}: merged {list(scraped.keys())} = "
-            f"{new_snapshot.get('game_count', 0)} games"
-        )
-
+        new_snapshot = merge_free_sources(scraped, sport)
         await self._process_snapshot(sport, new_snapshot)
 
     async def _snapshot_sport(self, sport: str) -> None:
@@ -839,21 +783,16 @@ class LineMonitor:
             if prior is not None and new_snapshot.get("games"):
                 new_snapshot = merge_delta_into_snapshot(prior, new_snapshot, now)
 
-        # Store snapshot — use retry on both execute and commit since autonomous
-        # loop does NOT acquire the write lock, so SQLite-level contention can occur.
-        from tools.db_utils import execute_with_retry, commit_with_retry
-        await execute_with_retry(
+        # Store snapshot (retry-wrapped; see tools.lines.snapshot_ops).
+        await insert_snapshot_record(
             self._db,
-            "INSERT INTO odds_snapshots "
-            "(sport, timestamp, snapshot_json, game_count, credits_remaining, "
-            "fetched_at, source) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (sport, now, json.dumps(new_snapshot), game_count, credits_remaining,
-             now, ingest_source),
-            max_retries=10,
-            operation="snapshot_insert",
+            sport=sport,
+            snapshot=new_snapshot,
+            now_iso=now,
+            game_count=game_count,
+            credits_remaining=credits_remaining,
+            ingest_source=ingest_source,
         )
-        await commit_with_retry(self._db, max_retries=10, operation="snapshot_store")
 
         logger.info(f"Snapshot {sport} ({source}): {game_count} games, credits={credits_remaining}")
 
@@ -868,35 +807,9 @@ class LineMonitor:
             pass  # Event bus not critical
 
         # ALWAYS cache in historical_odds_cache for backtesting.
-        # Every live snapshot becomes backtest-grade data. Even single-book
-        # snapshots are worth archiving — they provide game context data
-        # and can be cross-referenced with other snapshots from the same date.
-        # This is the primary mechanism for building historical depth.
-        book_count = 0
-        for g in new_snapshot.get("games", []):
-            book_count = max(book_count, len(g.get("bookmakers", [])))
-            if not g.get("sport_key"):
-                g["sport_key"] = sport
-        if game_count > 0:
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            try:
-                await execute_with_retry(
-                    self._db,
-                    "INSERT OR REPLACE INTO historical_odds_cache "
-                    "(sport, snapshot_date, event_id, market_type, response_json, credits_cost, fetched_at) "
-                    "VALUES (?, ?, NULL, 'h2h,spreads,totals', ?, 0, ?)",
-                    (sport, today, json.dumps(new_snapshot), now),
-                    max_retries=10,
-                    operation=f"historical_odds_cache insert {sport}",
-                )
-                await commit_with_retry(
-                    self._db,
-                    max_retries=10,
-                    operation=f"historical_odds_cache commit {sport}",
-                )
-                logger.info(f"Cached multi-book snapshot for backtest: {sport} {today} ({book_count} books)")
-            except Exception as e:
-                logger.warning(f"Failed to cache snapshot for backtest: {e}")
+        # Every live snapshot becomes backtest-grade data. This is the
+        # primary mechanism for building historical depth.
+        await cache_snapshot_for_backtest(self._db, sport=sport, snapshot=new_snapshot, now_iso=now)
 
         # Run edge scanner on every snapshot
         edge_report = full_edge_scan(new_snapshot)
@@ -906,38 +819,7 @@ class LineMonitor:
             logger.info(f"Edge scan {sport}: {total_edges} edges found")
 
         # Store market microstructure metrics from edge scan
-        try:
-            stored = 0
-            for market_key in ["cross_book_h2h", "cross_book_spreads", "cross_book_totals"]:
-                edges = edge_report.get(market_key, [])
-                for edge in edges:
-                    hhi_val = edge.get("hhi")
-                    entropy_val = edge.get("entropy")
-                    if hhi_val is not None or entropy_val is not None:
-                        await execute_with_retry(
-                            self._db,
-                            "INSERT OR REPLACE INTO market_microstructure "
-                            "(sport, game_id, market_type, timestamp, hhi_overall, "
-                            "entropy_overall, num_books) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                            (
-                                sport,
-                                edge.get("game_id", ""),
-                                market_key.replace("cross_book_", ""),
-                                now,
-                                hhi_val,
-                                entropy_val,
-                                edge.get("num_bookmakers", 0),
-                            ),
-                            max_retries=5,
-                            operation="microstructure_insert",
-                        )
-                        stored += 1
-            if stored > 0:
-                await commit_with_retry(self._db, max_retries=5, operation="microstructure_store")
-                logger.info(f"Stored {stored} microstructure metrics for {sport}")
-        except Exception as e:
-            logger.warning(f"Market microstructure store failed: {e}")
+        await store_market_microstructure(self._db, sport=sport, edge_report=edge_report, now_iso=now)
 
         # NOTE: Raw edges are NOT sent to Telegram here.
         # The autonomous loop analyzes candidates via full AGP sessions
@@ -1004,9 +886,7 @@ class LineMonitor:
     async def _capture_closing_lines(self, sport: str, snapshot: dict) -> None:
         """Push closing lines to CLV tracker for games about to start.
 
-        For each game starting within the next snapshot interval + buffer,
-        extract the consensus/sharp closing line and record it. This bridges
-        the line_monitor → CLV tracker gap that was previously dead code.
+        Delegates to tools.lines.snapshot_ops.capture_closing_lines.
         """
         try:
             # Import CLV tracker from the global API state
@@ -1014,105 +894,20 @@ class LineMonitor:
             if _clv is None:
                 return
 
-            now = datetime.now(timezone.utc)
-            closing_window_seconds = max(SNAPSHOT_INTERVAL + 300, 3600)  # at least 1hr window
-
-            games = snapshot.get("games", [])
-            closing_count = 0
-
-            for game in games:
-                commence_time_str = game.get("commence_time", "")
-                if not commence_time_str:
-                    continue
-
-                try:
-                    commence = datetime.fromisoformat(
-                        commence_time_str.replace("Z", "+00:00")
-                    )
-                except (ValueError, TypeError):
-                    continue
-
-                seconds_until_start = (commence - now).total_seconds()
-
-                # Game starts within closing window and hasn't already started
-                if 0 < seconds_until_start <= closing_window_seconds:
-                    event_id = game.get("id", "")
-                    home = game.get("home_team", "")
-                    away = game.get("away_team", "")
-
-                    # Extract odds from all bookmakers for each market
-                    for bm in game.get("bookmakers", []):
-                        book_name = bm.get("title", bm.get("key", ""))
-                        for market_data in bm.get("markets", []):
-                            market_key = market_data.get("key", "")
-                            for outcome in market_data.get("outcomes", []):
-                                team = outcome.get("name", "")
-                                price = outcome.get("price")
-                                point = outcome.get("point")
-
-                                if price is None:
-                                    continue
-
-                                # Normalize source identifier to the key-style used by
-                                # _RELIABLE_CLOSE_SOURCES in clv_tracker (lowercase, no
-                                # spaces). Odds-api-io returns titles like "Pinnacle",
-                                # "Betfair Exchange", "BetOnline.ag"; stored mixed-case,
-                                # every reliable book later tests as unreliable.
-                                src_key = (book_name or "").lower().replace(" ", "_")
-                                try:
-                                    await _clv.record_closing_line(
-                                        event_id=event_id,
-                                        market=market_key,
-                                        team=team,
-                                        closing_odds=int(price),
-                                        closing_point=float(point) if point is not None else None,
-                                        source=src_key,
-                                        sport=sport,
-                                    )
-                                    closing_count += 1
-                                except Exception as e:
-                                    logger.debug(f"CLV closing line record failed: {e}")
-
-            if closing_count > 0:
-                logger.info(
-                    f"CLV: captured {closing_count} closing lines for {sport} "
-                    f"(games starting within {closing_window_seconds}s)"
-                )
+            await _capture_closing_lines_impl(
+                _clv,
+                sport=sport,
+                snapshot=snapshot,
+                closing_window_seconds=default_closing_window(SNAPSHOT_INTERVAL),
+            )
         except ImportError:
             pass  # CLV tracker not available
         except Exception as e:
             logger.warning(f"CLV closing line capture failed for {sport}: {e}")
 
     async def _record_movement(self, sport: str, movement: dict) -> None:
-        """Record a line movement to the database."""
-        from tools.db_utils import execute_with_retry, commit_with_retry
-        now = datetime.now(timezone.utc).isoformat()
-        await execute_with_retry(
-            self._db,
-            "INSERT INTO line_movements "
-            "(sport, detected_at, team, market, bookmaker, old_price, new_price, "
-            "price_movement, old_point, new_point, point_movement, direction) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                sport, now, movement["team"], movement["market"],
-                movement["bookmaker"], movement["old_price"], movement["new_price"],
-                movement["price_movement"], movement.get("old_point"),
-                movement.get("new_point"), movement.get("point_movement", 0),
-                movement["direction"],
-            ),
-            max_retries=5,
-            operation=f"line_movement insert {sport}",
-        )
-        await commit_with_retry(self._db, max_retries=5, operation=f"line_movement commit {sport}")
-
-        self._alerts.append({
-            "sport": sport,
-            "detected_at": now,
-            **movement,
-        })
-        # Keep only last 100 alerts in memory
-        if len(self._alerts) > 100:
-            self._alerts = self._alerts[-100:]
+        """Record a line movement (delegates to tools.lines.snapshot_ops)."""
+        await _record_movement_impl(self._db, self._alerts, sport=sport, movement=movement)
 
     async def _compute_and_store_kl(self, sport: str, old_snapshot: dict, new_snapshot: dict) -> None:
         """Compute KL divergence between two consecutive snapshots per game.
