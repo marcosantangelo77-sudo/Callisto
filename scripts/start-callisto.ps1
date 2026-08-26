@@ -79,8 +79,10 @@ if (Test-Path $venvActivate) {
     $pythonCmd = Join-Path $CallistoRoot "venv\Scripts\python.exe"
 }
 
+# Bind to loopback unless CALLISTO_BIND_HOST overrides it
+$bindHost = if ($env:CALLISTO_BIND_HOST) { $env:CALLISTO_BIND_HOST } else { "127.0.0.1" }
 $apiProcess = Start-Process -FilePath $pythonCmd `
-    -ArgumentList "-u", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8420" `
+    -ArgumentList "-u", "-m", "uvicorn", "api:app", "--host", $bindHost, "--port", "8420" `
     -WorkingDirectory $CallistoRoot `
     -RedirectStandardOutput $apiLog `
     -RedirectStandardError (Join-Path $LogDir "api_error_$Timestamp.log") `
