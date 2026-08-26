@@ -19,6 +19,7 @@ DEPRECATION NOTE (feat/portfolio-kelly-live-loop, audit 2026-04-22):
     should import from ``tools.kelly`` (``kelly_dynamic``, ``kelly_portfolio``).
 """
 
+from tools.kelly import kelly_core
 from tools.math_utils import american_to_decimal, american_to_implied
 from tools.ev import ev_binary, ev_with_push
 
@@ -36,13 +37,12 @@ def kelly_binary(fair_prob: float, decimal_odds: float) -> float:
     f* = (bp - q) / b  where b = decimal-1, p = fair_prob, q = 1-p
     Returns 0 if bet is not +EV.
     Verified: prob=0.55, odds=2.10 -> f*=0.1409
+
+    Thin wrapper: delegates to the canonical unrounded primitive
+    ``tools.kelly.kelly_core`` so there is exactly one Kelly formula.
+    Decimal odds -> net payout b; no rounding (unlike ``kelly_full``).
     """
-    b = decimal_odds - 1
-    if b <= 0:
-        return 0.0
-    q = 1 - fair_prob
-    f = (b * fair_prob - q) / b
-    return max(f, 0)
+    return kelly_core(float(fair_prob), float(decimal_odds) - 1.0)
 
 
 def kelly_with_push(p_win: float, p_push: float, decimal_odds: float) -> float:

@@ -135,6 +135,29 @@ def _confidence_tier_from_score(score: float) -> str:
 
 
 # =========================================================================
+# 0. Shared unrounded Kelly primitive (single formula)
+# =========================================================================
+def kelly_core(p: float, b: float) -> float:
+    """
+    Unrounded binary Kelly fraction — THE canonical formula.
+
+        f* = (b*p - q) / b
+
+    where b = net payout per unit risked (decimal_odds - 1),
+          p = true win probability,
+          q = 1 - p.
+
+    Returns 0.0 when b <= 0 or the bet is not +EV (f* <= 0).
+    Both ``kelly_full`` here and ``tools.sizing.kelly_binary`` delegate
+    to this primitive so there is exactly one Kelly implementation.
+    """
+    if b <= 0:
+        return 0.0
+    q = 1.0 - p
+    return max(0.0, (b * p - q) / b)
+
+
+# =========================================================================
 # 1. Full Kelly
 # =========================================================================
 def kelly_full(edge: float, odds: int | float) -> float:
@@ -159,16 +182,10 @@ def kelly_full(edge: float, odds: int | float) -> float:
     implied = calculate_implied_probability(int(odds))
     p = implied + edge  # true probability
     p = max(0.0, min(1.0, p))  # clamp
-    q = 1.0 - p
 
-    decimal_odds = _american_to_decimal(odds)
-    b = decimal_odds - 1.0  # net payout per unit risked
+    b = _american_to_decimal(odds) - 1.0  # net payout per unit risked
 
-    if b <= 0:
-        return 0.0
-
-    fraction = (b * p - q) / b
-    return max(0.0, round(fraction, 6))
+    return round(kelly_core(p, b), 6)
 
 
 # =========================================================================
