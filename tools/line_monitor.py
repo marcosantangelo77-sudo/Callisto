@@ -14,8 +14,9 @@ Internals live in tools/lines/: ingest (snapshot conversion/merging),
 edge_report (consensus + +EV evaluation), movement (tracking/KL),
 monitor_loop (cycle body), schema (DDL bootstrap), snapshot_ops
 (snapshot storage/CLV/microstructure), ws_stream (WS + incremental
-ingestion) and process_snapshot (per-sport fetch, enrichment, storage,
-movement/EV pipeline — slice 5).
+ingestion), process_snapshot (per-sport fetch, enrichment, storage,
+movement/EV pipeline — slice 5) and lifecycle (pause/drain handshake,
+main loop scaffolding, status assembly — slice 6).
 The LineMonitor import path is unchanged.
 """
 
@@ -31,6 +32,7 @@ from dotenv import load_dotenv
 
 import aiosqlite
 
+from tools.lines import config as _config
 from tools.odds_api import (
     get_credit_status,
 )
@@ -91,6 +93,12 @@ from tools.lines.process_snapshot import (
     record_movement as _record_movement_core,
     snapshot_sport as _snapshot_sport_impl,
 )
+from tools.lines.lifecycle import (
+    build_status as _build_status_impl,
+    monitor_loop as _monitor_loop_body,
+    resume_monitor as _resume_monitor_impl,
+    wait_for_drain as _wait_for_drain_impl,
+)
 from tools.lines.schema import connect_and_tag, ensure_line_schema
 from tools.lines.snapshot_ops import (
     capture_closing_lines as _capture_closing_lines_ops_impl,
@@ -113,35 +121,20 @@ load_dotenv()
 
 logger = logging.getLogger("callisto.line_monitor")
 
-DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
+DB_PATH = _config.DB_PATH
 
-# Snapshot interval in seconds — balance freshness vs credit burn
-# 500 credits/month ≈ 16/day. Each snapshot = markets × regions credits.
-# Default: 15 min intervals, 3 markets, 1 region = 3 credits/snap = ~5 snaps/day budget
-SNAPSHOT_INTERVAL = int(os.getenv("ODDS_SNAPSHOT_INTERVAL", "900"))
+# Snapshot interval in seconds — see tools.lines.config (slice-6 extraction)
+SNAPSHOT_INTERVAL = _config.SNAPSHOT_INTERVAL
 
-# Sports to monitor — configurable via env, comma-separated
-MONITORED_SPORTS = os.getenv(
-    "ODDS_MONITORED_SPORTS",
-    "basketball_nba,icehockey_nhl,americanfootball_nfl,baseball_mlb,basketball_ncaab,basketball_ncaaw,soccer_mls,golf_pga",
-).split(",")
+# Sports to monitor — see tools.lines.config (slice-6 extraction)
+MONITORED_SPORTS = _config.MONITORED_SPORTS
 
-# --- Event-driven odds update config ----------------------------------------
-# These knobs flip Callisto from "poll every 15 min" to event-driven freshness:
-#   * WS_SPORTS — odds-api.io sport slugs to stream live (comma-separated).
-#     Maps many-to-one onto MONITORED_SPORTS via WS_SPORT_TO_MONITORED below.
-#   * WS_ENABLED — flip to 0 to disable WS entirely (fall back to 15-min poll).
-#   * INCREMENTAL_ENABLED — /odds/updated?since=X polling every 60s as a
-#     gap-filler between WS drops.
-#   * REQUIRE_MODEL_AGREEMENT — gate ev_opportunities on independent model
-#     confirmation. Default on; set to 0 to revert to steam-only emission.
-WS_SPORTS = os.getenv(
-    "CALLISTO_WS_SPORTS", "basketball,american-football,baseball,ice-hockey"
-)
-WS_ENABLED = os.getenv("CALLISTO_WS_ENABLED", "1") == "1"
-INCREMENTAL_ENABLED = os.getenv("CALLISTO_INCREMENTAL_ENABLED", "1") == "1"
-INCREMENTAL_INTERVAL = int(os.getenv("CALLISTO_INCREMENTAL_INTERVAL_S", "60"))
-REQUIRE_MODEL_AGREEMENT = os.getenv("CALLISTO_REQUIRE_MODEL_AGREEMENT", "1") == "1"
+# Event-driven odds update config — see tools.lines.config (slice-6 extraction)
+WS_SPORTS = _config.WS_SPORTS
+WS_ENABLED = _config.WS_ENABLED
+INCREMENTAL_ENABLED = _config.INCREMENTAL_ENABLED
+INCREMENTAL_INTERVAL = _config.INCREMENTAL_INTERVAL
+REQUIRE_MODEL_AGREEMENT = _config.REQUIRE_MODEL_AGREEMENT
 
 
 def _ws_sport_to_monitored(ws_sport: str, ws_league: str = "") -> Optional[str]:
@@ -304,93 +297,34 @@ class LineMonitor:
     async def wait_for_drain(self, timeout: float = 60) -> bool:
         """Pause the monitor and wait until all in-flight DB ops complete.
 
-        Sets _paused, waits for _pause_ack, then ACQUIRES the snapshot lock
-        to guarantee no new snapshot can start. Returns True if drained.
-        Caller MUST eventually call resume() to release the lock.
+        Delegates to tools.lines.lifecycle.wait_for_drain.
         """
-        self._paused = True
-        deadline = time.monotonic() + timeout
-        # SECURITY (audit C-8): acquire the lock FIRST, then verify under-lock that
-        # ack is set and no DB op is in flight. Previously we checked ack outside the
-        # lock and then acquired — between those two operations a snapshot could start
-        # and set _in_flight_db=True, leaving the caller with the lock but a live writer
-        # racing it. By holding the lock during verification we guarantee mutual
-        # exclusion: if someone else has the lock we wait; once we hold it no new
-        # snapshot can begin (the loop body acquires _snapshot_lock before doing work).
-        while time.monotonic() < deadline:
-            try:
-                await asyncio.wait_for(
-                    self._snapshot_lock.acquire(),
-                    timeout=max(1.0, deadline - time.monotonic()),
-                )
-            except asyncio.TimeoutError:
-                break
-            # Lock held — re-check invariants under it.
-            if self._pause_ack.is_set() and not self._in_flight_db:
-                return True
-            # Caller hasn't fully drained; release and retry after a short sleep.
-            try:
-                self._snapshot_lock.release()
-            except RuntimeError:
-                pass
-            await asyncio.sleep(0.5)
-        logger.warning(
-            f"wait_for_drain timed out after {timeout}s "
-            f"(ack={self._pause_ack.is_set()}, in_flight={self._in_flight_db})"
-        )
-        return False
+        return await _wait_for_drain_impl(self, timeout=timeout)
 
     def resume(self) -> None:
         """Release the drain lock and unpause the monitor.
 
         Must be called after wait_for_drain() succeeds, in a try/finally
         block to guarantee the lock is released.
+
+        Delegates to tools.lines.lifecycle.resume_monitor.
         """
-        self._paused = False
-        if self._snapshot_lock.locked():
-            try:
-                self._snapshot_lock.release()
-            except RuntimeError:
-                # Already released — non-fatal
-                pass
+        _resume_monitor_impl(self)
 
     async def _monitor_loop(self) -> None:
         """Main monitoring loop — snapshot, compare, alert.
 
         Delegates each cycle body to tools.lines.monitor_loop.run_monitor_cycle
         (credit-aware fallback switch, adaptive interval stretch, per-sport
-        backoff, free prop cascade). This wrapper owns the pause/ack
-        handshake and the inter-cycle sleep.
+        backoff, free prop cascade). The loop scaffolding lives in
+        tools.lines.lifecycle.monitor_loop; this wrapper owns the running flag.
         """
-        while self._running:
-            # Yield to backtests when paused
-            if self._paused:
-                self._pause_ack.set()
-                await asyncio.sleep(5)
-                continue
-            self._pause_ack.clear()
-            try:
-                interval = await run_monitor_cycle(
-                    self,
-                    monitored_sports=MONITORED_SPORTS,
-                    snapshot_interval=SNAPSHOT_INTERVAL,
-                    get_credit_status=get_credit_status,
-                )
-
-                # If paused mid-cycle (broke out of sport loop), skip the
-                # interval sleep and loop back immediately so _pause_ack fires.
-                # Without this, autonomous waits 30s, always times out, and
-                # proceeds with WAL-contending DB writes.
-                if self._paused:
-                    continue
-
-                await asyncio.sleep(interval)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Monitor loop error: {e}")
-                await asyncio.sleep(30)
+        await _monitor_loop_body(
+            self,
+            monitored_sports=MONITORED_SPORTS,
+            snapshot_interval=SNAPSHOT_INTERVAL,
+            get_credit_status=get_credit_status,
+        )
 
     async def _snapshot_props(self) -> None:
         """Scrape player props from all free sources for all monitored sports.
@@ -534,21 +468,16 @@ class LineMonitor:
         return await fetch_snapshot_history(self._db, sport, limit=limit)
 
     async def get_status(self) -> dict:
-        """Return monitor status with DB-backed counts."""
-        counts = await collect_status_counts(self._db) if self._db else {}
+        """Return monitor status with DB-backed counts.
 
-        return {
-            "running": self._running,
-            "monitored_sports": MONITORED_SPORTS,
-            "snapshot_interval_seconds": SNAPSHOT_INTERVAL,
-            "cached_snapshots": list(self._snapshots.keys()),
-            "db_snapshots_total": counts.get("db_snapshots_total", 0),
-            "db_movements_total": counts.get("db_movements_total", 0),
-            "db_closing_lines": counts.get("db_closing_lines", 0),
-            "latest_snapshot_at": counts.get("latest_snapshot_at"),
-            "recent_alerts_in_memory": len(self._alerts),
-            "credits": get_credit_status(),
-        }
+        Delegates to tools.lines.lifecycle.build_status.
+        """
+        return await _build_status_impl(
+            self,
+            monitored_sports=MONITORED_SPORTS,
+            snapshot_interval=SNAPSHOT_INTERVAL,
+            get_credit_status=get_credit_status,
+        )
 
     def get_edge_report(self, sport: Optional[str] = None) -> dict:
         """Get the latest edge scan report."""

@@ -10,4 +10,5 @@ import path stable):
 - monitor_loop: main loop cycle body, prop cascade, alert glue, query helpers
 - schema: DDL bootstrap for odds tables
 - ws_stream: WS + incremental event-driven ingestion
+- lifecycle: pause/drain handshake, main loop scaffolding, status assembly
 """
