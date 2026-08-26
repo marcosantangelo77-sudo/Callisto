@@ -301,6 +301,7 @@ class TestCyclesAndSymmetry:
 
     def test_patch_dict_environment_isolation(self, tmp_path):
         """Same contract holds via patch.dict instead of monkeypatch."""
+        before = os.environ.get(ENV_VAR)
         with patch.dict(os.environ, {ENV_VAR: "1"}):
             ex = _make_executor()
             m = _make_manager(tmp_path)
@@ -308,8 +309,9 @@ class TestCyclesAndSymmetry:
             assert m.enable() is False
             assert not ex.is_enabled
             assert not m.is_enabled
-        # Outside the patched context the env is restored.
-        assert ENV_VAR not in os.environ or os.environ[ENV_VAR] != "1"
+        # patch.dict restores the prior value (including a leaked "1" from
+        # another test module that set the env without monkeypatch).
+        assert os.environ.get(ENV_VAR) == before
 
 
 # ===========================================================================
