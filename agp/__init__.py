@@ -479,7 +479,14 @@ class AGPSession:
         # Accept: current key (or unkeyed fallback), then legacy unkeyed
         # digest (pre-keying seals), then any rotation keys. Constant-time
         # comparisons throughout.
-        candidates = [_seal_digest(payload), hashlib.sha256(payload.encode("utf-8")).hexdigest()]
+        # Accept: current key (or unkeyed fallback when no key is set),
+        # then any rotation keys. Constant-time comparisons throughout.
+        # When a key regime is active, the raw public SHA-256 of the payload
+        # is deliberately NOT accepted — otherwise anyone who can write the
+        # DB could forge a seal without knowing the key.
+        candidates = [_seal_digest(payload)]
+        if not _seal_keys():
+            candidates.append(hashlib.sha256(payload.encode("utf-8")).hexdigest())
         for key in _seal_keys():
             candidates.append(
                 hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
