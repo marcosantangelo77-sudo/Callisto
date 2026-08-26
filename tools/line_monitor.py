@@ -15,22 +15,17 @@ edge_report (consensus + +EV evaluation), movement (tracking/KL),
 monitor_loop (cycle body), schema (DDL bootstrap), snapshot_ops
 (snapshot storage/CLV/microstructure), ws_stream (WS + incremental
 ingestion), process_snapshot (per-sport fetch, enrichment, storage,
-movement/EV pipeline — slice 5) and lifecycle (pause/drain handshake,
-main loop scaffolding, status assembly — slice 6).
+movement/EV pipeline — slice 5), lifecycle (pause/drain handshake,
+main loop scaffolding, status assembly — slice 6) and core (init
+state, start/stop bring-down, WS update wrapper, edge report /
+force snapshot accessors — slice 7).
 The LineMonitor import path is unchanged.
 """
 
-import asyncio
 import logging
-import os
-import time
-from collections import deque
-from datetime import datetime, timezone
 from typing import Optional
 
 from dotenv import load_dotenv
-
-import aiosqlite
 
 from tools.lines import config as _config
 from tools.odds_api import (
@@ -99,6 +94,15 @@ from tools.lines.lifecycle import (
     resume_monitor as _resume_monitor_impl,
     wait_for_drain as _wait_for_drain_impl,
 )
+from tools.lines.core import (
+    force_snapshot as _force_snapshot_impl,
+    get_edge_report as _get_edge_report_impl,
+    handle_ws_update as _handle_ws_update_core,
+    init_state,
+    initialize as _initialize_impl,
+    start as _start_impl,
+    stop as _stop_impl,
+)
 from tools.lines.schema import connect_and_tag, ensure_line_schema
 from tools.lines.snapshot_ops import (
     capture_closing_lines as _capture_closing_lines_ops_impl,
@@ -110,11 +114,10 @@ from tools.lines.snapshot_ops import (
     store_market_microstructure,
 )
 from tools.lines.ws_stream import (
-    handle_ws_update as _handle_ws_update_impl,
+    handle_ws_update as _handle_ws_update_impl,  # noqa: F401 (re-exported via core)
     incremental_loop as _incremental_loop_impl,
     start_ws as _start_ws_impl,
     stop_ws_and_incremental as _stop_ws_and_incremental_impl,
-    ws_status_fields as _ws_status_fields_impl,
 )
 
 load_dotenv()
@@ -158,101 +161,42 @@ def _stamp_snapshot_fetched_at(snapshot: dict, now_iso: str) -> None:
 
 
 class LineMonitor:
-    """Autonomous line movement detection engine."""
+    """Autonomous line movement detection engine.
+
+    Facade only — every method delegates to tools.lines.*; __init__
+    state lives in tools.lines.core.init_state.
+    """
 
     def __init__(self, db_path: str = DB_PATH):
-        self.db_path = db_path
-        self._db: Optional[aiosqlite.Connection] = None
-        self._task: Optional[asyncio.Task] = None
-        self._running = False
-        self._paused = False  # Set True to pause snapshot writes (during backtests)
-        self._pause_ack = asyncio.Event()  # Signals when monitor has entered paused state (no in-flight DB ops)
-        self._in_flight_db = False  # True while a snapshot DB write is in progress
-        self._snapshot_lock = asyncio.Lock()  # Atomic guard around _process_snapshot
-        self._snapshots: dict[str, dict] = {}  # sport -> last snapshot (only latest per sport)
-        self._alerts: deque = deque(maxlen=100)  # Hard-capped at 100 (was unbounded list)
-        self._latest_edge_reports: dict[str, dict] = {}  # sport -> latest edge scan (only latest per sport)
-        # Self-healing: track consecutive all-source failures per sport.
-        # Alert via Telegram only after 3+ consecutive failures.
-        self._consecutive_failures: dict[str, int] = {}  # sport -> count
-        self._FAILURE_ALERT_THRESHOLD = 3
-
+        init_state(self, db_path, monitored_sports=MONITORED_SPORTS)
         # Extracted collaborators (tools/lines/)
         self._kl_tracker = KLDivergenceTracker(db_path=db_path)
         self._evaluator: Optional[MovementEvaluator] = None
 
-        # Event-driven odds state (WS + incremental poll) -------------------
-        # _ws_client holds the odds-api.io WebSocket handle; _incremental_task
-        # holds the /odds/updated?since=X poller. Both are None when the
-        # feature is disabled or failed to initialize; the 15-min snapshot
-        # loop runs regardless so WS outages degrade gracefully.
-        self._ws_client = None
-        self._ws_task: Optional[asyncio.Task] = None
-        self._ws_updates_received = 0
-        self._ws_last_update_at: Optional[float] = None
-        self._incremental_task: Optional[asyncio.Task] = None
-        # Unix seconds of the last /odds/updated poll, per sport. Used as
-        # the `since` cursor on the next call.
-        self._last_incremental_since: dict[str, int] = {}
-
     async def initialize(self) -> None:
         """Create tables for odds snapshots and alerts.
 
-        Delegates DDL to tools.lines.schema (per-statement DDL avoids
-        EXCLUSIVE lock contention — security audit C-6).
+        Delegates to tools.lines.core.initialize (DDL in
+        tools.lines.schema — per-statement DDL avoids EXCLUSIVE lock
+        contention, security audit C-6).
         """
-        self._db = await connect_and_tag(self.db_path)
-        await ensure_line_schema(self._db)
-        # Ensure prop_snapshots table exists
-        await ensure_prop_schema(self.db_path)
-        logger.info("Line monitor initialized (with prop snapshots)")
+        await _initialize_impl(self, ensure_prop_schema=ensure_prop_schema)
 
     async def start(self) -> None:
-        """Start the background monitoring loop."""
-        if self._running:
-            return
-        self._running = True
-        # Take immediate startup snapshots before the loop begins.
-        # The autonomous loop has a 15s startup delay — use that window
-        # to get at least one round of fresh data before it pauses us.
-        for sport in MONITORED_SPORTS:
-            try:
-                await self._snapshot_sport(sport.strip())
-            except Exception as e:
-                logger.warning(f"Startup snapshot for {sport} failed: {e}")
-        self._task = asyncio.create_task(self._monitor_loop())
-
-        # Event-driven paths — non-blocking: failure to open WS must NOT
-        # prevent the 15-min safety loop from running.
-        if WS_ENABLED:
-            try:
-                await self._start_ws()
-            except Exception as e:
-                logger.warning(f"WS startup failed (will retry in background): {e}")
-        if INCREMENTAL_ENABLED:
-            self._incremental_task = asyncio.create_task(self._incremental_loop())
-
-        logger.info(
-            f"Line monitor started — {len(MONITORED_SPORTS)} sports, "
-            f"{SNAPSHOT_INTERVAL}s interval "
-            f"(ws={'on' if WS_ENABLED else 'off'}, "
-            f"incremental={'on' if INCREMENTAL_ENABLED else 'off'})"
+        """Start the background monitoring loop — delegates to tools.lines.core.start."""
+        await _start_impl(
+            self,
+            monitored_sports=MONITORED_SPORTS,
+            snapshot_interval=SNAPSHOT_INTERVAL,
+            ws_enabled=WS_ENABLED,
+            incremental_enabled=INCREMENTAL_ENABLED,
+            monitor_loop_fn=self._monitor_loop,
+            incremental_loop_fn=self._incremental_loop,
         )
 
     async def stop(self) -> None:
-        """Stop the monitoring loop and close DB."""
-        self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        # Stop WS and incremental tasks (each teardown isolated — see ws_stream).
-        await _stop_ws_and_incremental_impl(self)
-        if self._db:
-            await self._db.close()
-        logger.info("Line monitor stopped")
+        """Stop the monitoring loop and close DB — delegates to tools.lines.core.stop."""
+        await _stop_impl(self)
 
     # --- WebSocket path -----------------------------------------------------
     async def _start_ws(self) -> None:
@@ -265,25 +209,13 @@ class LineMonitor:
     async def _handle_ws_update(self, data: dict) -> None:
         """WS callback — merge a single delta into our latest snapshot.
 
-        Delegates to tools.lines.ws_stream.handle_ws_update; this wrapper
-        owns the update counters and isolates detector failures from
-        odds ingestion.
+        Counters + detector isolation live in tools.lines.core.handle_ws_update;
+        the merge itself in tools.lines.ws_stream.
         """
-        self._ws_updates_received += 1
-        self._ws_last_update_at = time.time()
-        try:
-
-            async def _eval_detectors(event_id: str):
-                from tools.live_state import evaluate_detectors_for_event
-                await evaluate_detectors_for_event(event_id, db_path=self.db_path)
-
-            await _handle_ws_update_impl(
-                self, data,
-                process_snapshot=self._process_snapshot,
-                evaluate_live_detectors=_eval_detectors,
-            )
-        except Exception as e:
-            logger.warning(f"WS update handler failed: {e}")
+        await _handle_ws_update_core(
+            self, data,
+            process_snapshot=self._process_snapshot,
+        )
 
     # --- Incremental /odds/updated path -------------------------------------
     async def _incremental_loop(self) -> None:
@@ -292,7 +224,8 @@ class LineMonitor:
 
     def get_ws_status(self) -> dict:
         """Telemetry snapshot — exposed via /health and /system/full-status."""
-        return _ws_status_fields_impl(self)
+        from tools.lines.ws_stream import ws_status_fields
+        return ws_status_fields(self)
 
     async def wait_for_drain(self, timeout: float = 60) -> bool:
         """Pause the monitor and wait until all in-flight DB ops complete.
@@ -480,12 +413,12 @@ class LineMonitor:
         )
 
     def get_edge_report(self, sport: Optional[str] = None) -> dict:
-        """Get the latest edge scan report."""
-        if sport:
-            return self._latest_edge_reports.get(sport, {"error": f"No report for {sport}"})
-        return self._latest_edge_reports
+        """Get the latest edge scan report — delegates to tools.lines.core."""
+        return _get_edge_report_impl(self, sport)
 
     async def force_snapshot(self, sport: str) -> dict:
-        """Manually trigger a snapshot for a sport. Returns the snapshot data."""
-        await self._snapshot_sport(sport)
-        return self._snapshots.get(sport, {"error": "No snapshot taken"})
+        """Manually trigger a snapshot for a sport. Returns the snapshot data.
+
+        Delegates to tools.lines.core.force_snapshot.
+        """
+        return await _force_snapshot_impl(self, sport, snapshot_sport=self._snapshot_sport)
