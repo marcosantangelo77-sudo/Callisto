@@ -205,12 +205,27 @@ def _db_path() -> str:
                      str(REPO / "memory" / "callisto.db"))
 
 
+def _print_appliance_switches() -> None:
+    """Print bind host + money/signal env switches (env only, informational)."""
+    bind_host = os.getenv("CALLISTO_BIND_HOST", "").strip() or "127.0.0.1"
+    print("=== APPLIANCE SWITCHES ===")
+    print(f"  bind host: {bind_host}")
+    for name in ("CALLISTO_LOCAL_ONLY",
+                 "CALLISTO_ALLOW_LIVE_EXECUTE",
+                 "CALLISTO_ALLOW_SIGNAL_REFRESH"):
+        state = "on" if os.getenv(name, "").strip() else "off"
+        short = name.removeprefix("CALLISTO_")
+        print(f"  {short}: {state}")
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     import sqlite3
 
+    _print_appliance_switches()
+
     db = _db_path()
     if not Path(db).exists():
-        print(f"no database at {db} — nothing has run on this machine yet")
+        print(f"\nno database at {db} — nothing has run on this machine yet")
         return 0
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
