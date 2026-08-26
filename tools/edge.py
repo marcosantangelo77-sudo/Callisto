@@ -211,7 +211,18 @@ def assess_edge(
     decimal = _to_decimal(quote.price)
     b = decimal - 1.0
     q = 1.0 - calibrated_prob
-    kelly_full_frac = max(0.0, (b * calibrated_prob - q) / b)
+
+    # Canonical Kelly: delegate to tools.kelly.kelly_full instead of
+    # recomputing f* inline (this was the third copy of the formula).
+    # kelly_full(edge, odds) solves (b*p - q)/b with p = implied(odds) + edge,
+    # so passing the edge VERSUS THE OFFERED PRICE (calibrated - raw implied)
+    # reconstructs exactly p = calibrated_prob at the quoted payout — the
+    # semantics the inline version always had (see tests/test_build_r5_edge.py).
+    # For single-sided quotes raw == market_fair, so this equals the spec's
+    # kelly_full(calibrated - market_fair); for devigged two-sided quotes it
+    # is the only form that preserves the frozen numbers.
+    edge_vs_price = calibrated_prob - market_raw
+    kelly_full_frac = kelly_full(edge_vs_price, quote.price)
     kelly_full_capped = min(kelly_full_frac, MAX_FRACTION_FULL_KELLY)
 
     ev_per_unit = calibrated_prob * b - q      # stake 1, win b*p - q expectation
