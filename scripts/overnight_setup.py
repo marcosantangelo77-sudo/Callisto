@@ -56,7 +56,7 @@ print("\n[Phase 3] Starting Callisto API...")
 try:
     # Start API as a detached process
     subprocess.Popen(
-        [sys.executable, '-m', 'uvicorn', 'api:app', '--host', '0.0.0.0', '--port', '8420'],
+        [sys.executable, '-m', 'uvicorn', 'api:app', '--host', os.environ.get("CALLISTO_BIND_HOST", "127.0.0.1"), '--port', '8420'],
         cwd=str(PROJECT_ROOT),
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
         stdout=open(PROJECT_ROOT / 'logs' / 'api_overnight.log', 'w'),
