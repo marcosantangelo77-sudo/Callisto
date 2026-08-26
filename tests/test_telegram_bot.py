@@ -26,6 +26,7 @@ async def mgr(tmp_path):
     sender = MockSender()
     m = OrderManager(db_path=str(tmp_path / "orders.db"), telegram_sender=sender)
     await m.initialize()
+    m.enable()  # default-disabled; arm for order-flow tests
     try:
         yield m, sender
     finally:
@@ -125,6 +126,36 @@ async def test_non_command_returns_none(mgr):
     assert ret is None
 
 
+class MockExecutor:
+    """Records enable/disable calls on the bet executor."""
+
+    def __init__(self):
+        self.enabled_calls = 0
+        self.disabled_calls = 0
+
+    def enable(self):
+        self.enabled_calls += 1
+
+    def disable(self):
+        self.disabled_calls += 1
+
+
+@pytest.mark.asyncio
+async def test_resume_all_does_not_arm_executor(mgr):
+    """Chat /resume_all must NOT arm the (require_admin) bet executor."""
+    m, _ = mgr
+    executor = MockExecutor()
+    replies = MockSender()
+    await handle_order_command("/pause_all", m, replies, bet_executor=executor)
+    assert executor.disabled_calls == 1
+    await handle_order_command("/resume_all", m, replies, bet_executor=executor)
+    assert executor.enabled_calls == 0
+    assert m.is_enabled
+    # The reply should tell the user the executor stays disabled.
+    combined = "\n".join(replies.sent)
+    assert "bet_executor" in combined and "DISABLED" in combined
+
+
 @pytest.mark.asyncio
 async def test_order_status_shows_pending(mgr, sig):
     m, _ = mgr
@@ -144,6 +175,7 @@ async def test_submit_order_telegram_prompt_format(tmp_path, sig):
     sender = MockSender()
     m = OrderManager(db_path=str(tmp_path / "o.db"), telegram_sender=sender)
     await m.initialize()
+    m.enable()
     try:
         oid = await m.submit_order(
             hypothesis_id="mlb_home_favs_vs_lefty",

@@ -67,6 +67,7 @@ async def _setup_bets_and_game_results(db):
 async def mgr(tmp_path):
     m = OrderManager(db_path=str(tmp_path / "e2e.db"), telegram_sender=_noop)
     await m.initialize()
+    m.enable()  # default-disabled: arm for tests
     await _setup_bets_and_game_results(m._db)
     try:
         yield m

@@ -21,6 +21,7 @@ async def mgr(tmp_path):
         telegram_sender=_noop_send,
     )
     await m.initialize()
+    m.enable()  # default-disabled: arm for tests
     try:
         yield m
     finally:
