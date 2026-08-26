@@ -2584,7 +2584,7 @@ async def simulate_portfolio_endpoint(
     return {"cached": False, **payload}
 
 
-@app.get("/model/total/{sport}")
+@app.get("/model/total/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def get_model_total(sport: str, venue: str = "", wind_mph: float = None,
                           wind_dir: str = "", temp_f: float = None,
                           humidity: float = None, refs: str = ""):
@@ -2642,7 +2642,7 @@ async def get_model_total(sport: str, venue: str = "", wind_mph: float = None,
     }
 
 
-@app.get("/model/environment")
+@app.get("/model/environment", dependencies=[Depends(require_admin_or_loopback)])
 async def get_model_environment(venue: str, sport: str = "NFL",
                                 wind_mph: float = None, wind_dir: str = "",
                                 temp_f: float = None, humidity: float = None,
@@ -2691,7 +2691,7 @@ async def get_model_environment(venue: str, sport: str = "NFL",
     }
 
 
-@app.get("/data/injuries/{sport}")
+@app.get("/data/injuries/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def get_injuries(sport: str):
     """Get current injury report from ESPN with model analysis.
 
@@ -2739,7 +2739,7 @@ async def get_injuries(sport: str):
     return data
 
 
-@app.get("/model/injury-impact/{sport}")
+@app.get("/model/injury-impact/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def injury_impact_model(sport: str):
     """Run full injury model analysis for today's games.
 
@@ -2884,21 +2884,21 @@ async def injury_impact_model(sport: str):
     }
 
 
-@app.get("/data/scoreboard/{sport}")
+@app.get("/data/scoreboard/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def get_scoreboard(sport: str):
     """Get live scoreboard from ESPN."""
     from tools.contextual_data import get_scoreboard as _get_scoreboard
     return await _get_scoreboard(sport)
 
 
-@app.get("/data/weather")
+@app.get("/data/weather", dependencies=[Depends(require_admin_or_loopback)])
 async def get_weather(latitude: float, longitude: float, venue: str = ""):
     """Get weather forecast for a venue."""
     from tools.contextual_data import get_weather as _get_weather
     return await _get_weather(latitude, longitude, venue_name=venue)
 
 
-@app.get("/data/referee")
+@app.get("/data/referee", dependencies=[Depends(require_admin_or_loopback)])
 async def referee_info(refs: str, sport: str = "basketball_nba"):
     """Get referee tendency adjustments. Pass refs as comma-separated names."""
     from tools.contextual_data import get_referee_adjustment
@@ -3370,7 +3370,7 @@ async def run_backtest(req: BacktestRequest):
     )
 
 
-@app.get("/backtest/run/{run_id}")
+@app.get("/backtest/run/{run_id}", dependencies=[Depends(require_admin_or_loopback)])
 async def get_backtest_results(run_id: str):
     """Get backtest results for a run."""
     return await backtest_engine.get_run_results(run_id)
@@ -3382,7 +3382,7 @@ async def resolve_backtest(run_id: str, sport: str = "basketball_nba"):
     return await backtest_engine.resolve_with_scores(run_id, sport)
 
 
-@app.get("/historical/cache")
+@app.get("/historical/cache", dependencies=[Depends(require_admin_or_loopback)])
 async def historical_cache_stats():
     """Get historical odds cache statistics."""
     return await historical_fetcher.get_cache_stats()
@@ -3406,7 +3406,7 @@ async def fetch_historical(
 
 # ── Research Loop Endpoints ──
 
-@app.get("/research/status")
+@app.get("/research/status", dependencies=[Depends(require_admin_or_loopback)])
 async def research_status():
     """Get research loop status."""
     if not research_loop:
@@ -3523,14 +3523,14 @@ async def batch_reject_hypotheses(request: Request):
         await db.close()
 
 
-@app.get("/research/sports")
+@app.get("/research/sports", dependencies=[Depends(require_admin_or_loopback)])
 async def get_research_sports():
     """Get all researched sports — all compete equally."""
     from tools.autonomous import RESEARCH_SPORTS
     return {"sports": RESEARCH_SPORTS}
 
 
-@app.get("/embeddings/stats")
+@app.get("/embeddings/stats", dependencies=[Depends(require_admin_or_loopback)])
 async def embedding_stats(collection: Optional[str] = None):
     """Get embedding store statistics."""
     if not vector_store:
@@ -3550,7 +3550,7 @@ async def embedding_search(
     return await vector_store.search_text(collection, query, top_k)
 
 
-@app.get("/data/stats")
+@app.get("/data/stats", dependencies=[Depends(require_admin_or_loopback)])
 async def data_collection_stats():
     """Get data collection statistics."""
     if not data_collector:
@@ -3979,7 +3979,7 @@ async def integrity_history(limit: int = 50):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/claude/status")
+@app.get("/claude/status", dependencies=[Depends(require_admin_or_loopback)])
 async def claude_status():
     """Get Claude Code availability and usage stats."""
     from tools.claude_code import get_usage_stats
@@ -4233,7 +4233,7 @@ async def admin_restart(confirm: str = "", _auth: None = Depends(require_admin_o
 _tracemalloc_snapshot: Optional[tracemalloc.Snapshot] = None
 
 
-@app.get("/debug/memory")
+@app.get("/debug/memory", dependencies=[Depends(require_admin_or_loopback)])
 async def debug_memory(_auth: None = Depends(require_admin)):
     """tracemalloc snapshot comparison — identifies the top growing allocations.
 
@@ -4298,7 +4298,7 @@ async def debug_memory(_auth: None = Depends(require_admin)):
     return result
 
 
-@app.get("/debug/memory/top-traces")
+@app.get("/debug/memory/top-traces", dependencies=[Depends(require_admin_or_loopback)])
 async def debug_memory_traces(limit: int = 10, _auth: None = Depends(require_admin)):
     """Show full stack traces for the top memory consumers."""
     if not tracemalloc.is_tracing():
