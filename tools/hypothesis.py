@@ -1896,101 +1896,24 @@ class HypothesisManager:
                 if total_events > 0 and eval_cycles >= 2:
                     edge_diag = await self._diagnose_edge_threshold(hypothesis_id)
                     if edge_diag.get("threshold_too_high"):
-                        # Auto-lower threshold and give more cycles
-                        new_threshold = edge_diag["recommended_threshold"]
-                        model_config["edge_threshold"] = new_threshold
-                        model_config["evaluate_cycles"] = 0  # Reset cycle count
-                        from tools.db_utils import execute_with_retry, commit_with_retry
-                        await execute_with_retry(
-                            self._db,
-                            "UPDATE hypotheses SET edge_threshold = ?, model_config = ? "
-                            "WHERE hypothesis_id = ?",
-                            (new_threshold, json.dumps(model_config), hypothesis_id),
-                            operation="hypothesis auto_lower_threshold",
-                        )
-                        await commit_with_retry(self._db, operation="hypothesis auto_lower_threshold")
-
-                        # Retroactively update signal_generated on existing events
-                        # so evaluate_significance can see them without re-backtesting
-                        # NOTE: must use `edge` column (probability edge), NOT `ev_pct` (expected value)
-                        # — consistent with backtest.py:1161 where is_signal = edge >= edge_threshold
-                        cursor = await execute_with_retry(
-                            self._db,
-                            "UPDATE backtest_events "
-                            "SET signal_generated = CASE WHEN edge >= ? THEN 1 ELSE 0 END "
-                            "WHERE hypothesis_id = ?",
-                            (new_threshold, hypothesis_id),
-                            operation="hypothesis retroactive_signal_update",
-                        )
-                        await commit_with_retry(self._db, operation="hypothesis retroactive_signal_update")
-                        retroactive_count = cursor.rowcount
-                        # Count how many are now signals
-                        sig_cursor = await (await self._db.execute(
-                            "SELECT COUNT(DISTINCT event_id) FROM backtest_events "
-                            "WHERE hypothesis_id = ? AND signal_generated = 1",
-                            (hypothesis_id,),
-                        )).fetchone()
-                        new_signals = sig_cursor[0] if sig_cursor else 0
-
-                        # Sync backtest_runs.signals_generated so monitoring
-                        # reflects the retroactive update (not just evaluate_significance)
-                        await execute_with_retry(
-                            self._db,
-                            "UPDATE backtest_runs SET signals_generated = ("
-                            "  SELECT COUNT(DISTINCT event_id) FROM backtest_events"
-                            "  WHERE backtest_events.run_id = backtest_runs.run_id"
-                            "  AND signal_generated = 1"
-                            ") WHERE hypothesis_id = ?",
-                            (hypothesis_id,),
-                            operation="hypothesis sync_backtest_runs_signals",
-                        )
-                        await commit_with_retry(self._db, operation="hypothesis sync_backtest_runs_signals")
-
+                        # Diagnose-only policy: never rewrite evidence to fit
+                        # the gate. Log and hold; an operator decides whether
+                        # to lower the threshold manually.
                         logger.info(
-                            f"Hypothesis {hypothesis_id}: lowered edge_threshold "
-                            f"from {edge_diag['current_threshold']:.3f} to {new_threshold:.3f} "
-                            f"(max observed edge: {edge_diag['max_edge']:.3f}). "
-                            f"Retroactively updated {retroactive_count} events → {new_signals} signals"
+                            f"Hypothesis {hypothesis_id}: holding — edge_threshold "
+                            f"too high. current_threshold="
+                            f"{edge_diag.get('current_threshold'):.3f}, "
+                            f"recommended_threshold="
+                            f"{edge_diag.get('recommended_threshold'):.3f}, "
+                            f"max_edge={edge_diag.get('max_edge'):.3f}, "
+                            f"events={total_events}, signals=0 "
+                            f"(evaluate_cycles={eval_cycles})"
                         )
-                        # If retroactive update created enough signals, immediately
-                        # check promotion readiness instead of returning early.
-                        if new_signals >= PROMOTION_GATES["backtesting→paper_trading"]["min_signals"]:
-                            logger.info(
-                                f"Hypothesis {hypothesis_id}: {new_signals} signals after "
-                                f"threshold adjustment — checking promotion readiness now"
-                            )
-                            readiness = await self.check_promotion_readiness(hypothesis_id)
-                            if readiness.get("should_reject"):
-                                cas = await self.update_status(hypothesis_id, "rejected", "auto", expected_status=status)
-                                if not cas.get("changed"):
-                                    return {"action": "held", "reason": "Concurrent transition won; rejection skipped."}
-                                return {"action": "rejected", "reason": "Data actively disproves thesis after threshold adjustment."}
-                            if readiness.get("ready"):
-                                next_stage = readiness["next_stage"]
-                                cas = await self.update_status(hypothesis_id, next_stage, "auto", expected_status=status)
-                                if not cas.get("changed"):
-                                    return {"action": "held", "reason": f"Concurrent promotion already moved row past {status!r}."}
-                                return {"action": "promoted", "new_status": next_stage}
-                            return {
-                                "action": "threshold_adjusted",
-                                "reason": (
-                                    f"Threshold lowered to {new_threshold:.1%}, "
-                                    f"{new_signals} signals now exist, but promotion "
-                                    f"check not yet passing."
-                                ),
-                                "checks": readiness.get("checks", []),
-                            }
-                        else:
-                            return {
-                                "action": "threshold_adjusted",
-                                "reason": (
-                                    f"0 signals in {total_events} events because edge_threshold "
-                                    f"({edge_diag['current_threshold']:.1%}) exceeds max observed "
-                                    f"edge ({edge_diag['max_edge']:.1%}). Lowered to "
-                                    f"{new_threshold:.1%} and reset eval cycles. "
-                                    f"Retroactively updated {new_signals} events to signals."
-                                ),
-                            }
+                        return {
+                            "action": "held",
+                            "reason": "threshold_too_high",
+                            "diagnosis": edge_diag,
+                        }
 
                 # Use 6 cycles before rejecting — gives time for threshold
                 # adjustment (at cycle 2) plus 4 more cycles to accumulate signals.
