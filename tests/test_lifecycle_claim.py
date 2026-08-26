@@ -525,3 +525,189 @@ def test_unkeyed_journal_still_loads_without_key_configured(tmp_path, monkeypatc
     monkeypatch.setenv("CALLISTO_SEAL_KEY", "cd" * 32)
     with pytest.raises(ClaimError, match="integrity seal"):
         store.load(c.claim_id)
+
+
+def _write_sealed_journal(store_dir, monkeypatch, key_hex):
+    """Helper: write a one-entry journal under the given key config."""
+    import hashlib as _h
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", key_hex)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(store_dir))
+    p = _prereg(); p.seal()
+    c = Claim(text="Keyed claim")
+    c.seal_preregistration(p)
+    store.save(c)
+    return store, c
+
+
+def test_malformed_current_key_public_digest_fails_closed(tmp_path, monkeypatch):
+    # Blocker 1: configured-but-invalid CALLISTO_SEAL_KEY must NOT be treated
+    # as an unkeyed deployment; a forged public SHA-256 seal must raise.
+    import hashlib as _h
+    store, c = _write_sealed_journal(tmp_path / "claims", monkeypatch, "ab" * 32)
+
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    lines = path.read_text().splitlines()
+    tail = json.loads(lines[-1])
+    forged = dict(tail, state=dict(tail["state"], confidence=0.99))
+    payload = ClaimStore._entry_seal_payload(
+        forged["prev"], forged["saved_at"], forged["state"])
+    provenance = json.dumps({"alg": "sha256"}, sort_keys=True,
+                            separators=(",", ":"))
+    forged["seal"] = {"alg": "sha256",
+                      "digest": _h.sha256(
+                          (payload + "\n" + provenance).encode()).hexdigest()}
+    lines[-1] = json.dumps(forged, sort_keys=True, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n")
+
+    # Malformed current key: fail closed, never "unkeyed".
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "not-hex")
+    with pytest.raises(ClaimError):
+        store.load(c.claim_id)
+    # Even legacy opt-in cannot resurrect it under malformed keyed policy.
+    with pytest.raises(ClaimError):
+        store.load(c.claim_id, allow_legacy_unsigned=True)
+
+
+def test_malformed_old_only_key_public_digest_fails_closed(tmp_path, monkeypatch):
+    # Blocker 1b: invalid old-key-only configuration also fails closed when
+    # an attacker substitutes a public SHA-256 digest for the HMAC.
+    import hashlib as _h
+    store, c = _write_sealed_journal(tmp_path / "claims", monkeypatch, "ab" * 32)
+
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    lines = path.read_text().splitlines()
+    tail = json.loads(lines[-1])
+    forged = dict(tail, state=dict(tail["state"], status="confirmed"))
+    payload = ClaimStore._entry_seal_payload(
+        forged["prev"], forged["saved_at"], forged["state"])
+    provenance = json.dumps({"alg": "sha256"}, sort_keys=True,
+                            separators=(",", ":"))
+    forged["seal"] = {"alg": "sha256",
+                      "digest": _h.sha256(
+                          (payload + "\n" + provenance).encode()).hexdigest()}
+    lines[-1] = json.dumps(forged, sort_keys=True, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n")
+
+    monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
+    monkeypatch.setenv("CALLISTO_SEAL_KEY_OLD", "zz-not-hex")
+    with pytest.raises(ClaimError):
+        store.load(c.claim_id)
+
+
+def test_regime_change_keyed_history_not_downgraded_after_key_removal(
+        tmp_path, monkeypatch):
+    # Blocker 3: a journal entry written by pre-provenance code under a
+    # valid key carries a BARE STRING seal (HMAC or public digest cannot be
+    # distinguished once the writing-time key configuration is gone). After
+    # both key variables are removed, such an entry must FAIL CLOSED rather
+    # than silently load as a legitimate unkeyed SHA-256 digest.
+    import hashlib as _h
+    store, c = _write_sealed_journal(tmp_path / "claims", monkeypatch, "ef" * 32)
+
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    lines = path.read_text().splitlines()
+    tail = json.loads(lines[-1])
+    forged = dict(tail, state=dict(tail["state"], confidence=0.99))
+    payload = ClaimStore._entry_seal_payload(
+        forged["prev"], forged["saved_at"], forged["state"])
+
+    # Key variables removed; the attacker downgrades to the HISTORICAL
+    # bare-string public-digest format.
+    monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    forged["seal"] = _h.sha256(payload.encode("utf-8")).hexdigest()
+    lines[-1] = json.dumps(forged, sort_keys=True, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ClaimError, match="integrity seal"):
+        store.load(c.claim_id)
+    # Even legacy opt-in must not resurrect the ambiguous historical format.
+    with pytest.raises(ClaimError, match="integrity seal"):
+        store.load(c.claim_id, allow_legacy_unsigned=True)
+
+    # Control: the SAME bare-string digest read while the WRITING key is
+    # still configured also fails closed (public digest never substitutes).
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "ef" * 32)
+    with pytest.raises(ClaimError, match="integrity seal"):
+        store.load(c.claim_id)
+
+
+def test_valid_unkeyed_journal_with_alg_marker_loads(tmp_path, monkeypatch):
+    # Control matching the regime-change policy: a genuinely unkeyed journal
+    # written and read without any key variable still loads.
+    monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path / "claims2"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Unkeyed marker claim")
+    c.seal_preregistration(p)
+    store.save(c)
+    assert store.load(c.claim_id) is not None
+    entry = json.loads((tmp_path / "claims2" /
+                        f"claim_{c.claim_id}.jsonl").read_text().splitlines()[0])
+    assert entry["seal"]["alg"] == "sha256"
+
+
+def test_wholly_stripped_keyed_history_rejected_despite_legacy_opt_in(
+        tmp_path, monkeypatch):
+    # Blocker 4: with a valid active key, strip EVERY seal, rebuild public
+    # prev links, alter states, then load with allow_legacy_unsigned=True.
+    # A wholly stripped keyed history is tampering, never a legacy journal.
+    import hashlib as _h
+    store, c = _write_sealed_journal(tmp_path / "claims", monkeypatch, "99" * 32)
+
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    line = json.loads(path.read_text().splitlines()[0])
+    stripped = {"prev": "GENESIS", "saved_at": line["saved_at"],
+                "state": dict(line["state"], confidence=0.99)}
+    path.write_text(json.dumps(stripped, sort_keys=True) + "\n")
+
+    with pytest.raises(ClaimError, match="keyed policy forbids unsigned"):
+        store.load(c.claim_id, allow_legacy_unsigned=True)
+    with pytest.raises(ClaimError, match="keyed policy forbids unsigned"):
+        store.load(c.claim_id)
+
+
+def test_wholly_stripped_history_without_any_key_still_legacy_opt_in(
+        tmp_path, monkeypatch):
+    # Control: the same stripped/unsigned journal read in a deployment with
+    # NO key variables remains reachable only via explicit opt-in (legacy
+    # compatibility preserved exactly where no keyed policy exists).
+    monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path))
+    p = _prereg(); p.seal()
+    c = Claim(text="Pure legacy after removal")
+    c.seal_preregistration(p)
+    e0 = {"prev": "GENESIS", "saved_at": c.created_at, "state": c.to_dict()}
+    path = tmp_path / f"claim_{c.claim_id}.jsonl"
+    _write_journal(path, [e0])
+
+    with pytest.raises(ClaimError, match="no integrity seal"):
+        store.load(c.claim_id)
+    loaded = store.load(c.claim_id, allow_legacy_unsigned=True)
+    assert loaded is not None
+
+
+def test_tail_truncation_needs_write_access_not_the_key(tmp_path, monkeypatch):
+    # Honest limitation pinned as documentation-by-test: deleting the signed
+    # tail requires ONLY filesystem write access; load() succeeds on the
+    # truncated prefix because no external head/count anchor exists.
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "77" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Truncation claim")
+    c.seal_preregistration(p)
+    store.save(c)
+    c.attach_evidence(_ev("later evidence"), note="n")
+    store.save(c)  # two signed entries
+
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    lines = path.read_text().splitlines()
+    path.write_text(lines[0] + "\n")   # writer drops the tail; no key needed
+
+    loaded = store.load(c.claim_id)   # validly sealed prefix loads
+    assert loaded is not None
+    assert loaded.to_dict() != c.to_dict()   # trailing entries are gone
