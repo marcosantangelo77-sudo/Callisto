@@ -33,3 +33,8 @@ from tools.loop.phases.backtest_run import (  # noqa: F401
     phase_backtest,
     phase_validate,
 )
+from tools.loop.phases.repair import (  # noqa: F401
+    phase_self_repair,
+    phase_self_diagnose,
+    phase_refresh_signals,
+)
