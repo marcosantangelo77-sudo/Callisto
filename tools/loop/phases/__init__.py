@@ -16,3 +16,7 @@ from tools.loop.phases.post_live import (  # noqa: F401
     phase_system_improvement,
     phase_system_watchdog,
 )
+from tools.loop.phases.pre_live import (  # noqa: F401
+    phase_interpret_backtests,
+    phase_paper_trade,
+)
