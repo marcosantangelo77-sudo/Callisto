@@ -21,22 +21,27 @@ Safety controls:
   - Every bet logged + screenshotted
   - Minimum edge threshold to execute
 
-Split (2026-08): pure helpers (config constants, DK constants, regime
-lookups, Kelly sizing arithmetic, drawdown evaluation) live in the
-``tools.betexec`` package; this module is the facade that re-exports them
-and keeps the ``BetExecutor`` orchestration + DB/browser surface.
+Split history:
+  - Split (2026-08): pure helpers (config constants, DK constants, regime
+    lookups, Kelly sizing arithmetic, drawdown evaluation) moved into the
+    ``tools.betexec`` package.
+  - Slice 2: browser-session flow in ``tools.betexec.browser``, bet-slip
+    interaction in ``tools.betexec.slip``, executor_log / bets /
+    bankroll-peak DB writes in ``tools.betexec.logging``.
+  - Slice 3: portfolio Kelly orchestration (``portfolio``), preflight gates
+    (``preflight``), drawdown hypothesis CAS (``kill_switch``), Telegram
+    message builders (``notify``).
+  - Slice 4 (this): the remaining session/DB orchestration moved out too —
+    read-only bankroll/PnL/exposure queries and the status dict assembly in
+    ``tools.betexec.db_state``, the full size → cap → preflight → navigate →
+    place → record pipeline in ``tools.betexec.execution``, and the
+    drawdown kill-switch flow + local-only arm gate + health status
+    gathering in ``tools.betexec.lifecycle``.
 
-Slice 2 split (2026-08): the Playwright browser-session flow lives in
-``tools.betexec.browser``, the bet-slip interaction in ``tools.betexec.slip``,
-and the executor_log / bets / bankroll-peak DB writes in
-``tools.betexec.logging`` (imported here as ``betexec_logging``). This module
-keeps ``BetExecutor`` as a thin delegating orchestrator.
-
-Slice 3 split (2026-08): the remaining helpers moved out too — portfolio
-Kelly sizing orchestration into ``tools.betexec.portfolio``, the preflight
-safety gates into ``tools.betexec.preflight``, the drawdown kill-switch
-hypothesis CAS into ``tools.betexec.kill_switch``, and the Telegram message
-builders into ``tools.betexec.notify``.
+This module is now a thin facade: it re-exports the authoritative helpers
+for backwards compatibility and keeps ``BetExecutor`` as an adapter that
+binds its live state (db connection, bankroll lock, enabled flag) to those
+modules.
 """
 
 import asyncio
@@ -82,6 +87,9 @@ from tools.betexec import browser as betexec_browser
 from tools.betexec import slip as betexec_slip
 from tools.betexec import logging as betexec_logging
 from tools.betexec import portfolio as betexec_portfolio
+from tools.betexec import db_state as betexec_db_state
+from tools.betexec import execution as betexec_execution
+from tools.betexec import lifecycle as betexec_lifecycle
 from tools.betexec.kill_switch import pause_live_hypotheses, attach_pause_result
 from tools.betexec.notify import build_bet_placed_message
 from tools.betexec.preflight import evaluate_preflight
@@ -169,21 +177,11 @@ class BetExecutor:
 
     async def get_bankroll(self) -> float:
         """Get current bankroll balance."""
-        cursor = await self._db.execute(
-            "SELECT balance FROM bankroll ORDER BY timestamp DESC LIMIT 1"
-        )
-        row = await cursor.fetchone()
-        return row[0] if row else 0.0
+        return await betexec_db_state.get_bankroll(self._db)
 
     async def get_daily_stakes(self) -> float:
         """Get total stakes placed today."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        cursor = await self._db.execute(
-            "SELECT COALESCE(SUM(stake), 0) FROM bets WHERE placed_at >= ?",
-            (today,),
-        )
-        row = await cursor.fetchone()
-        return row[0] if row else 0.0
+        return await betexec_db_state.get_daily_stakes(self._db)
 
     async def get_open_exposure(self) -> float:
         """Total stake across all currently-pending bets.
@@ -192,25 +190,11 @@ class BetExecutor:
         keeps simultaneous bets from compounding past MAX_OPEN_EXPOSURE_PCT of
         bankroll.
         """
-        cursor = await self._db.execute(
-            "SELECT COALESCE(SUM(stake), 0) FROM bets WHERE result = 'pending'"
-        )
-        row = await cursor.fetchone()
-        return float(row[0]) if row else 0.0
+        return await betexec_db_state.get_open_exposure(self._db)
 
     async def get_daily_losses(self) -> float:
         """Get net losses today (negative = losing)."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        cursor = await self._db.execute(
-            """SELECT COALESCE(SUM(
-                CASE WHEN result = 'won' THEN payout - stake
-                     WHEN result = 'lost' THEN -stake
-                     ELSE 0 END
-            ), 0) FROM bets WHERE placed_at >= ?""",
-            (today,),
-        )
-        row = await cursor.fetchone()
-        return row[0] if row else 0.0
+        return await betexec_db_state.get_daily_losses(self._db)
 
     def compute_stake(
         self,
@@ -418,134 +402,54 @@ class BetExecutor:
         """
         Full bet execution pipeline: size → preflight → navigate → place → record.
 
-        Returns execution result dict.
-
-        feat/portfolio-kelly-live-loop (audit 2026-04-22): callers can pass
-        ``stake_override`` to use a pre-computed portfolio stake and skip the
-        per-bet Kelly sizing. The portfolio caller (``size_portfolio`` in the
-        live-exec loop) already applied correlation, game/sport caps, and the
-        signals_n dampener; recomputing here would undo that work.
+        Returns execution result dict. The pipeline body lives in
+        ``tools.betexec.execution.run_execute_bet``; this adapter binds the
+        executor's live state and browser hooks to it.
 
         SECURITY (audit H-1, H-4): the read-bankroll → size → exposure-check → write
-        sequence is serialized by ``self._bankroll_lock`` so two concurrent placements
-        cannot both decide they have full bankroll available, and the portfolio cap
-        (``MAX_OPEN_EXPOSURE_PCT``) is evaluated against the *committed* sum of pending
-        stakes rather than a stale snapshot.
+        sequence remains serialized by ``self._bankroll_lock`` inside the pipeline.
         """
-        async with self._bankroll_lock:
-            bankroll = await self.get_bankroll()
+        async def _ensure_logged_in():
+            # Preserve legacy short-circuit: an already-known-good session
+            # never touches the browser (matches pre-split facade check).
+            if self._logged_in:
+                return True
+            return await self.ensure_logged_in()
 
-            # Size the bet — respect pre-computed portfolio stake if provided.
-            if stake_override is not None and stake_override > 0:
-                stake = round(float(stake_override), 2)
-            else:
-                stake = self.compute_stake(edge, odds, bankroll, confidence)
-            if stake <= 0:
-                return {"success": False, "reason": "Stake too small after Kelly sizing"}
+        return await betexec_execution.run_execute_bet(
+            db=self._db,
+            bankroll_lock=self._bankroll_lock,
+            enabled=self._enabled,
+            sport=sport,
+            team=team,
+            market=market,
+            side=side,
+            odds=odds,
+            fair_prob=fair_prob,
+            edge=edge,
+            hypothesis_id=hypothesis_id,
+            event_id=event_id,
+            game_description=game_description,
+            confidence=confidence,
+            point=point,
+            stake_override=stake_override,
+            compute_stake_fn=self.compute_stake,
+            preflight_fn=self.preflight_check,
+            ensure_logged_in_fn=_ensure_logged_in,
+            navigate_fn=self.navigate_to_game,
+            place_fn=self.place_bet_on_slip,
+            record_bet_fn=self._record_bet,
+            log_action_fn=self._log_action,
+            notify_fn=self._notify,
+            build_message_fn=build_bet_placed_message,
+        )
 
-            # Portfolio-level cap: refuse if this stake would push total open
-            # exposure past MAX_OPEN_EXPOSURE_PCT of bankroll.
-            open_exposure = await self.get_open_exposure()
-            exposure_cap = bankroll * MAX_OPEN_EXPOSURE_PCT
-            if open_exposure + stake > exposure_cap:
-                room = max(0.0, exposure_cap - open_exposure)
-                if room < MIN_BET_AMOUNT:
-                    await self._log_action(
-                        "EXPOSURE_CAP", sport, team, market, side, odds, stake, edge,
-                        hypothesis_id,
-                        reason=f"Open exposure ${open_exposure:.2f} + stake ${stake:.2f} > cap ${exposure_cap:.2f}",
-                    )
-                    return {
-                        "success": False,
-                        "reason": (
-                            f"Portfolio exposure cap hit: ${open_exposure:.2f} pending + "
-                            f"${stake:.2f} would exceed {MAX_OPEN_EXPOSURE_PCT:.0%} of bankroll"
-                        ),
-                    }
-                # Shrink stake to the remaining headroom rather than skipping outright.
-                stake = round(room, 2)
-
-        # Preflight checks
-        ok, reason = await self.preflight_check(sport, odds, edge, stake)
-        if not ok:
-            await self._log_action("PREFLIGHT_FAIL", sport, team, market, side, odds, stake, edge, hypothesis_id, reason=reason)
-            return {"success": False, "reason": reason}
-
-        # Ensure browser is ready
-        if not self._logged_in:
-            logged_in = await self.ensure_logged_in()
-            if not logged_in:
-                return {"success": False, "reason": "Not logged into DraftKings — manual login required"}
-
-        # Navigate to game
-        found = await self.navigate_to_game(sport, team, event_id)
-        if not found:
-            await self._log_action("NAV_FAIL", sport, team, market, side, odds, stake, edge, hypothesis_id, reason="Game not found on DK")
-            return {"success": False, "reason": f"Could not find {team} game on DraftKings"}
-
-        # Build selection text based on market type
-        selection_text = betexec_slip.build_selection_text(market, team, side, point)
-
-        # Place the bet
-        placement = await self.place_bet_on_slip(selection_text, stake)
-
-        if placement["success"]:
-            # Record the bet in the database
-            bet_id = await self._record_bet(
-                sport=sport,
-                event_id=event_id,
-                game_description=game_description,
-                team=team,
-                market=market,
-                bookmaker="DraftKings",
-                odds=odds,
-                point=point,
-                stake=stake,
-                edge=edge,
-                fair_prob=fair_prob,
-                hypothesis_id=hypothesis_id,
-            )
-
-            await self._log_action(
-                "BET_PLACED", sport, team, market, side, odds, stake, edge,
-                hypothesis_id, bet_id=bet_id, screenshot=placement.get("screenshot"),
-            )
-
-            # Send Telegram notification
-            try:
-                from tools.telegram import send_telegram
-                msg = build_bet_placed_message(
-                    game_description=game_description,
-                    team=team,
-                    side=side,
-                    odds=odds,
-                    stake=stake,
-                    edge=edge,
-                    bankroll=bankroll,
-                )
-                send_telegram(msg)
-            except Exception as e:
-                logger.warning(f"Telegram bet notification failed: {e}")
-
-            return {
-                "success": True,
-                "bet_id": bet_id,
-                "stake": stake,
-                "odds": odds,
-                "edge": edge,
-                "screenshot": placement.get("screenshot"),
-            }
-        else:
-            await self._log_action(
-                "BET_FAILED", sport, team, market, side, odds, stake, edge,
-                hypothesis_id, reason=placement.get("error"),
-                screenshot=placement.get("screenshot"),
-            )
-            return {
-                "success": False,
-                "reason": placement.get("error"),
-                "screenshot": placement.get("screenshot"),
-            }
+    @staticmethod
+    def _notify(msg: str) -> None:
+        """Best-effort Telegram send — imported lazily so missing webhook config
+        never blocks bet recording."""
+        from tools.telegram import send_telegram
+        send_telegram(msg)
 
     async def _record_bet(
         self, sport, event_id, game_description, team, market,
@@ -588,51 +492,13 @@ class BetExecutor:
     async def check_drawdown_and_kill(self) -> dict:
         """Evaluate rolling drawdown; if past MAX_DRAWDOWN_PCT, kill-switch.
 
-        Flow:
-          1. Read current bankroll and rolling peak.
-          2. Record current bankroll into bankroll_peak (so next call has a
-             growing history).
-          3. If current < peak * (1 - MAX_DRAWDOWN_PCT):
-             - self._enabled = False
-             - CAS all LIVE hyps to 'drawdown_paused'
-             - fire Telegram alert (best-effort; missing webhook is fine)
-
-        Returns a status dict describing the action taken.
+        Flow lives in ``tools.betexec.lifecycle.run_check_drawdown_and_kill``;
+        this adapter supplies the db handle and the disarm callback.
         """
-        current = await self.get_bankroll()
-        peak = await self._rolling_peak()
-        await self._record_bankroll_peak(current)
-
-        status = evaluate_drawdown(current, peak)
-
-        if not status["triggered"]:
-            return status
-
-        # Kill switch fires.
-        logger.error(
-            f"DRAWDOWN KILL SWITCH: current=${current:,.2f} peak=${peak:,.2f} "
-            f"drawdown={status['drawdown_pct']:.1%} exceeds threshold {MAX_DRAWDOWN_PCT:.1%}"
+        return await betexec_lifecycle.run_check_drawdown_and_kill(
+            self._db,
+            disable_fn=self.disable,
         )
-        self._enabled = False
-
-        # CAS all LIVE hypotheses to drawdown_paused (tools.betexec.kill_switch).
-        try:
-            paused = await pause_live_hypotheses(self._db)
-            status = attach_pause_result(status, paused)
-        except Exception as e:
-            status = attach_pause_result(status, [], error=e)
-
-        # Best-effort Telegram alert.
-        try:
-            from tools.telegram import send_alert  # noqa: WPS433
-            msg = build_kill_switch_alert(
-                current, peak, status["drawdown_pct"], len(status["paused_hypotheses"])
-            )
-            await send_alert(msg, throttle_key="drawdown_kill")
-        except Exception as e:
-            logger.debug(f"Telegram drawdown alert skipped: {e}")
-
-        return status
 
     async def _log_action(
         self, action, sport, team, market, side, odds, stake, edge,
@@ -650,12 +516,12 @@ class BetExecutor:
         Returns True when the executor was armed, False when refused.
         Refuses to arm when CALLISTO_LOCAL_ONLY is truthy — that env var is
         the appliance-wide nuclear switch and must block live betting too.
+        The refusal is evaluated BEFORE any state flip (gate lives in
+        ``tools.betexec.lifecycle.arm_gate_refusal``).
         """
-        if os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes"):
-            logger.warning(
-                "Bet executor NOT enabled: CALLISTO_LOCAL_ONLY is set — "
-                "local-only mode refuses to arm live betting"
-            )
+        refusal = betexec_lifecycle.arm_gate_refusal()
+        if refusal:
+            logger.warning(refusal)
             return False
         self._enabled = True
         logger.info("Bet executor ENABLED — live bets will be placed")
@@ -675,20 +541,14 @@ class BetExecutor:
         return self._logged_in
 
     async def status(self) -> dict:
-        """Return executor status for health checks."""
-        bankroll = await self.get_bankroll() if self._db else 0
-        daily_losses = await self.get_daily_losses() if self._db else 0
-        return {
-            "enabled": self._enabled,
-            "logged_in": self._logged_in,
-            "browser_active": self._page is not None,
-            "bankroll": bankroll,
-            "daily_losses": daily_losses,
-            "daily_loss_limit": bankroll * DAILY_LOSS_LIMIT_PCT,
-            "max_single_bet_pct": MAX_BET_PCT,
-            "kelly_fraction": KELLY_FRACTION,
-            "min_edge": MIN_EDGE_TO_EXECUTE,
-        }
+        """Return executor status for health checks (assembly lives in
+        ``tools.betexec.lifecycle.run_status``)."""
+        return await betexec_lifecycle.run_status(
+            self._db,
+            enabled=self._enabled,
+            logged_in=self._logged_in,
+            browser_active=self._page is not None,
+        )
 
     async def shutdown(self):
         """Clean shutdown."""
