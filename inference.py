@@ -1434,15 +1434,22 @@ class ProviderRouter:
         """Probe one endpoint with a minimal chat request."""
         ep = self.endpoints[name]
         if ep.backend == "hermes_cli":
-            # No HTTP to probe: healthy iff the binary resolves. A real ping
-            # would burn a ~14s CLI session per health pass.
-            from tools.pipeline.hermes_cli import hermes_available
-            if hermes_available():
-                self.states[name].record_success()
-                return {"endpoint": name, "status": "ok"}
-            self.states[name].record_failure()
-            return {"endpoint": name, "status": "error",
-                    "error": "hermes CLI binary not found"}
+            # No HTTP to probe: a real ping would burn a ~14s CLI session per
+            # health pass. Binary-present is NOT enough — a fresh VM with
+            # Hermes installed but no `hermes portal login` will fail every
+            # completion with "not logged into Nous Portal".
+            from tools.pipeline.hermes_cli import hermes_available, hermes_logged_in
+            if not hermes_available():
+                self.states[name].record_failure()
+                return {"endpoint": name, "status": "error",
+                        "error": "hermes CLI binary not found"}
+            if not hermes_logged_in():
+                self.states[name].record_failure()
+                return {"endpoint": name, "status": "error",
+                        "error": "Hermes is not logged into Nous Portal "
+                                 "(run: hermes auth add nous --type oauth --no-browser)"}
+            self.states[name].record_success()
+            return {"endpoint": name, "status": "ok"}
         headers = {"Content-Type": "application/json"}
         if ep.api_key:
             headers["Authorization"] = f"Bearer {ep.api_key}"
