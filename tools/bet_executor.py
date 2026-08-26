@@ -41,6 +41,12 @@ Split history:
     directory bootstrap / teardown in ``tools.betexec.bootstrap``, the
     instance-level browser-session methods in ``tools.betexec.session``,
     and the execute_bet dependency binding in ``tools.betexec.wiring``.
+  - Slice 6 (this): the remaining inline method bodies moved out too —
+    the read-only DB accessors, preflight gather, recording/audit seams,
+    drawdown peak seams and the kill-switch/status binding now live in
+    ``tools.betexec.methods``. The facade keeps one-line adapters plus the
+    two source-contract-pinned bodies that must stay inline: the
+    default-disarmed ``__init__`` and guard-first ``enable()``.
 
 This module is now a thin facade: it re-exports the authoritative helpers
 for backwards compatibility and keeps ``BetExecutor`` as an adapter that
@@ -97,6 +103,7 @@ from tools.betexec import lifecycle as betexec_lifecycle
 from tools.betexec import bootstrap as betexec_bootstrap
 from tools.betexec import session as betexec_session
 from tools.betexec import wiring as betexec_wiring
+from tools.betexec import methods as betexec_methods
 from tools.betexec.kill_switch import pause_live_hypotheses, attach_pause_result
 from tools.betexec.notify import build_bet_placed_message
 from tools.betexec.preflight import evaluate_preflight
@@ -175,11 +182,11 @@ class BetExecutor:
 
     async def get_bankroll(self) -> float:
         """Get current bankroll balance."""
-        return await betexec_db_state.get_bankroll(self._db)
+        return await betexec_methods.get_bankroll(self)
 
     async def get_daily_stakes(self) -> float:
         """Get total stakes placed today."""
-        return await betexec_db_state.get_daily_stakes(self._db)
+        return await betexec_methods.get_daily_stakes(self)
 
     async def get_open_exposure(self) -> float:
         """Total stake across all currently-pending bets.
@@ -188,11 +195,11 @@ class BetExecutor:
         keeps simultaneous bets from compounding past MAX_OPEN_EXPOSURE_PCT of
         bankroll.
         """
-        return await betexec_db_state.get_open_exposure(self._db)
+        return await betexec_methods.get_open_exposure(self)
 
     async def get_daily_losses(self) -> float:
         """Get net losses today (negative = losing)."""
-        return await betexec_db_state.get_daily_losses(self._db)
+        return await betexec_methods.get_daily_losses(self)
 
     def compute_stake(
         self,
@@ -328,15 +335,8 @@ class BetExecutor:
         # Enablement gate first — refuse before any DB access (no db needed).
         if not self._enabled:
             return False, "Executor is disabled"
-        bankroll = await self.get_bankroll()
-        daily_losses = await self.get_daily_losses()
-        return evaluate_preflight(
-            enabled=self._enabled,
-            edge=edge,
-            bankroll=bankroll,
-            stake=stake,
-            daily_losses=daily_losses,
-            sport=sport,
+        return await betexec_methods.preflight_check(
+            self, sport, odds, edge, stake
         )
 
     async def launch_browser(self) -> None:
@@ -420,20 +420,16 @@ class BetExecutor:
 
     @staticmethod
     def _notify(msg: str) -> None:
-        """Best-effort Telegram send — imported lazily so missing webhook config
-        never blocks bet recording."""
-        from tools.telegram import send_telegram
-        send_telegram(msg)
+        """Best-effort Telegram send — body lives in tools.betexec.methods."""
+        betexec_methods.notify(msg)
 
     async def _record_bet(
         self, sport, event_id, game_description, team, market,
         bookmaker, odds, point, stake, edge, fair_prob, hypothesis_id,
     ) -> int:
         """Record bet in the bets table and update bankroll."""
-        return await betexec_logging.record_bet(
-            self._db,
-            self.get_bankroll,
-            self._bankroll_lock,
+        return await betexec_methods.record_bet(
+            self,
             sport=sport,
             event_id=event_id,
             game_description=game_description,
@@ -457,11 +453,11 @@ class BetExecutor:
         Called opportunistically by ``check_drawdown_and_kill``. The table is
         append-only so a 30d peak is a simple MAX over the window.
         """
-        await betexec_logging.record_bankroll_peak(self._db, bankroll)
+        await betexec_methods.record_bankroll_peak(self, bankroll)
 
     async def _rolling_peak(self, window_days: int = None) -> float:
         """Return MAX(balance) over the rolling peak window."""
-        return await betexec_logging.rolling_peak(self._db, window_days)
+        return await betexec_methods.rolling_peak(self, window_days)
 
     async def check_drawdown_and_kill(self) -> dict:
         """Evaluate rolling drawdown; if past MAX_DRAWDOWN_PCT, kill-switch.
@@ -469,18 +465,15 @@ class BetExecutor:
         Flow lives in ``tools.betexec.lifecycle.run_check_drawdown_and_kill``;
         this adapter supplies the db handle and the disarm callback.
         """
-        return await betexec_lifecycle.run_check_drawdown_and_kill(
-            self._db,
-            disable_fn=self.disable,
-        )
+        return await betexec_methods.check_drawdown_and_kill(self)
 
     async def _log_action(
         self, action, sport, team, market, side, odds, stake, edge,
         hypothesis_id, bet_id=None, screenshot=None, reason=None,
     ):
         """Log executor action for audit trail."""
-        await betexec_logging.log_action(
-            self._db, action, sport, team, market, side, odds, stake, edge,
+        await betexec_methods.log_action(
+            self, action, sport, team, market, side, odds, stake, edge,
             hypothesis_id, bet_id=bet_id, screenshot=screenshot, reason=reason,
         )
 
@@ -517,12 +510,7 @@ class BetExecutor:
     async def status(self) -> dict:
         """Return executor status for health checks (assembly lives in
         ``tools.betexec.lifecycle.run_status``)."""
-        return await betexec_lifecycle.run_status(
-            self._db,
-            enabled=self._enabled,
-            logged_in=self._logged_in,
-            browser_active=self._page is not None,
-        )
+        return await betexec_methods.status(self)
 
     async def shutdown(self):
         """Clean shutdown."""
