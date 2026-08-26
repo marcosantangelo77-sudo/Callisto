@@ -14,6 +14,7 @@ All formulas verified numerically — see test_devig.py.
 
 import logging
 import math
+import sys
 
 from tools.math_utils import (
     american_to_decimal,
@@ -88,6 +89,8 @@ def _brentq(f, a, b, xtol=1e-12, maxiter=200):
 
     return b
 
+import sys
+
 logger = logging.getLogger("callisto.devig")
 
 # Ceiling on the total hold of a book we are willing to devig. Real retail
@@ -95,6 +98,10 @@ logger = logging.getLogger("callisto.devig")
 # below this. A hold at/above 20 points means the sides cannot belong to one
 # live market — a stale snapshot mix or malformed input.
 MAX_SANE_OVERROUND = 0.20
+
+# Few-ulp relative slack for the ceiling comparison so the exact
+# mathematical boundary stays invalid despite float representation.
+_CEILING_ULP_SLACK = 64
 
 
 def _validate_book(odds_list: list[float]) -> list[float]:
@@ -126,7 +133,13 @@ def _validate_book(odds_list: list[float]) -> list[float]:
     if not math.isfinite(overround) or overround <= 1e-9:
         raise ValueError(f"Invalid book: overround {overround:.6f} is not strictly "
                          "positive (zero-hold or crossed book)")
-    if overround >= MAX_SANE_OVERROUND:
+    # Boundary-tolerant ceiling: a book at the exact configured hold must be
+    # invalid even when float representation nudges `overround` an ulp below
+    # MAX_SANE_OVERROUND (e.g. devig_market([1/.6, 1/.6]) sums to
+    # 0.19999999999999996). Allow only a few-ulp relative slack so the true
+    # mathematical boundary is rejected while healthy below-limit books
+    # (which sit far from the ceiling) still pass untouched.
+    if overround >= MAX_SANE_OVERROUND * (1.0 - _CEILING_ULP_SLACK * sys.float_info.epsilon):
         raise ValueError(f"Invalid book: overround {overround:.4f} exceeds the "
                          f"{MAX_SANE_OVERROUND:.0%} market-sanity ceiling "
                          "(stale mix or absurd hold)")
@@ -411,4 +424,7 @@ def devig_retail(
     """
     dec_a = american_to_decimal(retail_odds_a)
     dec_b = american_to_decimal(retail_odds_b)
-    return _devig_pair_via_gate(dec_a, dec_b)
+    # Power is the documented semantic identity of this helper: it must be
+    # explicit, never delegated to the auto selector (which would switch to
+    # multiplicative on low-vig books and silently drop the FLB correction).
+    return _devig_pair_via_gate(dec_a, dec_b, method="power")

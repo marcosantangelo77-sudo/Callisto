@@ -512,3 +512,68 @@ def test_r2_boost_devig_additive_rejects_unsanitary_books():
     # Healthy control keeps its additive semantics.
     a, b = devig_additive(-110, -110)
     assert abs(a + b - 1.0) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Review blockers — exact 20% hold boundary, direct Kelly input safety,
+# and CLV None contract
+# ---------------------------------------------------------------------------
+
+def test_exact_twenty_pct_hold_is_invalid_via_assess_edge():
+    """A book whose sides are each priced at exactly 1/0.6 has a mathematical
+    overround of exactly 20% — at the configured ceiling, therefore invalid.
+    Float representation sums the implied probabilities to
+    0.19999999999999996, which previously slipped past the gate and produced
+    an actionable assessment."""
+    q = MarketQuote(price=1 / 0.6, counter_price=1 / 0.6, kind="decimal")
+    a = assess_edge("exact-hold", 0.9, q)
+    assert not a.actionable
+    assert a.kelly_fraction_full == 0.0
+    assert a.kelly_fraction_quarter == 0.0
+    assert a.devig_audit.get("invalid_book")
+    assert math.isnan(a.edge)
+
+    # Healthy control just below the ceiling must stay actionable-capable.
+    q_ok = MarketQuote(price=1 / 0.59, counter_price=1 / 0.6, kind="decimal")
+    a_ok = assess_edge("below-ceiling", 0.9, q_ok)
+    assert not a_ok.devig_audit.get("invalid_book")
+    assert math.isfinite(a_ok.edge)
+
+
+def test_kelly_full_rejects_nonfinite_and_bool_edges():
+    """kelly_full(nan, -110) previously returned 1.0 (NaN comparisons never
+    fire) and kelly_full(True, ...) treated bool as a probability. Invalid
+    direct inputs must yield 0.0, never a stake."""
+    for bad in (float("nan"), float("inf"), float("-inf"), True):
+        assert kelly_full(bad, -110) == 0.0, f"bad edge accepted: {bad!r}"
+    # Valid control unchanged.
+    assert kelly_full(0.05, -110) > 0.0
+
+
+def test_kelly_fractional_rejects_bad_multipliers():
+    """A negative/non-finite/oversized fraction previously scaled a valid
+    Kelly fraction into a negative or oversized stake; it now returns 0.0."""
+    for bad in (-1, 0, 1.5, float("nan"), float("inf"), True):
+        got = kelly_fractional(0.05, -110, bad)
+        assert got == 0.0, f"bad fraction accepted: {bad!r} -> {got}"
+    assert got <= kelly_full(0.05, -110)
+    # Valid quarter-Kelly control unchanged.
+    assert kelly_fractional(0.05, -110, 0.25) \
+        == pytest.approx(kelly_full(0.05, -110) * 0.25)
+
+
+def test_clv_points_returns_none_for_devig_impossible_quotes():
+    """"clv_points documents None as its no-trusted-CLV signal; it previously
+    raised ValueError when fair_probability leaked a nonfinite value."""
+    from tools.devig import MAX_SANE_OVERROUND
+
+    def quote_at(hold):
+        p_yes = 1 / 0.55
+        p_no = 1 / ((1 - 0.55) + hold)
+        return MarketQuote(price=p_yes, counter_price=p_no, kind="decimal")
+
+    claim_bad = quote_at(MAX_SANE_OVERROUND)     # at-ceiling book -> invalid
+    close_ok = MarketQuote(price=0.55, counter_price=0.46, kind="probability")
+    assert clv_points(claim_bad, close_ok) is None
+    assert clv_points(close_ok, claim_bad) is None
+    assert isinstance(clv_points(close_ok, close_ok), float)

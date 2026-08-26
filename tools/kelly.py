@@ -160,7 +160,16 @@ def kelly_full(edge: float, odds: int | float) -> float:
     fractional quotes such as 100.9, or out-of-policy magnitudes — are
     never silently coerced: they return 0.0 (no trusted stake) rather
     than a positive fraction derived from a bogus price.
+
+    The same holds for the edge input: a boolean or non-finite edge
+    (NaN/inf) is not an edge at all and returns 0.0 — never a stake.
     """
+    # An edge must be a real finite number to carry any information about
+    # the bet. NaN previously slipped through every comparison and yielded
+    # a full-stake 1.0; bools are ints in Python but not probabilities.
+    if isinstance(edge, bool) or not isinstance(edge, (int, float)) \
+            or not math.isfinite(edge):
+        return 0.0
     from tools.math_utils import validate_american_odds
     try:
         validated = validate_american_odds(odds)
@@ -205,7 +214,14 @@ def kelly_fractional(
 
     Returns:
         Reduced fraction of bankroll to wager.
+
+    A non-finite or out-of-range fraction multiplier is rejected outright
+    (returns 0.0): it would otherwise scale a valid Kelly fraction into an
+    oversized or negative stake.
     """
+    if isinstance(fraction, bool) or not isinstance(fraction, (int, float)) \
+            or not math.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+        return 0.0
     full = kelly_full(edge, odds)
     # Floor here too: double rounding must never raise the quarter-Kelly stake.
     return math.floor(full * fraction * 1_000_000.0) / 1_000_000.0
