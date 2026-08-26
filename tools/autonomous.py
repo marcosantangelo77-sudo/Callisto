@@ -5821,6 +5821,11 @@ class ResearchLoop:
     async def _phase_live_execute(self) -> None:
         """Execute bets on live (proven) hypotheses.
 
+        SAFETY GATE: this phase is OFF by default. It only runs when the
+        operator explicitly arms it via the environment variable
+        ``CALLISTO_ALLOW_LIVE_EXECUTE=1`` — that env var is the ONLY
+        arming switch for this phase.
+
         Combined flow (feat/portfolio-kelly-live-loop + feat/order-management-telegram):
           1. Run drawdown kill-switch check BEFORE any execution.
           2. Collect ALL pending signals across ALL LIVE hyps into a batch.
@@ -5835,6 +5840,10 @@ class ResearchLoop:
                the pre-computed ``stake_override``.
         """
         import os as _os
+        if _os.getenv("CALLISTO_ALLOW_LIVE_EXECUTE") != "1":
+            logger.info("live_execute skipped (CALLISTO_ALLOW_LIVE_EXECUTE!=1)")
+            return
+
         use_order_manager = _os.getenv("CALLISTO_USE_ORDER_MANAGER", "1") == "1"
 
         try:
