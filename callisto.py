@@ -127,37 +127,58 @@ def _persist_run(record: dict) -> Path:
          reservation marker that no `*.json` glob (runs/show/_load_run)
          ever matches, so readers can never observe it as a run record,
          let alone an empty final file.
-      2. Write the complete payload to a `.tmp` sibling and fsync the file.
-      3. os.replace() the tmp onto the final `<id>.json` — atomic swap,
+      2. Revalidate final absence UNDER the reservation: another writer
+         may have published this exact id and released its reservation
+         between our cheap existence pre-check and our O_EXCL win, so
+         holding the reservation alone does not prove the slot is free.
+      3. Write the complete payload to a `.tmp` sibling and fsync it.
+      4. os.replace() the tmp onto the final `<id>.json` — atomic swap,
          so no reader ever sees a partial or empty final JSON — then fsync
          both the published file and the directory for durability.
 
-    On any failure the reservation and tmp are removed and the next seq
-    candidate is tried; a crashed writer leaves at most a stale `.resv`
-    marker (never a malformed `*.json`). Concurrent same-second writers
-    each hold their own reservation, so neither can overwrite the other.
+    Every step after the O_EXCL claim runs under a `finally` that closes
+    the reservation fd and unlinks the marker (plus any tmp), so no normal
+    exception path — including a failed reservation fsync — leaks a stale
+    `.resv`. Only a hard process crash can leave one behind; even then a
+    crashed writer leaves at most a stale `.resv`, never malformed `*.json`.
     """
     stamp = record["recorded_at"].replace(":", "").replace("-", "")
     qhash = hashlib.sha256(
         str(record.get("question", "")).encode("utf-8")).hexdigest()[:8]
     base = _runs_dir()
     payload = json.dumps(record, indent=2).encode("utf-8")
-    for seq in range(1000):
+    # A post-reservation failure cleans its own claim (see `finally`
+    # below), freeing the exact slot again — so such failures retry the
+    # SAME sequence number rather than burning a new one.
+    attempts_left = 1000
+    seq = 0
+    while attempts_left:
+        attempts_left -= 1
         run_id = f"{stamp}_{qhash}_{seq:03d}"
         path = base / f"{run_id}.json"
         resv = base / f"{run_id}.json.resv"
-        # Never reuse a slot whose record is already published.
+        # Fast path: skip slots whose record is already published. The
+        # authoritative recheck happens under the reservation below.
         if path.exists():
+            seq += 1
             continue
         # Atomic private claim: fails with FileExistsError if another writer
         # holds this exact id (same second, same question, same seq).
         try:
             fd = os.open(resv, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
+            seq += 1          # slot genuinely taken; move on
             continue
         try:
             os.write(fd, b"")
             os.fsync(fd)               # durable reservation
+            # Revalidate under the reservation: writer A may have published
+            # this exact id and released its reservation between our cheap
+            # exists() check and our O_EXCL win. Replacing over A's record
+            # would silently destroy it — retry on the next sequence slot.
+            if path.exists():
+                seq += 1
+                continue
             tmp = path.with_suffix(".json.tmp")
             with open(tmp, "wb") as fh:
                 fh.write(payload)
@@ -175,17 +196,16 @@ def _persist_run(record: dict) -> Path:
                     os.fsync(dfd)      # directory entry durability
                 finally:
                     os.close(dfd)
-                os.close(fd)
-                fd = -1
                 return path
             finally:
-                if fd != -1:
-                    os.close(fd)
-                    fd = -1
                 tmp.unlink(missing_ok=True)
-                resv.unlink(missing_ok=True)   # release failed claim
         except OSError:
-            continue
+            pass              # slot cleaned; retry this seq
+        finally:
+            # Release the claim on EVERY post-reservation outcome: success
+            # (record now published), failure, or retry-to-next-slot.
+            os.close(fd)
+            resv.unlink(missing_ok=True)
     raise RuntimeError(
         "could not allocate a unique run id after 1000 attempts "
         f"for stamp {stamp}")

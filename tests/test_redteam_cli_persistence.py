@@ -539,3 +539,71 @@ def test_fix_concurrent_same_second_writers_all_survive(runs_dir):
     for p in sorted(runs_dir.glob("*.json")):
         got = json.loads(p.read_text(encoding="utf-8"))
         assert got["question"] == "thread race"
+
+
+# ── repair-pinning: reservation race + cleanup ────────────────────────────
+
+def test_fix_no_overwrite_when_final_appears_after_reservation(
+        runs_dir, monkeypatch):
+    """Deterministic interleaving of the classic lost-update race: writer B
+    passes the cheap `path.exists()` pre-check while the slot is free and
+    wins the O_EXCL claim; writer A then publishes + releases between B's
+    claim and B's publish. B must revalidate final absence UNDER its
+    reservation and move to the next slot — never os.replace over A's
+    published record."""
+    import os as _os
+    stamp = "20260824T070000+0000".replace(":", "").replace("-", "")
+    qhash = hashlib.sha256(b"probe question").hexdigest()[:8]
+    victim_path = runs_dir / f"{stamp}_{qhash}_000.json"
+
+    real_fsync = _os.fsync
+    state = {"fired": False}
+
+    def racing_fsync(fd):
+        result = real_fsync(fd)
+        # First fsync inside _persist_run is B's reservation fsync —
+        # exactly the moment A's publication slips in.
+        if not state["fired"]:
+            state["fired"] = True
+            victim_path.write_text(json.dumps(
+                _record(q="probe question", conclusion="A CONCLUSION")),
+                encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(_os, "fsync", racing_fsync)
+    pb = callisto._persist_run(
+        _record(q="probe question", conclusion="B CONCLUSION"))
+
+    assert pb != victim_path, (
+        "writer B replaced over writer A's published record at the same "
+        "final path: A's record was silently destroyed")
+    assert json.loads(victim_path.read_text(encoding="utf-8"))[
+        "conclusion"] == "A CONCLUSION", "A's record was overwritten"
+    rec_b, _ = callisto._load_run(pb.stem)
+    assert rec_b["conclusion"] == "B CONCLUSION"
+    assert not list(runs_dir.glob("*.resv"))
+
+
+def test_fix_failed_reservation_fsync_cleans_marker_and_retries_same_seq(
+        runs_dir, monkeypatch):
+    """If the reservation fsync fails, cleanup must still remove the
+    `.json.resv` marker immediately and the retry must be able to reuse
+    the same sequence slot (no stale `_000.resv` pushing ids to `_001`)."""
+    import os as _os
+    real_fsync = _os.fsync
+    state = {"failed": False}
+
+    def flaky_fsync(fd):
+        if not state["failed"]:
+            state["failed"] = True
+            raise OSError("simulated reservation fsync failure")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(_os, "fsync", flaky_fsync)
+    p = callisto._persist_run(_record(q="fsync probe"))
+    assert "_000" in p.stem, (
+        f"stale reservation marker forced retry onto {p.stem}")
+    rec, _ = callisto._load_run(p.stem)
+    assert rec["question"] == "fsync probe"
+    assert not list(runs_dir.glob("*.resv")), "leaked .json.resv marker"
+    assert not list(runs_dir.glob("*.tmp"))
