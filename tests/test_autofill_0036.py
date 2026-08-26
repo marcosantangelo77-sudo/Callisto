@@ -452,6 +452,15 @@ class TestFailClosedMeta:
 
     def test_no_production_gate_weakened_by_importing_backend(self):
         # This module reads files only; it must not import the trading
-        # backend or touch signal-status arrays.
-        imported = [m for m in sys.modules if m.startswith(("callisto", "executor"))]
-        assert not imported
+        # backend. Parse THIS file's AST so the check is not confused by
+        # other tests already loaded in sys.modules.
+        import ast
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name.split(".", 1)[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module.split(".", 1)[0])
+        assert "callisto" not in imported
+        assert "executor" not in imported
