@@ -21,9 +21,10 @@ The checkout is:
 /Users/marcosantangelo/Documents/ChatGPT/callisto
 ```
 
-`master` currently tracks `origin/master` and was last verified at
-`4c79807`. The current master checkout must stay clean while candidate
-worktrees are reviewed.
+At the final freeze snapshot, `master` was clean and tracking
+`origin/master`. The last reviewed code change is `4c79807`; later master
+commits before this snapshot are handoff documentation only. The current
+master checkout must stay clean while candidate worktrees are reviewed.
 
 ## What has safely reached master
 
@@ -44,24 +45,26 @@ Everything below is a candidate or WIP until independently approved.
 Use at most **three direct Hermes/OX terminal workers at once**. This is a
 deliberate host-reliability cap, not a known Nous concurrency limit: four
 simultaneous terminal/test workloads previously led to external process-group
-losses. Refill a slot immediately after a worker truly exits.
+losses. Outside an explicit operator freeze, refill a slot immediately after a
+worker truly exits.
 
-At the time this document was written, these three focused repair turns were
-live:
+At the final freeze snapshot, no direct Hermes/OX worker remained running.
+Each of the three focused turns below exited, and any source work was either
+reviewed/merged or committed and pushed for the successor:
 
 | Priority | Branch / worktree | Goal |
 | --- | --- | --- |
-| 1 | `codex/checkpoint-trace-fidelity` at `/private/tmp/callisto-checkpoint-trace-fidelity` | Narrow worker: make resume use only validated admitted evidence and reject forged independent-source credit. Malformed outcome data is queued for a later turn. |
-| 2 | `codex/run-persistence-unique-id` at `/private/tmp/callisto-run-persistence-unique-id` | Bind publication success to inode provenance and close post-rename/CLI race semantics. |
+| 1 | `codex/checkpoint-trace-fidelity` at `/private/tmp/callisto-checkpoint-trace-fidelity` | Completed `dbcc751`; clean/pushed but **unreviewed and unmerged**. It is limited to validated admitted-fetch evidence and derived source keys; malformed outcome/rejection data remains for a later repair. |
+| 2 | `codex/run-persistence-unique-id` at `/private/tmp/callisto-run-persistence-unique-id` | Completed `1ec9778`; clean/pushed but **unreviewed and unmerged**. Do not launch a replacement. |
 | 3 | `codex/db-writer-shutdown` at `/private/tmp/callisto-db-writer-shutdown` | Completed during the freeze; independently reviewed and squash-merged to master as `4c79807`. Do not launch a replacement. |
 
 ### Handoff freeze — do not dispatch more workers
 
-The operator has explicitly requested a freeze after the three live turns
-finish. Let them complete, ensure any source work is committed and pushed (or
-checkpoint it if the supervisor interrupts it), and **do not launch a
-replacement worker**. This includes the prepared market follow-up prompt.
-Cursor/Grok should decide what to run next after reading this handoff.
+The operator explicitly requested a freeze after the three live turns finish.
+That freeze is now complete: source work has been committed/pushed or safely
+merged, and **no replacement worker was launched**. This includes the
+prepared market follow-up prompt. Cursor/Grok should decide what to run next
+after reading this handoff.
 
 Prepared but deliberately **not launched** prompts:
 
@@ -129,12 +132,12 @@ matching.
 | --- | --- | --- |
 | `codex/market-book-sanity` / `ae2cf32` | Shared market-book sanity gate across devig, consensus, scanner, placement/ranking, CLV, boost, and local devig. | **BLOCKED** by review: percentage boost still turns `100.9` into `SLAM`; scanner accepts fractional raw odds; present malformed pair values fall back to a one-sided prior; public consensus primitives bypass the gate; invalid-placement skip persistence fails. The narrow raw-input/placement repair prompt exists above but must not be launched during the freeze. |
 
-### Blocked candidates with replacement turns queued/running
+### Unreviewed completed candidates — frozen, do not merge yet
 
-| Branch / current head | Verified blocker | Correct next action |
+| Branch / current head | Predecessor finding / unreviewed scope | Correct next action |
 | --- | --- | --- |
-| `codex/checkpoint-trace-fidelity` / `9513ffc` | Resume path bypasses admission validation by consuming raw `payload['fetches']`; forged `independent_keys` can inflate confidence; blank rejected/skipped and malformed `rejections` fabricate honest-null/gate evidence. | Worker is active. Require one strict decoder used by all resume consumers, derived independent keys, and end-to-end adversarial tests. |
-| `codex/run-persistence-unique-id` / `39e9ef0` | Normal post-rename success still trusts byte equality rather than inode identity; a moved final can duplicate records; cleanup can turn indeterminate publication into false durability; CLI lacks explicit do-not-retry semantics. | Worker is active. Require fd/inode validation and atomic foreign-replacement tests. |
+| `codex/checkpoint-trace-fidelity` / `dbcc751` | The prior `9513ffc` resumed from raw `payload['fetches']` and trusted serialized `independent_keys`, permitting confidence laundering. The new worker reports one strict validated-admitted-fetch decoder shared by fetch-cache, resume hydration, and ledger replay; it derives independence keys instead of trusting payload keys. It intentionally does **not** repair blank `rejected`/`skipped` values or malformed top-level `rejections`; legacy checkpoints without admission markers are conservatively refetched/rejected as source evidence. | Completed and pushed, but **unreviewed/unmerged under the freeze**. Independently exercise forged keys, raw/unadmitted fetches, resume/replay/cache-hit consumers, malformed outcome/rejection shapes, and legacy compatibility before any merge. |
+| `codex/run-persistence-unique-id` / `1ec9778` | Earlier `39e9ef0` trusted byte equality rather than inode identity; a moved final could duplicate records; cleanup could turn indeterminate publication into false durability; CLI lacked explicit do-not-retry semantics. | Replacement completed and pushed, but is **unreviewed/unmerged under the freeze**. It claims fd/inode-bound post-commit verification, guarded retry, indeterminate cleanup propagation, nonzero explicit CLI warning, and atomic-swap regressions. Cursor must independently reproduce all prior race cases before merging. |
 
 ### Parked: requires a deployment-policy decision before merge
 
@@ -206,20 +209,20 @@ Do not merge WIP checkpoints or candidates with an unresolved reviewer BLOCK.
 
 ## First actions for the successor
 
-1. Read this file, then inspect `master`, the candidate ledger, and the three
-   active supervisor terminals/state rows.
-2. Do not relaunch a duplicate worker until `ps` confirms the existing Hermes
-   process is gone.
-3. Wait for each currently live worker’s summary, review or at minimum record
-   its exact new head, and do **not** recycle the worker slot during the
-   operator-requested freeze.
-4. `fd496e6` was squash-merged into master as `47ae16f`; reviewed DB repair
-   `4609e04` was squash-merged as `4c79807`. During the freeze, record rather
-   than dispatch repairs for remaining blocks.
-5. When implementation credits are exhausted, preserve this file and all
-   pushed branches, stop launching new paid primary-agent work, and hand the
-   same branch/task ledger to Cursor/Grok. The external OX workers may still
-   be independently monitored by the same process/state-db method.
+1. Read this file, then inspect `master` and the candidate ledger. There are
+   no active supervisor terminals or OX turns to wait for at this snapshot.
+2. Before any dispatch or merge, independently review the pushed but
+   unreviewed `dbcc751` and `1ec9778` candidates against their listed
+   adversarial invariants. The freeze means neither was merged here.
+3. `fd496e6` was squash-merged into master as `47ae16f`; reviewed DB repair
+   `4609e04` was squash-merged as `4c79807`. Keep market `ae2cf32` blocked
+   and Claim `399fb44` parked until their documented conditions are resolved.
+4. If the operator resumes implementation, use the prepared narrow prompts
+   only after confirming no duplicate Hermes process exists and after deciding
+   whether the outstanding Claim deployment policy should be addressed.
+5. Preserve this file and all pushed branches when changing orchestrators.
+   The external OX workers can be monitored with the same process/state-db
+   method if a future fleet is launched.
 
 ## Security and hygiene reminders
 
