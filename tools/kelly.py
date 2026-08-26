@@ -155,13 +155,23 @@ def kelly_full(edge: float, odds: int | float) -> float:
 
     Returns:
         Optimal fraction of bankroll (0.0 if no edge).  Never negative.
+
+    Invalid American odds — booleans, non-numbers, non-finite values,
+    fractional quotes such as 100.9, or out-of-policy magnitudes — are
+    never silently coerced: they return 0.0 (no trusted stake) rather
+    than a positive fraction derived from a bogus price.
     """
-    implied = calculate_implied_probability(int(odds))
+    from tools.math_utils import validate_american_odds
+    try:
+        validated = validate_american_odds(odds)
+    except (ValueError, TypeError):
+        return 0.0
+    implied = calculate_implied_probability(validated)
     p = implied + edge  # true probability
     p = max(0.0, min(1.0, p))  # clamp
     q = 1.0 - p
 
-    decimal_odds = _american_to_decimal(odds)
+    decimal_odds = _american_to_decimal(validated)
     b = decimal_odds - 1.0  # net payout per unit risked
 
     if b <= 0:

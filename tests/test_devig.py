@@ -34,27 +34,28 @@ from tools.math_utils import (
 
 
 class TestFairMarket:
-    """Test 1: Fair market [2.0, 2.0] → all methods return [0.5, 0.5]"""
+    """A zero-hold book ([2.0, 2.0]) is not deviggable under the market-sanity
+    policy: every public helper must raise rather than return [0.5, 0.5].
+    Healthy low-hold controls still devig to ~[0.5, 0.5]."""
 
-    def test_multiplicative(self):
-        result = multiplicative_devig([2.0, 2.0])
-        assert abs(result[0] - 0.5) < 0.001
-        assert abs(result[1] - 0.5) < 0.001
+    def test_zero_hold_rejected_by_all_helpers(self):
+        for fn in (multiplicative_devig, additive_devig):
+            with pytest.raises(ValueError):
+                fn([2.0, 2.0])
+        for fn in (power_devig, shin_devig):
+            with pytest.raises(ValueError):
+                fn([2.0, 2.0])
 
-    def test_additive(self):
-        result = additive_devig([2.0, 2.0])
-        assert abs(result[0] - 0.5) < 0.001
-        assert abs(result[1] - 0.5) < 0.001
-
-    def test_power(self):
-        result, k = power_devig([2.0, 2.0])
-        assert abs(result[0] - 0.5) < 0.001
-        assert abs(result[1] - 0.5) < 0.001
-
-    def test_shin(self):
-        result, z = shin_devig([2.0, 2.0])
-        assert abs(result[0] - 0.5) < 0.001
-        assert abs(result[1] - 0.5) < 0.001
+    @pytest.mark.parametrize("fn", [
+        multiplicative_devig,
+        additive_devig,
+        lambda odds: power_devig(odds)[0],
+        lambda odds: shin_devig(odds)[0],
+    ], ids=["mult", "additive", "power", "shin"])
+    def test_low_vig_healthy_book_near_fair(self, fn):
+        result = fn([1.95, 1.95])
+        assert abs(result[0] - 0.5) < 0.02
+        assert abs(result[1] - 0.5) < 0.02
 
 
 class TestStandardVig:

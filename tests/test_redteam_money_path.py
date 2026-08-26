@@ -39,6 +39,7 @@ from tools.edge import (
     clv_points,
 )
 from tools.devig import devig_american, devig_market
+from tools.math_utils import american_to_decimal
 from tools.kelly import kelly_full, kelly_fractional
 
 
@@ -386,3 +387,111 @@ def test_explicit_probability_out_of_range_raises_and_is_inert():
     q = MarketQuote(price=1.5, counter_price=0.7, kind="probability")
     with pytest.raises(ValueError):
         q.implied_probability()
+
+
+# ---------------------------------------------------------------------------
+# Blocker R2-1 — kelly_full must not coerce invalid American odds
+# ---------------------------------------------------------------------------
+
+def test_r2_kelly_full_rejects_invalid_american_odds():
+    """Fractional quotes like 100.9 and booleans must never be int()-coerced
+    into a positive stake."""
+    assert kelly_full(0.40, 100.9) == 0.0
+    assert kelly_full(0.40, True) == 0.0
+    assert kelly_full(0.40, False) == 0.0
+    assert kelly_fractional(0.40, 100.9) == 0.0
+    assert kelly_fractional(0.40, True) == 0.0
+    # Out-of-policy magnitudes and non-finite values likewise
+    for bad in (50, -50, 0, float("nan"), float("inf"), "110", None):
+        assert kelly_full(0.40, bad) == 0.0
+
+
+def test_r2_kelly_full_healthy_controls_unchanged():
+    """Valid American odds keep their exact Kelly semantics after validation."""
+    assert kelly_full(0.05, -110) == pytest.approx(0.105, abs=1e-6)
+    assert kelly_full(0.05, 100) > 0
+    assert kelly_full(-0.10, -110) == 0.0
+    assert kelly_full(0.60, -110) == 1.0   # upper clamp p=1 preserved
+
+
+# ---------------------------------------------------------------------------
+# Blocker R2-2 — no_vig_price / devig_multiplicative route through the gate
+# ---------------------------------------------------------------------------
+
+def test_r2_no_vig_price_high_hold_book_is_rejected():
+    """no_vig_price(-200, -200) is a 33%-hold book; it must raise, never
+    return a confident (0.5, 0.5)."""
+    from tools.math_utils import no_vig_price
+    with pytest.raises(ValueError):
+        no_vig_price(-200, -200)
+    from tools.boost_evaluator import devig_multiplicative
+    with pytest.raises(ValueError):
+        devig_multiplicative(-200, -200)
+    # Healthy control keeps working through the same path.
+    a, b = no_vig_price(-110, -110)
+    assert abs(a + b - 1.0) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Blocker R2-3 — low-level devig helpers share the market-sanity gate
+# ---------------------------------------------------------------------------
+
+def test_r2_low_level_devig_helpers_share_the_gate():
+    """Every exported devig helper rejects zero-hold and crossed books."""
+    from tools.devig import (
+        additive_devig,
+        multiplicative_devig,
+        power_devig,
+        shin_devig,
+    )
+    zero_hold = [2.0, 2.0]                       # overround exactly 0
+    crossed = [1.0 / 0.45, 1.0 / 0.50]           # overround -0.05
+    stale_mix = [1.0 / 0.60, 1.0 / 0.61]         # +21-point overround
+    malformed = [float("nan"), 2.0]
+    for bad in (zero_hold, crossed, stale_mix, malformed):
+        for fn in (multiplicative_devig, additive_devig):
+            with pytest.raises(ValueError):
+                fn(bad)
+        for fn in (power_devig, shin_devig):
+            with pytest.raises(ValueError):
+                fn(bad)
+    # Healthy controls: all helpers still devig a live ~2.5% hold book.
+    ok = [1.95, 1.98]
+    m = multiplicative_devig(ok)
+    assert all(p > 0 for p in m)
+    p, k = power_devig(ok)
+    assert all(0 < x < 1 for x in p) and k >= 1.0
+    s, z = shin_devig(ok)
+    assert all(0 < x < 1 for x in s)
+
+
+# ---------------------------------------------------------------------------
+# Blocker R2-4 — devig_pinnacle stays multiplicative (documented identity)
+# ---------------------------------------------------------------------------
+
+def test_r2_devig_pinnacle_remains_multiplicative():
+    """devig_pinnacle(-145, +125) must equal an explicitly multiplicative
+    devig of the same book, not drift to the auto-selected power method."""
+    from tools.devig import devig_market, devig_pinnacle
+    a, b = devig_pinnacle(-145, 125)
+    ref = devig_market(
+        [american_to_decimal(-145), american_to_decimal(125)],
+        method="multiplicative",
+    )
+    assert "error" not in ref
+    assert a == pytest.approx(ref["fair_probabilities"][0], abs=1e-12)
+    assert b == pytest.approx(ref["fair_probabilities"][1], abs=1e-12)
+    assert ref["method"] == "multiplicative"
+
+
+def test_r2_devig_retail_keeps_power_identity():
+    """devig_retail retains its documented power-method output."""
+    from tools.devig import devig_market, devig_retail
+    a, b = devig_retail(-200, 170)
+    ref = devig_market(
+        [american_to_decimal(-200), american_to_decimal(170)],
+        method="power",
+    )
+    assert "error" not in ref
+    assert a == pytest.approx(ref["fair_probabilities"][0], abs=1e-12)
+    assert b == pytest.approx(ref["fair_probabilities"][1], abs=1e-12)

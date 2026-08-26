@@ -131,9 +131,14 @@ def no_vig_price(side_a_american: int, side_b_american: int) -> tuple[float, flo
     Quick no-vig (multiplicative devig) for a two-way market.
     Returns (fair_prob_a, fair_prob_b).
 
+    Routes through the shared market-sanity gate in tools/devig.py: invalid
+    American odds or an unsanitary book (zero-hold, crossed, or overround at
+    or above the 20% ceiling) raises ValueError instead of returning
+    trustworthy-looking probabilities.
+
     For proper devig with FLB correction, use tools.devig.devig_market().
     """
-    imp_a = american_to_implied(side_a_american)
-    imp_b = american_to_implied(side_b_american)
-    total = imp_a + imp_b
-    return imp_a / total, imp_b / total
+    from tools.devig import _devig_pair_via_gate
+    dec_a = american_to_decimal(side_a_american)
+    dec_b = american_to_decimal(side_b_american)
+    return _devig_pair_via_gate(dec_a, dec_b, method="multiplicative")

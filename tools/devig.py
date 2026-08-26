@@ -97,6 +97,42 @@ logger = logging.getLogger("callisto.devig")
 MAX_SANE_OVERROUND = 0.20
 
 
+def _validate_book(odds_list: list[float]) -> list[float]:
+    """Shared market-sanity gate for every public devig entry point.
+
+    Validates decimal odds and returns implied probabilities only for a
+    book that is finite, well-formed, has a strictly positive overround,
+    and stays under the sane-hold ceiling. Anything else raises ValueError
+    rather than producing a trustworthy-looking fair probability.
+    """
+    if not odds_list:
+        raise ValueError("Empty odds list")
+    for o in odds_list:
+        if isinstance(o, bool) or not isinstance(o, (int, float)) \
+                or not math.isfinite(o):
+            raise ValueError(f"Non-finite or non-numeric odds in list: {o!r}")
+        if o <= 1.0:
+            raise ValueError(
+                f"Decimal odds must exceed 1.0, got {o!r}")
+    implied = [1 / o for o in odds_list]
+    if any(not math.isfinite(ip) or not 0.0 < ip < 1.0 for ip in implied):
+        raise ValueError("Implied probability out of (0, 1)")
+    overround = sum(implied) - 1.0
+    # Market-sanity gate on the book as a whole. A real two-sided book has a
+    # small POSITIVE hold (the vig/spread). Zero hold means a no-vig (or
+    # self-consistent-arbitrage-free but unpriceable) book and a negative
+    # hold means crossed asks — neither may be devigged into an actionable
+    # fair probability.
+    if not math.isfinite(overround) or overround <= 1e-9:
+        raise ValueError(f"Invalid book: overround {overround:.6f} is not strictly "
+                         "positive (zero-hold or crossed book)")
+    if overround >= MAX_SANE_OVERROUND:
+        raise ValueError(f"Invalid book: overround {overround:.4f} exceeds the "
+                         f"{MAX_SANE_OVERROUND:.0%} market-sanity ceiling "
+                         "(stale mix or absurd hold)")
+    return implied
+
+
 def multiplicative_devig(odds_list: list[float]) -> list[float]:
     """
     Proportional vig removal. Fast, good for low-vig books (Pinnacle).
@@ -106,11 +142,13 @@ def multiplicative_devig(odds_list: list[float]) -> list[float]:
       [2.0, 2.0] → [0.50, 0.50]
 
     Limitation: Overestimates longshot probability in lopsided markets.
+
+    Raises ValueError on any invalid book (malformed odds, zero-hold,
+    crossed, or excessive overround) — never silently coerces one into
+    fair probabilities. Use devig_market for an error-dict audit instead.
     """
-    implied = [1 / o for o in odds_list]
+    implied = _validate_book(odds_list)
     total = sum(implied)
-    if total == 0:
-        return [1 / len(odds_list)] * len(odds_list)
     return [ip / total for ip in implied]
 
 
@@ -120,8 +158,10 @@ def additive_devig(odds_list: list[float]) -> list[float]:
 
     FLAW: Can produce NEGATIVE probabilities on 3-way markets.
     If any result < 0, falls back to multiplicative.
+
+    Raises ValueError on any invalid book, same as the other helpers.
     """
-    implied = [1 / o for o in odds_list]
+    implied = _validate_book(odds_list)
     overround = sum(implied) - 1.0
     vig_per = overround / len(odds_list)
     result = [ip - vig_per for ip in implied]
@@ -144,8 +184,11 @@ def power_devig(odds_list: list[float]) -> tuple[list[float], float]:
       Power shifts probability TOWARD favorite, AWAY from longshot.
 
     Returns: (fair_probs, k)
+
+    Raises ValueError on any invalid book (zero-hold, crossed, excessive
+    overround), same as the other helpers.
     """
-    implied = [1 / o for o in odds_list]
+    implied = _validate_book(odds_list)
 
     # Check if already fair
     total = sum(implied)
@@ -181,8 +224,11 @@ def shin_devig(odds_list: list[float]) -> tuple[list[float], float]:
       [1.667, 2.400] → [0.592, 0.408], z≈0.017
 
     Returns: (fair_probs, z)
+
+    Raises ValueError on any invalid book (zero-hold, crossed, excessive
+    overround), same as the other helpers.
     """
-    implied = [1 / o for o in odds_list]
+    implied = _validate_book(odds_list)
     total = sum(implied)
 
     if abs(total - 1.0) < 0.0001:
@@ -229,38 +275,22 @@ def devig_market(
     Returns dict with: method, raw_implied, overround, fair_probabilities,
     fair_decimal_odds, fair_american_odds, solver_param
     """
-    if not odds_list:
-        return {"error": "Empty odds list", "fair_probabilities": [], "overround": 0.0}
-    if any(not isinstance(o, (int, float)) or isinstance(o, bool)
-           or not math.isfinite(o) for o in odds_list):
-        return {"error": "Non-finite or non-numeric odds in list",
-                "fair_probabilities": [], "overround": 0.0}
-    if any(o <= 1.0 for o in odds_list):
-        return {"error": "Non-positive implied probability (decimal odds must exceed 1.0)",
-                "fair_probabilities": [], "overround": 0.0}
-    implied = [1 / o for o in odds_list]
-    if any(not math.isfinite(ip) or not 0.0 < ip < 1.0 for ip in implied):
-        return {"error": "Implied probability out of (0, 1)",
-                "fair_probabilities": [], "overround": 0.0}
+    try:
+        implied = _validate_book(odds_list)
+    except ValueError as e:
+        overround = None
+        try:
+            overround = sum(1 / o for o in odds_list
+                            if isinstance(o, (int, float)) and not isinstance(o, bool)
+                            and o > 0 and math.isfinite(o)) - 1.0
+        except (ZeroDivisionError, TypeError):
+            pass
+        return {"error": str(e),
+                "fair_probabilities": [],
+                "overround": round(overround, 6)
+                             if overround is not None and math.isfinite(overround)
+                             else 0.0}
     overround = sum(implied) - 1.0
-    # Market-sanity gate on the book as a whole. A real two-sided book has a
-    # small POSITIVE hold (the vig/spread). overround <= 0 means crossed asks
-    # or a stale snapshot mix (free-lunch book); a hold at or above 50% means
-    # the sides cannot belong to one live market. Neither may be devigged into
-    # a precise-looking "fair" price.
-    # A two-sided book must have STRICTLY positive hold. Zero hold means a
-    # no-vig (or self-consistent-arbitrage-free but unpriceable) book and a
-    # negative hold means crossed asks — neither may be devigged into an
-    # actionable fair probability under the executable two-sided quote policy.
-    if not math.isfinite(overround) or overround <= 1e-9:
-        return {"error": f"Invalid book: overround {overround:.6f} is not strictly "
-                         "positive (zero-hold or crossed book)",
-                "fair_probabilities": [], "overround": round(overround, 6)}
-    if overround >= MAX_SANE_OVERROUND:
-        return {"error": f"Invalid book: overround {overround:.4f} exceeds the "
-                         f"{MAX_SANE_OVERROUND:.0%} market-sanity ceiling "
-                         "(stale mix or absurd hold)",
-                "fair_probabilities": [], "overround": round(overround, 6)}
     param = None
 
     if method == "auto":
@@ -334,7 +364,8 @@ def devig_american(
     return result
 
 
-def _devig_pair_via_gate(dec_a: float, dec_b: float) -> tuple[float, float]:
+def _devig_pair_via_gate(dec_a: float, dec_b: float,
+                         method: str = "auto") -> tuple[float, float]:
     """Route a two-way book through devig_market's market-sanity gate.
 
     The convenience helpers must not be able to bypass the validation that
@@ -342,7 +373,7 @@ def _devig_pair_via_gate(dec_a: float, dec_b: float) -> tuple[float, float]:
     previously they did, returning fair probabilities for crossed/invalid
     paired odds like (-200, -200).
     """
-    result = devig_market([dec_a, dec_b])
+    result = devig_market([dec_a, dec_b], method=method)
     if "error" in result:
         raise ValueError(result["error"])
     fair = result["fair_probabilities"]
@@ -355,14 +386,16 @@ def devig_pinnacle(
 ) -> tuple[float, float]:
     """
     Quick Pinnacle devig — returns (fair_prob_a, fair_prob_b).
-    Uses multiplicative since Pinnacle vig is < 3%.
+    Uses multiplicative since Pinnacle vig is < 3% — this is the documented
+    semantic identity of this helper and does NOT change with the auto
+    selector's choice for higher-hold books.
 
     Raises ValueError on invalid American odds or an invalid book
     (non-positive / excessive overround) instead of returning probabilities.
     """
     dec_a = american_to_decimal(pinnacle_odds_a)
     dec_b = american_to_decimal(pinnacle_odds_b)
-    return _devig_pair_via_gate(dec_a, dec_b)
+    return _devig_pair_via_gate(dec_a, dec_b, method="multiplicative")
 
 
 def devig_retail(
