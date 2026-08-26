@@ -1,0 +1,10 @@
+# name	prompt	exclusive files (comma)
+# Fleet skips a row when files are claimed or the worktree already has OX_DONE.
+api-split	/tmp/ox_prompts/wave7-api-split.md	api.py,tools/api/
+hyp-split	/tmp/ox_prompts/wave7-hyp-split.md	tools/hypothesis.py,tools/hypothesis/
+inference-split	/tmp/ox_prompts/wave7-inference-split.md	inference.py,inference_kernel.py,inference_router.py
+orch-split	/tmp/ox_prompts/wave7-orch-split.md	orchestrator.py,tools/orch/
+cli-split	/tmp/ox_prompts/wave7-cli-split.md	callisto.py,tools/cli/
+wiki-split	/tmp/ox_prompts/wave7-wiki-split.md	tools/knowledge_wiki.py,tools/wiki/
+auto-phases	/tmp/ox_prompts/wave7-auto-phases.md	tools/autonomous.py,tools/loop/
+backtest-split	/tmp/ox_prompts/wave7-backtest-split.md	tools/backtest.py,tools/signals/,tools/backtest_io.py
