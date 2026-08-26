@@ -134,6 +134,18 @@ INHERITED_CEILING_BY_SOURCE: dict[str, float] = {
 
 SPECULATIVE_CAP = TIER_PROBABLE_MIN   # just under PROBABLE band start
 
+# Documented maximum staleness demotion: penalty = rate * stale_fraction,
+# with stale_fraction in [0, 1], so the penalty can never fall below -rate.
+STALENESS_PENALTY_RATE = 0.20
+
+
+def stale_penalty_rate() -> float:
+    """The documented staleness-penalty rate, for display-only consumers
+    (tools/why.py, tools/calibration/instrument.py) that must describe the
+    applied penalty without recomputing the math themselves."""
+    return STALENESS_PENALTY_RATE
+
+
 
 @dataclass
 class TrackRecord:
@@ -258,7 +270,7 @@ def inherited_ceiling(records: Iterable) -> float:
 
     # Staleness penalty: unresolved-at-deadline sub-claims demote the parent
     # (mirrors existing cascade demotion). Up to −0.20.
-    penalty = 0.20 * tr.stale_fraction
+    penalty = STALENESS_PENALTY_RATE * tr.stale_fraction
     score = base - penalty
 
     # Provenance gate: inherited confidence is capped by the BEST source
