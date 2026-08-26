@@ -145,8 +145,10 @@ class TrackRecord:
 
     @property
     def hit_rate(self) -> float:
-        scored = max(1, self.n_resolved - self.n_stale)
-        return self.n_hit / scored if (self.n_resolved - self.n_stale) > 0 else 0.0
+        """Hits over GENUINE resolutions. Stales are already excluded from
+        n_resolved, so subtracting them again could push this above 1.0 —
+        an impossible hit rate that would flatter the parent."""
+        return self.n_hit / self.n_resolved if self.n_resolved > 0 else 0.0
 
 
 def summarize_track_record(records: Iterable[ResolutionRecord]) -> TrackRecord:

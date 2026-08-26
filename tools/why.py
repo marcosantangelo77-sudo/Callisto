@@ -422,7 +422,12 @@ def explain_result(result, ledger=None,
             detail=("evidence requirements unmet on some leaf: "
                     + "; ".join(reasons))))
     inh_cap = inherited_ceiling(descendant_resolutions or [])
-    n_resolved = len(list(descendant_resolutions or []))
+    # Only genuine resolutions (hit/miss) count toward the lift gate — a
+    # stale record is unresolved-at-deadline and must not be reported as
+    # resolved evidence (mirrors tools/research_program.inherited_ceiling).
+    from tools.research_program import normalize_records as _nr
+    _recs = [r for r in _nr(descendant_resolutions or []) if r.resolved]
+    n_resolved = len(_recs)
     inh_detail = (f"{n_resolved} resolved descendant(s) feed the inheritance "
                   f"rule; ceiling from their track record is {inh_cap:.2f}")
     if n_resolved < MIN_RESOLVED_FOR_LIFT:
@@ -512,8 +517,7 @@ def explain_result(result, ledger=None,
         # The inheritance rule with too-few resolutions is a STRUCTURAL cap
         # ("SPECULATIVE forever"), binding even when a lower numeric cap
         # happens to sit beneath it.
-        n_res = len(list(descendant_resolutions or []))
-        if n_res < MIN_RESOLVED_FOR_LIFT:
+        if n_resolved < MIN_RESOLVED_FOR_LIFT:
             next(c for c in ceilings if c.kind == "inheritance").binding = True
 
     largest = _largest_constraint(steps, ceilings, veto_text,

@@ -178,3 +178,48 @@ class TestDomainGenerality:
         score, tier = clamp_parent_confidence(
             0.85, [{"question_id": "none", "outcome": "void"}])
         assert score <= SPECULATIVE_CAP
+
+class TestStaleNeverEarnsCredit:
+    """2026-08-25 repair of the interrupted F7 fix: 'stale' means unresolved
+    at deadline. Every route from a stale record into lift is closed."""
+
+    def test_track_record_hit_rate_cannot_exceed_one(self):
+        # n_resolved counts genuine resolutions only; subtracting stales
+        # again would let 5 hits + 1 stale report an impossible 1.25.
+        recs = hits(5) + [ResolutionRecord("s", D0, "stale")]
+        tr = summarize_track_record(recs)
+        assert tr.n_resolved == 5 and tr.n_stale == 1
+        assert tr.hit_rate == pytest.approx(1.0)
+        assert tr.hit_rate <= 1.0
+
+    def test_stale_pinball_score_earns_no_calibration_credit(self):
+        clean = inherited_ceiling(hits(6))
+        poisoned = inherited_ceiling(
+            hits(6) + [ResolutionRecord("s", D0, "stale", pinball_score=0.0)])
+        assert poisoned == clean   # a perfect claimed score changes nothing
+
+    def test_stale_misses_do_not_count_toward_wilson_support(self):
+        # 5 hits lift; 5 hits + 5 stale-miss-shaped records must not lose
+        # accuracy credit either — stales are simply absent from evidence.
+        five_hits = inherited_ceiling(hits(5))
+        with_stales = inherited_ceiling(hits(5) +
+                                        [ResolutionRecord(f"s{i}", D0, "stale")
+                                         for i in range(5)])
+        assert with_stales < five_hits   # only the staleness penalty bites
+        # ...but they never count as resolved misses inflating n:
+        from tools.research_program import summarize_track_record as s
+        tr = s(hits(5) + [ResolutionRecord("z", D0, "stale")])
+        assert tr.n_resolved == 5
+
+    def test_all_stale_is_identical_to_no_descendants(self):
+        stales_only = [ResolutionRecord(f"s{i}", D0, "stale",
+                                        best_source_class="PRIMARY")
+                       for i in range(10)]
+        assert inherited_ceiling(stales_only) == SPECULATIVE_CAP
+
+    def test_four_hits_plus_any_number_of_stales_stay_speculative(self):
+        base = inherited_ceiling(hits(4))
+        for extra in (1, 5, 50):
+            recs = hits(4) + [ResolutionRecord(f"s{i}", D0, "stale")
+                              for i in range(extra)]
+            assert inherited_ceiling(recs) == SPECULATIVE_CAP == base
