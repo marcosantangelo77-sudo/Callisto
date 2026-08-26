@@ -343,6 +343,51 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         else:
             print("  OK: seal key is set (hex-valid); seals are HMAC-SHA256")
 
+    print("== bind ==")
+    bind_host = os.getenv("CALLISTO_BIND_HOST", "").strip() or "127.0.0.1"
+    print(f"  host: {bind_host}")
+    if bind_host in ("0.0.0.0", "::"):
+        print("  FAIL: binding to an unspecified address exposes the API")
+        print("  beyond loopback; set CALLISTO_BIND_HOST=127.0.0.1")
+        ok = False
+    else:
+        print("  OK: loopback default — API not exposed off-host")
+
+    print("== money switches ==")
+    import tools.order_manager
+    import tools.bet_executor
+    try:
+        om_src = Path(tools.order_manager.__file__).read_text(encoding="utf-8")
+    except Exception as exc:
+        print(f"  OrderManager source unreadable: {exc}")
+        ok = False
+    else:
+        if re.search(
+            r"self\._enabled\s*=\s*True", om_src.split("def enable", 1)[0]
+        ):
+            print("  FAIL: OrderManager.__init__ defaults _enabled = True;")
+            print("  orders are live by default — flip the default to False")
+            ok = False
+        else:
+            print("  OK: OrderManager.__init__ defaults _enabled = False")
+    try:
+        be_src = Path(tools.bet_executor.__file__).read_text(encoding="utf-8")
+    except Exception as exc:
+        print(f"  BetExecutor source unreadable: {exc}")
+        ok = False
+    else:
+        init_src = be_src.split("def ", 1)[0]
+        head = be_src[be_src.find("class BetExecutor"):be_src.find("class BetExecutor") + 20000]
+        m = re.search(r"def __init__\(.*?\n(?:.*?\n)*?(    self\._enabled\s*=\s*\w+)", head)
+        if m is None or "False" not in m.group(1):
+            print("  FAIL: BetExecutor.__init__ does not assign _enabled = False")
+            ok = False
+        else:
+            print("  OK: BetExecutor.__init__ assigns _enabled = False")
+    print(f"  CALLISTO_LOCAL_ONLY: {'on' if os.getenv('CALLISTO_LOCAL_ONLY', '').strip() else 'off'}")
+    allow_live = os.getenv("CALLISTO_ALLOW_LIVE_EXECUTE", "").strip()
+    print(f"  CALLISTO_ALLOW_LIVE_EXECUTE: {'on' if allow_live else 'off'}")
+
     print("\ndoctor:", "OK" if ok else "PROBLEMS FOUND (see above)")
     return 0 if ok else 1
 
