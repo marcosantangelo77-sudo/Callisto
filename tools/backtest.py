@@ -40,6 +40,11 @@ logger = logging.getLogger("callisto.backtest")
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
+# HARD GATE: generate_paper_trade_signal runs ONLY for paper_trading
+# hypotheses. "live" (or any other status) must NEVER be added here — the live
+# path needs separately tested sizing/caps/kill-switch, not this method.
+_PAPER_TRADE_SIGNAL_STATUSES = frozenset({"paper_trading"})
+
 
 def _signal_confidence(edge: float) -> str:
     """Categorize edge into confidence tiers based on realistic market edges.
@@ -3804,9 +3809,16 @@ class BacktestEngine:
         """
         For paper trading: apply model to current live odds.
         Returns signals meeting threshold. Does NOT place bets.
+
+        HARD GATE: this method may ONLY run for hypotheses whose status is
+        exactly ``"paper_trading"``. Any other status — including ``"live"``
+        (or any future status) — returns ``[]`` immediately, before any odds
+        processing. Accepting ``"live"`` here is FORBIDDEN: that would arm
+        untested sizing/caps/kill-switch logic all at once. Live order flow
+        must go through a separately reviewed and tested path.
         """
         h = await self.hypothesis_manager.get_hypothesis(hypothesis_id)
-        if not h or h["status"] != "paper_trading":
+        if not h or h["status"] not in _PAPER_TRADE_SIGNAL_STATUSES:
             return []
 
         config = h["model_config"]
