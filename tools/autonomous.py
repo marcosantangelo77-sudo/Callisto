@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from tools import telegram
+from tools.loop.cycle_health import last_cycle_ok, last_cycle_phase_failures
 from tools.loop.phase_ledger import PhaseFailureLedger
 from tools.loop.sequencer import PERIODIC_PHASES, PHASES
 from tools.backtest import _signal_confidence
@@ -7940,30 +7941,12 @@ class ResearchLoop:
                 logger.warning(f"Claude spinning diagnosis failed: {e}")
 
     def _last_cycle_phase_failures(self) -> int:
-        """Number of phase failures recorded during the current cycle.
-
-        Older cycles stay on the ledger for history; this count is only
-        ``cycle == self._cycles`` so a clean cycle reports 0 even if a
-        previous cycle failed.
-        """
-        if self._cycles == 0:
-            return 0
-        return sum(
-            1
-            for entry in self._phase_failures_ledger.latest(
-                self._phase_failures_ledger.count
-            )
-            if entry["cycle"] == self._cycles
-        )
+        """Number of phase failures recorded during the current cycle."""
+        return last_cycle_phase_failures(self._cycles, self._phase_failures_ledger)
 
     def _last_cycle_ok(self) -> bool:
-        """True iff no phase failed during the current cycle.
-
-        Failures are non-fatal (the loop continues), but a cycle in which any
-        phase failed or timed out must not report as healthy. If no cycle has
-        run yet, the loop is healthy.
-        """
-        return self._last_cycle_phase_failures() == 0
+        """True iff no phase failed during the current cycle."""
+        return last_cycle_ok(self._cycles, self._phase_failures_ledger)
 
     def get_status(self) -> dict:
         """Return research loop status."""
