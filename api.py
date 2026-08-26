@@ -1464,7 +1464,7 @@ async def query_world(
 
 # --- Knowledge Wiki endpoints (LLM Wiki pattern) ---
 
-@app.get("/wiki/stats")
+@app.get("/wiki/stats", dependencies=[Depends(require_admin_or_loopback)])
 async def wiki_stats():
     """Get wiki compilation statistics."""
     from tools.knowledge_wiki import get_wiki
@@ -1474,7 +1474,7 @@ async def wiki_stats():
         return await wiki.get_stats(db)
 
 
-@app.get("/wiki/articles")
+@app.get("/wiki/articles", dependencies=[Depends(require_admin_or_loopback)])
 async def wiki_articles(domain: Optional[str] = None, limit: int = 50):
     """List wiki articles, optionally filtered by domain."""
     from tools.knowledge_wiki import get_wiki
@@ -1485,7 +1485,7 @@ async def wiki_articles(domain: Optional[str] = None, limit: int = 50):
         return {"count": len(articles), "articles": articles}
 
 
-@app.get("/wiki/article/{topic}")
+@app.get("/wiki/article/{topic}", dependencies=[Depends(require_admin_or_loopback)])
 async def wiki_article(topic: str):
     """Get a specific wiki article by topic slug."""
     from tools.knowledge_wiki import get_wiki
@@ -1498,7 +1498,7 @@ async def wiki_article(topic: str):
         return article
 
 
-@app.get("/wiki/search")
+@app.get("/wiki/search", dependencies=[Depends(require_admin_or_loopback)])
 async def wiki_search(q: str, limit: int = 10):
     """Search wiki articles by keyword."""
     from tools.knowledge_wiki import get_wiki
@@ -1509,7 +1509,7 @@ async def wiki_search(q: str, limit: int = 10):
         return {"query": q, "count": len(results), "results": results}
 
 
-@app.get("/wiki/contradictions")
+@app.get("/wiki/contradictions", dependencies=[Depends(require_admin_or_loopback)])
 async def wiki_contradictions(unresolved_only: bool = True):
     """Get wiki contradiction findings."""
     from tools.knowledge_wiki import get_wiki
@@ -1780,7 +1780,7 @@ async def parlay_scan(sport: str):
     }
 
 
-@app.get("/odds/sgp-analysis/{sport}")
+@app.get("/odds/sgp-analysis/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def sgp_analysis(sport: str):
     """Analyze SGP mispricing and excessive vig for a sport.
 
@@ -1886,7 +1886,7 @@ async def sgp_analysis(sport: str):
     }
 
 
-@app.get("/odds/props/{sport}/{event_id}")
+@app.get("/odds/props/{sport}/{event_id}", dependencies=[Depends(require_admin_or_loopback)])
 async def scan_props(sport: str, event_id: str, target_book: str = "draftkings", threshold: float = 0.015):
     """
     Scan player props for +EV edges on target book.
@@ -1898,7 +1898,7 @@ async def scan_props(sport: str, event_id: str, target_book: str = "draftkings",
     return await scan_props_ev(sport, event_id, target_book=target_book, edge_threshold=threshold)
 
 
-@app.get("/odds/dk-props/{sport}")
+@app.get("/odds/dk-props/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def dk_props(sport: str):
     """
     Scrape DraftKings player props for all games in a sport — FREE, no API credits.
@@ -1948,7 +1948,7 @@ async def odds_status():
     return await line_monitor.get_status()
 
 
-@app.get("/odds/learned-correlations")
+@app.get("/odds/learned-correlations", dependencies=[Depends(require_admin_or_loopback)])
 async def get_learned_correlations():
     """Get learned correlation estimates — Bayesian blend of priors + empirical data."""
     if learned_correlation_store is None:
@@ -2033,7 +2033,7 @@ async def init_bankroll(balance: float):
 
 # --- Market Structure Analysis ---
 
-@app.get("/odds/market-analysis/{sport}")
+@app.get("/odds/market-analysis/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def market_analysis(sport: str):
     """Full market structure analysis — key numbers, stale lines, Pinnacle benchmark."""
     from tools.odds_api import get_odds as _get_odds
@@ -2048,7 +2048,7 @@ async def market_analysis(sport: str):
     return analysis
 
 
-@app.get("/odds/stale-lines/{sport}")
+@app.get("/odds/stale-lines/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def stale_lines(sport: str):
     """Find retail book lines that are stale vs sharp benchmark."""
     from tools.odds_api import get_odds as _get_odds
@@ -2064,7 +2064,7 @@ async def stale_lines(sport: str):
 
 # --- Market Psychology ---
 
-@app.get("/odds/psychology/{sport}")
+@app.get("/odds/psychology/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def market_psychology(sport: str):
     """Run full market psychology analysis — number shading, attention arbitrage.
 
@@ -2091,7 +2091,7 @@ async def market_psychology(sport: str):
     return psych
 
 
-@app.get("/odds/psychology")
+@app.get("/odds/psychology", dependencies=[Depends(require_admin_or_loopback)])
 async def market_psychology_all():
     """Return cached market psychology signals for all monitored sports.
 
@@ -2105,7 +2105,7 @@ async def market_psychology_all():
 
 # --- Dead Numbers & Line Analysis ---
 
-@app.get("/odds/dead-numbers/{sport}")
+@app.get("/odds/dead-numbers/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def dead_numbers_endpoint(sport: str):
     """Show dead number steals and key number analysis for a sport.
 
@@ -2217,7 +2217,7 @@ async def dead_numbers_endpoint(sport: str):
     }
 
 
-@app.get("/analysis/futures-efficiency")
+@app.get("/analysis/futures-efficiency", dependencies=[Depends(require_admin_or_loopback)])
 async def futures_efficiency_endpoint(
     current_odds: int = -200,
     record_wins: int = 30,
@@ -2238,7 +2238,7 @@ async def futures_efficiency_endpoint(
     )
 
 
-@app.get("/analysis/half-market/{sport}")
+@app.get("/analysis/half-market/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def half_market_endpoint(
     full_game_total: float = 220.0,
     half_total: float = 110.0,
@@ -2255,7 +2255,7 @@ async def half_market_endpoint(
     )
 
 
-@app.get("/analysis/cross-tabulate/{sport}")
+@app.get("/analysis/cross-tabulate/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def cross_tabulate_endpoint(sport: str, min_sample: int = 20):
     """Multi-factor interaction analysis — discovers which factor combos produce edges."""
     from tools.temporal_analysis import load_game_results, cross_tabulate
@@ -2266,7 +2266,7 @@ async def cross_tabulate_endpoint(sport: str, min_sample: int = 20):
     return cross_tabulate(df, min_sample=min_sample).to_dicts()
 
 
-@app.get("/odds/line-analysis/{sport}")
+@app.get("/odds/line-analysis/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def line_analysis_endpoint(sport: str):
     """Show RLM, steam moves, public side analysis, and bet timing for a sport.
 
@@ -2908,7 +2908,7 @@ async def referee_info(refs: str, sport: str = "basketball_nba"):
 
 # --- Line Gap Analysis ---
 
-@app.get("/odds/line-gaps/{sport}")
+@app.get("/odds/line-gaps/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def line_gaps(sport: str, event_id: str = "", market: str = "alternate_spreads"):
     """Scan alternate lines for gaps — missing points that reveal risk concentration."""
     from tools.odds_api import get_odds as _get_odds, get_alternate_lines as _get_alt
@@ -2951,7 +2951,7 @@ async def line_gaps(sport: str, event_id: str = "", market: str = "alternate_spr
     }
 
 
-@app.get("/odds/prop-gaps/{sport}")
+@app.get("/odds/prop-gaps/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def prop_gaps(sport: str, event_id: str = ""):
     """Scan player props for line gaps across bookmakers."""
     from tools.odds_api import get_odds as _get_odds, get_player_props as _get_props
@@ -3806,7 +3806,7 @@ async def health_readyz():
     }
 
 
-@app.get("/health/detailed")
+@app.get("/health/detailed", dependencies=[Depends(require_admin_or_loopback)])
 async def health_detailed():
     """
     Everything /health returns, plus per-source ingestion SLAs and
@@ -3944,7 +3944,7 @@ async def writer_stats():
     return {"coordinators": _writer_stats()}
 
 
-@app.get("/health/deep")
+@app.get("/health/deep", dependencies=[Depends(require_admin_or_loopback)])
 async def health_deep():
     """
     Full pipeline integrity suite — runs ALL checks on demand.
@@ -3967,7 +3967,7 @@ async def health_deep():
     return result
 
 
-@app.get("/health/integrity/history")
+@app.get("/health/integrity/history", dependencies=[Depends(require_admin_or_loopback)])
 async def integrity_history(limit: int = 50):
     """Get recent pipeline integrity check history."""
     try:
@@ -4135,7 +4135,7 @@ async def full_system_status():
 # Task listing & context sync
 # ---------------------------------------------------------------------------
 
-@app.get("/tasks")
+@app.get("/tasks", dependencies=[Depends(require_admin_or_loopback)])
 async def list_tasks(
     status: Optional[str] = None,
     limit: int = 10,
