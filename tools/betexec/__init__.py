@@ -38,6 +38,8 @@ from tools.betexec.sizing import (
     signals_n_to_kelly_fraction,
 )
 from tools.betexec.drawdown import build_kill_switch_alert, evaluate_drawdown
+from tools.betexec import browser, slip
+from tools.betexec import logging as betexec_logging
 
 __all__ = [
     "DB_PATH",

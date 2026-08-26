@@ -25,12 +25,18 @@ Split (2026-08): pure helpers (config constants, DK constants, regime
 lookups, Kelly sizing arithmetic, drawdown evaluation) live in the
 ``tools.betexec`` package; this module is the facade that re-exports them
 and keeps the ``BetExecutor`` orchestration + DB/browser surface.
+
+Slice 2 split (2026-08): the Playwright browser-session flow lives in
+``tools.betexec.browser``, the bet-slip interaction in ``tools.betexec.slip``,
+and the executor_log / bets / bankroll-peak DB writes in
+``tools.betexec.logging`` (imported here as ``betexec_logging``). This module
+keeps ``BetExecutor`` as a thin delegating orchestrator.
 """
 
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 
 import aiosqlite
@@ -66,6 +72,9 @@ from tools.betexec.sizing import (
     signals_n_to_kelly_fraction as _signals_n_to_kelly_fraction_helper,
 )
 from tools.betexec.drawdown import build_kill_switch_alert, evaluate_drawdown
+from tools.betexec import browser as betexec_browser
+from tools.betexec import slip as betexec_slip
+from tools.betexec import logging as betexec_logging
 
 logger = logging.getLogger("callisto.executor")
 
@@ -131,7 +140,7 @@ class BetExecutor:
         self._last_reset = datetime.now(timezone.utc).date()
         # SECURITY (audit H-4): serialize the read-bankroll → size-bet → write-bankroll
         # sequence. Without this, two concurrent place_bet calls both read the same
-        # balance and both compute stakes against the full bankroll. See _record_bet
+        # balance and both compute stakes against the full bankroll. See record_bet
         # and place_bet for the holders.
         self._bankroll_lock = asyncio.Lock()
 
@@ -145,29 +154,7 @@ class BetExecutor:
         SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
         SESSION_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Create executor log table
-        await self._db.execute("""
-            CREATE TABLE IF NOT EXISTS executor_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                action TEXT NOT NULL,
-                sport TEXT,
-                team TEXT,
-                market TEXT,
-                side TEXT,
-                odds INTEGER,
-                stake REAL,
-                edge REAL,
-                hypothesis_id TEXT,
-                bet_id INTEGER,
-                screenshot_path TEXT,
-                status TEXT NOT NULL,
-                error TEXT,
-                details TEXT
-            )
-        """)
-        from tools.db_utils import commit_with_retry
-        await commit_with_retry(self._db, operation="executor schema")
+        await betexec_logging.ensure_executor_log_schema(self._db)
         logger.info("Bet executor initialized")
 
     async def get_bankroll(self) -> float:
@@ -327,8 +314,6 @@ class BetExecutor:
             return []
 
         # --- Regime multipliers per sport in the batch (cached for this call) ---
-        # Computed once per distinct sport via the module-level helper so a
-        # 20-bet batch hits the regime module at most len(set(sports)) times.
         sports_in_batch = {b.get("sport", "") for b in bets if b.get("sport")}
         regime_mults: dict[str, float] = {
             sp: _clamped_regime_multiplier(sp) for sp in sports_in_batch
@@ -381,21 +366,15 @@ class BetExecutor:
         # Multiple bets: use correlation-aware portfolio Kelly.
         portfolio_bets, sized = build_portfolio_requests(bets, correlation_matrix)
 
-        # First pass: compute raw stakes, apply signals_n dampener + regime
-        # multiplier, floor.
         results: list[dict] = []
         for i, item in enumerate(sized):
             b = bets[i]
             frac = float(item.get("final_fraction", 0.0))
             signals_n = int(b.get("signals_n", 0) or 0)
-            # Blend in the signals_n dampener: scale the portfolio-Kelly
-            # fraction by (kelly_frac / KELLY_FRACTION) — so a fresh hyp
-            # (signals_n<25) gets half its correlation-aware allocation.
             kelly_frac = self._signals_n_to_kelly_fraction(signals_n)
             scale = (kelly_frac / KELLY_FRACTION) if KELLY_FRACTION > 0 else 1.0
             frac = frac * scale
             stake_before_regime = round(bankroll * frac, 2)
-            # Regime multiplier (feat/regime-aware-sizing).
             sport = b.get("sport", "")
             reg_mult = regime_mults.get(sport, 1.0)
             frac = frac * reg_mult
@@ -471,19 +450,10 @@ class BetExecutor:
 
     async def launch_browser(self) -> None:
         """Launch Playwright browser with persistent session."""
-        from playwright.async_api import async_playwright
-
-        pw = await async_playwright().start()
-        self._browser = await pw.chromium.launch_persistent_context(
-            user_data_dir=str(SESSION_DIR),
-            headless=False,  # Visible for initial login, can switch to True later
-            viewport={"width": 1280, "height": 900},
-            args=[
-                "--disable-blink-features=AutomationControlled",
-            ],
+        self._context, self._page = await betexec_browser.launch_persistent_session(
+            SESSION_DIR
         )
-        self._page = self._browser.pages[0] if self._browser.pages else await self._browser.new_page()
-        logger.info("Browser launched with persistent session")
+        self._browser = self._context
 
     async def ensure_logged_in(self) -> bool:
         """
@@ -495,40 +465,9 @@ class BetExecutor:
         if not self._page:
             await self.launch_browser()
 
-        try:
-            await self._page.goto(DK_BASE_URL, wait_until="domcontentloaded", timeout=15000)
-            await self._page.wait_for_timeout(2000)
-
-            # Check for logged-in indicator (account balance, username, etc.)
-            logged_in = await self._page.query_selector(
-                "[data-testid='user-balance'], .dk-user-balance, .sportsbook-header__balance"
-            )
-
-            if logged_in:
-                self._logged_in = True
-                logger.info("DraftKings session active — logged in")
-                return True
-
-            # Also check by looking for sign-in button absence
-            sign_in = await self._page.query_selector(
-                "[data-testid='sign-in-button'], .sportsbook-header__sign-in, a[href*='login']"
-            )
-
-            if not sign_in:
-                # No sign-in button visible — might be logged in with different UI
-                self._logged_in = True
-                return True
-
-            logger.warning(
-                "DraftKings login required — browser is open, please log in manually. "
-                "Session will persist after first login."
-            )
-            self._logged_in = False
-            return False
-
-        except Exception as e:
-            logger.error(f"Login check failed: {e}")
-            return False
+        ok = await betexec_browser.check_logged_in(self._page)
+        self._logged_in = ok
+        return ok
 
     async def navigate_to_game(
         self,
@@ -537,33 +476,7 @@ class BetExecutor:
         event_id: str = "",
     ) -> bool:
         """Navigate to a specific game on DraftKings."""
-        slug = DK_SPORT_SLUGS.get(sport, "")
-        if not slug:
-            return False
-
-        # Navigate to sport page
-        url = f"{DK_BASE_URL}/leagues/{slug}"
-        try:
-            await self._page.goto(url, wait_until="domcontentloaded", timeout=15000)
-            await self._page.wait_for_timeout(2000)
-
-            # Try to find the team/game
-            # DK uses various selectors for game cards
-            game_link = await self._page.query_selector(
-                f"a:has-text('{team}')"
-            )
-
-            if game_link:
-                await game_link.click()
-                await self._page.wait_for_timeout(2000)
-                return True
-
-            logger.warning(f"Could not find game for {team} on DK {slug} page")
-            return False
-
-        except Exception as e:
-            logger.error(f"Navigation failed: {e}")
-            return False
+        return await betexec_browser.navigate_to_game(self._page, sport, team)
 
     async def place_bet_on_slip(
         self,
@@ -575,109 +488,7 @@ class BetExecutor:
 
         Returns dict with success status, screenshot path, and confirmation details.
         """
-        result = {
-            "success": False,
-            "screenshot": None,
-            "confirmation": None,
-            "error": None,
-        }
-
-        try:
-            # Click on the selection (spread/ML/total button)
-            selection = await self._page.query_selector(
-                f"button:has-text('{selection_text}'), "
-                f"[aria-label*='{selection_text}'], "
-                f".outcome-cell:has-text('{selection_text}')"
-            )
-
-            if not selection:
-                result["error"] = f"Selection '{selection_text}' not found on page"
-                return result
-
-            await selection.click()
-            await self._page.wait_for_timeout(1500)
-
-            # Find the bet slip stake input
-            stake_input = await self._page.query_selector(
-                "input[data-testid='bet-slip-stake'], "
-                "input[aria-label*='Wager'], "
-                "input[aria-label*='stake'], "
-                ".betslip-input input, "
-                "input[placeholder*='Wager']"
-            )
-
-            if not stake_input:
-                result["error"] = "Could not find stake input in bet slip"
-                return result
-
-            # Clear and enter stake
-            await stake_input.click(click_count=3)  # Select all
-            await stake_input.fill(f"{stake:.2f}")
-            await self._page.wait_for_timeout(500)
-
-            # Screenshot BEFORE confirming (for the record)
-            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            pre_path = SCREENSHOT_DIR / f"pre_confirm_{ts}.png"
-            await self._page.screenshot(path=str(pre_path))
-
-            # Find and click the Place Bet / Submit button
-            confirm_btn = await self._page.query_selector(
-                "button:has-text('Place Bet'), "
-                "button:has-text('Submit'), "
-                "button:has-text('Place Wager'), "
-                "[data-testid='place-bet-button']"
-            )
-
-            if not confirm_btn:
-                result["error"] = "Could not find Place Bet button"
-                result["screenshot"] = str(pre_path)
-                return result
-
-            await confirm_btn.click()
-            await self._page.wait_for_timeout(3000)
-
-            # Screenshot confirmation
-            post_path = SCREENSHOT_DIR / f"confirmed_{ts}.png"
-            await self._page.screenshot(path=str(post_path))
-
-            # Check for success indicator
-            success_el = await self._page.query_selector(
-                ":has-text('Bet Placed'), "
-                ":has-text('Wager Accepted'), "
-                ":has-text('Bet Confirmed'), "
-                ".bet-receipt"
-            )
-
-            if success_el:
-                result["success"] = True
-                result["screenshot"] = str(post_path)
-                result["confirmation"] = f"Bet confirmed at {ts}"
-            else:
-                # Check for error messages
-                error_el = await self._page.query_selector(
-                    ".error-message, .betslip-error, :has-text('odds have changed')"
-                )
-                if error_el:
-                    error_text = await error_el.inner_text()
-                    result["error"] = f"DK error: {error_text}"
-                else:
-                    # Assume success if no error detected
-                    result["success"] = True
-                    result["confirmation"] = f"Bet submitted at {ts} (no explicit confirmation detected)"
-                result["screenshot"] = str(post_path)
-
-            return result
-
-        except Exception as e:
-            result["error"] = str(e)
-            # Try to screenshot whatever state we're in
-            try:
-                err_path = SCREENSHOT_DIR / f"error_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.png"
-                await self._page.screenshot(path=str(err_path))
-                result["screenshot"] = str(err_path)
-            except Exception as e:
-                logger.warning(f"Error screenshot capture also failed: {e}")
-            return result
+        return await betexec_slip.place_bet_on_slip(self._page, selection_text, stake)
 
     async def execute_bet(
         self,
@@ -712,7 +523,6 @@ class BetExecutor:
         (``MAX_OPEN_EXPOSURE_PCT``) is evaluated against the *committed* sum of pending
         stakes rather than a stale snapshot.
         """
-        now = datetime.now(timezone.utc).isoformat()
         async with self._bankroll_lock:
             bankroll = await self.get_bankroll()
 
@@ -765,14 +575,7 @@ class BetExecutor:
             return {"success": False, "reason": f"Could not find {team} game on DraftKings"}
 
         # Build selection text based on market type
-        if market == "h2h":
-            selection_text = team  # Moneyline — just the team name
-        elif market == "spreads":
-            selection_text = f"{'+' if point and point > 0 else ''}{point}" if point else team
-        elif market == "totals":
-            selection_text = side  # "Over" or "Under"
-        else:
-            selection_text = side
+        selection_text = betexec_slip.build_selection_text(market, team, side, point)
 
         # Place the bet
         placement = await self.place_bet_on_slip(selection_text, stake)
@@ -838,86 +641,23 @@ class BetExecutor:
         bookmaker, odds, point, stake, edge, fair_prob, hypothesis_id,
     ) -> int:
         """Record bet in the bets table and update bankroll."""
-        now = datetime.now(timezone.utc).isoformat()
-        # SECURITY/CORRECTNESS: implied = fair_prob - edge (audit C-3, 2026-04-18).
-        # Prior formula `1.0 - fair_prob + edge` was inverted, poisoning every CLV calc.
-        implied = max(0.0, min(1.0, fair_prob - edge))
-
-        from tools.db_utils import execute_with_retry, commit_with_retry
-
-        # Guard against duplicate bets: check if we already have a pending bet
-        # on this event+team+market within the last hour
-        dup_check = await execute_with_retry(
+        return await betexec_logging.record_bet(
             self._db,
-            "SELECT bet_id FROM bets WHERE event_id = ? AND team = ? AND market = ? "
-            "AND result = 'pending' AND placed_at > datetime('now', '-1 hour')",
-            (event_id, team, market),
-            operation="executor dup_check",
+            self.get_bankroll,
+            self._bankroll_lock,
+            sport=sport,
+            event_id=event_id,
+            game_description=game_description,
+            team=team,
+            market=market,
+            bookmaker=bookmaker,
+            odds=odds,
+            point=point,
+            stake=stake,
+            edge=edge,
+            fair_prob=fair_prob,
+            hypothesis_id=hypothesis_id,
         )
-        existing = await dup_check.fetchone()
-        if existing:
-            logger.warning(
-                f"Duplicate bet prevented: event={event_id} team={team} market={market} "
-                f"(existing bet_id={existing[0]})"
-            )
-            return existing[0]
-
-        cursor = await execute_with_retry(
-            self._db,
-            """INSERT INTO bets
-            (placed_at, sport, event_id, game_description, bet_type,
-             team, market, bookmaker, placement_odds, placement_point,
-             placement_implied_prob, stake, result, edge_at_placement,
-             kelly_at_placement, notes, tags)
-            VALUES (?, ?, ?, ?, 'single', ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)""",
-            (
-                now, sport, event_id, game_description,
-                team, market, bookmaker, odds, point,
-                round(implied, 6), stake, round(edge, 6),
-                round(stake / max(await self.get_bankroll(), 1), 4),
-                f"Auto-executed by Callisto. hypothesis={hypothesis_id}",
-                f"auto,hypothesis:{hypothesis_id}",
-            ),
-            max_retries=10,
-            operation="executor record_bet insert",
-        )
-        bet_id = cursor.lastrowid
-
-        # Update bankroll (deduct stake) under the same lock that gated sizing,
-        # so the read→write of bankroll is atomic across concurrent placements
-        # (audit H-4). feat/portfolio-kelly-live-loop (audit 2026-04-22):
-        # wrap read+insert in BEGIN IMMEDIATE so SQLite's own locking
-        # serializes even if two callers somehow race past the asyncio lock
-        # (e.g. different event loops, or the fallback path when the
-        # WriteCoordinator is not running).
-        async with self._bankroll_lock:
-            # BEGIN IMMEDIATE acquires a RESERVED lock now, preventing any
-            # other writer from reading-then-writing on top of our snapshot.
-            try:
-                await self._db.execute("BEGIN IMMEDIATE")
-            except Exception:
-                # If a transaction is already open (WriteCoordinator path),
-                # BEGIN will raise — that's fine, the coordinator serializes
-                # writes already.
-                pass
-            try:
-                bankroll = await self.get_bankroll()
-                await execute_with_retry(
-                    self._db,
-                    "INSERT INTO bankroll (timestamp, balance, change, bet_id, description) VALUES (?, ?, ?, ?, ?)",
-                    (now, bankroll - stake, -stake, bet_id, f"Auto bet #{bet_id}: {team} {market}"),
-                    max_retries=10,
-                    operation="executor record_bet bankroll",
-                )
-
-                await commit_with_retry(self._db, max_retries=10, operation="executor record_bet")
-            except Exception:
-                try:
-                    await self._db.rollback()
-                except Exception:
-                    pass
-                raise
-        return bet_id
 
     # ------------------------------------------------------------------
     # Drawdown kill-switch (feat/portfolio-kelly-live-loop, audit 2026-04-22)
@@ -928,43 +668,11 @@ class BetExecutor:
         Called opportunistically by ``check_drawdown_and_kill``. The table is
         append-only so a 30d peak is a simple MAX over the window.
         """
-        try:
-            from tools.db_utils import execute_with_retry, commit_with_retry
-            await execute_with_retry(
-                self._db,
-                "INSERT INTO bankroll_peak (observed_at, balance, note) VALUES (?, ?, ?)",
-                (datetime.now(timezone.utc).isoformat(), float(bankroll), "auto-observed"),
-                operation="bankroll_peak insert",
-            )
-            await commit_with_retry(self._db, operation="bankroll_peak insert")
-        except Exception as e:
-            logger.debug(f"bankroll_peak insert skipped: {e}")
+        await betexec_logging.record_bankroll_peak(self._db, bankroll)
 
     async def _rolling_peak(self, window_days: int = None) -> float:
         """Return MAX(balance) over the rolling peak window."""
-        window = window_days or DRAWDOWN_PEAK_WINDOW_DAYS
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=window)).isoformat()
-        try:
-            cursor = await self._db.execute(
-                "SELECT COALESCE(MAX(balance), 0) FROM bankroll_peak WHERE observed_at >= ?",
-                (cutoff,),
-            )
-            row = await cursor.fetchone()
-            peak = float(row[0]) if row and row[0] is not None else 0.0
-        except Exception:
-            peak = 0.0
-        # Fallback to bankroll history if bankroll_peak is empty / missing.
-        if peak <= 0:
-            try:
-                cursor = await self._db.execute(
-                    "SELECT COALESCE(MAX(balance), 0) FROM bankroll WHERE timestamp >= ?",
-                    (cutoff,),
-                )
-                row = await cursor.fetchone()
-                peak = float(row[0]) if row and row[0] is not None else 0.0
-            except Exception:
-                peak = 0.0
-        return peak
+        return await betexec_logging.rolling_peak(self._db, window_days)
 
     async def check_drawdown_and_kill(self) -> dict:
         """Evaluate rolling drawdown; if past MAX_DRAWDOWN_PCT, kill-switch.
@@ -1039,24 +747,10 @@ class BetExecutor:
         hypothesis_id, bet_id=None, screenshot=None, reason=None,
     ):
         """Log executor action for audit trail."""
-        from tools.db_utils import execute_with_retry, commit_with_retry
-        await execute_with_retry(
-            self._db,
-            """INSERT INTO executor_log
-            (timestamp, action, sport, team, market, side, odds, stake, edge,
-             hypothesis_id, bet_id, screenshot_path, status, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                datetime.now(timezone.utc).isoformat(),
-                action, sport, team, market, side, odds, stake, edge,
-                hypothesis_id, bet_id, screenshot,
-                "success" if action == "BET_PLACED" else "failed",
-                reason,
-            ),
-            max_retries=10,
-            operation="executor log_action",
+        await betexec_logging.log_action(
+            self._db, action, sport, team, market, side, odds, stake, edge,
+            hypothesis_id, bet_id=bet_id, screenshot=screenshot, reason=reason,
         )
-        await commit_with_retry(self._db, max_retries=10, operation="executor log_action")
 
     def enable(self) -> bool:
         """Enable the executor (allow bet placement).
@@ -1109,6 +803,7 @@ class BetExecutor:
         if self._browser:
             await self._browser.close()
             self._browser = None
+            self._context = None
             self._page = None
         if self._db:
             await self._db.close()
