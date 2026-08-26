@@ -12,17 +12,42 @@ Verified conversions:
 """
 
 
+def validate_american_odds(american) -> int:
+    """Validate an American-odds value and return it as an int.
+
+    American odds are whole numbers with magnitude >= 100 (e.g. -110, +150).
+    Rejects booleans, non-numbers, non-finite values, fractional quotes such
+    as 100.9, and out-of-policy values like 50 or 0 — none may be silently
+    coerced into a trusted price.
+    """
+    if isinstance(american, bool) or not isinstance(american, (int, float)):
+        raise ValueError(f"American odds must be a finite number, got {american!r}")
+    import math as _math
+    if not _math.isfinite(american):
+        raise ValueError(f"American odds must be finite, got {american!r}")
+    if float(american) != int(american):
+        raise ValueError(f"American odds must be whole numbers, got {american!r}")
+    am = int(american)
+    if am == 0 or abs(am) < 100:
+        raise ValueError(
+            f"American odds must be a nonzero whole number with |odds| >= 100, "
+            f"got {am}")
+    return am
+
+
 def american_to_decimal(american: int) -> float:
     """
     Convert American odds to decimal odds.
     Verified: -110→1.9091, +150→2.50, -200→1.50, +300→4.00, +100→2.00
+
+    Raises ValueError on any value that is not valid American odds
+    (see validate_american_odds).
     """
-    if american > 0:
-        return (american / 100) + 1
-    elif american < 0:
-        return (100 / abs(american)) + 1
+    am = validate_american_odds(american)
+    if am > 0:
+        return (am / 100) + 1
     else:
-        raise ValueError("American odds cannot be 0")
+        return (100 / abs(am)) + 1
 
 
 def decimal_to_american(decimal_odds: float) -> int:

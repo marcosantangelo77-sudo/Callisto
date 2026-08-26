@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Union
 
 from tools.devig import devig_market
+from tools.math_utils import validate_american_odds
 from tools.kelly import kelly_full
 
 Quote = Union[int, float]
@@ -100,14 +101,52 @@ class MarketQuote:
     as_of: str = ""                    # ISO timestamp the quote was live
 
     def implied_probability(self) -> float:
+        """Raw implied probability under the DECLARED convention.
+
+        Explicit kinds are honoured exactly — no silent reinterpretation or
+        int() coercion. Invalid values under the declared kind raise
+        ValueError rather than producing a trusted price.
+        """
         if self.kind == "auto":
             return _raw_implied(self.price)
-        return {
-            "american": lambda: _american_to_implied(int(self.price)),
-            "decimal": lambda: 1.0 / float(self.price),
-            "contract_cents": lambda: float(self.price) / 100.0,
-            "probability": lambda: float(self.price),
-        }[self.kind]()
+
+        def _finite(x):
+            if isinstance(x, bool) or not isinstance(x, (int, float)) \
+                    or not math.isfinite(x):
+                raise ValueError(f"price must be a finite number, got {x!r}")
+            return float(x)
+
+        if self.kind == "american":
+            am = validate_american_odds(self.price)
+            return _american_to_implied(am)
+        if self.kind == "decimal":
+            d = _finite(self.price)
+            if d <= 1.0:
+                raise ValueError(f"decimal odds must exceed 1.0, got {d}")
+            return 1.0 / d
+        if self.kind == "contract_cents":
+            c = _finite(self.price)
+            if c <= 0.0 or c >= 100.0:
+                raise ValueError(f"contract price must be in (0, 100) cents, got {c}")
+            return c / 100.0
+        if self.kind == "probability":
+            p = _finite(self.price)
+            if not 0.0 < p < 1.0:
+                raise ValueError(f"probability must be in (0, 1), got {p}")
+            return p
+        raise ValueError(f"unknown quote kind: {self.kind!r}")
+
+    def payout_decimal(self) -> float:
+        """Decimal payout multiplier honouring the DECLARED kind exactly.
+
+        The integral-cent auto rule lives only in kind='auto' interpretation;
+        an explicitly declared kind must never be reinterpreted through it
+        (e.g. decimal odds of 2 are NOT a 2-cent contract).
+        """
+        if self.kind == "auto":
+            return _to_decimal(self.price)
+        p = self.implied_probability()
+        return 1.0 / p
 
     def fair_probability(self) -> tuple[float, dict]:
         """Devigged probability plus the audit trail of how it was derived.
@@ -235,8 +274,16 @@ def assess_edge(
     if not 0.0 < calibrated_prob < 1.0:
         raise ValueError("calibrated_prob must be in (0, 1)")
 
-    market_fair, audit = quote.fair_probability()
-    market_raw = quote.implied_probability()
+    try:
+        market_fair, audit = quote.fair_probability()
+        market_raw = quote.implied_probability()
+    except ValueError as e:
+        # Unparseable/out-of-policy quote (e.g. American odds of 50): the
+        # assessment stays inert rather than raising past the caller.
+        market_raw = float("nan")
+        market_fair = float("nan")
+        audit = {"devigged": False, "invalid_book": str(e),
+                 "note": "quote rejected before any fair probability"}
 
     # Fail safe on invalid books: an unsanitary two-sided book must not yield
     # an actionable assessment or positive Kelly stake. Keep the existing
@@ -268,8 +315,24 @@ def assess_edge(
             "devigged — edge may include up to the full vig as phantom"
         )
 
-    # Decimal payout available at the quoted price.
-    decimal = _to_decimal(quote.price)
+    # Decimal payout available at the quoted price — under its DECLARED kind.
+    try:
+        decimal = quote.payout_decimal()
+    except ValueError as e:
+        return EdgeAssessment(
+            claim_id=claim_id,
+            calibrated_prob=calibrated_prob,
+            quote=quote,
+            market_prob_raw=market_raw,
+            market_prob_fair=market_fair,
+            devig_audit={**audit, "invalid_book": str(e)},
+            edge=float("nan"),
+            kelly_fraction_full=0.0,
+            kelly_fraction_quarter=0.0,
+            ev_per_unit=float("nan"),
+            actionable=False,
+            notes=["invalid quoted price for payout conversion; sizing refused"],
+        )
     b = decimal - 1.0
     q = 1.0 - calibrated_prob
     # Kelly is only meaningful for a claim that beats the DEVIGGED market

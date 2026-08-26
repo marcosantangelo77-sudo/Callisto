@@ -248,9 +248,13 @@ def devig_market(
     # or a stale snapshot mix (free-lunch book); a hold at or above 50% means
     # the sides cannot belong to one live market. Neither may be devigged into
     # a precise-looking "fair" price.
-    if not math.isfinite(overround) or overround < -1e-9:
-        return {"error": f"Invalid book: overround {overround:.4f} is not positive "
-                         "(crossed asks or stale/mismatched sides)",
+    # A two-sided book must have STRICTLY positive hold. Zero hold means a
+    # no-vig (or self-consistent-arbitrage-free but unpriceable) book and a
+    # negative hold means crossed asks — neither may be devigged into an
+    # actionable fair probability under the executable two-sided quote policy.
+    if not math.isfinite(overround) or overround <= 1e-9:
+        return {"error": f"Invalid book: overround {overround:.6f} is not strictly "
+                         "positive (zero-hold or crossed book)",
                 "fair_probabilities": [], "overround": round(overround, 6)}
     if overround >= MAX_SANE_OVERROUND:
         return {"error": f"Invalid book: overround {overround:.4f} exceeds the "
@@ -302,8 +306,14 @@ def devig_american(
     Convenience: devig a two-way market from American odds.
     Returns same dict as devig_market plus labeled sides.
     """
-    dec_a = american_to_decimal(side_a_american)
-    dec_b = american_to_decimal(side_b_american)
+    try:
+        dec_a = american_to_decimal(side_a_american)
+        dec_b = american_to_decimal(side_b_american)
+    except (ValueError, TypeError) as e:
+        return {"error": f"Invalid American odds: {e}",
+                "fair_probabilities": [],
+                "side_a": {"american": side_a_american},
+                "side_b": {"american": side_b_american}}
     result = devig_market([dec_a, dec_b], method=method)
     if "error" in result:
         # Propagate the invalid-book audit instead of indexing into an
@@ -324,6 +334,21 @@ def devig_american(
     return result
 
 
+def _devig_pair_via_gate(dec_a: float, dec_b: float) -> tuple[float, float]:
+    """Route a two-way book through devig_market's market-sanity gate.
+
+    The convenience helpers must not be able to bypass the validation that
+    devig_market applies (positive finite overround within the sane ceiling);
+    previously they did, returning fair probabilities for crossed/invalid
+    paired odds like (-200, -200).
+    """
+    result = devig_market([dec_a, dec_b])
+    if "error" in result:
+        raise ValueError(result["error"])
+    fair = result["fair_probabilities"]
+    return fair[0], fair[1]
+
+
 def devig_pinnacle(
     pinnacle_odds_a: int,
     pinnacle_odds_b: int,
@@ -331,11 +356,13 @@ def devig_pinnacle(
     """
     Quick Pinnacle devig — returns (fair_prob_a, fair_prob_b).
     Uses multiplicative since Pinnacle vig is < 3%.
+
+    Raises ValueError on invalid American odds or an invalid book
+    (non-positive / excessive overround) instead of returning probabilities.
     """
     dec_a = american_to_decimal(pinnacle_odds_a)
     dec_b = american_to_decimal(pinnacle_odds_b)
-    fair = multiplicative_devig([dec_a, dec_b])
-    return fair[0], fair[1]
+    return _devig_pair_via_gate(dec_a, dec_b)
 
 
 def devig_retail(
@@ -345,8 +372,10 @@ def devig_retail(
     """
     Quick retail book (DK/Fanatics) devig — returns (fair_prob_a, fair_prob_b).
     Uses power method for FLB correction.
+
+    Raises ValueError on invalid American odds or an invalid book
+    (non-positive / excessive overround) instead of returning probabilities.
     """
     dec_a = american_to_decimal(retail_odds_a)
     dec_b = american_to_decimal(retail_odds_b)
-    fair, _ = power_devig([dec_a, dec_b])
-    return fair[0], fair[1]
+    return _devig_pair_via_gate(dec_a, dec_b)

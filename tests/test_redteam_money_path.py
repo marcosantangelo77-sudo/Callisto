@@ -280,3 +280,109 @@ def test_repaired_m6_clv_refuses_invalid_book_on_either_side():
     hold_bad = MarketQuote(price=0.60, counter_price=0.61, kind="probability")   # +0.21 hold
     assert clv_points(hold_bad, close_ok) is None
     assert clv_points(close_ok, hold_bad) is None
+
+
+# ---------------------------------------------------------------------------
+# Blocker 1 — zero/non-positive overround must be inert end-to-end
+# ---------------------------------------------------------------------------
+
+def test_blocker1_zero_overround_book_is_inert():
+    """A zero-hold book (.5/.5 probability) must never devig into an
+    actionable fair price or positive Kelly."""
+    r = devig_market([2.0, 2.0])          # implied sum exactly 1 -> hold 0
+    assert r.get("error"), f"zero-hold book accepted: {r}"
+    assert r["fair_probabilities"] == []
+
+    q = MarketQuote(price=0.5, counter_price=0.5, kind="probability")
+    a = assess_edge("t", 0.99, q)         # huge claimed edge must not matter
+    assert not a.actionable
+    assert a.kelly_fraction_full == 0.0
+    assert a.kelly_fraction_quarter == 0.0
+    assert not math.isfinite(a.market_prob_fair)
+    assert not math.isfinite(a.edge)
+    assert a.devig_audit.get("invalid_book")
+    # invalid audit state is distinct from a clean no-edge result
+    clean = assess_edge("t", 0.50, MarketQuote(price=-110, counter_price=-110,
+                                               kind="american"))
+    assert clean.devig_audit.get("devigged") and not clean.actionable
+
+
+def test_blocker2_invalid_american_quotes_never_coerced():
+    """kind='american' values are validated as American odds; out-of-policy
+    (50, 100) and fractional (100.9, -110) quotes are inert, never trusted."""
+    for price, ctr in [(50, 100), (100.9, -110), (0, -110), (True, -110),
+                       (float("nan"), -110)]:
+        q = MarketQuote(price=price, counter_price=ctr, kind="american")
+        with pytest.raises(ValueError):
+            q.implied_probability()
+        a = assess_edge("t", 0.9, q)
+        assert not a.actionable
+        assert a.kelly_fraction_full == 0.0
+        assert a.devig_audit.get("invalid_book")
+
+
+def test_blocker2_healthy_american_still_works():
+    q = MarketQuote(price=-105, counter_price=-105, kind="american")
+    f, aud = q.fair_probability()
+    assert aud.get("devigged") and abs(f - 0.5) < 0.01
+
+
+def test_blocker3_convenience_helpers_route_through_the_gate():
+    """devig_pinnacle / devig_retail cannot bypass the market-sanity gate:
+    paired favorite odds (-200, -200) have a 33% hold and must be rejected."""
+    from tools.devig import devig_pinnacle, devig_retail
+    for fn in (devig_pinnacle, devig_retail):
+        with pytest.raises(ValueError):
+            fn(-200, -200)
+        # Healthy controls still devig.
+        a, b = fn(-110, -110)
+        assert abs(a + b - 1.0) < 1e-6
+
+
+def test_blocker4_explicit_decimal_kind_is_honoured_by_payout():
+    """Decimal odds 2/1.98 is a real book (~0.5% hold). assess_edge must use
+    payout b=1.0 (decimal 2), NOT reinterpret '2' as a 2-cent contract."""
+    q = MarketQuote(2, 1.98, kind="decimal")
+    f, aud = q.fair_probability()
+    assert aud.get("devigged")
+    assert abs(f - 0.497487) < 1e-3
+
+    a = assess_edge("claim-d", 0.55, q)
+    assert a.actionable
+    # b = decimal - 1 = 1.0 -> Kelly = edge/b = ~0.0525 capped path, EV = 0.10
+    assert a.ev_per_unit == pytest.approx(0.55 * 1.0 - 0.45)
+    expected_kelly = min((1.0 * 0.55 - 0.45) / 1.0, MAX_FRACTION_FULL_KELLY)
+    assert a.kelly_fraction_full == pytest.approx(expected_kelly)
+    assert a.kelly_fraction_full < 0.15     # nowhere near the bogus maximum
+
+
+def test_blocker4_contract_cents_kind_keeps_cent_payout():
+    """Symmetric control: an explicit cent-quoted book converts its payout in
+    cents (47 -> decimal 1/0.47), preserving prior behavior."""
+    q = MarketQuote(54, 54, kind="contract_cents")
+    a = assess_edge("claim-c", 0.60, q)
+    dec = 1.0 / 0.54
+    assert a.ev_per_unit == pytest.approx(0.60 * (dec - 1.0) - 0.40)
+
+
+def test_all_kinds_healthy_controls_assess_end_to_end():
+    """Every supported convention keeps working through assess_edge."""
+    quotes = [
+        MarketQuote(price=-110, counter_price=-110, kind="american"),
+        MarketQuote(price=1.95, counter_price=1.95, kind="decimal"),
+        MarketQuote(price=0.52, counter_price=0.52, kind="probability"),
+        MarketQuote(price=53, counter_price=53, kind="contract_cents"),
+        MarketQuote(price=47, counter_price=54),   # auto integral contract
+    ]
+    for q in quotes:
+        a = assess_edge(f"ok-{q.kind}", 0.60, q)
+        assert a.devig_audit.get("devigged"), (q.kind, a.summary())
+        assert 0 < a.market_prob_fair < 1
+        assert a.edge > 0 and a.actionable
+        assert 0 <= a.kelly_fraction_full <= MAX_FRACTION_FULL_KELLY
+
+
+def test_explicit_probability_out_of_range_raises_and_is_inert():
+    q = MarketQuote(price=1.5, counter_price=0.7, kind="probability")
+    with pytest.raises(ValueError):
+        q.implied_probability()
