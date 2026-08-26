@@ -1416,6 +1416,12 @@ class ResearchLoop:
         self._promotions = 0
         self._rejections = 0
 
+        # Phase-failure ledger — every _phase_* exception/timeout is recorded
+        # here so a "healthy-looking" loop can't silently swallow failures.
+        # Capped at 50 entries; oldest dropped when full.
+        self._phase_failures: list[dict] = []
+        self._PHASE_FAILURES_MAX = 50
+
         # Self-diagnostics — track already-escalated issues to avoid spam
         # Capped at 500 entries; oldest keys evicted when full.
         self._diagnostic_issues: set[str] = set()
@@ -2442,6 +2448,32 @@ class ResearchLoop:
                 logger.warning(f"Quant scan loop iteration failed: {e}")
             await asyncio.sleep(interval)
 
+    def _record_phase_failure(
+        self,
+        phase: str,
+        kind: str,
+        exc: BaseException | None = None,
+    ) -> None:
+        """Record a phase failure (exception or timeout) in the ledger.
+
+        Recording is non-fatal: the loop continues after a phase failure, but
+        the failure becomes visible via get_status()["phase_failures"].
+        """
+        try:
+            self._phase_failures.append(
+                {
+                    "cycle": self._cycles,
+                    "phase": phase,
+                    "kind": kind,
+                    "error": repr(exc)[:300] if exc is not None else "timeout",
+                    "ts": time.time(),
+                }
+            )
+            while len(self._phase_failures) > self._PHASE_FAILURES_MAX:
+                self._phase_failures.pop(0)
+        except Exception:
+            logger.debug("Failed to record phase failure", exc_info=True)
+
     async def _loop(self) -> None:
         """Main research cycle."""
         # Brief delay to let other systems start
@@ -2477,16 +2509,20 @@ class ResearchLoop:
                     await asyncio.wait_for(self._drain_deferred_queue(), timeout=120)
                 except asyncio.TimeoutError:
                     logger.warning("Queue drain timed out after 120s — skipping")
+                    self._record_phase_failure("queue_drain", "timeout")
                 except Exception as e:
                     logger.warning(f"Queue drain failed (non-fatal): {e}")
+                    self._record_phase_failure("queue_drain", "exception", e)
 
                 # Phase 0: Self-repair (detect, fix, verify, record)
                 try:
                     await asyncio.wait_for(self._phase_self_repair(), timeout=120)
                 except asyncio.TimeoutError:
                     logger.warning("Phase self_repair timed out after 120s — skipping")
+                    self._record_phase_failure("self_repair", "timeout")
                 except Exception as e:
                     logger.warning(f"Self-repair failed (non-fatal): {e}")
+                    self._record_phase_failure("self_repair", "exception", e)
 
                 if not self._running:
                     break
@@ -2496,8 +2532,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_self_diagnose(), timeout=120)
                 except asyncio.TimeoutError:
                     logger.warning("Phase self_diagnose timed out after 120s — skipping")
+                    self._record_phase_failure("self_diagnose", "timeout")
                 except Exception as e:
                     logger.warning(f"Self-diagnose failed (non-fatal): {e}")
+                    self._record_phase_failure("self_diagnose", "exception", e)
 
                 if not self._running:
                     break
@@ -2507,8 +2545,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_refresh_signals(), timeout=120)
                 except asyncio.TimeoutError:
                     logger.warning("Phase refresh_signals timed out after 120s — skipping")
+                    self._record_phase_failure("refresh_signals", "timeout")
                 except Exception as e:
                     logger.warning(f"Signal refresh failed (non-fatal): {e}")
+                    self._record_phase_failure("refresh_signals", "exception", e)
 
                 if not self._running:
                     break
@@ -2518,8 +2558,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_backtest(), timeout=600)
                 except asyncio.TimeoutError:
                     logger.warning("Phase backtest timed out after 600s — skipping")
+                    self._record_phase_failure("backtest", "timeout")
                 except Exception as e:
                     logger.warning(f"Phase backtest failed (non-fatal): {e}")
+                    self._record_phase_failure("backtest", "exception", e)
 
                 if not self._running:
                     break
@@ -2529,6 +2571,7 @@ class ResearchLoop:
                     await self._phase_validate()
                 except Exception as e:
                     logger.warning(f"Phase validate failed (non-fatal): {e}")
+                    self._record_phase_failure("validate", "exception", e)
 
                 if not self._running:
                     break
@@ -2538,8 +2581,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_generate_hypotheses(), timeout=300)
                 except asyncio.TimeoutError:
                     logger.warning("Phase generate_hypotheses timed out after 300s — skipping")
+                    self._record_phase_failure("generate_hypotheses", "timeout")
                 except Exception as e:
                     logger.warning(f"Phase generate_hypotheses failed (non-fatal): {e}")
+                    self._record_phase_failure("generate_hypotheses", "exception", e)
 
                 if not self._running:
                     break
@@ -2552,8 +2597,10 @@ class ResearchLoop:
                         )
                     except asyncio.TimeoutError:
                         logger.warning("Phase injury_prop_hypotheses timed out — skipping")
+                        self._record_phase_failure("injury_prop_hypotheses", "timeout")
                     except Exception as e:
                         logger.warning(f"Injury prop hypothesis phase failed (non-fatal): {e}")
+                        self._record_phase_failure("injury_prop_hypotheses", "exception", e)
 
                 if not self._running:
                     break
@@ -2563,8 +2610,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_collect_data(), timeout=120)
                 except asyncio.TimeoutError:
                     logger.warning("Phase collect_data timed out after 120s — skipping")
+                    self._record_phase_failure("collect_data", "timeout")
                 except Exception as e:
                     logger.warning(f"Data collection failed (non-fatal): {e}")
+                    self._record_phase_failure("collect_data", "exception", e)
 
                 if not self._running:
                     break
@@ -2574,8 +2623,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_embed_data(), timeout=120)
                 except asyncio.TimeoutError:
                     logger.warning("Phase embed_data timed out after 120s — skipping")
+                    self._record_phase_failure("embed_data", "timeout")
                 except Exception as e:
                     logger.warning(f"Embedding failed (non-fatal): {e}")
+                    self._record_phase_failure("embed_data", "exception", e)
 
                 if not self._running:
                     break
@@ -2585,8 +2636,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_evaluate(), timeout=600)
                 except asyncio.TimeoutError:
                     logger.warning("Phase evaluate timed out after 600s — skipping")
+                    self._record_phase_failure("evaluate", "timeout")
                 except Exception as e:
                     logger.warning(f"Phase evaluate failed (non-fatal): {e}")
+                    self._record_phase_failure("evaluate", "exception", e)
 
                 if not self._running:
                     break
@@ -2596,8 +2649,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_interpret_backtests(), timeout=300)
                 except asyncio.TimeoutError:
                     logger.warning("Phase interpret_backtests timed out after 300s — skipping")
+                    self._record_phase_failure("interpret_backtests", "timeout")
                 except Exception as e:
                     logger.warning(f"Phase interpret_backtests failed (non-fatal): {e}")
+                    self._record_phase_failure("interpret_backtests", "exception", e)
 
                 if not self._running:
                     break
@@ -2609,8 +2664,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_paper_trade(), timeout=300)
                 except asyncio.TimeoutError:
                     logger.warning("Phase paper_trade timed out after 300s — skipping")
+                    self._record_phase_failure("paper_trade", "timeout")
                 except Exception as e:
                     logger.warning(f"Phase paper_trade failed (non-fatal): {e}")
+                    self._record_phase_failure("paper_trade", "exception", e)
 
                 if not self._running:
                     break
@@ -2620,8 +2677,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_live_execute(), timeout=120)
                 except asyncio.TimeoutError:
                     logger.warning("Phase live_execute timed out after 120s — skipping")
+                    self._record_phase_failure("live_execute", "timeout")
                 except Exception as e:
                     logger.warning(f"Phase live_execute failed (non-fatal): {e}")
+                    self._record_phase_failure("live_execute", "exception", e)
 
                 if not self._running:
                     break
@@ -2634,8 +2693,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_review_live(), timeout=120)
                 except asyncio.TimeoutError:
                     logger.warning("Phase review_live timed out after 120s — skipping")
+                    self._record_phase_failure("review_live", "timeout")
                 except Exception as e:
                     logger.warning(f"Phase review_live failed (non-fatal): {e}")
+                    self._record_phase_failure("review_live", "exception", e)
 
                 if not self._running:
                     break
@@ -2645,8 +2706,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_narrative_edges(), timeout=120)
                 except asyncio.TimeoutError:
                     logger.warning("Phase narrative_edges timed out after 120s — skipping")
+                    self._record_phase_failure("narrative_edges", "timeout")
                 except Exception as e:
                     logger.warning(f"Phase narrative_edges failed (non-fatal): {e}")
+                    self._record_phase_failure("narrative_edges", "exception", e)
 
                 if not self._running:
                     break
@@ -2656,8 +2719,10 @@ class ResearchLoop:
                     await asyncio.wait_for(self._phase_claude_deep_work(), timeout=300)
                 except asyncio.TimeoutError:
                     logger.warning("Phase claude_deep_work timed out after 300s — skipping")
+                    self._record_phase_failure("claude_deep_work", "timeout")
                 except Exception as e:
                     logger.warning(f"Phase claude_deep_work failed (non-fatal): {e}")
+                    self._record_phase_failure("claude_deep_work", "exception", e)
 
                 if not self._running:
                     break
@@ -2678,8 +2743,10 @@ class ResearchLoop:
                         await asyncio.wait_for(self._phase_system_improvement(), timeout=120)
                     except asyncio.TimeoutError:
                         logger.warning("Phase system_improvement timed out after 120s — skipping")
+                        self._record_phase_failure("system_improvement", "timeout")
                     except Exception as e:
                         logger.warning(f"Phase system_improvement failed (non-fatal): {e}")
+                        self._record_phase_failure("system_improvement", "exception", e)
 
                     if not self._running:
                         break
@@ -2689,8 +2756,10 @@ class ResearchLoop:
                         await asyncio.wait_for(self._phase_integrity_check(), timeout=120)
                     except asyncio.TimeoutError:
                         logger.warning("Phase integrity_check timed out after 120s — skipping")
+                        self._record_phase_failure("integrity_check", "timeout")
                     except Exception as e:
                         logger.warning(f"Phase integrity_check failed (non-fatal): {e}")
+                        self._record_phase_failure("integrity_check", "exception", e)
 
                     # Phase 10: System watchdog (every 13 cycles — coprime with regime/improvement)
                     if self._cycles % 13 == 0 and self._cycles > 0:
@@ -2698,8 +2767,10 @@ class ResearchLoop:
                             await asyncio.wait_for(self._phase_system_watchdog(), timeout=60)
                         except asyncio.TimeoutError:
                             logger.warning("Phase system_watchdog timed out")
+                            self._record_phase_failure("system_watchdog", "timeout")
                         except Exception as e:
                             logger.warning(f"Phase system_watchdog failed: {e}")
+                            self._record_phase_failure("system_watchdog", "exception", e)
 
                     if not self._running:
                         break
@@ -2709,8 +2780,10 @@ class ResearchLoop:
                         await asyncio.wait_for(self._phase_granger_analysis(), timeout=300)
                     except asyncio.TimeoutError:
                         logger.warning("Phase granger_analysis timed out after 300s — skipping")
+                        self._record_phase_failure("granger_analysis", "timeout")
                     except Exception as e:
                         logger.warning(f"Phase granger_analysis failed (non-fatal): {e}")
+                        self._record_phase_failure("granger_analysis", "exception", e)
 
                     if not self._running:
                         break
@@ -2720,24 +2793,30 @@ class ResearchLoop:
                         await asyncio.wait_for(self._phase_regime_analysis(), timeout=180)
                     except asyncio.TimeoutError:
                         logger.warning("Phase regime_analysis timed out after 180s — skipping")
+                        self._record_phase_failure("regime_analysis", "timeout")
                     except Exception as e:
                         logger.warning(f"Phase regime_analysis failed (non-fatal): {e}")
+                        self._record_phase_failure("regime_analysis", "exception", e)
 
                     # Phase 12: Knowledge wiki compilation (every 7 cycles)
                     try:
                         await asyncio.wait_for(self._phase_knowledge_compile(), timeout=180)
                     except asyncio.TimeoutError:
                         logger.warning("Phase knowledge_compile timed out after 180s — skipping")
+                        self._record_phase_failure("knowledge_compile", "timeout")
                     except Exception as e:
                         logger.warning(f"Phase knowledge_compile failed (non-fatal): {e}")
+                        self._record_phase_failure("knowledge_compile", "exception", e)
 
                     # Phase 13: Knowledge wiki lint (every 11 cycles — coprime with compile)
                     try:
                         await asyncio.wait_for(self._phase_knowledge_lint(), timeout=120)
                     except asyncio.TimeoutError:
                         logger.warning("Phase knowledge_lint timed out after 120s — skipping")
+                        self._record_phase_failure("knowledge_lint", "timeout")
                     except Exception as e:
                         logger.warning(f"Phase knowledge_lint failed (non-fatal): {e}")
+                        self._record_phase_failure("knowledge_lint", "exception", e)
 
                 # ── Progress tracking: detect spinning ──
                 await self._check_progress()
@@ -3191,18 +3270,46 @@ class ResearchLoop:
             logger.info("DIAG: all pipeline health checks passed")
 
     async def _phase_refresh_signals(self) -> None:
-        """Retroactively update signal_generated when thresholds change.
+        """Retroactive signal refresh — WRITE PATH GATED, OFF BY DEFAULT.
 
-        Claude deep work can lower edge_threshold on hypotheses AFTER backtests
-        have already run and stored signal_generated=0. This phase catches those
-        events and upgrades them to signal=1 so the pipeline sees them.
+        This phase used to UPDATE backtest_events.signal_generated = 1 whenever
+        edge >= threshold, which let a later threshold drop retroactively
+        rewrite history (laundered evidence). By default this phase is now
+        DIAGNOSE-ONLY: it counts rows that *would* have been upgraded (SELECT,
+        no UPDATE) and returns without writing.
+
+        The write path is operator-explicit only:
+            CALLISTO_ALLOW_SIGNAL_REFRESH=1
+        enables the original retroactive UPDATE (backtest_events +
+        backtest_runs.signals_generated + stats recalc).
         """
         import aiosqlite
 
         db_path = self.backtest_engine.db_path
+        allow_write = os.getenv("CALLISTO_ALLOW_SIGNAL_REFRESH") == "1"
         try:
             async with aiosqlite.connect(db_path) as db:
                 await db.execute("PRAGMA busy_timeout = 60000")
+                # Diagnose-only: count events where edge now exceeds threshold
+                # but signal=0. Read-only — no evidence rewriting.
+                count_row = await db.execute(
+                    """SELECT COUNT(*) FROM backtest_events be
+                       JOIN hypotheses h ON be.hypothesis_id = h.hypothesis_id
+                       WHERE be.edge >= h.edge_threshold AND be.edge > 0
+                       AND be.signal_generated = 0"""
+                )
+                row = await count_row.fetchone()
+                would_upgrade = row[0] if row else 0
+                if not allow_write:
+                    if would_upgrade:
+                        logger.info(
+                            f"Signal refresh: {would_upgrade} events WOULD be "
+                            "upgraded to signal=1 (write gated; set "
+                            "CALLISTO_ALLOW_SIGNAL_REFRESH=1 to enable)"
+                        )
+                    return
+
+                # ── Gated write path (operator-explicit) ──
                 # Find events where edge now exceeds threshold but signal=0
                 updated = await db.execute(
                     """UPDATE backtest_events SET signal_generated = 1
@@ -8115,6 +8222,10 @@ class ResearchLoop:
             "claude_escalations": self._claude_escalations,
             "promotions": self._promotions,
             "rejections": self._rejections,
+            # Phase-failure ledger: last 10 failures + total count so a
+            # "healthy-looking" loop can't hide swallowed phase errors.
+            "phase_failures": list(self._phase_failures)[-10:],
+            "phase_failure_count": len(self._phase_failures),
             # R2: loop-quality telemetry — calibration trace + per-phase
             # task-class map, consumed by R1's retrodiction harness.
             "calibration": self._calibration_trace.summary(),
