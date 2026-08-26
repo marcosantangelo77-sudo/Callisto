@@ -6,8 +6,7 @@ via Telegram. Marco approves, places the bet manually on DK/Fanatics, and
 replies with the confirmation. Callisto tracks every transition in the
 ``orders`` table with an append-only ``state_history_json`` audit trail.
 
-FSM (enforced by :data:`ALLOWED_TRANSITIONS`). See also
-:data:`ALLOWED_TRANSITIONS` for the authoritative edge list. States:
+FSM (enforced by :data:`ALLOWED_TRANSITIONS`). States:
 
     pending_approval -> approved -> submitted -> filled -> settled_{win,loss,push}
     pending_approval -> rejected / cancelled / expired
@@ -24,6 +23,12 @@ Module integrates with:
   * ``tools.clv_tracker`` (``bets`` table) — kept in sync for CLV/CLV backfill
   * ``tools.bet_executor`` (``executor_log``) — still written during transition
   * ``game_results`` table — settlement reconciler maps -> settled_{win|loss|push}
+
+Implementation note
+-------------------
+The building blocks (states/FSM, ULID, Order model, transition engine,
+bets sync) live in :mod:`tools.ordermgr`. This module keeps the manager +
+public API surface for backwards compatibility.
 """
 
 from __future__ import annotations
@@ -33,152 +38,75 @@ import contextlib
 import json
 import logging
 import os
-import secrets
-import time
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import aiosqlite
 
-logger = logging.getLogger("callisto.orders")
+from tools.ordermgr.bets_sync import sync_bets_on_fill, sync_bets_on_settle
+from tools.ordermgr.constants import (
+    CREATE_ORDERS_TABLE_SQL,
+    DB_PATH,
+    INSERT_ORDER_SQL,
+    OPEN_STATES_SQL,
+    ORDER_EXPIRY_MIN,
+    ORDERS_INDEXES_SQL,
+)
+from tools.ordermgr.models import Order, format_approval_message
+from tools.ordermgr.states import (
+    ALLOWED_TRANSITIONS,
+    APPROVED,
+    CANCELLED,
+    EXPIRED,
+    FILLED,
+    InvalidTransition,
+    OPEN_STATES,
+    OrderNotFound,
+    PENDING_APPROVAL,
+    REJECTED,
+    SETTLED_LOSS,
+    SETTLED_PUSH,
+    SETTLED_WIN,
+    SUBMITTED,
+    TERMINAL_STATES,
+    canonical_settle_result,
+)
+from tools.ordermgr.transitions import apply_transition, load_order_row
+from tools.ordermgr.ulid import new_ulid
 
-DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
-
-ORDER_EXPIRY_MIN = int(os.getenv("CALLISTO_ORDER_EXPIRY_MIN", "10"))
 # Backwards-compat toggle. 1 (default here) routes through order_manager; 0
 # falls back to the legacy Playwright path in bet_executor.
 USE_ORDER_MANAGER = os.getenv("CALLISTO_USE_ORDER_MANAGER", "1") == "1"
 
+__all__ = [
+    "ALLOWED_TRANSITIONS",
+    "APPROVED",
+    "CANCELLED",
+    "DB_PATH",
+    "EXPIRED",
+    "FILLED",
+    "InvalidTransition",
+    "OPEN_STATES",
+    "ORDER_EXPIRY_MIN",
+    "Order",
+    "OrderManager",
+    "OrderNotFound",
+    "PENDING_APPROVAL",
+    "REJECTED",
+    "SETTLED_LOSS",
+    "SETTLED_PUSH",
+    "SETTLED_WIN",
+    "SUBMITTED",
+    "TERMINAL_STATES",
+    "USE_ORDER_MANAGER",
+    "detect_voided_orders",
+    "get_manager",
+    "new_ulid",
+    "reconcile_filled_orders",
+    "reset_manager",
+]
 
-# --- States ----------------------------------------------------------------
-
-PENDING_APPROVAL = "pending_approval"
-APPROVED = "approved"
-SUBMITTED = "submitted"
-FILLED = "filled"
-REJECTED = "rejected"
-CANCELLED = "cancelled"
-SETTLED_WIN = "settled_win"
-SETTLED_LOSS = "settled_loss"
-SETTLED_PUSH = "settled_push"
-EXPIRED = "expired"
-
-OPEN_STATES = frozenset({PENDING_APPROVAL, APPROVED, SUBMITTED, FILLED})
-TERMINAL_STATES = frozenset(
-    {REJECTED, CANCELLED, EXPIRED, SETTLED_WIN, SETTLED_LOSS, SETTLED_PUSH}
-)
-
-ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
-    PENDING_APPROVAL: frozenset({APPROVED, REJECTED, EXPIRED, CANCELLED}),
-    APPROVED: frozenset({SUBMITTED, CANCELLED, REJECTED}),
-    SUBMITTED: frozenset({FILLED, CANCELLED, REJECTED}),
-    FILLED: frozenset({SETTLED_WIN, SETTLED_LOSS, SETTLED_PUSH, CANCELLED}),
-    REJECTED: frozenset(),
-    CANCELLED: frozenset(),
-    EXPIRED: frozenset(),
-    SETTLED_WIN: frozenset(),
-    SETTLED_LOSS: frozenset(),
-    SETTLED_PUSH: frozenset(),
-}
-
-
-class InvalidTransition(ValueError):
-    """Attempted FSM transition is not in :data:`ALLOWED_TRANSITIONS`."""
-
-
-class OrderNotFound(LookupError):
-    """No row in ``orders`` for the given order_id."""
-
-
-# --- ULID --------------------------------------------------------------------
-
-_CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-
-
-def new_ulid() -> str:
-    """Monotonic-ish ULID implementation (no external dep).
-
-    48 bits ms timestamp + 80 bits randomness, Crockford base32. Good enough
-    for order_id — collisions are astronomically unlikely within one ms and
-    the timestamp prefix means default index order = creation order.
-    """
-    ts_ms = int(time.time() * 1000) & ((1 << 48) - 1)
-    rnd = secrets.randbits(80)
-    v = (ts_ms << 80) | rnd
-    out = [""] * 26
-    for i in range(25, -1, -1):
-        out[i] = _CROCKFORD[v & 0x1F]
-        v >>= 5
-    return "".join(out)
-
-
-# --- Dataclass ---------------------------------------------------------------
-
-
-@dataclass
-class Order:
-    order_id: str
-    hypothesis_id: str
-    signal_id: Optional[str]
-    odds_snapshot_id: Optional[int]
-    sport: Optional[str]
-    event_id: Optional[str]
-    market: Optional[str]
-    side: Optional[str]
-    price_american: Optional[int]
-    stake_units: Optional[float]
-    stake_dollars: Optional[float]
-    state: str
-    state_history: list[dict]
-    book: Optional[str]
-    placed_at: Optional[str]
-    settled_at: Optional[str]
-    pnl_dollars: Optional[float]
-    telegram_msg_id: Optional[str]
-    expires_at: Optional[str]
-    created_at: Optional[str]
-    bet_id: Optional[int] = None
-    edge: Optional[float] = None
-    fair_prob: Optional[float] = None
-    game_description: Optional[str] = None
-    notes: Optional[str] = None
-
-    @classmethod
-    def from_row(cls, row: aiosqlite.Row) -> "Order":
-        d = dict(row)
-        hist_raw = d.get("state_history_json") or "[]"
-        try:
-            hist = json.loads(hist_raw)
-        except Exception:
-            hist = []
-        return cls(
-            order_id=d["order_id"],
-            hypothesis_id=d["hypothesis_id"],
-            signal_id=d.get("signal_id"),
-            odds_snapshot_id=d.get("odds_snapshot_id"),
-            sport=d.get("sport"),
-            event_id=d.get("event_id"),
-            market=d.get("market"),
-            side=d.get("side"),
-            price_american=d.get("price_american"),
-            stake_units=d.get("stake_units"),
-            stake_dollars=d.get("stake_dollars"),
-            state=d["state"],
-            state_history=hist,
-            book=d.get("book"),
-            placed_at=d.get("placed_at"),
-            settled_at=d.get("settled_at"),
-            pnl_dollars=d.get("pnl_dollars"),
-            telegram_msg_id=d.get("telegram_msg_id"),
-            expires_at=d.get("expires_at"),
-            created_at=d.get("created_at"),
-            bet_id=d.get("bet_id"),
-            edge=d.get("edge"),
-            fair_prob=d.get("fair_prob"),
-            game_description=d.get("game_description"),
-            notes=d.get("notes"),
-        )
+logger = logging.getLogger("callisto.orders")
 
 
 # --- Manager -----------------------------------------------------------------
@@ -217,51 +145,9 @@ class OrderManager:
             # fresh DB that hasn't run migrations yet (tests). Idempotent
             # with migration 007 — the CREATE TABLE IF NOT EXISTS is a
             # no-op when the migration framework already applied.
-            await self._db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS orders (
-                    order_id TEXT PRIMARY KEY,
-                    hypothesis_id TEXT NOT NULL,
-                    signal_id TEXT,
-                    odds_snapshot_id INTEGER,
-                    sport TEXT,
-                    event_id TEXT,
-                    market TEXT,
-                    side TEXT,
-                    price_american INTEGER,
-                    stake_units REAL,
-                    stake_dollars REAL,
-                    state TEXT NOT NULL,
-                    state_history_json TEXT NOT NULL DEFAULT '[]',
-                    book TEXT,
-                    placed_at TIMESTAMP,
-                    settled_at TIMESTAMP,
-                    pnl_dollars REAL,
-                    telegram_msg_id TEXT,
-                    expires_at TIMESTAMP,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    bet_id INTEGER,
-                    edge REAL,
-                    fair_prob REAL,
-                    game_description TEXT,
-                    notes TEXT
-                )
-                """
-            )
-            await self._db.execute(
-                "CREATE INDEX IF NOT EXISTS idx_orders_state "
-                "ON orders(state, created_at DESC)"
-            )
-            await self._db.execute(
-                "CREATE INDEX IF NOT EXISTS idx_orders_hypothesis "
-                "ON orders(hypothesis_id, created_at DESC)"
-            )
-            await self._db.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_signal_open "
-                "ON orders(hypothesis_id, signal_id) "
-                "WHERE signal_id IS NOT NULL "
-                "AND state IN ('pending_approval','approved','submitted','filled')"
-            )
+            await self._db.execute(CREATE_ORDERS_TABLE_SQL)
+            for idx_sql in ORDERS_INDEXES_SQL:
+                await self._db.execute(idx_sql)
             await self._db.commit()
             logger.info("OrderManager initialized")
 
@@ -334,22 +220,14 @@ class OrderManager:
 
         # Idempotency check: if an open order already exists for this
         # (hypothesis, signal), return it.
-        if signal_id is not None:
-            cursor = await self._db.execute(
-                "SELECT order_id FROM orders "
-                "WHERE hypothesis_id = ? AND signal_id = ? "
-                "AND state IN (?, ?, ?, ?)",
-                (hypothesis_id, signal_id,
-                 PENDING_APPROVAL, APPROVED, SUBMITTED, FILLED),
+        existing = await self._find_open_order(hypothesis_id, signal_id)
+        if existing:
+            logger.info(
+                f"Idempotent submit_order: returning existing "
+                f"order_id={existing} for hypothesis={hypothesis_id} "
+                f"signal_id={signal_id}"
             )
-            existing = await cursor.fetchone()
-            if existing:
-                logger.info(
-                    f"Idempotent submit_order: returning existing "
-                    f"order_id={existing['order_id']} for hypothesis={hypothesis_id} "
-                    f"signal_id={signal_id}"
-                )
-                return existing["order_id"]
+            return existing
 
         now = datetime.now(timezone.utc)
         order_id = new_ulid()
@@ -363,15 +241,7 @@ class OrderManager:
 
         try:
             await self._db.execute(
-                """
-                INSERT INTO orders (
-                    order_id, hypothesis_id, signal_id, odds_snapshot_id,
-                    sport, event_id, market, side, price_american,
-                    stake_units, stake_dollars, state, state_history_json,
-                    book, expires_at, created_at, edge, fair_prob,
-                    game_description
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                INSERT_ORDER_SQL,
                 (
                     order_id, hypothesis_id, signal_id, odds_snapshot_id,
                     signal.get("sport"), signal.get("event_id"),
@@ -391,34 +261,22 @@ class OrderManager:
             logger.info(f"IntegrityError on insert — re-reading: {e}")
             await self._db.rollback()
             if signal_id is not None:
-                cursor = await self._db.execute(
-                    "SELECT order_id FROM orders "
-                    "WHERE hypothesis_id = ? AND signal_id = ? "
-                    "AND state IN (?, ?, ?, ?)",
-                    (hypothesis_id, signal_id,
-                     PENDING_APPROVAL, APPROVED, SUBMITTED, FILLED),
-                )
-                existing = await cursor.fetchone()
+                existing = await self._find_open_order(hypothesis_id, signal_id)
                 if existing:
-                    return existing["order_id"]
+                    return existing
             raise
 
         # Fire the approval request — best effort, don't block on Telegram.
-        price = signal.get("price_american") or signal.get("book_odds_american") or 0
-        price_str = f"+{price}" if price > 0 else str(price)
-        edge_pct = (edge or 0) * 100
-        clv_str = f", CLV_prior={clv_prior * 100:+.1f}%" if clv_prior is not None else ""
-        msg = (
-            f"<b>Order #{order_id[-6:]}</b>\n"
-            f"{signal.get('sport', '?').upper()} "
-            f"{signal.get('game_description') or signal.get('event_id', '?')}\n"
-            f"{signal.get('side', '?')} {price_str} @ {book}\n"
-            f"Stake: {stake_units:.2f}u (${stake_dollars:.0f})\n"
-            f"hyp={hypothesis_id}{clv_str}, edge={edge_pct:.1f}%\n"
-            f"\n"
-            f"/approve {order_id}\n"
-            f"/reject {order_id}\n"
-            f"<i>Expires in {ORDER_EXPIRY_MIN} min.</i>"
+        msg = format_approval_message(
+            order_id=order_id,
+            signal=signal,
+            book=book,
+            stake_units=stake_units,
+            stake_dollars=stake_dollars,
+            hypothesis_id=hypothesis_id,
+            edge=edge,
+            clv_prior=clv_prior,
+            expiry_min=ORDER_EXPIRY_MIN,
         )
         tg_msg_id = await self._send_telegram(msg)
         if tg_msg_id:
@@ -435,14 +293,24 @@ class OrderManager:
         )
         return order_id
 
-    async def get_order(self, order_id: str) -> Order:
+    async def _find_open_order(
+        self, hypothesis_id: str, signal_id: Optional[str]
+    ) -> Optional[str]:
+        """Return the open order_id for (hypothesis, signal), if any."""
         assert self._db is not None
+        if signal_id is None:
+            return None
         cursor = await self._db.execute(
-            "SELECT * FROM orders WHERE order_id = ?", (order_id,)
+            OPEN_STATES_SQL,
+            (hypothesis_id, signal_id,
+             PENDING_APPROVAL, APPROVED, SUBMITTED, FILLED),
         )
         row = await cursor.fetchone()
-        if not row:
-            raise OrderNotFound(order_id)
+        return row["order_id"] if row else None
+
+    async def get_order(self, order_id: str) -> Order:
+        assert self._db is not None
+        row = await load_order_row(self._db, order_id)
         return Order.from_row(row)
 
     async def list_orders(
@@ -511,13 +379,7 @@ class OrderManager:
         """Mark a filled order as settled. ``result`` is one of
         ``win``/``loss``/``push`` (short form) or ``settled_win`` etc.
         """
-        canonical = {
-            "win": SETTLED_WIN, "won": SETTLED_WIN, "settled_win": SETTLED_WIN,
-            "loss": SETTLED_LOSS, "lost": SETTLED_LOSS, "settled_loss": SETTLED_LOSS,
-            "push": SETTLED_PUSH, "settled_push": SETTLED_PUSH,
-        }.get(result.lower())
-        if not canonical:
-            raise ValueError(f"Unknown settle result: {result!r}")
+        canonical = canonical_settle_result(result)
         now = datetime.now(timezone.utc).isoformat()
         order = await self._transition(
             order_id, canonical, reason=reason,
@@ -563,141 +425,22 @@ class OrderManager:
         **extra: Any,
     ) -> Order:
         assert self._db is not None
-        cursor = await self._db.execute(
-            "SELECT * FROM orders WHERE order_id = ?", (order_id,)
+        order = await apply_transition(
+            self._db, order_id, new_state, reason=reason, **extra,
         )
-        row = await cursor.fetchone()
-        if not row:
-            raise OrderNotFound(order_id)
-        current_state = row["state"]
-        allowed = ALLOWED_TRANSITIONS.get(current_state, frozenset())
-        if new_state not in allowed:
-            raise InvalidTransition(
-                f"Cannot transition {order_id} from {current_state} to {new_state}; "
-                f"allowed: {sorted(allowed)}"
-            )
-
-        # Append history.
-        try:
-            history = json.loads(row["state_history_json"] or "[]")
-        except Exception:
-            history = []
-        history.append({
-            "state": new_state,
-            "at": datetime.now(timezone.utc).isoformat(),
-            "reason": reason,
-            **{k: v for k, v in extra.items() if k not in ("settled_at", "placed_at")},
-        })
-
-        # Build update clause. Only a whitelisted set of columns is writable
-        # via a transition; silently drop anything else to avoid SQL
-        # injection via ``reason``/``extra``.
-        WRITABLE = {
-            "placed_at", "settled_at", "pnl_dollars", "price_american",
-            "telegram_msg_id", "bet_id", "notes",
-        }
-        set_parts = ["state = ?", "state_history_json = ?"]
-        params: list[Any] = [new_state, json.dumps(history)]
-        for k, v in extra.items():
-            if k in WRITABLE and v is not None:
-                set_parts.append(f"{k} = ?")
-                params.append(v)
-        params.append(order_id)
-
-        await self._db.execute(
-            f"UPDATE orders SET {', '.join(set_parts)} WHERE order_id = ?",
-            tuple(params),
-        )
-        await self._db.commit()
-        cursor = await self._db.execute(
-            "SELECT * FROM orders WHERE order_id = ?", (order_id,)
-        )
-        row = await cursor.fetchone()
-        logger.info(
-            f"Order {order_id}: {current_state} -> {new_state} ({reason})"
-        )
-        return Order.from_row(row)
+        logger.info(f"Order {order_id}: -> {new_state} ({reason})")
+        return order
 
     async def _sync_bets_on_fill(self, order: Order) -> None:
-        """Insert a row in ``bets`` matching this filled order so the
-        existing CLV pipeline (tools/clv_tracker.record_closing_line) will
-        backfill closing lines and compute CLV automatically.
-
-        Schema gap noted in the audit: ``bets`` has no ``signal_id`` or
-        ``odds_snapshot_id`` column. We write the order_id into ``notes``
-        and ``tags`` so the join can be recovered.
-        """
         assert self._db is not None
-        if order.bet_id:
-            return  # already synced
-        try:
-            now = datetime.now(timezone.utc).isoformat()
-            implied = None
-            if order.fair_prob is not None and order.edge is not None:
-                implied = max(0.0, min(1.0, order.fair_prob - order.edge))
-            cursor = await self._db.execute(
-                """
-                INSERT INTO bets (
-                    placed_at, sport, event_id, game_description, bet_type,
-                    team, market, bookmaker, placement_odds, placement_point,
-                    placement_implied_prob, stake, result,
-                    edge_at_placement, kelly_at_placement, notes, tags
-                ) VALUES (?, ?, ?, ?, 'single', ?, ?, ?, ?, NULL, ?, ?, 'pending', ?, NULL, ?, ?)
-                """,
-                (
-                    order.placed_at or now, order.sport or "", order.event_id or "",
-                    order.game_description or "",
-                    order.side or "", order.market or "", order.book or "",
-                    order.price_american or 0,
-                    implied, order.stake_dollars or 0.0,
-                    order.edge,
-                    f"order_id={order.order_id} hypothesis={order.hypothesis_id}",
-                    f"order:{order.order_id},hypothesis:{order.hypothesis_id}",
-                ),
-            )
-            bet_id = cursor.lastrowid
-            await self._db.execute(
-                "UPDATE orders SET bet_id = ? WHERE order_id = ?",
-                (bet_id, order.order_id),
-            )
-            await self._db.commit()
-        except Exception as e:
-            # bets table may not exist in a stripped test DB — log and move on.
-            logger.debug(f"bets sync on fill skipped: {e}")
+        await sync_bets_on_fill(self._db, order)
 
     async def _sync_bets_on_settle(self, order: Order) -> None:
         assert self._db is not None
-        if not order.bet_id:
-            return
-        result_map = {
-            SETTLED_WIN: "won",
-            SETTLED_LOSS: "lost",
-            SETTLED_PUSH: "push",
-        }
-        bets_result = result_map.get(order.state)
-        if not bets_result:
-            return
-        try:
-            payout = None
-            if bets_result == "won" and order.price_american and order.stake_dollars:
-                # American odds payout including stake.
-                p = order.price_american
-                if p > 0:
-                    payout = order.stake_dollars * (1 + p / 100.0)
-                else:
-                    payout = order.stake_dollars * (1 + 100.0 / abs(p))
-            elif bets_result == "push":
-                payout = order.stake_dollars
-            await self._db.execute(
-                "UPDATE bets SET result = ?, payout = ? WHERE id = ?",
-                (bets_result, payout, order.bet_id),
-            )
-            await self._db.commit()
-        except Exception as e:
-            logger.debug(f"bets sync on settle skipped: {e}")
+        await sync_bets_on_settle(self._db, order)
 
 
-# --- Settlement reconciler --------------------------------------------------
+# --- Settlement reconciler ---------------------------------------------------
 
 # The real reconciler lives in ``tools.order_reconciler``. Re-exported here
 # for backwards compatibility — ``api.py`` and the /orders/reconcile endpoint
@@ -723,7 +466,7 @@ async def detect_voided_orders(manager: "OrderManager") -> dict:
     return await _real(manager)
 
 
-# --- Module-level singleton -------------------------------------------------
+# --- Module-level singleton --------------------------------------------------
 
 _manager: Optional[OrderManager] = None
 
