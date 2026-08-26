@@ -274,10 +274,15 @@ def _persist_run(record: dict) -> Path:
                     if _final_is_our_tmp(path, tmp_stat):
                         published_path = path
                     elif (not path.exists()
+                          and _tmp_name_is_our_inode(tmp, tmp_stat)
                           and _published_payload_matches(path, payload) is False):
-                        # Destination provably absent: nothing was published
-                        # and no foreign content exists. Pre-commit failure:
-                        # cleanup removes the tmp and the slot may be retried.
+                        # Destination provably absent AND the original temp
+                        # pathname still refers to THIS call's captured tmp
+                        # inode — nothing was published by us or anyone else,
+                        # so cleanup removes the tmp and the slot may be
+                        # safely retried. If the temp name has moved or been
+                        # replaced too, we cannot prove absence of a
+                        # publication: classify indeterminate instead.
                         action = "retry"
                     else:
                         detail = (
@@ -293,34 +298,65 @@ def _persist_run(record: dict) -> Path:
             #    retry loop would republish the same logical run as
             #    `_001.json`.
             if action is None:
-                # Post-commit external race: an external writer may have
-                # replaced the final between our rename and this check.
-                # A final that no longer holds THIS call's payload must
-                # never yield a normal success — report indeterminate
-                # (the record was published but has since been displaced).
-                if not _published_payload_matches(path, payload):
-                    error = PublicationIndeterminate(
-                        "the published final no longer matches this "
-                        "call's intended payload (external race after "
-                        "commit)", path)
-                    action = "fail"
-            if action is None:
+                # Post-commit provenance verification, bound to ONE opened
+                # descriptor. An external writer can atomically replace the
+                # final at ANY point — including between a byte check and a
+                # later os.open() — so validation, fsync and inode identity
+                # must all be observed on the same fd, then the pathname is
+                # re-stat'ed after the directory fsync. Byte equality is
+                # content evidence only; inode identity with THIS call's
+                # captured tmp inode is the provenance proof.
                 problems = []
+                ffd = -1
                 try:
-                    ffd = os.open(path, os.O_RDONLY)
-                except OSError as exc:
-                    problems.append(
-                        f"published file could not be reopened: {exc}")
-                else:
                     try:
-                        os.fsync(ffd)      # durability of published content
+                        ffd = os.open(path, os.O_RDONLY)
                     except OSError as exc:
-                        problems.append(f"final-file fsync failed: {exc}")
-                    finally:
+                        # Commit already succeeded (os.replace returned);
+                        # inability to OBSERVE the published file afterwards
+                        # is durability-unconfirmed, not proof of foreign
+                        # displacement — keep DurabilityError semantics.
+                        problems.append(
+                            f"published file could not be reopened: {exc}")
+                    if problems:
+                        error = DurabilityError(path, "; ".join(problems))
+                        action = "fail"
+                    if ffd != -1 and not problems:
+                        st = os.fstat(ffd)
+                        proven = tmp_stat is not None and (
+                            st.st_ino, st.st_dev) == \
+                            (tmp_stat.st_ino, tmp_stat.st_dev)
+                        data = b""
+                        while True:
+                            chunk = os.read(ffd, 1 << 20)
+                            if not chunk:
+                                break
+                            data += chunk
+                        matches = (data == payload)
+                        if not proven or not matches:
+                            # Either the fd does not belong to this call's
+                            # tmp inode (external atomic replacement), or it
+                            # no longer holds this call's payload. Never a
+                            # normal success.
+                            error = PublicationIndeterminate(
+                                "the published final was displaced by an "
+                                "external writer after commit (foreign "
+                                "inode or foreign/malformed content)",
+                                path)
+                            action = "fail"
+                    if action is None:
+                        try:
+                            os.fsync(ffd)
+                        except OSError as exc:
+                            problems.append(
+                                f"final-file fsync failed: {exc}")
+                finally:
+                    if ffd != -1:
                         try:
                             os.close(ffd)
                         except OSError:
                             pass
+            if action is None:
                 try:
                     dfd = os.open(base, os.O_RDONLY)
                 except OSError as exc:
@@ -340,9 +376,28 @@ def _persist_run(record: dict) -> Path:
                 if problems:
                     error = DurabilityError(path, "; ".join(problems))
                     action = "fail"
-                else:
-                    result_path = path
-                    action = "done"
+            if action is None:
+                # Re-stat the PATHNAME after the directory fsync: the fd
+                # checks above prove what we OBSERVED; this narrows (but can
+                # never close — see module docstring limits) the window in
+                # which an external writer atomically replaced the final
+                # after our last observation.
+                try:
+                    st_after = os.stat(path)
+                    same = (st_after.st_ino, st_after.st_dev) == \
+                        (tmp_stat.st_ino, tmp_stat.st_dev) \
+                        if tmp_stat is not None else False
+                except OSError:
+                    same = False
+                if not same:
+                    error = PublicationIndeterminate(
+                        "the final path no longer references this call's "
+                        "published inode after the durability confirmation "
+                        "(external replacement observed post-commit)", path)
+                    action = "fail"
+            if action is None:
+                result_path = path
+                action = "done"
         finally:
             # Cleanup of the reservation descriptor/marker and the tmp
             # sibling. Each step is independent — one failure cannot skip
@@ -365,6 +420,15 @@ def _persist_run(record: dict) -> Path:
         # ── Outcome resolution (deliberate, never silent) ──
         if cleanup_errors:
             residue = "; ".join(cleanup_errors)
+            if isinstance(error, PublicationIndeterminate):
+                # Indeterminate publication state must survive cleanup
+                # failures unchanged: re-raising it as DurabilityError would
+                # falsely claim the named result IS saved. Append the
+                # residue note to the indeterminate detail instead.
+                raise PublicationIndeterminate(
+                    str(error.args[0]) + "; additionally, residual sidecar "
+                    f"file(s) could not be removed: {residue}",
+                    error.path)
             if published_path is not None:
                 # The record IS published at `path`; report durability/
                 # residue honestly without ever duplicating the record.
@@ -411,6 +475,19 @@ def _final_is_our_tmp(path: Path, tmp_stat: "os.stat_result | None") -> bool:
         return False
     return (fstat.st_ino, fstat.st_dev) == \
         (tmp_stat.st_ino, tmp_stat.st_dev)
+
+
+def _tmp_name_is_our_inode(tmp: Path, tmp_stat: "os.stat_result | None") -> bool:
+    """Does the ORIGINAL temp pathname still reference THIS call's captured
+    tmp inode? Used to decide whether a failed/absent-replace outcome is a
+    provably clean pre-commit failure (safe to retry) or indeterminate."""
+    if tmp_stat is None:
+        return False
+    try:
+        st = os.stat(tmp)
+    except OSError:
+        return False
+    return (st.st_ino, st.st_dev) == (tmp_stat.st_ino, tmp_stat.st_dev)
 
 
 def _published_payload_matches(path: Path, payload: bytes) -> bool | None:
@@ -544,9 +621,21 @@ async def _cmd_ask(args: argparse.Namespace) -> int:
         print(f"           {exc}")
         print("           do NOT re-ask to 'retry' — the record above is "
               "already published; verify the file after any crash.")
+    except PublicationIndeterminate as exc:
+        # It could NOT be determined whether this call's sealed record was
+        # published at `exc.path`: an external writer may hold foreign
+        # content there, and blind retrying risks duplicating the run or
+        # clobbering the foreign file. Say exactly that, warn explicitly,
+        # and do NOT report ordinary success: a sealed result whose
+        # persistence state is unknown must not exit 0.
+        print("run      : PUBLICATION INDETERMINATE")
+        print(f"           path: {exc.path}")
+        print(f"           {exc}")
+        print("           do NOT blindly re-ask to 'retry': inspect the path "
+              "above (and any .json.tmp sibling) manually first.")
+        return 1
     except Exception as exc:
-        # Pre-publication failure or indeterminate state: no verified
-        # record of THIS run exists at a known path.
+        # Pre-publication failure: no record of THIS run exists anywhere.
         print(f"run      : NOT SAVED ({exc})")
     return 0 if result.sealed else 1
 

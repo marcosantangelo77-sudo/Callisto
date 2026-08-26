@@ -1068,3 +1068,238 @@ def test_fix_valid_publication_still_ordinary_success(runs_dir):
     assert len(list(runs_dir.glob("*.json"))) == 1
     assert not list(runs_dir.glob("*.tmp"))
     assert not list(runs_dir.glob("*.resv"))
+
+
+# ── review blockers: inode provenance + race/cleanup semantics ────────────
+
+def _expected_path(runs_dir, q, seq=0):
+    stamp = "20260824T070000+0000".replace(":", "").replace("-", "")
+    qhash = hashlib.sha256(q.encode()).hexdigest()[:8]
+    return runs_dir / f"{stamp}_{qhash}_{seq:03d}.json"
+
+
+def test_fix_atomic_identical_replacement_after_commit_is_indeterminate(
+        runs_dir, monkeypatch):
+    """Blocker 1: after a successful os.replace, an external writer performs
+    an ATOMIC replacement (os.replace of its own file) with byte-identical
+    content. Byte-only verification would return normal success; the final
+    fd must belong to THIS call's captured tmp inode."""
+    import os as _os
+    q = "atomic twin"
+    final_path = _expected_path(runs_dir, q)
+    real_replace = _os.replace
+    state = {"replaced": False}
+
+    def spy_replace(src, dst):
+        out = real_replace(src, dst)
+        if str(dst).endswith(".json") and not state["replaced"]:
+            state["replaced"] = True
+            # External ATOMIC replacement with byte-identical payload.
+            foreign_tmp = runs_dir / "foreign.tmp.json"
+            payload = json.dumps(_record(q=q), indent=2).encode("utf-8")
+            ftmp = open(runs_dir / "ext_tmp", "wb")
+            ftmp.write(payload)
+            ftmp.flush()
+            import os as os2
+            os2.fsync(ftmp.fileno())
+            ftmp.close()
+            real_replace(str(runs_dir / "ext_tmp"), str(final_path))
+        return out
+
+    monkeypatch.setattr(_os, "replace", spy_replace)
+    with pytest.raises(callisto.PublicationIndeterminate) as ei:
+        callisto._persist_run(_record(q=q))
+    assert ei.value.path == final_path
+
+
+def test_fix_malformed_swap_between_verify_and_open_is_indeterminate(
+        runs_dir, monkeypatch):
+    """Blocker 2: an external atomic malformed replacement lands between
+    byte verification and os.open(). Validation/fsync must be bound to one
+    descriptor and compared against the expected inode; the outcome must be
+    indeterminate, never normal success."""
+    import os as _os
+    q = "verify-open race"
+    final_path = _expected_path(runs_dir, q)
+    real_replace = _os.replace
+    real_open = _os.open
+    state = {"phase": 0}
+
+    def racing_open(path, *a, **kw):
+        fd = real_open(path, *a, **kw)
+        # The FIRST post-commit O_RDONLY open of the final is the
+        # verification open. Swap in malformed content atomically the
+        # instant it returns, so any SECOND open (old buggy code) sees
+        # foreign bytes on a foreign inode while the first check passed.
+        if state["phase"] == 0 and str(path).endswith(".json") \
+                and flags_readonly(*a, **kw):
+            state["phase"] = 1
+            ext = runs_dir / "ext_race_tmp"
+            ext.write_text("{malformed!", encoding="utf-8")
+            real_replace(str(ext), str(final_path))
+        return fd
+
+    def flags_readonly(*a, **kw):
+        return not a or (a and isinstance(a[0], int))
+
+    monkeypatch.setattr(_os, "open", racing_open)
+    with pytest.raises(callisto.PublicationIndeterminate) as ei:
+        callisto._persist_run(_record(q=q))
+    assert ei.value.path == final_path
+    # Foreign content left in place, untouched.
+    assert final_path.read_text(encoding="utf-8") == "{malformed!"
+
+
+def test_fix_moved_final_on_raised_replace_is_indeterminate_not_duplicate(
+        runs_dir, monkeypatch):
+    """Blocker 3: os.replace raises AFTER an external actor moved our final
+    elsewhere. Absence handling must only retry when the original temp
+    pathname still refers to OUR captured tmp inode — here it does not, so
+    the outcome must be indeterminate, never a second record under _001."""
+    import os as _os
+    q = "moved final probe"
+    final_path = _expected_path(runs_dir, q)
+    real_replace = _os.replace
+    state = {"fired": False}
+
+    def hostile_replace(src, dst):
+        if str(dst).endswith(".json") and not state["fired"]:
+            state["fired"] = True
+            # External actor moves OUR just-renamed... actually move the
+            # tmp after a failed swap simulation: rename src away first,
+            # then raise, so the destination is absent but our tmp name is
+            # gone (its inode lives elsewhere now).
+            hidden = runs_dir / "hidden_elsewhere.json"
+            try:
+                real_replace(src, hidden)   # tmp inode relocated
+            except OSError:
+                pass
+            raise OSError("simulated replace error after external move")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(_os, "replace", hostile_replace)
+    with pytest.raises(callisto.PublicationIndeterminate):
+        callisto._persist_run(_record(q=q))
+    # No duplicate published anywhere for this question, and no retry
+    # created a second record: the tmp inode was relocated by the external
+    # actor (hidden_elsewhere.json), which must classify indeterminate.
+    dupes = [p for p in runs_dir.glob("*.json")
+             if p.name != "hidden_elsewhere.json"
+             and json.loads(p.read_text())["question"] == q]
+    assert not dupes
+
+
+def test_fix_moved_final_with_intact_tmp_is_clean_retry(
+        runs_dir, monkeypatch):
+    """Blocker 3 (safe side): os.replace raises before swapping AND the tmp
+    pathname still holds our captured inode — retry must be allowed and
+    succeed on the same sequence slot."""
+    import os as _os
+    q = "intact tmp retry"
+    real_fsync = _os.fsync
+    real_replace = _os.replace
+    state = {"failed": False}
+
+    def flaky_replace(src, dst):
+        if str(dst).endswith(".json") and not state["failed"]:
+            state["failed"] = True
+            raise OSError("simulated transient replace failure")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(_os, "replace", flaky_replace)
+    p = callisto._persist_run(_record(q=q))
+    rec, _ = callisto._load_run(p.stem)
+    assert rec["question"] == q
+    assert len(list(runs_dir.glob("*.json"))) == 1
+
+
+def test_fix_indeterminate_survives_cleanup_failure(
+        runs_dir, monkeypatch):
+    """Blocker 4: post-commit foreign-race detection combined with
+    reservation-cleanup failure must still raise PublicationIndeterminate —
+    converting it to DurabilityError would falsely claim the named result
+    IS saved."""
+    import os as _os
+    from pathlib import Path as _Path
+    q = "indeterminate cleanup probe"
+    final_path = _expected_path(runs_dir, q)
+    real_replace = _os.replace
+    real_unlink = _Path.unlink
+
+    state = {"replaced": False, "resv_unlinks": 0}
+
+    def spy_replace(src, dst):
+        out = real_replace(src, dst)
+        if str(dst).endswith(".json") and not state["replaced"]:
+            state["replaced"] = True
+            ext = runs_dir / "ext_cleanup_tmp"
+            ext.write_text("{foreign!", encoding="utf-8")
+            real_replace(str(ext), str(final_path))
+        return out
+
+    def flaky_unlink(self, missing_ok=False):
+        if self.suffix == ".resv" and state["resv_unlinks"] < 3:
+            state["resv_unlinks"] += 1
+            raise OSError("simulated resv unlink failure")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(_os, "replace", spy_replace)
+    monkeypatch.setattr(_Path, "unlink", flaky_unlink)
+    try:
+        with pytest.raises(callisto.PublicationIndeterminate) as ei:
+            callisto._persist_run(_record(q=q))
+        assert ei.value.path == final_path
+        assert "could not be removed" in str(ei.value)
+        # And it is NOT mis-classified as durability-unconfirmed-saved.
+        assert not isinstance(ei.value, callisto.DurabilityError)
+    finally:
+        monkeypatch.setattr(_Path, "unlink", real_unlink)
+
+
+def test_cli_prints_dedicated_indeterminate_message_and_does_not_claim_saved(
+        runs_dir, monkeypatch, capsys):
+    """Blocker 5: PublicationIndeterminate gets a dedicated user-visible
+    message naming the path and an explicit do-not-blindly-retry warning;
+    it is NOT reported as NOT SAVED-as-usual nor as saved-with-exit-0
+    ambiguity — exit stays non-zero-consistent with CLI conventions."""
+    import asyncio
+    from types import SimpleNamespace as NS
+    import callisto as C
+    from callisto import _cmd_ask, build_parser
+
+    class FakeRouter:
+        endpoints = {}
+        task_classes = {}
+        default_tier_name = "gpu1"
+        class cost_ledger:
+            @staticmethod
+            def snapshot(): return {"by_tier": {}}
+        async def check_health(self, tier):
+            return {"status": "ok"}
+
+    def make_engine(router, self_review=False):
+        async def run(q):
+            return NS(sealed=True, refusal_reason="", leaves=[],
+                      confidence_score=0.5, confidence_tier="X",
+                      conclusion="c", fetches=[], objections=[], notes=[],
+                      artifact_refs=[])
+        return NS(run=run)
+
+    monkeypatch.setenv("CALLISTO_RUNS_DIR", str(runs_dir))
+    monkeypatch.setattr(C, "_load_router", lambda p: FakeRouter())
+    monkeypatch.setattr(C, "_make_engine", make_engine)
+    victim = runs_dir / "somewhere.json"
+
+    def boom(record):
+        raise callisto.PublicationIndeterminate(
+            "external race after commit", victim)
+    monkeypatch.setattr(C, "_persist_run", boom)
+
+    rc = asyncio.run(_cmd_ask(build_parser().parse_args(["ask", "q"])))
+    out = capsys.readouterr().out
+    assert "PUBLICATION INDETERMINATE" in out
+    assert str(victim) in out
+    assert "do NOT blindly re-ask" in out or "do NOT" in out
+    # Not claimed as cleanly saved-and-durable, not plain NOT SAVED either.
+    assert "SAVED WITH UNCONFIRMED DURABILITY" not in out
+    assert rc != 0
