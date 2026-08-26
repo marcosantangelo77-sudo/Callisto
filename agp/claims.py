@@ -45,28 +45,6 @@ from agp.thresholds import MAX_CONFIDENCE_BY_SOURCE
 _log = logging.getLogger("callisto.agp.claims")
 
 
-def _configured_seal_key_vars() -> bool:
-    """True iff ANY seal-key environment variable is set (even to garbage).
-
-    Distinguishes "no key configured" (an unkeyed deployment) from "key
-    configured but malformed" — a malformed configured policy must fail
-    closed, never silently degrade to an unkeyed one.
-    """
-    return bool(
-        os.getenv("CALLISTO_SEAL_KEY", "").strip()
-        or os.getenv("CALLISTO_SEAL_KEY_OLD", "").strip())
-
-
-def _keyed_policy_active() -> bool:
-    """True iff a usable seal key is configured for this process.
-
-    A configured-but-invalid key makes this False AND
-    _configured_seal_key_vars() True; callers must treat that combination as
-    a configuration error and fail closed.
-    """
-    return bool(_seal_keys())
-
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -83,6 +61,121 @@ class ClaimStatus(str, Enum):
 
 class ClaimError(Exception):
     pass
+
+
+class SealPolicyError(ClaimError):
+    """Raised when the seal-key configuration itself is malformed.
+
+    A malformed security policy must never be silently reinterpreted as a
+    weaker one (fail closed).
+    """
+
+
+# Seal REGIME — an explicit external policy anchor, never inferred from
+# attacker-writable journal data.
+#
+#   KEYED       HMAC-SHA256 under CALLISTO_SEAL_KEY (+ optional rotation key
+#               CALLISTO_SEAL_KEY_OLD). Default when a valid current key is
+#               configured. New entries are sealed with the CURRENT key; old
+#               keys verify only. Public/unsigned fallbacks are rejected,
+#               including allow_legacy_unsigned=True.
+#   UNKEYED     Public SHA-256 checksums, chosen ONLY via an explicit
+#               compatibility opt-in (CALLISTO_SEAL_POLICY=unkeyed or
+#               ClaimStore(..., seal_policy="unkeyed")). Provides
+#               tamper-EVIDENCE against third parties, not authenticity:
+#               anyone who can write the journal can recompute the digest.
+#   UNSPECIFIED No policy declared and no usable key configured: FAIL CLOSED
+#               on both save and load. Silence is never read as "unkeyed".
+#
+# Honest limits (documented, not fixable inside the journal format):
+#   * The regime marker inside an entry is covered by the seal but is not,
+#     by itself, a provenance anchor: an attacker who can rewrite the file
+#     and controls the external configuration can re-seal under any regime.
+#     The journal defends only against attackers who cannot alter the
+#     external policy/configuration.
+#   * Tail truncation: deleting trailing signed lines requires only
+#     filesystem WRITE access, not the key; absent an external head/count
+#     anchor, load() success proves nothing about removed tail lines.
+
+
+def _parse_seal_policy(
+        *, env_policy=None, ctor_policy=None) -> tuple[str, list[bytes],
+                                                       list[bytes]]:
+    """Single strict policy parser used by BOTH save and load.
+
+    Returns ``(regime, current_keys, old_keys)`` where regime is one of
+    ``"keyed"``, ``"unkeyed"`` or raises SealPolicyError. Every nonblank
+    configured token must be valid hex; no malformed token is ever dropped.
+
+    Raises SealPolicyError on:
+      * unknown/unreadable policy values;
+      * any malformed CALLISTO_SEAL_KEY / CALLISTO_SEAL_KEY_OLD token;
+      * a keyed declaration without a valid current key (old keys are
+        verification-only and never authorize new writes);
+      * contradictory declarations (explicit unkeyed opt-in while a seal-key
+        variable is also set).
+    """
+    if (ctor_policy is not None and env_policy
+            and str(ctor_policy).strip().lower()
+            != str(env_policy).strip().lower()):
+        raise SealPolicyError(
+            f"conflicting seal policy: constructor {ctor_policy!r} vs "
+            f"environment {env_policy!r} — configure exactly one")
+    raw = ctor_policy if ctor_policy is not None else env_policy
+    if raw is not None and str(raw).strip().lower() not in ("keyed", "unkeyed"):
+        raise SealPolicyError(f"unknown seal policy {raw!r}")
+
+    cur_raw = os.getenv("CALLISTO_SEAL_KEY", "").strip()
+    old_raws = [t.strip()
+                for t in os.getenv("CALLISTO_SEAL_KEY_OLD", "").split(",")
+                if t.strip()]
+
+    def _hex(tok: str) -> bytes:
+        try:
+            k = bytes.fromhex(tok)
+        except ValueError:
+            raise SealPolicyError(
+                f"malformed seal key token ({tok[:8]!r}...): must be hex — "
+                f"refusing to ignore or downgrade it") from None
+        if not k:
+            raise SealPolicyError("malformed seal key token: empty key")
+        return k
+
+    current = [_hex(cur_raw)] if cur_raw else []
+    olds = [_hex(t) for t in old_raws]
+
+    # Explicit declaration wins and must be self-consistent.
+    if raw is not None:
+        regime = str(raw).strip().lower()
+        if regime == "keyed" and not current:
+            raise SealPolicyError(
+                "seal policy 'keyed' requires a valid CALLISTO_SEAL_KEY "
+                "(old keys are verification-only)")
+        if regime == "unkeyed" and (current or olds):
+            raise SealPolicyError(
+                "seal policy 'unkeyed' conflicts with configured seal-key "
+                "variables — remove them or choose the keyed regime")
+        return regime, current, olds
+
+    # No explicit declaration: presence of a valid current key selects the
+    # keyed regime; anything else fails closed.
+    if current:
+        return "keyed", current, olds
+    if cur_raw or os.getenv("CALLISTO_SEAL_KEY_OLD", "").strip():
+        raise SealPolicyError(
+            "malformed seal key configuration: seal-key variables are set "
+            "but contain no valid current key — refusing to fall back to an "
+            "unkeyed regime (fail closed)")
+    raise SealPolicyError(
+        "no seal policy configured: set CALLISTO_SEAL_POLICY=unkeyed to "
+        "explicitly accept public-checksum seals, or configure a valid "
+        "CALLISTO_SEAL_KEY for authenticated seals (fail closed)")
+
+
+def _resolve_seal_regime(ctor_policy=None) -> tuple[str, list[bytes], list[bytes]]:
+    return _parse_seal_policy(env_policy=os.getenv("CALLISTO_SEAL_POLICY"),
+                              ctor_policy=ctor_policy)
+
 
 
 # ── Evidence accrual ─────────────────────────────────────────────────────
@@ -397,9 +490,19 @@ class ClaimStore:
     before returning state, so tampering is detected on read, loudly.
     """
 
-    def __init__(self, directory: str):
+    def __init__(self, directory: str, *, seal_policy: Optional[str] = None):
+        """``seal_policy``: explicit "keyed"/"unkeyed" regime override.
+
+        Omitted => environment (CALLISTO_SEAL_POLICY) decides; with neither,
+        construction succeeds but every save/load fails closed until a
+        policy is declared. See the seal-regime block above this class.
+        """
         self._dir = directory
+        self._ctor_seal_policy = seal_policy
         os.makedirs(self._dir, exist_ok=True)
+
+    def _policy(self) -> tuple[str, list[bytes], list[bytes]]:
+        return _resolve_seal_regime(ctor_policy=self._ctor_seal_policy)
 
     def _journal_path(self, claim_id: str) -> str:
         if not claim_id or any(ch in claim_id for ch in "/\\."):
@@ -414,65 +517,55 @@ class ClaimStore:
             sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
     @classmethod
-    def _entry_seal(cls, prev_hash: str, saved_at: str, state: dict) -> dict:
-        """Keyed integrity seal over an entry's canonical content.
+    def _entry_seal(cls, prev_hash: str, saved_at: str, state: dict,
+                    regime: str, keys: list[bytes]) -> dict:
+        """Seal an entry's canonical content under an ALREADY-RESOLVED policy.
 
         Sealing {prev, saved_at, state} binds EVERY entry's content —
-        including a single-entry journal's first line and every tail entry,
-        which no successor exists to protect.
-
-        The returned dict carries an authenticated provenance marker: under a
-        keyed regime the HMAC covers {"alg": "hmac-sha256"} so the algorithm/
-        key-presence of the writing regime is itself sealed; the unkeyed
-        regime seals {"alg": "sha256"} the same way. A reader can therefore
-        distinguish a legitimately unkeyed digest from a forged one only via
-        this marker plus its own configured policy — see load().
+        including a single-entry journal's first line and every tail entry.
+        The authenticated provenance marker {alg} is covered by the digest;
+        it records the writing regime but is NOT, by itself, a provenance
+        anchor (see the honest-limits note in the module policy block).
         """
-        alg = "hmac-sha256" if _keyed_policy_active() else "sha256"
-        provenance = json.dumps({"alg": alg}, sort_keys=True,
-                                separators=(",", ":"))
+        alg = "hmac-sha256" if regime == "keyed" else "sha256"
         payload = cls._entry_seal_payload(prev_hash, saved_at, state)
-        digest = _seal_digest(payload + "\n" + provenance)
+        encoded = (payload + "\n"
+                   + json.dumps({"alg": alg}, sort_keys=True,
+                                separators=(",", ":"))).encode("utf-8")
+        if regime == "keyed":
+            # Sign under the CURRENT key only; old keys verify history.
+            digest = hmac.new(keys[0], encoded, hashlib.sha256).hexdigest()
+        else:
+            digest = hashlib.sha256(encoded).hexdigest()
         return {"alg": alg, "digest": digest}
 
     @staticmethod
     def _verify_entry_seal(seal, prev_hash: str, saved_at: str,
-                           state: dict) -> bool:
-        """Verify a journal entry seal per the claim-journal key policy.
-
-        Policy boundary (exact):
-          * Any seal-key variable configured but NO usable key (malformed
-            CALLISTO_SEAL_KEY / old-key-only config) => FAIL CLOSED. Malformed
-            security policy is never mistaken for an unkeyed deployment.
-          * Keys configured and usable => the seal MUST be a valid HMAC under
-            that key ring. Public SHA-256 digests are never accepted, so
-            public-digest substitution fails closed.
-          * No key variable configured at all => plain SHA-256 accepted, but
-            ONLY with the matching authenticated ``alg: "sha256"`` marker.
-        """
-        if not isinstance(seal, dict) or "digest" not in seal:
+                           state: dict, regime: str,
+                           keys: list[bytes]) -> bool:
+        """Strict envelope check + digest verification for the given regime."""
+        if not isinstance(seal, dict):
+            return False
+        if set(seal) - {"alg", "digest"}:
             return False
         claimed_alg = seal.get("alg")
-        digest = str(seal["digest"])
-        keyed_vars = _configured_seal_key_vars()
-        keys = _seal_keys()
-        if keyed_vars and not keys:
-            raise ClaimError(
-                "seal key configuration error: CALLISTO_SEAL_KEY/"
-                "CALLISTO_SEAL_KEY_OLD are set but no value is valid hex — "
-                "refusing to fall back to an unkeyed verification (fail "
-                "closed)")
-        expected_alg = "hmac-sha256" if keys else "sha256"
-        if hmac.compare_digest(str(claimed_alg), expected_alg) is False:
+        raw_digest = seal.get("digest")
+        if not isinstance(raw_digest, (str, int)):
+            return False
+        digest = str(raw_digest)
+        expected_alg = "hmac-sha256" if regime == "keyed" else "sha256"
+        if not isinstance(claimed_alg, str) or claimed_alg != expected_alg:
+            return False
+        if not isinstance(prev_hash, str) or not isinstance(saved_at, str) \
+                or not isinstance(state, dict):
             return False
         payload = ClaimStore._entry_seal_payload(prev_hash, saved_at, state)
-        provenance = json.dumps({"alg": expected_alg}, sort_keys=True,
-                                separators=(",", ":"))
-        encoded = (payload + "\n" + provenance).encode("utf-8")
-        candidates = [hmac.new(key, encoded, hashlib.sha256).hexdigest()
-                      for key in keys]
-        if not candidates:
-            candidates.append(hashlib.sha256(encoded).hexdigest())
+        encoded = (payload + "\n"
+                   + json.dumps({"alg": expected_alg}, sort_keys=True,
+                                separators=(",", ":"))).encode("utf-8")
+        candidates = ([hmac.new(k, encoded, hashlib.sha256).hexdigest()
+                       for k in keys] if regime == "keyed"
+                      else [hashlib.sha256(encoded).hexdigest()])
         return any(hmac.compare_digest(c, digest) for c in candidates)
 
     def save(self, claim: Claim) -> int:
@@ -487,11 +580,15 @@ class ClaimStore:
             if lines:
                 prev_hash = hashlib.sha256(
                     lines[-1].encode("utf-8")).hexdigest()
+        # Resolve the seal policy BEFORE any write: malformed or missing
+        # configuration raises here and nothing is appended (fail closed).
+        regime, current_keys, _old_keys = self._policy()
         saved_at = _now_iso()
         state = claim.to_dict()
         entry = {"prev": prev_hash, "saved_at": saved_at,
                  "state": state,
-                 "seal": self._entry_seal(prev_hash, saved_at, state)}
+                 "seal": self._entry_seal(prev_hash, saved_at, state,
+                                          regime, current_keys)}
         blob = json.dumps(entry, sort_keys=True, ensure_ascii=False)
         with open(path, "a", encoding="utf-8") as f:
             f.write(blob + "\n")
@@ -501,113 +598,196 @@ class ClaimStore:
              allow_legacy_unsigned: bool = False) -> Optional[Claim]:
         """Replay the journal to latest verified state.
 
-        With verify=True (default) any break in the hash chain or ANY invalid
-        or missing per-entry integrity seal raises ClaimError — a tampered or
-        flattering history never silently loads.
+        Policy (exact boundary — see the seal-regime block at module top):
+          * The SAME strict parser used by save() resolves the regime first;
+            any malformed configuration raises SealPolicyError before any
+            entry is judged.
+          * keyed: every seal MUST be an HMAC under the current/old key ring.
+            Public digests, unsigned entries and allow_legacy_unsigned are
+            all rejected. Key REMOVAL cannot downgrade a keyed history: the
+            journal alone cannot prove its own regime, so with no usable key
+            configured it simply becomes unloadable (fail closed) until an
+            explicit policy or migration is declared.
+          * unkeyed (explicit opt-in only): public SHA-256 seals accepted.
+            This is a tamper-EVIDENCE checksum, not authenticity.
+          * UNSPECIFIED (no policy, no keys): fail closed on both save/load.
 
-        Key policy (exact boundary):
-          * If CALLISTO_SEAL_KEY / CALLISTO_SEAL_KEY_OLD are set but contain
-            NO usable hex key, loading FAILS CLOSED immediately: malformed
-            security policy is never treated as an unkeyed deployment, and a
-            forged public SHA-256 digest can never load in that state.
-          * With usable keys configured, every entry's seal MUST be an HMAC
-            under that key ring; public digests are rejected, and
-            allow_legacy_unsigned=True is IGNORED — a configured (even
-            malformed-but-configured) keyed policy disables every unsigned/
-            public-digest fallback, so a wholly stripped keyed history cannot
-            masquerade as a legacy journal.
-          * With no key variable configured at all, plain SHA-256 seals
-            (authenticated with their ``alg`` marker) are accepted for
-            genuinely unkeyed journals.
+        Legacy handling:
+          * Bare-string historical seals (ambiguous HMAC vs public digest)
+            always raise ClaimError; use migrate_legacy_journal().
+          * Wholly-unsigned journals: readable ONLY via allow_legacy_unsigned=True
+            in an explicitly UNKEYED deployment; chain checks still apply.
 
-        Ambiguous historical format (regime change): entries written before
-        authenticated algorithm provenance existed carry a bare string seal;
-        whether they were HMAC or public-digest cannot be established from
-        the bytes alone once the writing-time key configuration is removed.
-        The safe policy chosen here is FAIL CLOSED: such journals raise
-        ClaimError and require an explicit operator re-seal/migration under
-        the current policy; removing key configuration never silently
-        downgrades an old keyed history, and allow_legacy_unsigned never
-        resurrects these ambiguous entries.
-
-        Legacy wholly-unsigned journals (pre-sealing format, no ``seal``
-        field): readable only with allow_legacy_unsigned=True AND only when
-        no key variable is configured. Chain checks still apply; their tail
-        integrity is NOT guaranteed and this must never be enabled on
-        security-sensitive paths.
-
-        Honest tail-truncation limitation: deleting trailing lines from a
-        validly signed journal requires only filesystem WRITE access — not
-        the seal key — so truncation of a signed prefix is undetectable here
-        absent an external head/count anchor. Do not treat load() success as
-        proof no lines were removed.
+        Honest limitation: a filesystem writer can delete a validly signed
+        tail without the key; absent an external head/count anchor, load()
+        success does not prove no lines were removed.
         """
         path = self._journal_path(claim_id)
         if not os.path.exists(path):
             return None
+        # Strict shared parser: malformed config fails closed BEFORE reading.
+        regime, current_keys, old_keys = self._policy()
+        keys = list(current_keys) + [k for k in old_keys if k not in current_keys]
         with open(path, encoding="utf-8") as f:
             lines = [ln for ln in f.read().splitlines() if ln.strip()]
         prev = "GENESIS"
         state = None
         saw_seal = False
         saw_unsigned = False
+
+        def _fail(msg: str):
+            raise ClaimError(f"{msg} in claim {claim_id} "
+                             f"(journal line {i+1})")
+
         for i, ln in enumerate(lines):
             try:
                 entry = json.loads(ln)
             except json.JSONDecodeError as e:
-                raise ClaimError(f"journal line {i+1} corrupt: {e}")
+                raise ClaimError(f"journal line {i+1} corrupt: {e}") from e
             if verify:
-                # Fail closed on malformed configured key policy BEFORE any
-                # entry can be judged: invalid config != unkeyed deployment.
-                if _configured_seal_key_vars() and not _keyed_policy_active():
-                    raise ClaimError(
-                        f"configuration error for claim {claim_id}: seal key "
-                        f"variables are set but contain no valid hex key — "
-                        f"refusing to fall back to unkeyed verification")
-                keyed_policy = _keyed_policy_active()
-                # Chain check: line 1 must reference GENESIS; each later
-                # line must reference its predecessor's raw-line digest.
+                if not isinstance(entry, dict):
+                    _fail(f"malformed journal line {i+1}: expected object")
                 if entry.get("prev") != prev:
-                    raise ClaimError(
-                        f"tampering detected in claim {claim_id}: journal "
-                        f"line {i+1} does not chain to its predecessor "
-                        f"(history is not trustworthy)")
+                    _fail("tampering detected: entry does not chain to its "
+                          "predecessor (history is not trustworthy)")
                 seal = entry.get("seal")
+                if seal is None and "seal" in entry:
+                    # Present-but-null is MALFORMED, never "missing": it
+                    # must not pass as a legacy unsigned entry.
+                    _fail("malformed seal envelope: seal is null (distinct "
+                          "from an absent legacy seal)")
                 if seal is None:
-                    # Legacy opt-in applies ONLY to wholly unsigned journals
-                    # in a genuinely unkeyed deployment. Under an active keyed
-                    # policy it is ignored: a stripped seal there is tampering
-                    # (including stripping EVERY seal to fake a legacy
-                    # journal), never a permitted fallback.
                     saw_unsigned = True
-                    if keyed_policy or not allow_legacy_unsigned:
-                        raise ClaimError(
-                            f"tampering detected in claim {claim_id}: "
-                            f"journal line {i+1} has no integrity seal"
-                            + (" (active keyed policy forbids unsigned "
-                               "entries)"
-                               if keyed_policy else
-                               " (legacy unsigned journal; refusing to load "
-                               "unverified history)"))
-                else:
-                    saw_seal = True
-                    if not self._verify_entry_seal(
+                    if regime == "keyed":
+                        _fail("tampering detected: active keyed policy "
+                              "forbids unsigned entries")
+                    if not allow_legacy_unsigned:
+                        _fail("tampering detected: entry has no integrity "
+                              "seal (legacy unsigned journal; refusing to "
+                              "load unverified history)")
+                elif isinstance(seal, dict):
+                    # Present-but-malformed envelope values are ClaimErrors,
+                    # never silent acceptance.
+                    try:
+                        ok = self._verify_entry_seal(
                             seal, entry["prev"], entry["saved_at"],
-                            entry["state"]):
+                            entry["state"], regime, keys)
+                    except (TypeError, KeyError, AttributeError, ValueError) \
+                            as e:
                         raise ClaimError(
-                            f"tampering detected in claim {claim_id}: "
-                            f"journal line {i+1} failed its integrity seal "
-                            f"(content does not match the sealed record)")
+                            f"malformed seal envelope in claim {claim_id} "
+                            f"(journal line {i+1}): {e!r}") from e
+                    if not ok:
+                        _fail("tampering detected: entry failed its "
+                              "integrity seal (content does not match the "
+                              "sealed record)")
+                    saw_seal = True
+                else:
+                    _fail("unsupported legacy bare-string seal format; use "
+                          "migrate_legacy_journal() to re-seal explicitly")
+            if not isinstance(entry.get("saved_at"), str) \
+                    or not isinstance(entry.get("state"), dict):
+                raise ClaimError(
+                    f"malformed journal entry shape in claim {claim_id} "
+                    f"(journal line {i+1})")
             prev = hashlib.sha256(ln.encode("utf-8")).hexdigest()
             state = entry["state"]
-        if (verify and saw_seal and saw_unsigned
-                and allow_legacy_unsigned and not _keyed_policy_active()):
-            raise ClaimError(
-                f"tampering detected in claim {claim_id}: history mixes "
-                f"sealed and unsigned entries — an unsigned entry in a "
-                f"sealed history is a stripped-seal downgrade, not a "
-                f"legacy journal (refusing to load)")
+        if verify and saw_seal and saw_unsigned:
+            _fail_tail = (
+                "tampering detected: history mixes sealed and unsigned "
+                "entries — an unsigned entry in a sealed history is a "
+                "stripped-seal downgrade, not a legacy journal")
+            raise ClaimError(f"{_fail_tail} in claim {claim_id}")
         return Claim.from_dict(state)
+
+    # ── operator-attested legacy migration ───────────────────────────────
+
+    def migrate_legacy_journal(self, claim_id: str,
+                               *, attest_unverified: bool = False) -> int:
+        """Operator-attested re-seal of an unloadable legacy history.
+
+        Rewrites the journal ATOMICALLY (temp file + os.replace): every entry
+        that can be verified under the current policy keeps its verified
+        state; every unverifiable entry (bare-string seal, stripped seal) is
+        carried over ONLY when ``attest_unverified=True``, marking each such
+        line ``migrated_unverified: true`` so the unverified provenance stays
+        visible forever. Never silently appends a new-format envelope onto
+        unsupported history, and never treats unverified data as
+        authenticated.
+
+        The result loads under the CURRENT strict policy. Chain links are
+        rebuilt from the rewritten raw lines. Returns the new entry count.
+        """
+        path = self._journal_path(claim_id)
+        if not os.path.exists(path):
+            raise ClaimError(f"no journal exists for claim {claim_id}")
+        regime, current_keys, old_keys = self._policy()
+        keys = list(current_keys) + [k for k in old_keys if k not in current_keys]
+        with open(path, encoding="utf-8") as f:
+            lines = [ln for ln in f.read().splitlines() if ln.strip()]
+        prev = "GENESIS"
+        out_lines = []
+        attested_any = False
+        for i, ln in enumerate(lines):
+            try:
+                entry = json.loads(ln)
+            except json.JSONDecodeError as e:
+                raise ClaimError(
+                    f"cannot migrate claim {claim_id}: line {i+1} is not "
+                    f"valid JSON ({e})") from e
+            if not isinstance(entry, dict):
+                raise ClaimError(
+                    f"cannot migrate claim {claim_id}: line {i+1} is not an "
+                    f"object")
+            state = entry.get("state")
+            saved_at = entry.get("saved_at")
+            if not isinstance(state, dict) or not isinstance(saved_at, str):
+                raise ClaimError(
+                    f"cannot migrate claim {claim_id}: line {i+1} has "
+                    f"malformed state/saved_at")
+            verified = False
+            seal = entry.get("seal")
+            if isinstance(seal, dict):
+                try:
+                    verified = self._verify_entry_seal(
+                        seal, entry["prev"], saved_at, state,
+                        regime, keys)
+                except (TypeError, KeyError, AttributeError, ValueError):
+                    verified = False
+            migrated_unverified = False
+            if not verified:
+                if not attest_unverified:
+                    raise ClaimError(
+                        f"cannot migrate claim {claim_id}: line {i+1} "
+                        f"cannot be verified under the current policy — "
+                        f"re-run with attest_unverified=True to accept it "
+                        f"as explicitly UNVERIFIED history")
+                migrated_unverified = True
+                attested_any = True
+            new_entry = {"prev": prev, "saved_at": saved_at,
+                         "state": state}
+            if migrated_unverified:
+                new_entry["migrated_unverified"] = True
+            payload = ClaimStore._entry_seal_payload(prev, saved_at, state)
+            blob = json.dumps(new_entry, sort_keys=True, ensure_ascii=False)
+            sealed = self._entry_seal(prev, saved_at, state,
+                                      regime, current_keys)
+            out_blob = json.dumps({**new_entry, "seal": sealed},
+                                  sort_keys=True, ensure_ascii=False)
+            out_lines.append(out_blob)
+            prev = hashlib.sha256(out_blob.encode("utf-8")).hexdigest()
+        tmp = path + ".migrate.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(out_lines) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        if attested_any:
+            _log.warning(
+                "[claim journal] %s: migrated %d-entry history with "
+                "operator-attested UNVERIFIED entries under %s regime",
+                claim_id, len(out_lines), regime)
+        return len(out_lines)
 
     def list_ids(self) -> list[str]:
         prefix, suffix = "claim_", ".jsonl"

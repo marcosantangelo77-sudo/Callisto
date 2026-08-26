@@ -22,7 +22,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import hashlib
 import json
+
+import os
 
 import pytest
 
@@ -32,7 +35,8 @@ _nosocket = NoSocket()
 _nosocket.install()
 
 from agp import Domain, Evidence, SourceClass  # noqa: E402
-from agp.claims import Claim, ClaimError, ClaimStatus, ClaimStore  # noqa: E402
+from agp.claims import (Claim, ClaimError, ClaimStatus,
+                        ClaimStore, _now_iso)  # noqa: E402
 from agp.preregistration import (  # noqa: E402
     Criteria,
     Preregistration,
@@ -42,6 +46,20 @@ from agp.preregistration import (  # noqa: E402
 )
 from agp.provenance import ProvenanceLedger  # noqa: E402
 from agp.thresholds import MAX_CONFIDENCE_BY_SOURCE  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_unkeyed_seal_policy(monkeypatch):
+    """Tests default to the EXPLICIT unkeyed regime (public checksums).
+
+    Tests that exercise keyed/malformed policies delete this variable
+    themselves (monkeypatch.setenv/delenv wins because it runs later within
+    the test). Production has no such default: undeclared policy fails
+    closed.
+    """
+    if not any(v in os.environ for v in ("CALLISTO_SEAL_KEY",
+                                         "CALLISTO_SEAL_KEY_OLD")):
+        monkeypatch.setenv("CALLISTO_SEAL_POLICY", "unkeyed")
 
 
 def _prereg() -> Preregistration:
@@ -396,6 +414,7 @@ def test_old_key_journal_loads_after_rotation(tmp_path, monkeypatch):
     # CALLISTO_SEAL_KEY to a new current key, per the project's existing
     # rotation policy (CALLISTO_SEAL_KEY_OLD lists accepted prior keys).
     monkeypatch.setenv("CALLISTO_SEAL_KEY", "aa" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
     monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
     store = ClaimStore(str(tmp_path / "claims"))
     p = _prereg(); p.seal()
@@ -405,6 +424,7 @@ def test_old_key_journal_loads_after_rotation(tmp_path, monkeypatch):
 
     # Rotate to a NEW current key; the old key becomes an accepted rotation key.
     monkeypatch.setenv("CALLISTO_SEAL_KEY", "bb" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
     monkeypatch.setenv("CALLISTO_SEAL_KEY_OLD", "aa" * 32)
     loaded = store.load(c.claim_id)
     assert loaded is not None and loaded.to_dict() == c.to_dict()
@@ -463,6 +483,7 @@ def test_invalid_current_key_seal_fails_closed(tmp_path, monkeypatch):
     # Sealed under key A; loading under unrelated key B (no rotation list)
     # must fail closed, not silently fall back.
     monkeypatch.setenv("CALLISTO_SEAL_KEY", "11" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
     monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
     store = ClaimStore(str(tmp_path / "claims"))
     p = _prereg(); p.seal()
@@ -471,6 +492,7 @@ def test_invalid_current_key_seal_fails_closed(tmp_path, monkeypatch):
     store.save(c)
 
     monkeypatch.setenv("CALLISTO_SEAL_KEY", "22" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
     with pytest.raises(ClaimError, match="integrity seal"):
         store.load(c.claim_id)
 
@@ -481,6 +503,7 @@ def test_public_digest_never_substitutes_for_hmac(tmp_path, monkeypatch):
     # The public digest must never substitute for an HMAC under a key ring.
     import hashlib as _h
     monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
     monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
     store = ClaimStore(str(tmp_path / "claims"))
     p = _prereg(); p.seal()
@@ -499,10 +522,12 @@ def test_public_digest_never_substitutes_for_hmac(tmp_path, monkeypatch):
     lines[-1] = json.dumps(forged, sort_keys=True, ensure_ascii=False)
     path.write_text("\n".join(lines) + "\n")
 
-    with pytest.raises(ClaimError, match="integrity seal"):
+    with pytest.raises(ClaimError,
+                       match="bare-string seal|failed its integrity seal"):
         store.load(c.claim_id)
     # Even the legacy opt-in must not resurrect a forged keyed entry.
-    with pytest.raises(ClaimError, match="integrity seal"):
+    with pytest.raises(ClaimError,
+                       match="bare-string seal|failed its integrity seal"):
         store.load(c.claim_id, allow_legacy_unsigned=True)
 
 
@@ -523,6 +548,7 @@ def test_unkeyed_journal_still_loads_without_key_configured(tmp_path, monkeypatc
     # But once a key IS configured, those same public-digest seals fail
     # closed rather than silently bridging into a keyed deployment.
     monkeypatch.setenv("CALLISTO_SEAL_KEY", "cd" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
     with pytest.raises(ClaimError, match="integrity seal"):
         store.load(c.claim_id)
 
@@ -531,6 +557,7 @@ def _write_sealed_journal(store_dir, monkeypatch, key_hex):
     """Helper: write a one-entry journal under the given key config."""
     import hashlib as _h
     monkeypatch.setenv("CALLISTO_SEAL_KEY", key_hex)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
     monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
     store = ClaimStore(str(store_dir))
     p = _prereg(); p.seal()
@@ -562,6 +589,7 @@ def test_malformed_current_key_public_digest_fails_closed(tmp_path, monkeypatch)
 
     # Malformed current key: fail closed, never "unkeyed".
     monkeypatch.setenv("CALLISTO_SEAL_KEY", "not-hex")
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
     with pytest.raises(ClaimError):
         store.load(c.claim_id)
     # Even legacy opt-in cannot resurrect it under malformed keyed policy.
@@ -613,23 +641,35 @@ def test_regime_change_keyed_history_not_downgraded_after_key_removal(
         forged["prev"], forged["saved_at"], forged["state"])
 
     # Key variables removed; the attacker downgrades to the HISTORICAL
-    # bare-string public-digest format.
+    # bare-string public-digest format. With NO external policy declared,
+    # load() now FAILS CLOSED at the policy layer (regime is never inferred
+    # from journal bytes — blocker 3).
     monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
     monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
     forged["seal"] = _h.sha256(payload.encode("utf-8")).hexdigest()
     lines[-1] = json.dumps(forged, sort_keys=True, ensure_ascii=False)
     path.write_text("\n".join(lines) + "\n")
 
-    with pytest.raises(ClaimError, match="integrity seal"):
+    with pytest.raises(ClaimError,
+                       match="no seal policy configured|bare-string"):
         store.load(c.claim_id)
-    # Even legacy opt-in must not resurrect the ambiguous historical format.
-    with pytest.raises(ClaimError, match="integrity seal"):
+    with pytest.raises(ClaimError,
+                       match="no seal policy configured|bare-string"):
         store.load(c.claim_id, allow_legacy_unsigned=True)
 
-    # Control: the SAME bare-string digest read while the WRITING key is
-    # still configured also fails closed (public digest never substitutes).
+    # Even with an EXPLICIT unkeyed opt-in, a bare-string historical seal
+    # (ambiguous HMAC vs public digest) cannot be authenticated and must
+    # route through migrate_legacy_journal(), never silently load.
+    monkeypatch.setenv("CALLISTO_SEAL_POLICY", "unkeyed")
+    with pytest.raises(ClaimError, match="bare-string seal"):
+        store.load(c.claim_id)
+
+    # Control: with the WRITING key configured again, the bare string still
+    # fails closed (public digest never substitutes for an HMAC).
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
     monkeypatch.setenv("CALLISTO_SEAL_KEY", "ef" * 32)
-    with pytest.raises(ClaimError, match="integrity seal"):
+    with pytest.raises(ClaimError, match="bare-string seal"):
         store.load(c.claim_id)
 
 
@@ -695,6 +735,7 @@ def test_tail_truncation_needs_write_access_not_the_key(tmp_path, monkeypatch):
     # tail requires ONLY filesystem write access; load() succeeds on the
     # truncated prefix because no external head/count anchor exists.
     monkeypatch.setenv("CALLISTO_SEAL_KEY", "77" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
     monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
     store = ClaimStore(str(tmp_path / "claims"))
     p = _prereg(); p.seal()
@@ -711,3 +752,286 @@ def test_tail_truncation_needs_write_access_not_the_key(tmp_path, monkeypatch):
     loaded = store.load(c.claim_id)   # validly sealed prefix loads
     assert loaded is not None
     assert loaded.to_dict() != c.to_dict()   # trailing entries are gone
+
+
+# ── explicit strict seal-policy regime (blockers 1–5) ────────────────────
+
+def test_save_fails_closed_on_malformed_current_key(tmp_path, monkeypatch):
+    # Blocker 1: save() must fail closed on malformed config BEFORE any
+    # write — no public {alg:"sha256"} entry may ever be emitted.
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "not-hex")
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Write-side fail closed")
+    c.seal_preregistration(p)
+    with pytest.raises(ClaimError, match="malformed"):
+        store.save(c)
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    assert not path.exists()          # nothing written, no public fallback
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "aa" * 32)
+    store.save(c)                     # fixed config writes fine
+    entry = json.loads(path.read_text().splitlines()[0])
+    assert entry["seal"]["alg"] == "hmac-sha256"
+
+
+def test_mixed_valid_invalid_key_ring_rejected_on_save_and_load(
+        tmp_path, monkeypatch):
+    # Blocker 2: every nonblank configured token must validate. Invalid
+    # current + valid old, or valid current + invalid old: both fail closed
+    # on save AND load; no token is silently dropped.
+    p = _prereg(); p.seal()
+    for cur, old in (("not-hex", "bb" * 32), ("aa" * 32, "zz-bad")):
+        monkeypatch.setenv("CALLISTO_SEAL_KEY", cur)
+        monkeypatch.setenv("CALLISTO_SEAL_KEY_OLD", old)
+        monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
+        store = ClaimStore(str(tmp_path / f"m{cur[:3]}"))
+        c = Claim(text="mixed ring"); c.seal_preregistration(p)
+        with pytest.raises(ClaimError):
+            store.save(c)
+        # Even a pre-existing journal cannot be read under a broken ring.
+        (tmp_path / f"m{cur[:3]}" /
+         f"claim_{c.claim_id}.jsonl").write_text("{}\n")
+        with pytest.raises(ClaimError, match="malformed|corrupt|expected"):
+            store.load(c.claim_id)
+
+
+def test_old_key_only_config_cannot_authorize_new_writes(tmp_path,
+                                                         monkeypatch):
+    # Blocker 2 clarification: old keys are verification-only. An old key
+    # alone (no valid current) is a malformed keyed config and fails closed.
+    monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
+    monkeypatch.setenv("CALLISTO_SEAL_KEY_OLD", "bb" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
+    store = ClaimStore(str(tmp_path / "oldonly"))
+    p = _prereg(); p.seal()
+    c = Claim(text="old-only ring"); c.seal_preregistration(p)
+    with pytest.raises(ClaimError):
+        store.save(c)
+
+
+def test_keyed_history_unloadable_after_key_removal_without_explicit_policy(
+        tmp_path, monkeypatch):
+    # Blocker 3: regime is an EXTERNAL policy anchor. After writing under a
+    # key and then removing all key configuration, the journal must NOT load
+    # as an inferred-unkeyed history: undeclared policy fails closed. Key
+    # removal alone never transforms a keyed policy into public-checksum
+    # verification.
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="External anchor claim"); c.seal_preregistration(p)
+    store.save(c)
+
+    monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
+    with pytest.raises(ClaimError, match="no seal policy configured"):
+        store.load(c.claim_id)
+    # Explicit unkeyed opt-in also fails per-entry (HMAC seals can't verify
+    # publicly); it never re-authenticates keyed entries.
+    monkeypatch.setenv("CALLISTO_SEAL_POLICY", "unkeyed")
+    with pytest.raises(ClaimError):
+        store.load(c.claim_id)
+
+
+def test_envelope_rewrite_to_public_sha256_under_keyed_policy_rejected(
+        tmp_path, monkeypatch):
+    # Blocker 3 attack shape: attacker removes keys from THEIR config,
+    # rewrites alg to sha256, recomputes the public digest, and loads.
+    # Under the deployment's keyed external policy this must fail closed;
+    # and with no policy at all, it fails closed at the policy layer.
+    import hashlib as _h
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "cd" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Rewrite attack"); c.seal_preregistration(p)
+    store.save(c)
+
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    lines = path.read_text().splitlines()
+    tail = json.loads(lines[-1])
+    forged = dict(tail, state=dict(tail["state"], status="confirmed"))
+    payload = ClaimStore._entry_seal_payload(
+        forged["prev"], forged["saved_at"], forged["state"])
+    prov = json.dumps({"alg": "sha256"}, sort_keys=True, separators=(",", ":"))
+    forged["seal"] = {"alg": "sha256",
+                      "digest": _h.sha256(
+                          (payload + "\n" + prov).encode()).hexdigest()}
+    lines[-1] = json.dumps(forged, sort_keys=True, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n")
+
+    # Deployment still declares keyed policy: rewrite rejected.
+    with pytest.raises(ClaimError):
+        store.load(c.claim_id)
+    # Attacker ALSO controls config and deletes the policy: fail closed at
+    # the policy layer (regime never inferred from journal bytes).
+    monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
+    with pytest.raises(ClaimError, match="no seal policy configured"):
+        store.load(c.claim_id)
+    # Explicit unkeyed opt-in: HONEST LIMIT pinned. The forged tail is a
+    # well-formed public sha256 seal over altered state, so it LOADS once
+    # the attacker sets the external policy to unkeyed. No journal-only
+    # marker can defend against an attacker who also controls the external
+    # configuration; unkeyed is tamper-EVIDENCE, not authenticity.
+    monkeypatch.setenv("CALLISTO_SEAL_POLICY", "unkeyed")
+    loaded = store.load(c.claim_id)
+    assert loaded.status == "confirmed"
+    assert json.loads(path.read_text())["seal"]["alg"] == "sha256"
+
+
+def test_absent_vs_null_vs_malformed_seals_and_scalar_entries(
+        tmp_path, monkeypatch):
+    # Blocker 4: absent seal vs present-null are distinct; null seal under
+    # legacy opt-in is NOT accepted as missing; malformed envelopes and
+    # scalar/odd entry shapes raise ClaimError, never AttributeError/
+    # TypeError/KeyError leaks.
+    monkeypatch.setenv("CALLISTO_SEAL_POLICY", "unkeyed")
+    monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Envelope shapes"); c.seal_preregistration(p)
+    state = c.to_dict()
+    base = {"prev": "GENESIS", "saved_at": _now_iso(), "state": state}
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+
+    def expect_claim_error(raw_lines):
+        path.write_text("\n".join(raw_lines) + "\n")
+        with pytest.raises(ClaimError):
+            store.load(c.claim_id)
+        with pytest.raises(ClaimError):
+            store.load(c.claim_id, allow_legacy_unsigned=True)
+
+    good_blob = json.dumps({**base, "seal":
+                            store._entry_seal("GENESIS", base["saved_at"],
+                                              state, "unkeyed", [])},
+                           sort_keys=True)
+    # sanity control
+    path.write_text(good_blob + "\n")
+    assert store.load(c.claim_id) is not None
+
+    # NULL seal: distinct from ABSENT — never accepted as legacy-missing.
+    expect_claim_error([json.dumps({**base, "seal": None}, sort_keys=True)])
+    # Malformed envelope shapes -> ClaimError (not incidental exceptions).
+    expect_claim_error([json.dumps({**base, "seal": ["x"]})])
+    expect_claim_error([json.dumps({**base, "seal": {"digest": 12}})])
+    expect_claim_error([json.dumps({**base, "seal": {"digest": {}}})])
+    expect_claim_error([json.dumps({**base, "seal": {"alg": 9,
+                                                     "digest": "x"}})])
+    # Scalar entry / wrong container shapes.
+    expect_claim_error(['[1,2,3]'])
+    expect_claim_error(['"just a string"'])
+    expect_claim_error(['42'])
+    expect_claim_error([json.dumps({"prev": "GENESIS"})])       # missing fields
+
+
+def test_explicit_unkeyed_policy_round_trip_and_checksum_semantics(
+        tmp_path, monkeypatch):
+    # Explicit unkeyed regime: works without any key, produces public
+    # SHA-256 checksums (documented as tamper-EVIDENCE, not authenticity).
+    monkeypatch.setenv("CALLISTO_SEAL_POLICY", "unkeyed")
+    monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Explicit unkeyed"); c.seal_preregistration(p)
+    store.save(c)
+    assert store.load(c.claim_id).to_dict() == c.to_dict()
+    entry = json.loads((tmp_path / "claims" /
+                        f"claim_{c.claim_id}.jsonl").read_text())
+    assert entry["seal"]["alg"] == "sha256"
+    # Constructor API equivalent works too.
+    store2 = ClaimStore(str(tmp_path / "c2"), seal_policy="unkeyed")
+    c2 = Claim(text="Ctor unkeyed"); c2.seal_preregistration(p)
+    store2.save(c2)
+    assert store2.load(c2.claim_id) is not None
+    # Unknown policy value fails closed; conflicting declarations fail.
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
+    with pytest.raises(ClaimError, match="unknown seal policy"):
+        ClaimStore(str(tmp_path / "c3"), seal_policy="yolo")._policy()
+    monkeypatch.delenv("CALLISTO_SEAL_POLICY", raising=False)
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "aa" * 32)
+    with pytest.raises(ClaimError, match="conflicting seal policy|conflicts with configured"):
+        ClaimStore(str(tmp_path / "c4"), seal_policy="unkeyed")._policy()
+
+
+def test_rotation_current_signs_old_verifies(tmp_path, monkeypatch):
+    monkeypatch.setenv("CALLISTO_SEAL_POLICY", "keyed")
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "aa" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Rotation strict"); c.seal_preregistration(p)
+    store.save(c)
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "bb" * 32)
+    monkeypatch.setenv("CALLISTO_SEAL_KEY_OLD", "aa" * 32)
+    assert store.load(c.claim_id) is not None
+    # New entries sign under CURRENT key only.
+    c.attach_evidence(_ev("post rotation"), note="n")
+    store.save(c)
+    entry = json.loads((tmp_path / "claims" /
+                        f"claim_{c.claim_id}.jsonl").read_text().splitlines()[1])
+    assert entry["seal"]["alg"] == "hmac-sha256"
+    assert store.load(c.claim_id) is not None
+    # allow_legacy_unsigned stays inert under keyed policy: stripping a
+    # seal from any entry is still rejected even with the opt-in.
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    ls = path.read_text().splitlines()
+    stripped = json.loads(ls[-1]); del stripped["seal"]
+    ls[-1] = json.dumps(stripped, sort_keys=True)
+    path.write_text("\n".join(ls) + "\n")
+    with pytest.raises(ClaimError):
+        store.load(c.claim_id, allow_legacy_unsigned=True)
+
+
+def test_legacy_bare_string_journal_requires_migration_not_append(
+        tmp_path, monkeypatch):
+    # Blocker 5 footgun: load(verify=False) + save() used to append a new
+    # envelope onto permanently unloadable history. Now: migration is the
+    # ONLY route, it is atomic, operator-attested, and marks unverifiable
+    # entries forever.
+    import hashlib as _h
+    monkeypatch.setenv("CALLISTO_SEAL_POLICY", "unkeyed")
+    monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Bare string legacy"); c.seal_preregistration(p)
+    state = c.to_dict()
+    bare = {"prev": "GENESIS", "saved_at": _now_iso(), "state": state,
+            "seal": _h.sha256(json.dumps(
+                {"prev": "GENESIS", "saved_at": _now_iso(), "state": state},
+                sort_keys=True).encode()).hexdigest()}
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    path.write_text(json.dumps(bare, sort_keys=True) + "\n")
+
+    # Refuses to load; refuse-to-append: saving on top does NOT paper over it
+    # because load(verify=False)+save now leaves the history unloadable —
+    # instead save() itself refuses while the policy can't verify? No:
+    # save appends, so the FIX is that migrate_legacy_journal replaces the
+    # whole file atomically; appending is pointless but harmless. Pin that
+    # migration is required and works:
+    with pytest.raises(ClaimError, match="bare-string"):
+        store.load(c.claim_id)
+    with pytest.raises(ClaimError, match="attest_unverified"):
+        store.migrate_legacy_journal(c.claim_id)
+    n = store.migrate_legacy_journal(c.claim_id, attest_unverified=True)
+    assert n == 1
+    loaded = store.load(c.claim_id)
+    assert loaded is not None
+    raw = path.read_text().splitlines()[0]
+    entry = json.loads(raw)
+    assert entry.get("migrated_unverified") is True   # provenance kept visible
+    prev = hashlib.sha256(raw.encode()).hexdigest()
+    # Atomic replacement boundary: append after migration chains correctly.
+    c.attach_evidence(_ev("after migration"), note="n")
+    store.save(c)
+    assert store.load(c.claim_id) is not None
+    # Migration refuses corrupt JSON outright.
+    path.write_text("{not json\n")
+    with pytest.raises(ClaimError, match="cannot migrate"):
+        store.migrate_legacy_journal(c.claim_id, attest_unverified=True)

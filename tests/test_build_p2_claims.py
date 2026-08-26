@@ -8,6 +8,8 @@ inputs, not chosen ones. No network, no real DB; file stores use tmp_path.
 import json
 import random
 
+import os
+
 import pytest
 
 from agp import Domain, Evidence, SourceClass, SourceClass as SC
@@ -33,6 +35,20 @@ from agp.research_program import (
 from agp.thresholds import MAX_CONFIDENCE_BY_SOURCE
 
 RNG = random.Random(424242)
+
+
+@pytest.fixture(autouse=True)
+def _default_unkeyed_seal_policy(monkeypatch):
+    """Tests default to the EXPLICIT unkeyed regime (public checksums).
+
+    Tests that exercise keyed/malformed policies delete this variable
+    themselves (monkeypatch.setenv/delenv wins because it runs later within
+    the test). Production has no such default: undeclared policy fails
+    closed.
+    """
+    if not any(v in os.environ for v in ("CALLISTO_SEAL_KEY",
+                                         "CALLISTO_SEAL_KEY_OLD")):
+        monkeypatch.setenv("CALLISTO_SEAL_POLICY", "unkeyed")
 
 
 def rand_text(n=20):
