@@ -270,8 +270,17 @@ class OrderManager:
             await self._db.close()
             self._db = None
 
-    def enable(self) -> None:
+    def enable(self) -> bool:
+        # Nuclear kill switch: CALLISTO_LOCAL_ONLY forbids arming order
+        # submission entirely (mirrors BetExecutor.enable()).
+        if os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes"):
+            logger.warning(
+                "OrderManager.enable() refused: CALLISTO_LOCAL_ONLY is set — "
+                "order submission stays disabled"
+            )
+            return False
         self._enabled = True
+        return True
 
     def disable(self) -> None:
         self._enabled = False
