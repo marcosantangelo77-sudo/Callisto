@@ -81,10 +81,11 @@ echo     -------------------------------------------------------
 echo.
 
 REM --- 4. Run API in foreground (keeps window open) ---
+if not defined CALLISTO_BIND_HOST set CALLISTO_BIND_HOST=127.0.0.1
 if exist "venv\Scripts\python.exe" (
-    venv\Scripts\python.exe -u -m uvicorn api:app --host 0.0.0.0 --port 8420
+    venv\Scripts\python.exe -u -m uvicorn api:app --host %CALLISTO_BIND_HOST% --port 8420
 ) else (
-    python -u -m uvicorn api:app --host 0.0.0.0 --port 8420
+    python -u -m uvicorn api:app --host %CALLISTO_BIND_HOST% --port 8420
 )
 
 REM If we get here, the API exited
