@@ -24,3 +24,8 @@ from tools.loop.phases.hypgen import (  # noqa: F401
     phase_generate_hypotheses,
     phase_injury_prop_hypotheses,
 )
+from tools.loop.phases.collect_eval import (  # noqa: F401
+    phase_collect_data,
+    phase_embed_data,
+    phase_evaluate,
+)
