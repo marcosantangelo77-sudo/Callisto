@@ -8,4 +8,6 @@ import path stable):
 - snapshot_ops: odds_snapshots / backtest cache / microstructure persistence
 - fallback_cascade: all-source free scraper cascade
 - monitor_loop: main loop cycle body, prop cascade, alert glue, query helpers
+- schema: DDL bootstrap for odds tables
+- ws_stream: WS + incremental event-driven ingestion
 """
