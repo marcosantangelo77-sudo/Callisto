@@ -329,11 +329,12 @@ def test_backtest_engine_source_gates_via_reject_non_paper():
 
     src = inspect.getsource(BacktestEngine.generate_paper_trade_signal)
     assert "reject_non_paper" in src
-    # The gate fires before any odds processing: it must appear before the
-    # first odds/config handling line ("target_book").
+    # Slice-4 moved the odds body into tools.btest.paper_pipeline. The
+    # facade must still reject non-paper statuses BEFORE that delegation.
+    assert "paper_pipeline.generate_paper_trade_signal" in src
     gate_pos = src.index("reject_non_paper")
-    odds_pos = src.index("target_book")
-    assert gate_pos < odds_pos
+    pipeline_pos = src.index("paper_pipeline.generate_paper_trade_signal")
+    assert gate_pos < pipeline_pos
 
 
 def test_generate_paper_trade_signal_docstring_forbids_live():
