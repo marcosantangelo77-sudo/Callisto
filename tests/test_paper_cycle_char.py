@@ -298,8 +298,13 @@ def test_phase_live_execute_exists_and_checks_env_before_anything():
     assert len(nodes) == 1, "_phase_live_execute must exist exactly once in tools/autonomous.py"
     raw = _read(AUTONOMOUS_MODULE)
     seg_start = raw.find("async def _phase_live_execute")
-    seg_end = raw.find("async def _phase_interpret_backtests", seg_start)
-    assert seg_start != -1 and seg_end != -1
+    # After the auto-helper extraction refactor the method may no longer be
+    # followed by `_phase_interpret_backtests`; locate its end by brace
+    # back-navigation from the NEXT top-level `async def` at column 0.
+    seg_end = raw.find("\nasync def ", seg_start + 1)
+    if seg_end == -1:
+        seg_end = len(raw)
+    assert seg_start != -1
     src = raw[seg_start:seg_end]
     assert 'getenv("CALLISTO_ALLOW_LIVE_EXECUTE")' in src, (
         "arming switch must be read via getenv('CALLISTO_ALLOW_LIVE_EXECUTE')"
