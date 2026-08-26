@@ -7939,6 +7939,32 @@ class ResearchLoop:
             except Exception as e:
                 logger.warning(f"Claude spinning diagnosis failed: {e}")
 
+    def _last_cycle_phase_failures(self) -> int:
+        """Number of phase failures recorded during the most recent cycle."""
+        latest = self._phase_failures_ledger.latest(1)
+        if not latest:
+            return 0
+        last_cycle = latest[-1]["cycle"]
+        return sum(
+            1
+            for entry in self._phase_failures_ledger.latest(self._phase_failures_ledger.count)
+            if entry["cycle"] == last_cycle
+        )
+
+    def _last_cycle_ok(self) -> bool:
+        """True iff no phase failed during the most recent cycle.
+
+        Failures are non-fatal (the loop continues), but a cycle in which any
+        phase failed or timed out must not report as healthy. If no cycle has
+        run yet (or no failure was ever recorded), the loop is healthy.
+        """
+        if self._cycles == 0:
+            return True
+        latest = self._phase_failures_ledger.latest(1)
+        if not latest:
+            return True
+        return latest[-1]["cycle"] < self._cycles
+
     def get_status(self) -> dict:
         """Return research loop status."""
         from tools.claude_code import get_usage_stats as claude_stats
@@ -7973,6 +7999,10 @@ class ResearchLoop:
             # "healthy-looking" loop can't hide swallowed phase errors.
             "phase_failures": self._phase_failures_ledger.latest(10),
             "phase_failure_count": self._phase_failures_ledger.count,
+            # Per-cycle health: False when any phase failed during the most
+            # recent cycle (failures are non-fatal, but the loop is NOT ok).
+            "last_cycle_ok": self._last_cycle_ok(),
+            "last_cycle_phase_failures": self._last_cycle_phase_failures(),
             # R2: loop-quality telemetry — calibration trace + per-phase
             # task-class map, consumed by R1's retrodiction harness.
             "calibration": self._calibration_trace.summary(),
