@@ -9,6 +9,7 @@ import asyncio
 import os
 import sqlite3
 import tempfile
+import time
 
 import aiosqlite
 import pytest
@@ -356,3 +357,109 @@ async def test_graceful_drain_still_applies_all_writes(tmp_db):
         assert n == 50
     finally:
         pass  # already stopped
+
+
+@pytest.mark.asyncio
+async def test_forced_shutdown_settles_blocked_producer(tmp_db):
+    """Regression: a producer blocked in _submit() on Queue.put() (full queue)
+    must be settled by stop() — no orphaned future, no AttributeError on the
+    cleared queue, and stop() must respect the caller's drain timeout instead
+    of a hard-coded sentinel delay.
+    """
+    coord = WriteCoordinator(tmp_db)
+    await coord.start()
+    original_max = coord.QUEUE_MAXSIZE
+    coord.QUEUE_MAXSIZE = 1
+    try:
+        # Rebuild the queue with maxsize=1 (start() already created one with
+        # the class default; swap deterministically before any traffic).
+        coord._queue = asyncio.Queue(maxsize=1)
+
+        blocked_started = asyncio.Event()
+        release = asyncio.Event()
+        original_apply = coord._apply
+
+        async def slow_apply(op_type, sql, payload):
+            if not release.is_set():
+                blocked_started.set()
+                await release.wait()
+            return await original_apply(op_type, sql, payload)
+
+        coord._apply = slow_apply
+
+        results = {}
+
+        async def caller(name, coro):
+            try:
+                results[name] = ("ok", await coro)
+            except asyncio.CancelledError:
+                results[name] = ("cancelled", None)
+            except Exception as e:
+                results[name] = ("error", e)
+
+        async def wait_enqueued(n_expected):
+            while True:
+                q = coord._queue
+                if q is not None and q.qsize() >= n_expected:
+                    return
+                await asyncio.sleep(0)
+
+        # 1. In-flight _apply is blocked.
+        t1 = asyncio.create_task(caller("inflight", coord.execute(
+            "INSERT INTO t (v, who) VALUES (?, ?)", (1, "blocked"))))
+        await asyncio.wait_for(blocked_started.wait(), timeout=5)
+
+        # 2. Fills the queue (maxsize=1).
+        t2 = asyncio.create_task(caller("queued", coord.execute(
+            "INSERT INTO t (v, who) VALUES (?, ?)", (2, "queued"))))
+        await asyncio.wait_for(wait_enqueued(1), timeout=5)
+
+        # 3. Third producer must be BLOCKED inside _submit() on put().
+        t3 = asyncio.create_task(caller("blocked_producer", coord.execute(
+            "INSERT INTO t (v, who) VALUES (?, ?)", (3, "admission-blocked"))))
+        await asyncio.wait_for(wait_enqueued(1), timeout=1)
+        assert len(coord._pending_puts) == 1, (
+            "third write should be blocked at queue admission"
+        )
+        assert not t3.done()
+
+        start = time.monotonic()
+        await asyncio.wait_for(coord.stop(drain_timeout_s=0.05), timeout=5)
+        elapsed = time.monotonic() - start
+        assert elapsed < 1.5, (
+            f"stop() took {elapsed:.2f}s with drain_timeout_s=0.05 — "
+            f"hard-coded sentinel delay is back"
+        )
+
+        done, pending = await asyncio.wait({t1, t2, t3}, timeout=2.0)
+        assert not pending, f"producers hung after stop(): {pending}"
+        kinds = {k for k, _ in results.values()}
+        assert kinds <= {"ok", "cancelled", "error"}, f"{results}"
+        for k, v in results.values():
+            if k == "error":
+                assert isinstance(v, RuntimeError) and "shut down" in str(v)
+        # The admission-blocked producer must NOT leak an AttributeError or
+        # stay unresolved — it must have a terminal outcome recorded.
+        assert "blocked_producer" in results, (
+            "admission-blocked producer was never settled"
+        )
+
+        # Clean lifecycle state; no unresolved futures anywhere.
+        assert coord._task is None
+        assert coord._queue is None
+        assert not coord._running
+        assert not coord._pending_puts
+
+        # Restart works cleanly afterwards.
+        coord._apply = original_apply
+        coord.QUEUE_MAXSIZE = original_max
+        await asyncio.wait_for(coord.start(), timeout=5)
+        try:
+            rid = await asyncio.wait_for(coord.execute(
+                "INSERT INTO t (v, who) VALUES (?, ?)", (9, "post-restart")),
+                timeout=5)
+            assert rid > 0
+        finally:
+            await asyncio.wait_for(coord.stop(), timeout=5)
+    finally:
+        coord._apply = original_apply
