@@ -10,6 +10,9 @@ workstation. See `findings/ox_concurrency_probe_2026-08-26.md`.
 
 Orchestrator does not implement these diffs. Independent review before merge.
 
+**Superseded for fleet state:** `findings/ox_wave4_fleet.md` and
+`findings/scorecard_50.md`. Master is past Stage A (`373352e`).
+
 ## Wave 1
 
 | Slot | Task | Branch | Worktree | State |
