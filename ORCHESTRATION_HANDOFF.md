@@ -22,7 +22,7 @@ The checkout is:
 ```
 
 `master` currently tracks `origin/master` and was last verified at
-`47ae16f`. The current master checkout must stay clean while candidate
+`4c79807`. The current master checkout must stay clean while candidate
 worktrees are reviewed.
 
 ## What has safely reached master
@@ -35,6 +35,7 @@ These reviewed commits have been pushed to `origin/master`:
 | `1f70af2` | Retry transient POST 403s. |
 | `2c1eaa1` | Validate duplicate fetch provenance records. |
 | `47ae16f` | Keep stale evidence from earning confidence credit and make stale penalties/counts explicit in calibration and WHY diagnostics. |
+| `4c79807` | Settle DB-writer producers blocked at queue admission during forced shutdown. |
 
 Everything below is a candidate or WIP until independently approved.
 
@@ -52,7 +53,7 @@ live:
 | --- | --- | --- |
 | 1 | `codex/checkpoint-trace-fidelity` at `/private/tmp/callisto-checkpoint-trace-fidelity` | Narrow worker: make resume use only validated admitted evidence and reject forged independent-source credit. Malformed outcome data is queued for a later turn. |
 | 2 | `codex/run-persistence-unique-id` at `/private/tmp/callisto-run-persistence-unique-id` | Bind publication success to inode provenance and close post-rename/CLI race semantics. |
-| 3 | `codex/db-writer-shutdown` at `/private/tmp/callisto-db-writer-shutdown` | Completed `4609e04`; independent no-edit OX review approved it. Reviewed merge pending; do not launch a replacement. |
+| 3 | `codex/db-writer-shutdown` at `/private/tmp/callisto-db-writer-shutdown` | Completed during the freeze; independently reviewed and squash-merged to master as `4c79807`. Do not launch a replacement. |
 
 ### Handoff freeze — do not dispatch more workers
 
@@ -134,7 +135,6 @@ matching.
 | --- | --- | --- |
 | `codex/checkpoint-trace-fidelity` / `9513ffc` | Resume path bypasses admission validation by consuming raw `payload['fetches']`; forged `independent_keys` can inflate confidence; blank rejected/skipped and malformed `rejections` fabricate honest-null/gate evidence. | Worker is active. Require one strict decoder used by all resume consumers, derived independent keys, and end-to-end adversarial tests. |
 | `codex/run-persistence-unique-id` / `39e9ef0` | Normal post-rename success still trusts byte equality rather than inode identity; a moved final can duplicate records; cleanup can turn indeterminate publication into false durability; CLI lacks explicit do-not-retry semantics. | Worker is active. Require fd/inode validation and atomic foreign-replacement tests. |
-| `codex/db-writer-shutdown` / `4609e04` | Earlier `6500300` queue-sweep candidate missed a producer blocked in `Queue.put()`: stop waited ~2 s despite a 50 ms timeout, raised incidental `AttributeError`, and stranded its future. | **APPROVED** by a no-edit adversarial OX review: 26 focused tests plus pending-put, multi-producer, external-cancel, timeout, and restart probes. Non-blocking caveat: an in-flight forced-cancel caller receives `CancelledError`, and a narrow shutdown race may persist an op whose caller was told admission failed. Merge pending. |
 
 ### Parked: requires a deployment-policy decision before merge
 
@@ -213,9 +213,9 @@ Do not merge WIP checkpoints or candidates with an unresolved reviewer BLOCK.
 3. Wait for each currently live worker’s summary, review or at minimum record
    its exact new head, and do **not** recycle the worker slot during the
    operator-requested freeze.
-4. `fd496e6` was squash-merged into master as `47ae16f` after focused tests.
-   Merge reviewed `4609e04` after the standard clean-master checks. During
-   the freeze, record rather than dispatch repairs for remaining blocks.
+4. `fd496e6` was squash-merged into master as `47ae16f`; reviewed DB repair
+   `4609e04` was squash-merged as `4c79807`. During the freeze, record rather
+   than dispatch repairs for remaining blocks.
 5. When implementation credits are exhausted, preserve this file and all
    pushed branches, stop launching new paid primary-agent work, and hand the
    same branch/task ledger to Cursor/Grok. The external OX workers may still
