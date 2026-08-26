@@ -73,6 +73,23 @@ SENSITIVE_GETS = [
     "/health/deep",
     "/health/integrity/history",
     "/tasks",
+    # batch 4
+    "/model/total/{sport}",
+    "/model/environment",
+    "/model/injury-impact/{sport}",
+    "/data/injuries/{sport}",
+    "/data/scoreboard/{sport}",
+    "/data/weather",
+    "/data/referee",
+    "/data/stats",
+    "/backtest/run/{run_id}",
+    "/historical/cache",
+    "/research/status",
+    "/research/sports",
+    "/embeddings/stats",
+    "/claude/status",
+    "/debug/memory",
+    "/debug/memory/top-traces",
 ]
 
 
