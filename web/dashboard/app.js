@@ -1,6 +1,6 @@
 /* Callisto research appliance dashboard — vanilla JS, no build step.
  *
- * Refresh model: poll 6 endpoints every REFRESH_MS. Each panel renders
+ * Refresh model: poll 3 endpoints every REFRESH_MS. Each panel renders
  * independently so one slow/failed endpoint never blanks the whole UI.
  * Every fetch is wrapped — the error path just tags the panel with a
  * yellow "stale" banner instead of exploding.
@@ -13,9 +13,6 @@ const REFRESH_MS = 15000;
 // 8421 or mounted under api.py at /dashboard/.
 const API = {
   status:     "api/status",
-  hyps:       "api/hypotheses/live",
-  orders:     "api/orders?limit=20",
-  portfolio:  "api/portfolio",
   ingestion:  "api/ingestion",
   alerts:     "api/alerts?limit=20",
 };
@@ -148,106 +145,6 @@ function renderCircuits(sysHealth, health) {
   return `${pill(`${open.length} open`, "red")}: ${open.join(", ")}${recentTripTxt}`;
 }
 
-function renderHyps(data) {
-  const body = document.getElementById("hyps-body");
-  const countEl = document.getElementById("hyp-count");
-  if (data.__error) {
-    body.innerHTML = `<div class="error">${escapeHtml(data.__error)}</div>`;
-    countEl.textContent = "";
-    return;
-  }
-  const hyps = data.hypotheses || [];
-  countEl.textContent = hyps.length ? `${hyps.length} live` : "";
-  if (!hyps.length) {
-    body.innerHTML = '<div class="empty">No LIVE hypotheses.</div>';
-    return;
-  }
-  body.innerHTML =
-    `<div class="hyp-grid">` +
-    hyps.map(h => {
-      const color = h.health_color || "yellow";
-      return `
-        <div class="hyp-card health-${color}">
-          <div class="name">${escapeHtml(h.name || h.hypothesis_id || "–")}</div>
-          <div class="meta">${escapeHtml(h.sport || "")} · ${escapeHtml(h.market_type || "")} · ${pill(h.status || "–", color)}</div>
-          <div class="stats">
-            <span class="k">days live</span><span class="v">${fmtNum(h.days_live, 1)}</span>
-            <span class="k">signals</span><span class="v">${h.recent_signals ?? "–"}</span>
-            <span class="k">hit</span><span class="v">${h.rolling_hit_rate != null ? fmtPct(h.rolling_hit_rate * 100) : "–"}</span>
-            <span class="k">ROI</span><span class="v">${h.rolling_roi != null ? fmtPct(h.rolling_roi * 100) : "–"}</span>
-            <span class="k">CLV</span><span class="v">${h.rolling_clv != null ? fmtPct(h.rolling_clv * 100) : "–"}</span>
-            <span class="k">id</span><span class="v muted">${escapeHtml((h.hypothesis_id || "").slice(0, 11))}</span>
-          </div>
-        </div>
-      `;
-    }).join("") +
-    `</div>`;
-}
-
-function renderOrders(data) {
-  const body = document.getElementById("orders-body");
-  const countEl = document.getElementById("orders-count");
-  if (data.__error) {
-    body.innerHTML = `<div class="error">${escapeHtml(data.__error)}</div>`;
-    countEl.textContent = "";
-    return;
-  }
-  const orders = data.orders || [];
-  const counts = data.counts_by_state || {};
-  const countsTxt = Object.entries(counts)
-    .map(([k, v]) => `${k}: ${v}`).join(" · ") || "none";
-  countEl.textContent = `${orders.length} rows · ${countsTxt}${data.source === "db" ? " (db fallback)" : ""}`;
-
-  if (!orders.length) {
-    body.innerHTML = '<div class="empty">No recent orders.</div>';
-    return;
-  }
-  const rows = orders.map(o => {
-    const state = String(o.state || o.status || "").toLowerCase();
-    const pending = state.includes("pending");
-    return `
-      <tr class="${pending ? "pending" : ""}">
-        <td>${escapeHtml(o.id ?? "–")}</td>
-        <td>${pill(state || "–", pending ? "yellow" : state === "filled" ? "green" : state === "rejected" ? "red" : "muted")}</td>
-        <td>${escapeHtml(o.sport || "–")}</td>
-        <td>${escapeHtml(o.market || o.market_type || "–")}</td>
-        <td>${fmtMoney(o.stake)}</td>
-        <td class="muted">${escapeHtml(o.created_at || o.submitted_at || "–")}</td>
-      </tr>`;
-  }).join("");
-  body.innerHTML = `
-    <table class="tbl">
-      <thead><tr><th>#</th><th>state</th><th>sport</th><th>market</th><th>stake</th><th>created</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-}
-
-function renderPortfolio(data) {
-  const body = document.getElementById("portfolio-body");
-  if (data.__error || !data.online) {
-    body.innerHTML = `<div class="error">${escapeHtml(data.__error || "offline")}</div>`;
-    return;
-  }
-  const dd = data.drawdown_pct;
-  const ddColor = dd == null ? "muted" : dd < 2 ? "green" : dd < 8 ? "yellow" : "red";
-  const exposureRows = Object.entries(data.exposure_by_sport || {})
-    .sort((a, b) => b[1] - a[1])
-    .map(([s, v]) => `<tr><td>${escapeHtml(s)}</td><td>${fmtMoney(v)}</td></tr>`)
-    .join("") || `<tr><td class="empty" colspan="2">no open exposure</td></tr>`;
-
-  body.innerHTML = `
-    <dl class="kv">
-      <dt>Bankroll</dt><dd>${fmtMoney(data.current_balance)}</dd>
-      <dt>Rolling peak</dt><dd>${fmtMoney(data.rolling_peak)}</dd>
-      <dt>Drawdown</dt><dd>${pill(fmtPct(dd, 2), ddColor)}</dd>
-      <dt>Open exposure</dt><dd>${fmtMoney(data.total_open_exposure)} · ${data.unsettled_count || 0} bets</dd>
-    </dl>
-    <table class="tbl" style="margin-top:6px">
-      <thead><tr><th>sport</th><th>exposure</th></tr></thead>
-      <tbody>${exposureRows}</tbody>
-    </table>`;
-}
-
 function renderIngestion(data) {
   const body = document.getElementById("ingestion-body");
   if (data.__error) {
@@ -356,43 +253,19 @@ function setLastRefresh() {
 // Main loop
 // ---------------------------------------------------------------------------
 
-// Research face by default: trading panels stay hidden and their money
-// endpoints are never polled unless the operator opts in with ?trading=1.
-const TRADING_MODE =
-  new URLSearchParams(window.location.search).get("trading") === "1";
-
-function applyTradingMode() {
-  if (!TRADING_MODE) return;
-  ["panel-hyps", "panel-orders", "panel-portfolio"].forEach((id) => {
-    const el = document.getElementById(id);
-    if (el) el.hidden = false;
-  });
-}
-
 async function refresh() {
-  // Only poll money endpoints (live hypotheses / orders / portfolio) when
-  // the trading panels are actually visible.
-  const [status, hyps, orders, portfolio, ingestion, alerts] = await Promise.all([
+  const [status, ingestion, alerts] = await Promise.all([
     jsonFetch(API.status),
-    TRADING_MODE ? jsonFetch(API.hyps) : Promise.resolve({}),
-    TRADING_MODE ? jsonFetch(API.orders) : Promise.resolve({}),
-    TRADING_MODE ? jsonFetch(API.portfolio) : Promise.resolve({}),
     jsonFetch(API.ingestion),
     jsonFetch(API.alerts),
   ]);
 
   renderState(status);
-  if (TRADING_MODE) {
-    renderHyps(hyps);
-    renderOrders(orders);
-    renderPortfolio(portfolio);
-  }
   renderIngestion(ingestion);
   renderAlerts(alerts);
 
   setLastRefresh();
 }
 
-applyTradingMode();
 refresh();
 setInterval(refresh, REFRESH_MS);

@@ -223,18 +223,16 @@ def test_kelly_binary_delegates_to_kelly_core():
 
 
 # ---------------------------------------------------------------------------
-# 9. Dashboard hypotheses panel is hidden by default
+# 9. Dashboard trading panels are absent from the HTML entirely
 # ---------------------------------------------------------------------------
 
 
-def test_dashboard_panel_hyps_is_hidden():
+def test_dashboard_trading_panels_are_absent():
     src = _read("web/dashboard/index.html")
-    m = re.search(r'<section[^>]*id="panel-hyps"[^>]*>', src)
-    assert m, 'panel-hyps section missing from web/dashboard/index.html'
-    tag = m.group(0)
-    assert re.search(r'\bhidden\b', tag), (
-        "panel-hyps section lost its hidden attribute"
-    )
+    for panel_id in ("panel-hyps", "panel-orders", "panel-portfolio"):
+        assert f'id="{panel_id}"' not in src, (
+            f"{panel_id} must be deleted from index.html, not merely hidden"
+        )
 
 
 # ---------------------------------------------------------------------------

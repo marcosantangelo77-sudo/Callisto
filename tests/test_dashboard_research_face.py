@@ -15,31 +15,35 @@ def test_title_and_brand_are_research_not_ops_dashboard():
     assert "ops dashboard" not in combined
 
 
-def test_trading_panels_hidden_by_default_in_html():
+def test_trading_panels_absent_from_html():
     for panel_id in ("panel-hyps", "panel-orders", "panel-portfolio"):
-        # Find the section tag carrying this id and require the hidden attr.
-        import re
-
-        m = re.search(rf"<section[^>]*id=\"{panel_id}\"[^>]*>", HTML)
-        assert m, f"{panel_id} section not found in index.html"
-        assert "hidden" in m.group(0), f"{panel_id} is not hidden in HTML"
+        assert f'id="{panel_id}"' not in HTML, (
+            f"{panel_id} must be deleted from index.html, not merely hidden"
+        )
 
 
-def test_app_js_only_unhides_when_trading_eq_1():
-    assert 'get("trading") === "1"' in JS
-    assert "applyTradingMode" in JS
-    # Unhide must be gated on TRADING_MODE.
-    unhide_idx = JS.index("el.hidden = false")
-    gate = JS[:unhide_idx]
-    assert "TRADING_MODE" in gate.split("function applyTradingMode")[-1]
+def test_no_live_hypotheses_face_or_poll():
+    combined = HTML + JS
+    assert "LIVE hypotheses" not in combined
+    assert "api/hypotheses/live" not in JS
 
 
-def test_app_js_skips_money_polls_when_hidden():
-    # Each money endpoint fetch must be conditional on TRADING_MODE.
-    for endpoint in ("API.hyps", "API.orders", "API.portfolio"):
-        assert f"TRADING_MODE ? jsonFetch({endpoint})" in JS
+def test_app_js_does_not_fetch_money_endpoints():
+    assert 'jsonFetch(API.orders)' not in JS
+    assert 'jsonFetch(API.portfolio)' not in JS
+    assert "API.hyps" not in JS
+    assert "API.orders" not in JS
+    assert "API.portfolio" not in JS
+    # No ?trading=1 backdoor reintroducing trading markup.
+    assert "TRADING_MODE" not in JS
+    assert "applyTradingMode" not in JS
 
 
 def test_no_executor_enable_reference():
     assert "/executor/enable" not in JS
     assert "/executor/enable" not in HTML
+
+
+def test_research_panels_still_present():
+    for panel_id in ("panel-state", "panel-ingestion", "panel-alerts"):
+        assert f'id="{panel_id}"' in HTML, f"{panel_id} panel missing from index.html"
