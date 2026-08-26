@@ -1,5 +1,5 @@
 """
-Minimal read-only ops dashboard for Callisto.
+Minimal read-only research appliance for Callisto loop health.
 
 Exposes a FastAPI sub-app that:
   * Serves static HTML/JS/CSS from ``web/dashboard/``.
@@ -298,7 +298,7 @@ def build_dashboard_subapp(
     fakes without touching the environment.
     """
     app = FastAPI(
-        title="Callisto Ops Dashboard",
+        title="Callisto Research Dashboard",
         version="0.1.0",
         docs_url=None,          # no interactive docs; this is an internal UI
         redoc_url=None,
