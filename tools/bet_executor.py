@@ -1205,10 +1205,22 @@ class BetExecutor:
         )
         await commit_with_retry(self._db, max_retries=10, operation="executor log_action")
 
-    def enable(self):
-        """Enable the executor (allow bet placement)."""
+    def enable(self) -> bool:
+        """Enable the executor (allow bet placement).
+
+        Returns True when the executor was armed, False when refused.
+        Refuses to arm when CALLISTO_LOCAL_ONLY is truthy — that env var is
+        the appliance-wide nuclear switch and must block live betting too.
+        """
+        if os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes"):
+            logger.warning(
+                "Bet executor NOT enabled: CALLISTO_LOCAL_ONLY is set — "
+                "local-only mode refuses to arm live betting"
+            )
+            return False
         self._enabled = True
         logger.info("Bet executor ENABLED — live bets will be placed")
+        return True
 
     def disable(self):
         """Disable the executor (block bet placement)."""
