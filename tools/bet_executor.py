@@ -31,6 +31,12 @@ Slice 2 split (2026-08): the Playwright browser-session flow lives in
 and the executor_log / bets / bankroll-peak DB writes in
 ``tools.betexec.logging`` (imported here as ``betexec_logging``). This module
 keeps ``BetExecutor`` as a thin delegating orchestrator.
+
+Slice 3 split (2026-08): the remaining helpers moved out too — portfolio
+Kelly sizing orchestration into ``tools.betexec.portfolio``, the preflight
+safety gates into ``tools.betexec.preflight``, the drawdown kill-switch
+hypothesis CAS into ``tools.betexec.kill_switch``, and the Telegram message
+builders into ``tools.betexec.notify``.
 """
 
 import asyncio
@@ -75,6 +81,10 @@ from tools.betexec.drawdown import build_kill_switch_alert, evaluate_drawdown
 from tools.betexec import browser as betexec_browser
 from tools.betexec import slip as betexec_slip
 from tools.betexec import logging as betexec_logging
+from tools.betexec import portfolio as betexec_portfolio
+from tools.betexec.kill_switch import pause_live_hypotheses, attach_pause_result
+from tools.betexec.notify import build_bet_placed_message
+from tools.betexec.preflight import evaluate_preflight
 
 logger = logging.getLogger("callisto.executor")
 
@@ -310,104 +320,14 @@ class BetExecutor:
             List of dicts with {description, stake, fraction, event_id, sport,
             method, portfolio_summary} per bet.
         """
-        if not bets:
-            return []
-
-        # --- Regime multipliers per sport in the batch (cached for this call) ---
-        sports_in_batch = {b.get("sport", "") for b in bets if b.get("sport")}
-        regime_mults: dict[str, float] = {
-            sp: _clamped_regime_multiplier(sp) for sp in sports_in_batch
-        }
-        if regime_mults:
-            logger.info(
-                "regime_sizing: applying multipliers %s (enabled=%s)",
-                {k: round(v, 3) for k, v in regime_mults.items()},
-                REGIME_SIZING_ENABLED,
-            )
-
-        # Single bet: use standard individual sizing (no portfolio overhead).
-        if len(bets) == 1:
-            b = bets[0]
-            signals_n = int(b.get("signals_n", 0) or 0)
-            kelly_frac = self._signals_n_to_kelly_fraction(signals_n)
-            stake = self.compute_stake(
-                b.get("edge", 0.0),
-                b.get("odds", -110),
-                bankroll,
-                b.get("confidence", 0.6),
-            )
-            # Scale by signals_n-aware base fraction (cap-at-quarter Kelly).
-            stake = round(stake * (kelly_frac / KELLY_FRACTION), 2) if KELLY_FRACTION > 0 else stake
-            # Regime multiplier (feat/regime-aware-sizing).
-            sport = b.get("sport", "")
-            reg_mult = regime_mults.get(sport, 1.0)
-            pre_regime_stake = stake
-            stake = round(stake * reg_mult, 2)
-            if reg_mult != 1.0 and pre_regime_stake >= MIN_BET_AMOUNT:
-                logger.info(
-                    "regime_sizing: %s stake ${%.2f} → ${%.2f} (mult=%.3f sport=%s)",
-                    b.get("hypothesis_id", "?"), pre_regime_stake, stake,
-                    reg_mult, sport,
-                )
-            return [{
-                "description": b.get("description", "Bet 1"),
-                "stake": stake if stake >= MIN_BET_AMOUNT else 0.0,
-                "fraction": round(stake / bankroll, 6) if bankroll > 0 else 0,
-                "event_id": b.get("event_id", ""),
-                "sport": sport,
-                "hypothesis_id": b.get("hypothesis_id", ""),
-                "method": "individual_kelly_n_adjusted",
-                "kelly_base_fraction": kelly_frac,
-                "signals_n": signals_n,
-                "regime_multiplier": reg_mult,
-                "stake_before_regime": pre_regime_stake,
-            }]
-
-        # Multiple bets: use correlation-aware portfolio Kelly.
-        portfolio_bets, sized = build_portfolio_requests(bets, correlation_matrix)
-
-        results: list[dict] = []
-        for i, item in enumerate(sized):
-            b = bets[i]
-            frac = float(item.get("final_fraction", 0.0))
-            signals_n = int(b.get("signals_n", 0) or 0)
-            kelly_frac = self._signals_n_to_kelly_fraction(signals_n)
-            scale = (kelly_frac / KELLY_FRACTION) if KELLY_FRACTION > 0 else 1.0
-            frac = frac * scale
-            stake_before_regime = round(bankroll * frac, 2)
-            sport = b.get("sport", "")
-            reg_mult = regime_mults.get(sport, 1.0)
-            frac = frac * reg_mult
-            stake = round(bankroll * frac, 2)
-            if reg_mult != 1.0 and stake_before_regime > 0:
-                logger.info(
-                    "regime_sizing: %s stake ${%.2f} → ${%.2f} "
-                    "(mult=%.3f sport=%s)",
-                    b.get("hypothesis_id", "?"), stake_before_regime, stake,
-                    reg_mult, sport,
-                )
-            results.append({
-                "description": item.get("description", ""),
-                "stake": stake,
-                "fraction": frac,
-                "correlation": item.get("correlation", 0.0),
-                "tier": item.get("tier", ""),
-                "event_id": b.get("event_id", ""),
-                "sport": sport,
-                "hypothesis_id": b.get("hypothesis_id", ""),
-                "market_type": b.get("market_type", ""),
-                "method": "portfolio_kelly_n_adjusted",
-                "kelly_base_fraction": kelly_frac,
-                "signals_n": signals_n,
-                "regime_multiplier": reg_mult,
-                "stake_before_regime": stake_before_regime,
-                "portfolio_summary": item.get("portfolio_summary", {}),
-            })
-
-        # Second/third passes: per-game + per-sport caps, then min-bet floor.
-        results = apply_exposure_caps(results, bankroll)
-
-        return results
+        return betexec_portfolio.compute_portfolio_stakes(
+            bets,
+            bankroll,
+            correlation_matrix,
+            regime_multiplier_fn=_clamped_regime_multiplier,
+            kelly_fraction_fn=self._signals_n_to_kelly_fraction,
+            stake_fn=self.compute_stake,
+        )
 
     async def preflight_check(
         self,
@@ -419,34 +339,23 @@ class BetExecutor:
         """
         Run all safety checks before placing a bet.
 
-        Returns (ok, reason).
+        Returns (ok, reason). The gate logic lives in
+        tools.betexec.preflight.evaluate_preflight; this method only gathers
+        the live DB values and delegates.
         """
-        # Executor must be enabled
+        # Enablement gate first — refuse before any DB access (no db needed).
         if not self._enabled:
             return False, "Executor is disabled"
-
-        # Minimum edge
-        if edge < MIN_EDGE_TO_EXECUTE:
-            return False, f"Edge {edge:.3f} below minimum {MIN_EDGE_TO_EXECUTE}"
-
-        # Bankroll check
         bankroll = await self.get_bankroll()
-        if bankroll <= 0:
-            return False, "No bankroll"
-
-        if stake > bankroll * MAX_BET_PCT:
-            return False, f"Stake ${stake:.2f} exceeds {MAX_BET_PCT*100:.0f}% of bankroll ${bankroll:.2f}"
-
-        # Daily loss limit
         daily_losses = await self.get_daily_losses()
-        if daily_losses < -(bankroll * DAILY_LOSS_LIMIT_PCT):
-            return False, f"Daily loss limit hit: ${daily_losses:.2f} (limit: ${bankroll * DAILY_LOSS_LIMIT_PCT:.2f})"
-
-        # Sport support
-        if sport not in DK_SPORT_SLUGS:
-            return False, f"Sport {sport} not supported for DK execution"
-
-        return True, "OK"
+        return evaluate_preflight(
+            enabled=self._enabled,
+            edge=edge,
+            bankroll=bankroll,
+            stake=stake,
+            daily_losses=daily_losses,
+            sport=sport,
+        )
 
     async def launch_browser(self) -> None:
         """Launch Playwright browser with persistent session."""
@@ -605,12 +514,14 @@ class BetExecutor:
             # Send Telegram notification
             try:
                 from tools.telegram import send_telegram
-                msg = (
-                    f"BET PLACED\n"
-                    f"{game_description or team}\n"
-                    f"{side} @ {'+' if odds > 0 else ''}{odds}\n"
-                    f"Stake: ${stake:.2f} | Edge: {edge*100:.1f}%\n"
-                    f"Bankroll: ${bankroll:.2f} → ${bankroll - stake:.2f}"
+                msg = build_bet_placed_message(
+                    game_description=game_description,
+                    team=team,
+                    side=side,
+                    odds=odds,
+                    stake=stake,
+                    edge=edge,
+                    bankroll=bankroll,
                 )
                 send_telegram(msg)
             except Exception as e:
@@ -704,31 +615,12 @@ class BetExecutor:
         )
         self._enabled = False
 
-        # CAS all LIVE hypotheses to drawdown_paused.
+        # CAS all LIVE hypotheses to drawdown_paused (tools.betexec.kill_switch).
         try:
-            from tools.db_utils import execute_with_retry, commit_with_retry
-            cursor = await self._db.execute(
-                "SELECT hypothesis_id FROM hypotheses WHERE status = 'live'"
-            )
-            live_rows = await cursor.fetchall()
-            now_ts = datetime.now(timezone.utc).isoformat()
-            paused = []
-            for row in live_rows:
-                hid = row[0]
-                res = await execute_with_retry(
-                    self._db,
-                    "UPDATE hypotheses SET status = 'drawdown_paused', updated_at = ?, "
-                    "promoted_at = ?, promoted_by = ? "
-                    "WHERE hypothesis_id = ? AND status = 'live'",
-                    (now_ts, now_ts, "drawdown_kill_switch", hid),
-                    operation="drawdown pause hypothesis",
-                )
-                if (res.rowcount or 0) > 0:
-                    paused.append(hid)
-            await commit_with_retry(self._db, operation="drawdown pause hypotheses")
-            status["paused_hypotheses"] = paused
+            paused = await pause_live_hypotheses(self._db)
+            status = attach_pause_result(status, paused)
         except Exception as e:
-            logger.error(f"Drawdown: failed to pause LIVE hypotheses: {e}")
+            status = attach_pause_result(status, [], error=e)
 
         # Best-effort Telegram alert.
         try:
