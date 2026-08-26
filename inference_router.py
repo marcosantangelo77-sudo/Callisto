@@ -10,375 +10,49 @@ inference.complete()/escalate_with_ladder() walks. Do NOT unify the planes:
 measured Hermes fork latency (findings/hermes_latency_2026-08-26.md,
 p50 ≈ 11.9s / max ≈ 31.4s) does not support pointing MODEL_LADDER at this
 router yet. See tests/test_inference_planes.py, which pins both planes.
+
+Internals live in tools.infrouter (config, 429 retry, LOCAL_ONLY strip,
+endpoint state, empirical reordering). This module keeps the facade class
+and complete() dispatch. CALLISTO_LOCAL_ONLY fail-closed hosted strip runs
+in candidates_for()/tier_for() BEFORE any complete() dispatch.
 """
 
-import os
-from dataclasses import dataclass, field
 from typing import Any, Optional
+
+import asyncio as _asyncio
+import time as _time
 
 import httpx
 
 from inference_kernel import _parse_json_response, logger
 
-
-async def _post_with_retry(post_fn, endpoint: "EndpointConfig", payload: dict,
-                           timeout: float, attempts: int = 2) -> tuple[str, dict]:
-    """Retry transient failures within one endpoint before failing over.
-    Connection errors and 5xx retry; other HTTP errors do not.
-
-    SPEED run 8 (2026-08-23): upstream 429 (rate/capacity) also retries
-    in place. Measured live: the ox_alpha proxy serves the SAME model as
-    every later failover tier, but a Portal-capacity 429 is transient —
-    failing over on it discarded the ~10x persistent-proxy win and landed
-    every such call on the ~12-20s fresh-fork CLI path. Retry-in-place
-    changes only WHERE the identical completion is served; non-429 4xx
-    still fail over immediately and exhaustion still propagates to the
-    existing failover chain. A Retry-After header is honoured, capped at
-    _429_RETRY_AFTER_CAP_S so a hostile/lazy server cannot stall a call.
-    """
-    last_exc: Optional[Exception] = None
-    for i in range(attempts):
-        slept = False
-        try:
-            return await post_fn(endpoint, payload, timeout)
-        except httpx.HTTPStatusError as e:
-            status = e.response.status_code
-            if status < 500 and status != 429:
-                raise
-            last_exc = e
-            if status == 429:
-                retry_after = _retry_after_seconds(e.response)
-                if retry_after > _429_MAX_TOTAL_WAIT_S:
-                    raise  # server says: back off longer than we may wait
-                await _asyncio.sleep(retry_after)
-                slept = True
-        except (httpx.TransportError,) as e:
-            last_exc = e
-        if i < attempts - 1 and not slept:
-            await _asyncio.sleep(0.5 * (i + 1))
-    assert last_exc is not None
-    raise last_exc
-
-
-# ── SPEED run 8: 429 retry-in-place constants ─────────────────────────────
-# A 429 with no Retry-After waits this long before the next in-place attempt.
-_429_DEFAULT_BACKOFF_S = 1.0
-# Never sleep longer than this on a Retry-After; a server demanding more
-# backoff than we may spend fails over instead of stalling the caller.
-_429_MAX_TOTAL_WAIT_S = 10.0
-
-
-def _retry_after_seconds(response: httpx.Response) -> float:
-    """Retry-After from a 429 response, in seconds, capped.
-
-    Accepts delta-seconds (and ignores HTTP-date form — treat as default
-    backoff rather than parsing dates). Missing/garbled header -> default.
-    """
-    raw = ""
-    try:
-        raw = response.headers.get("Retry-After") or ""
-    except Exception:
-        return _429_DEFAULT_BACKOFF_S
-    try:
-        val = float(raw.strip())
-    except (ValueError, AttributeError):
-        return _429_DEFAULT_BACKOFF_S
-    if val < 0:
-        return _429_DEFAULT_BACKOFF_S
-    return min(val, _429_MAX_TOTAL_WAIT_S)
-
-
-import asyncio as _asyncio
-import time as _time
-import yaml as _yaml
-from pathlib import Path as _Path
-
-_PROVIDERS_CONFIG_PATH = _Path(
-    os.getenv("CALLISTO_PROVIDERS_CONFIG")
-    or str(_Path(__file__).parent / "config" / "providers.yaml")
+from tools.infrouter.config import (  # noqa: F401
+    TASK_CLASS_ALIASES,
+    EndpointConfig,
+    EscalationConfig,
+    TierConfig,
+    UnknownTaskClassError,
+    _PROVIDERS_CONFIG_PATH,
+    _endpoint_from_config,
+    load_providers_config,
 )
+from tools.infrouter.empirical import EmpiricalRoutingMixin
+from tools.infrouter.local_only import (  # noqa: F401
+    LOCAL_BACKENDS,
+    endpoint_is_hosted,
+    local_only_enabled,
+    strip_hosted_for_local_only,
+)
+from tools.infrouter.retry import (  # noqa: F401
+    _429_DEFAULT_BACKOFF_S,
+    _429_MAX_TOTAL_WAIT_S,
+    _post_with_retry,
+    _retry_after_seconds,
+)
+from tools.infrouter.state import CostLedger, _EndpointState
 
 
-class UnknownTaskClassError(KeyError):
-    """Raised when complete() gets a task_class not declared in providers.yaml.
-
-    LOUD by design: a typo'd task_class must never silently fall back to the
-    default tier — that is how routing decisions stop being decisions.
-    """
-
-
-# ── Vocabulary bridge ──────────────────────────────────────────────────────
-# The codebase (tools/autonomous.py, MODEL_LADDER keys) passes these names;
-# providers.yaml historically declared different ones. The ROUTER side is
-# authoritative: call-site names are accepted as aliases of canonical task
-# classes so routing works before instance 1's rename pass lands.
-TASK_CLASS_ALIASES: dict[str, str] = {
-    # call-site name -> canonical task class
-    "deep_work": "research_synthesis",
-    "hypothesis_gen": "hypothesis_generation",
-    "reasoning": "research_synthesis",
-    "review": "adversarial_review",
-    "code_generation": "research_synthesis",
-}
-
-
-@dataclass(frozen=True)
-class EndpointConfig:
-    """One model server process. A 'tier' may be served by MANY endpoints
-    (e.g. two GPU boxes running llama-server); routing picks among them."""
-    name: str
-    backend: str
-    base_url: str
-    model: str
-    api_key: Optional[str] = None
-    context_tokens: int = 32768
-    temperature: float = 0.2
-    vram_gb: float = 0.0                    # informational / placement hints
-    structured_output: bool = True          # json_schema response_format OK?
-    tool_calls: bool = False                # native function calling?
-    max_concurrency: int = 1                # parallel in-flight requests
-    cost_per_1k_input: float = 0.0          # USD; local = 0.0
-    cost_per_1k_output: float = 0.0
-    # Stable canonical identity of the served model (e.g.
-    # "nous/stealth/ox-alpha"). Endpoints sharing an identity are ONE model
-    # choice for scoring/routing — different transports of the same weights.
-    # Absent => each endpoint stands alone (legacy behaviour).
-    model_identity: Optional[str] = None
-    extra: dict = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class TierConfig:
-    """Back-compat view: tier name -> ordered candidate endpoints."""
-    name: str
-    backend: str
-    base_url: str                           # first endpoint (compat)
-    model: str                              # first endpoint (compat)
-    api_key: Optional[str] = None
-    context_tokens: int = 32768
-    temperature: float = 0.2
-    extra: dict = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class EscalationConfig:
-    json_schema_failures: int = 2
-    tool_error_loops: int = 2
-    confidence_below: Optional[float] = None
-
-
-def load_providers_config(path=None) -> dict:
-    cfg_path = _Path(path or _PROVIDERS_CONFIG_PATH)
-    with open(cfg_path) as f:
-        return _yaml.safe_load(f)
-
-
-def _endpoint_from_config(name: str, raw: dict) -> EndpointConfig:
-    """Build an EndpointConfig from one entry under `providers:`.
-
-    Env-backed fields (base_url_env / api_key_env / model_env) resolve at
-    build time when set; if unset the endpoint is marked _unresolved and is
-    skipped by routing (LOUD log) rather than crashing construction — that
-    keeps a local-only box constructible while a hosted tier is configured.
-
-    backend="hermes_cli" needs NEITHER base_url nor model: it shells out to
-    the Hermes CLI (Nous Portal OAuth lives in the keychain) and serves the
-    hosted stealth-ox-alpha model, so base_url stays "" and model defaults
-    to "ox-alpha". Such an endpoint is never _unresolved.
-
-    Routing target binding: extra.provider / extra.model (if configured) are
-    passed to the CLI as --provider / -m before `-z`. Endpoints without them
-    keep relying on external Hermes defaults (backward compatible).
-    """
-    backend = raw.get("backend", "openai_compat")
-    base_url = raw.get("base_url")
-    if not base_url and raw.get("base_url_env"):
-        base_url = os.getenv(raw["base_url_env"], "")
-        if not base_url:
-            raw = {**raw, "_unresolved": True}
-    api_key = None
-    if raw.get("api_key_env"):
-        api_key = os.getenv(raw["api_key_env"]) or None
-    # Model resolution precedence: a NONEMPTY configured model_env value
-    # overrides the static model; an unset or empty env value falls back to
-    # the static model (which may itself be absent for env-only configs).
-    model = raw.get("model")
-    env_model: Optional[str] = None
-    if raw.get("model_env"):
-        env_model = os.getenv(raw["model_env"], "") or None
-        if env_model:
-            model = env_model
-    if backend == "hermes_cli":
-        # No URL, no env vars, no keychain access — just the binary.
-        unresolved = False
-        model = model or "ox-alpha"
-        base_url = ""
-    else:
-        unresolved = bool(raw.get("_unresolved")) or not (base_url and model)
-    # Canonical-identity safety rule: a static `model_identity` is only
-    # trustworthy while the effective served model matches the configured
-    # static one. A nonempty `model_env` override pointing at a DIFFERENT
-    # model means we no longer know which weights actually run there, so the
-    # declared identity is invalidated (the endpoint becomes standalone).
-    # An explicit resolved identity may still be supplied via
-    # `resolved_model_identity` / `resolved_model_identity_env`; it is NEVER
-    # inferred from the override's model string.
-    model_identity = raw.get("model_identity") or None
-    if env_model and env_model != (raw.get("model") or None):
-        model_identity = None
-    resolved_identity = (
-        os.getenv(raw["resolved_model_identity_env"], "") or None
-        if raw.get("resolved_model_identity_env")
-        else (raw.get("resolved_model_identity") or None))
-    if resolved_identity:
-        model_identity = resolved_identity
-
-    return EndpointConfig(
-        name=name,
-        backend=raw.get("backend", "openai_compat"),
-        base_url=(base_url or "").rstrip("/"),
-        model=model or "",
-        api_key=api_key,
-        context_tokens=int(raw.get("context_tokens", 32768)),
-        temperature=float(raw.get("temperature", 0.2)),
-        vram_gb=float(raw.get("vram_gb", 0) or 0),
-        structured_output=bool(raw.get("structured_output", True)),
-        tool_calls=bool(raw.get("tool_calls", False)),
-        max_concurrency=max(1, int(raw.get("max_concurrency", 1))),
-        cost_per_1k_input=float(raw.get("cost_per_1k_input", 0) or 0),
-        cost_per_1k_output=float(raw.get("cost_per_1k_output", 0) or 0),
-        model_identity=model_identity,
-        extra={**(raw.get("extra") or {}), **({"_unresolved": True} if unresolved else {})},
-    )
-
-
-class _EndpointState:
-    """Mutable runtime state for one endpoint: health, load, queue slot."""
-    __slots__ = ("cfg", "semaphore", "consecutive_failures",
-                 "cooldown_until", "in_flight")
-
-    def __init__(self, cfg: EndpointConfig):
-        self.cfg = cfg
-        self.semaphore = _asyncio.Semaphore(cfg.max_concurrency)
-        self.consecutive_failures = 0
-        self.cooldown_until = 0.0
-        self.in_flight = 0
-
-    @property
-    def available(self) -> bool:
-        return (
-            not self.cfg.extra.get("_unresolved")
-            and _time.monotonic() >= self.cooldown_until
-        )
-
-    def record_success(self) -> None:
-        self.consecutive_failures = 0
-
-    def record_failure(self) -> None:
-        self.consecutive_failures += 1
-        # Exponential cooldown: 2s, 4s, 8s... capped at 60s.
-        delay = min(60.0, 2.0 * (2 ** (self.consecutive_failures - 1)))
-        self.cooldown_until = _time.monotonic() + delay
-
-
-class CostLedger:
-    """Tracks token usage + USD cost per tier. Hosted calls are budgeted;
-    local calls are free at the margin and show up as $0."""
-
-    def __init__(self, budget_usd: Optional[float] = None):
-        self.budget_usd = budget_usd
-        self.total_cost_usd = 0.0
-        self.by_tier: dict = {}
-        self._lock = _asyncio.Lock()
-
-    async def record(self, tier: str, input_tokens: int,
-                     output_tokens: int, cost_usd: float) -> None:
-        async with self._lock:
-            self.total_cost_usd += cost_usd
-            t = self.by_tier.setdefault(
-                tier, {"calls": 0, "input_tokens": 0, "output_tokens": 0,
-                       "cost_usd": 0.0}
-            )
-            t["calls"] += 1
-            t["input_tokens"] += input_tokens
-            t["output_tokens"] += output_tokens
-            t["cost_usd"] += cost_usd
-
-    def snapshot(self) -> dict:
-        return {
-            "budget_usd": self.budget_usd,
-            "total_cost_usd": round(self.total_cost_usd, 6),
-            "remaining_usd": (
-                None if self.budget_usd is None
-                else round(self.budget_usd - self.total_cost_usd, 6)
-            ),
-            "over_budget": (
-                self.budget_usd is not None
-                and self.total_cost_usd > self.budget_usd
-            ),
-            "by_tier": {
-                k: {**v, "cost_usd": round(v["cost_usd"], 6)}
-                for k, v in sorted(self.by_tier.items())
-            },
-        }
-
-
-# ── CALLISTO_LOCAL_ONLY: fail-closed hosted strip ─────────────────────────
-# When CALLISTO_LOCAL_ONLY is truthy (1/true/yes), the router must never
-# return a hosted endpoint. Full-local means llama_cpp_server / local ONLY;
-# openai_compat rails that name a hosted host (openrouter / nous / frontier /
-# ox_alpha proxy) are HOSTED even though the transport is plain HTTP.
-LOCAL_BACKENDS = ("llama_cpp_server", "local")
-
-
-def local_only_enabled() -> bool:
-    """True when CALLISTO_LOCAL_ONLY is set to 1/true/yes."""
-    return os.getenv("CALLISTO_LOCAL_ONLY", "").strip().lower() in (
-        "1", "true", "yes")
-
-
-def endpoint_is_hosted(ep: Optional["EndpointConfig"]) -> bool:
-    """Fail-closed hosted classification for one endpoint.
-
-    Anything that is not an explicitly local backend counts as hosted, and
-    openai_compat endpoints pointing at a known hosted marker count as
-    hosted regardless of naming.
-    """
-    if ep is None:
-        return True
-    backend = (ep.backend or "").strip().lower()
-    return backend not in LOCAL_BACKENDS
-
-
-def strip_hosted_for_local_only(
-        router: "ProviderRouter",
-        names: list[str],
-        task_class: str) -> list[str]:
-    """Filter `names` to local-only endpoints when CALLISTO_LOCAL_ONLY is set.
-
-    Raises RuntimeError LOUDLY when nothing local survives — silently
-    degrading to OpenRouter under LOCAL_ONLY would defeat the whole switch.
-    """
-    if not local_only_enabled():
-        return names
-    kept = [n for n in names
-            if not endpoint_is_hosted(router.endpoints.get(n))]
-    dropped = [n for n in names if n not in kept]
-    if dropped:
-        logger.warning(
-            "CALLISTO_LOCAL_ONLY: stripped hosted endpoints %s from "
-            "task_class=%r candidates", dropped, task_class)
-    if not kept:
-        raise RuntimeError(
-            f"CALLISTO_LOCAL_ONLY is set but task_class {task_class!r} has "
-            f"NO local endpoints after stripping hosted rails "
-            f"({names}). Start llama.cpp on gpu1/gpu1_fast or unset "
-            f"CALLISTO_LOCAL_ONLY — refusing to fall back to hosted."
-        )
-    return kept
-
-
-class ProviderRouter:
+class ProviderRouter(EmpiricalRoutingMixin):
     """Routes task_class -> tier -> best available endpoint in that tier.
 
     Usage at call sites:
@@ -499,89 +173,6 @@ class ProviderRouter:
     def score_store(self, store) -> None:
         self._score_store = store
 
-    def _candidates_as_models(self, names: list[str]) -> list:
-        from tools.routing.policy import CandidateModel
-        out = []
-        seen_identities: set[str] = set()
-        for rank, n in enumerate(names):
-            ep = self.endpoints.get(n)
-            if ep is None:
-                continue
-            model_name = self.scoring_model_name(n)
-            # Dedupe ONLY rails with an explicit canonical model identity.
-            # Identity-less endpoints keep legacy standalone behaviour even
-            # when their display `model` labels collide.
-            if ep.model_identity:
-                if ep.model_identity in seen_identities:
-                    # Same canonical model via another transport rail: ONE
-                    # scoring candidate, not several.
-                    continue
-                seen_identities.add(ep.model_identity)
-            out.append(CandidateModel(
-                name=model_name,
-                tier=n,
-                cost_per_1k_input=ep.cost_per_1k_input,
-                cost_per_1k_output=ep.cost_per_1k_output,
-                config_rank=rank,
-            ))
-        return out
-
-    def route_order(self, task_class: str,
-                    candidate_names: list[str],
-                    role: Optional[str] = None) -> tuple[list[str], dict]:
-        """Apply the empirical policy to one candidate list.
-
-        Returns (reordered_names, honesty_metadata). With empirical routing
-        disabled or zero measurements anywhere for this role, returns
-        (candidate_names unchanged, {"basis": "configured"}) — exact
-        degradation to today's configured behaviour.
-        """
-        meta: dict = {"basis": "configured", "role": role or task_class}
-        if not self.empirical_routing_enabled or len(candidate_names) < 2:
-            return candidate_names, meta
-        try:
-            from tools.routing.policy import ThompsonRoutingPolicy
-            if self._routing_policy is None:
-                self._routing_policy = ThompsonRoutingPolicy(
-                    store=self.score_store,
-                    cost_weight=self.empirical_cost_weight,
-                    usd_per_brier_point=self.empirical_usd_per_brier_point)
-            cands = self._candidates_as_models(candidate_names)
-            if not cands:
-                return candidate_names, meta
-            decision = self._routing_policy.decide(role or task_class, cands)
-        except Exception as e:  # never let measurement break a live call
-            logger.warning(f"Empirical routing failed ({e}) — using config order")
-            return candidate_names, {**meta, "error": str(e)}
-        meta.update({
-            "basis": decision.basis,
-            "chosen_model": decision.model,
-            "sampled_effective_loss": decision.sampled_effective_loss,
-            "scores": decision.scores_used,
-        })
-        winner_identity: Optional[str] = None
-        tier_ep = self.endpoints.get(decision.tier)
-        if tier_ep is not None and tier_ep.model_identity:
-            winner_identity = tier_ep.model_identity
-
-        def _is_winner_rail(n: str) -> bool:
-            if n == decision.tier:
-                return True
-            if winner_identity is None:
-                return False
-            ep = self.endpoints.get(n)
-            return ep is not None and ep.model_identity == winner_identity
-
-        if any(_is_winner_rail(n) for n in candidate_names):
-            # Chosen model's ENTIRE rail group moves to the front as one
-            # contiguous block (configured order preserved), so a proxy/CLI
-            # failover pair is never separated. The rest keep their failover
-            # order so a dead winner still degrades exactly as before.
-            winners = [n for n in candidate_names if _is_winner_rail(n)]
-            rest = [n for n in candidate_names if not _is_winner_rail(n)]
-            return winners + rest, meta
-        return candidate_names, meta
-
     # ── vocabulary ──
 
     def canonical_task_class(self, task_class: str) -> str:
@@ -675,45 +266,6 @@ class ProviderRouter:
                 )
                 return self._group_by_identity(fallback)
         return self._group_by_identity(out)
-
-    def _group_by_identity(self, names: list[str]) -> list[str]:
-        """Collapse rails that share a canonical model identity so the same
-        physical model is ONE candidate, not several. The first-declared rail
-        keeps its position (preserving configured transport priority); later
-        rails of the same identity move to directly after it as failovers.
-        Endpoints WITHOUT model_identity keep legacy per-endpoint behaviour."""
-        if len(names) < 2:
-            return names
-        # group index per identity / standalone endpoint, assigned at FIRST
-        # appearance in the configured order.
-        group_of: dict[str, int] = {}  # identity -> group index
-        standalone_group: dict[str, int] = {}  # endpoint -> group index
-        next_group = 0
-        for n in names:
-            ident = self.endpoints[n].model_identity if n in self.endpoints else None
-            if ident is None:
-                standalone_group[n] = next_group
-                next_group += 1
-            elif ident not in group_of:
-                group_of[ident] = next_group
-                next_group += 1
-        # Stable sort by group index preserves configured order WITHIN every
-        # group while keeping each identity contiguous at its first
-        # appearance; no-identity endpoints remain standalone.
-        return sorted(names, key=lambda n: (
-            group_of[self.endpoints[n].model_identity]
-            if n in self.endpoints and self.endpoints[n].model_identity
-            else standalone_group[n]))
-
-
-    def scoring_model_name(self, endpoint_name: str) -> str:
-        """Canonical name to record/lookup in the score store for an endpoint.
-        Rails sharing a model identity share one scoring candidate; without
-        an identity the display model label is used (legacy behaviour)."""
-        ep = self.endpoints.get(endpoint_name)
-        if ep is not None and ep.model_identity:
-            return ep.model_identity
-        return ep.model if ep is not None else endpoint_name
 
     def pick_endpoint(self, task_class: str, schema: Optional[dict] = None,
                       tools: bool = False) -> Optional[EndpointConfig]:
