@@ -227,17 +227,16 @@ Disjoint file ownership, host cap 3 Hermes processes:
 Independent adversarial review before any squash to master. Never merge
 because OX said pytest passed.
 
-### Stage B — choose the harness identity
+### Stage B — choose the appliance identity
 
-- CLI as the front door; FastAPI as a local control plane, not the product.
+- `callisto.py` is the front door; FastAPI is a local control plane, not the product.
 - Attic: live execute path, Telegram arming, `start.bat` bind-all lore.
   Restore notes, not `rm`.
 - Paper-only default in `ResearchLoop`. Keep the accidental
   `generate_paper_trade_signal` status check as a hard gate; add a test that
   fails if anyone widens it to `live`.
-- Generate `CALLISTO_SEAL_KEY` at `callisto init`. Refuse to seal as if
-  keyed when the key is missing (operator-visible warning, not silent
-  unkeyed).
+- Generate `CALLISTO_SEAL_KEY` on first `ask`/`doctor` if missing. Refuse
+  to pretend keyed when the key is missing (operator-visible warning).
 
 ### Stage C — one brain
 
@@ -254,11 +253,12 @@ phases as modules, `_loop` as a sequencer, evidence writes going through
 one journal that cannot UPDATE historical `signal_generated`.
 `autonomous.py` shrinks by move-to-package, not by a 8k-line PR.
 
-### Stage E — optional local UI
+### Stage E — retarget the local UI that already exists
 
-A loopback viewer for sealed sessions, hypothesis status, and paper PnL.
-No cloud account. No 0.0.0.0. If a website ever exists, it reads exported
-sealed artifacts.
+`web/dashboard/` is a betting ops console. Rebuild its panels around
+`callisto` runs, seal status, loop health, and paper calibration. Same
+port, same vanilla JS, different question. No cloud account. No 0.0.0.0.
+If a website ever exists, it reads exported sealed artifacts.
 
 ---
 
