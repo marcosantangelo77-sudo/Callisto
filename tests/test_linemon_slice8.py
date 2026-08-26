@@ -55,8 +55,17 @@ def test_facade_process_snapshot_is_thin_delegate():
     )
     src = ast.unparse(fn)
     assert "_process_snapshot_locked" in src
-    assert "_snapshot_lock" not in src
-    assert "_in_flight_db" not in src
+    body = fn.body
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]
+    body_src = "\n".join(ast.unparse(s) for s in body)
+    assert "_snapshot_lock" not in body_src
+    assert "_in_flight_db" not in body_src
 
 
 def test_init_state_wires_kl_tracker():
@@ -64,6 +73,9 @@ def test_init_state_wires_kl_tracker():
     assert "KLDivergenceTracker" in src
     assert "_kl_tracker" in src
     assert "_evaluator" in src
+    # Late import inside init_state — must not leak onto the core module
+    # public namespace (test_linemon_slice7 allowlist).
+    assert "from tools.lines.movement import KLDivergenceTracker" in src
     tree = ast.parse(LM.read_text(encoding="utf-8"))
     cls = next(
         n for n in tree.body

@@ -37,7 +37,6 @@ from tools.lines.ws_stream import (
     start_ws as _start_ws_impl,
     stop_ws_and_incremental as _stop_ws_and_incremental_impl,
 )
-from tools.lines.movement import KLDivergenceTracker
 
 logger = logging.getLogger("callisto.line_monitor")
 
@@ -92,6 +91,7 @@ def init_state(
     monitor._last_incremental_since = {}
 
     # Extracted collaborators (historically set on LineMonitor.__init__).
+    from tools.lines.movement import KLDivergenceTracker
     monitor._kl_tracker = KLDivergenceTracker(db_path=db_path)
     monitor._evaluator = None
 
