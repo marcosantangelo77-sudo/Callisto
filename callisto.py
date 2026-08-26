@@ -326,6 +326,23 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     except Exception as exc:
         print(f"  registry unavailable: {exc}"); ok = False
 
+    print("== seal ==")
+    seal_raw = os.getenv("CALLISTO_SEAL_KEY", "").strip()
+    if not seal_raw:
+        print("  FAIL: CALLISTO_SEAL_KEY is not set — seals are unkeyed")
+        print("  SHA-256 checksums and therefore forgeable; set a hex key")
+        print("  to enable HMAC-sealed sessions")
+        ok = False
+    else:
+        try:
+            bytes.fromhex(seal_raw)
+        except ValueError:
+            print("  FAIL: CALLISTO_SEAL_KEY is set but is not valid hex —")
+            print("  seals fall back to unkeyed (forgeable); fix the key value")
+            ok = False
+        else:
+            print("  OK: seal key is set (hex-valid); seals are HMAC-SHA256")
+
     print("\ndoctor:", "OK" if ok else "PROBLEMS FOUND (see above)")
     return 0 if ok else 1
 
