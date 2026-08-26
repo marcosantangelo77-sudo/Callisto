@@ -1522,7 +1522,7 @@ async def wiki_contradictions(unresolved_only: bool = True):
 
 # --- Betting / Odds endpoints ---
 
-@app.get("/odds/movements")
+@app.get("/odds/movements", dependencies=[Depends(require_admin_or_loopback)])
 async def get_movements(sport: Optional[str] = None, limit: int = 20):
     """Get recent line movements detected by the monitor."""
     movements = await line_monitor.get_recent_movements(sport=sport, limit=limit)
@@ -1536,7 +1536,7 @@ async def get_opportunities(status: str = "open", limit: int = 20):
     return {"count": len(opps), "opportunities": opps}
 
 
-@app.get("/odds/snapshots/{sport}")
+@app.get("/odds/snapshots/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def get_snapshots(sport: str, limit: int = 10):
     """Get snapshot history for a sport."""
     snaps = await line_monitor.get_snapshot_history(sport=sport, limit=limit)
@@ -1654,7 +1654,7 @@ async def get_live_edges(
     }
 
 
-@app.get("/odds/narrative-edges")
+@app.get("/odds/narrative-edges", dependencies=[Depends(require_admin_or_loopback)])
 async def get_narrative_edges(sport: str = "basketball_nba"):
     """Detect player-level narrative edges: usage surges, role changes,
     milestone proximity, revenge games. These exploit the lag between
@@ -1663,7 +1663,7 @@ async def get_narrative_edges(sport: str = "basketball_nba"):
     return await full_narrative_scan(sport)
 
 
-@app.get("/odds/kl-metrics")
+@app.get("/odds/kl-metrics", dependencies=[Depends(require_admin_or_loopback)])
 async def get_kl_metrics(sport: Optional[str] = None, limit: int = 50):
     """Get KL divergence metrics — measures information flow between odds snapshots.
 
@@ -1940,7 +1940,7 @@ async def dk_props(sport: str):
     }
 
 
-@app.get("/odds/status")
+@app.get("/odds/status", dependencies=[Depends(require_admin_or_loopback)])
 async def odds_status():
     """Get line monitor status and credit info."""
     if not line_monitor:
