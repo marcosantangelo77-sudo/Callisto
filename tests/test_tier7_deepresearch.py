@@ -76,7 +76,10 @@ class TestNoDecomposition:
     def test_hypothesis_intake_is_betting_shaped(self):
         """The hypotheses schema carries sport/market columns — cannot represent
         an arbitrary-domain research program without migration."""
-        src = _read("tools/hypothesis.py")
+        src = "\n".join(
+            p.read_text(encoding="utf-8")
+            for p in sorted((REPO / "tools" / "hypothesis").glob("*.py"))
+        )
         assert "sport" in src and "market_type" in src  # betting fields exist
         # and no generic-domain field exists yet
         assert "claim_type" not in src
