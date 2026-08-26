@@ -1,14 +1,10 @@
-"""
-Quantitative injury impact and usage projection model.
+"""tools.injury — quantitative injury impact model (data + computation).
 
-This module was split into the tools.injury package:
-- tools/injury/data.py   — hardcoded research baselines and lookup tables
-- tools/injury/model.py  — impact, redistribution, matchup, market-timing logic
-
-Imported here to keep every historical public name stable.
+Split out of tools/injury_model.py; that module re-exports this package's
+public API for backwards compatibility.
 """
 
-from tools.injury.data import (  # noqa: F401
+from tools.injury.data import (
     MARKET_ADJUSTMENT_CURVE,
     MLB_PITCHER_TIERS,
     MLB_POSITION_IMPACT_CENTS,
@@ -21,7 +17,7 @@ from tools.injury.data import (  # noqa: F401
     NFL_TARGET_REDISTRIBUTION,
     SIGNIFICANCE_TIERS,
 )
-from tools.injury.model import (  # noqa: F401
+from tools.injury.model import (
     MarketAdjustmentEstimate,
     MatchupAdjustedImpact,
     PlayerImpactResult,
