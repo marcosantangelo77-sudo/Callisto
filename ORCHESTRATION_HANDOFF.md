@@ -50,29 +50,45 @@ no 429, no OOM, 13 GiB still available.** Use
 `CALLISTO_HERMES_MAX_PROCS=6` here. Evidence:
 `findings/ox_concurrency_probe_2026-08-26.md`.
 
-Refill a slot immediately after a worker truly exits, up to the host cap.
+Refill a slot **immediately** after a worker truly exits. This VM's
+operating target is **six live Hermes/OX workers at all times**. Do not
+ask the operator for permission to refill. A worker with `OX_DONE.md` +
+pushed commit that is still "waiting on model" is a zombie — interrupt
+that PTY/PID only, then launch the next disjoint audit task.
 
 Operator freeze is **lifted** (2026-08-26). Product-direction work
 (`findings/production_ready_2026-08-26.md`) is orchestrator-owned.
 
-### Active OX (cloud VM, after 6-wide probe)
+### Live Hermes (target 6/6) — 2026-08-26 04:14Z
 
 | Slot | Branch / worktree | State |
 | --- | --- | --- |
-| 1 | `cursor/ox-loop-refresh-2ac0` `/tmp/callisto-ox-loop-refresh` | LIVE (Hermes `18004` at probe) |
-| 2 | `cursor/ox-autopromote-2ac0` `/tmp/callisto-ox-autopromote` | **exited** after `2f97780` push — unreviewed |
-| 3 | `cursor/ox-eventloop-2ac0` `/tmp/callisto-ox-eventloop` | LIVE |
-| 4 | `cursor/ox-bind-loopback-2ac0` `/tmp/callisto-ox-bind-loopback` | **exited** after `a1fbe37` push — unreviewed |
-| 5 | `cursor/ox-telegram-arming-2ac0` `/tmp/callisto-ox-telegram-arming` | LIVE |
-| 6 | `cursor/ox-seal-fail-closed-2ac0` `/tmp/callisto-ox-seal-fail-closed` | LIVE |
+| 1 | `cursor/ox-telegram-arming-2ac0` `/tmp/callisto-ox-telegram-arming` | LIVE |
+| 2 | `cursor/ox-seal-fail-closed-2ac0` `/tmp/callisto-ox-seal-fail-closed` | LIVE |
+| 3 | `cursor/ox-get-gating-2ac0` `/tmp/callisto-ox-get-gating` | LIVE (wave 3) |
+| 4 | `cursor/ox-live-signal-hard-gate-2ac0` `/tmp/callisto-ox-live-signal-hard-gate` | LIVE (wave 3) |
+| 5 | `cursor/ox-live-execute-gate-2ac0` `/tmp/callisto-ox-live-execute-gate` | LIVE (wave 3) |
+| 6 | `cursor/ox-cli-seal-warn-2ac0` `/tmp/callisto-ox-cli-seal-warn` | LIVE (wave 3) |
 
-Do not merge 2/4 on worker testimony. Independent review required.
+### Finished this wave — independent tests passed, squash later
 
-Prompts: `scripts/ox-prompts/wave1-*.md` and `wave2-*.md`.
-Tmux: `ox-loop-refresh`, `ox-eventloop`, `ox-telegram-arming`,
-`ox-seal-fail-closed` (plus completed `ox-autopromote`, `ox-bind-loopback`).
-Supervisor: `CALLISTO_HERMES_MAX_PROCS=6 bash scripts/nous-supervisor.sh`
-(in-tree on PR #28 if not yet on master).
+See `findings/ox_independent_review_2026-08-26.md`.
+
+| Branch | SHA |
+| --- | --- |
+| `cursor/ox-autopromote-2ac0` | `2f97780` |
+| `cursor/ox-bind-loopback-2ac0` | `a1fbe37` |
+| `cursor/ox-loop-refresh-2ac0` | `1227f4a` |
+| `cursor/ox-eventloop-2ac0` | `f02c7f2` |
+
+### Next refill queue (disjoint files, in order)
+
+1. Dual Kelly: `tools/kelly.py` + `tools/sizing.py` (+ `bet_executor.compute_stake` if needed)
+2. Remaining ungated GETs missed by get-gating (only if that worker missed any)
+3. Dashboard retarget (`web/dashboard/`) — after fail-closed kernel items
+4. One inference control plane — later, measured
+
+Never idle a slot waiting for the operator.
 
 ### Frozen unreviewed candidates — do not merge yet
 
