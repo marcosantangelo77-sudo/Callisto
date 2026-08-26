@@ -22,7 +22,7 @@ The checkout is:
 ```
 
 `master` currently tracks `origin/master` and was last verified at
-`2c1eaa1`. The current master checkout must stay clean while candidate
+`47ae16f`. The current master checkout must stay clean while candidate
 worktrees are reviewed.
 
 ## What has safely reached master
@@ -34,6 +34,7 @@ These reviewed commits have been pushed to `origin/master`:
 | `a181e9f` | Own event-bus lifecycle tasks correctly. |
 | `1f70af2` | Retry transient POST 403s. |
 | `2c1eaa1` | Validate duplicate fetch provenance records. |
+| `47ae16f` | Keep stale evidence from earning confidence credit and make stale penalties/counts explicit in calibration and WHY diagnostics. |
 
 Everything below is a candidate or WIP until independently approved.
 
@@ -51,7 +52,22 @@ live:
 | --- | --- | --- |
 | 1 | `codex/checkpoint-trace-fidelity` at `/private/tmp/callisto-checkpoint-trace-fidelity` | Narrow worker: make resume use only validated admitted evidence and reject forged independent-source credit. Malformed outcome data is queued for a later turn. |
 | 2 | `codex/run-persistence-unique-id` at `/private/tmp/callisto-run-persistence-unique-id` | Bind publication success to inode provenance and close post-rename/CLI race semantics. |
-| 3 | `codex/db-writer-shutdown` at `/private/tmp/callisto-db-writer-shutdown` | No-edit OX adversarial review of the completed blocked-producer shutdown repair (`4609e04`). |
+| 3 | `codex/db-writer-shutdown` at `/private/tmp/callisto-db-writer-shutdown` | Completed `4609e04`; independent no-edit OX review approved it. Reviewed merge pending; do not launch a replacement. |
+
+### Handoff freeze — do not dispatch more workers
+
+The operator has explicitly requested a freeze after the three live turns
+finish. Let them complete, ensure any source work is committed and pushed (or
+checkpoint it if the supervisor interrupts it), and **do not launch a
+replacement worker**. This includes the prepared market follow-up prompt.
+Cursor/Grok should decide what to run next after reading this handoff.
+
+Prepared but deliberately **not launched** prompts:
+
+```text
+/private/tmp/ox_market_raw_input_placement_repair_prompt.md
+/private/tmp/ox_checkpoint_trace_outcome_rejection_shape_repair_prompt.md
+```
 
 Workers are launched through:
 
@@ -110,8 +126,7 @@ matching.
 
 | Branch / head | Scope | Review status |
 | --- | --- | --- |
-| `codex/market-book-sanity` / `ae2cf32` | Shared market-book sanity gate across devig, consensus, scanner, placement/ranking, CLV, boost, and local devig. | New OX candidate. Independently retest invalid high-hold/NaN/crossed books, the live scanner-to-ranker path, `evaluate_percentage_boost(20, 100.9, .9)`, direct CLV contract, and tiny-hold power/shin normalization. Do not merge from the agent report alone. |
-| `codex/stale-confidence-credit` / `fd496e6` | Expose genuine/stale counts and bounded stale penalty in calibration traces and WHY output. | **APPROVED** by independent adversarial review: 500 randomized supported-record cases preserved scoring/clamp math; trace/WHY/rehydration/no-stale controls passed. Merge pending. **Caution:** the worker briefly used prohibited checkout and stash actions on its own files, but review found the final diff clean and functionally correct. |
+| `codex/market-book-sanity` / `ae2cf32` | Shared market-book sanity gate across devig, consensus, scanner, placement/ranking, CLV, boost, and local devig. | **BLOCKED** by review: percentage boost still turns `100.9` into `SLAM`; scanner accepts fractional raw odds; present malformed pair values fall back to a one-sided prior; public consensus primitives bypass the gate; invalid-placement skip persistence fails. The narrow raw-input/placement repair prompt exists above but must not be launched during the freeze. |
 
 ### Blocked candidates with replacement turns queued/running
 
@@ -119,7 +134,7 @@ matching.
 | --- | --- | --- |
 | `codex/checkpoint-trace-fidelity` / `9513ffc` | Resume path bypasses admission validation by consuming raw `payload['fetches']`; forged `independent_keys` can inflate confidence; blank rejected/skipped and malformed `rejections` fabricate honest-null/gate evidence. | Worker is active. Require one strict decoder used by all resume consumers, derived independent keys, and end-to-end adversarial tests. |
 | `codex/run-persistence-unique-id` / `39e9ef0` | Normal post-rename success still trusts byte equality rather than inode identity; a moved final can duplicate records; cleanup can turn indeterminate publication into false durability; CLI lacks explicit do-not-retry semantics. | Worker is active. Require fd/inode validation and atomic foreign-replacement tests. |
-| `codex/db-writer-shutdown` / `4609e04` | Earlier `6500300` queue-sweep candidate missed a producer blocked in `Queue.put()`: stop waited ~2 s despite a 50 ms timeout, raised incidental `AttributeError`, and stranded its future. | Replacement implementation `4609e04` is complete; an independent no-edit OX review is active. Require lifecycle synchronization and a deterministic blocked-producer test before any merge. |
+| `codex/db-writer-shutdown` / `4609e04` | Earlier `6500300` queue-sweep candidate missed a producer blocked in `Queue.put()`: stop waited ~2 s despite a 50 ms timeout, raised incidental `AttributeError`, and stranded its future. | **APPROVED** by a no-edit adversarial OX review: 26 focused tests plus pending-put, multi-producer, external-cancel, timeout, and restart probes. Non-blocking caveat: an in-flight forced-cancel caller receives `CancelledError`, and a narrow shutdown race may persist an op whose caller was told admission failed. Merge pending. |
 
 ### Parked: requires a deployment-policy decision before merge
 
@@ -195,11 +210,12 @@ Do not merge WIP checkpoints or candidates with an unresolved reviewer BLOCK.
    active supervisor terminals/state rows.
 2. Do not relaunch a duplicate worker until `ps` confirms the existing Hermes
    process is gone.
-3. Wait for each worker’s summary, review its exact new head, and recycle its
-   worker slot to the next highest-risk queued repair.
-4. Merge approved `fd496e6` after the standard clean-master checks; continue
-   adversarial review of `ae2cf32`. Update this file with every disposition
-   and master SHA.
+3. Wait for each currently live worker’s summary, review or at minimum record
+   its exact new head, and do **not** recycle the worker slot during the
+   operator-requested freeze.
+4. `fd496e6` was squash-merged into master as `47ae16f` after focused tests.
+   Merge reviewed `4609e04` after the standard clean-master checks. During
+   the freeze, record rather than dispatch repairs for remaining blocks.
 5. When implementation credits are exhausted, preserve this file and all
    pushed branches, stop launching new paid primary-agent work, and hand the
    same branch/task ledger to Cursor/Grok. The external OX workers may still
