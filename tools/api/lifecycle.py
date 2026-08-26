@@ -435,6 +435,111 @@ async def announce_startup(port: int, line_monitor) -> None:
 # the ordering contract stays pinned in api.py itself).
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Slice 7 — lifespan glue moved OUT of api.py's lifespan coroutine.
+#
+# api.lifespan keeps: the phase ORDER, the yield, the producers-before-
+# writers shutdown block, the H-14 restart-task cancellation, and every
+# marker pinned by tests/test_event_bus_lifecycle.py +
+# tests/test_api_slice6.py. The mechanical glue below (result unpacking,
+# background-task binding, cancel-and-await sweeps, component close tail)
+# lives here so the facade coroutine stays readable.
+#
+# None of these helpers arm the executor, touch paper-trade statuses, or
+# start a second odds stream.
+# ---------------------------------------------------------------------------
+
+RESEARCH_STACK_KEYS = (
+    "clv_tracker",
+    "order_manager",
+    "hypothesis_manager",
+    "historical_fetcher",
+    "backtest_engine",
+    "vector_store",
+    "hypothesis_generator",
+    "data_collector",
+    "research_loop",
+)
+
+
+def unpack_research_stack(stack: dict):
+    """Return startup_research_stack()'s dict as an ordered tuple matching
+    api.py's module-global assignment order:
+
+    (clv_tracker, order_manager_instance, hypothesis_manager,
+     historical_fetcher, backtest_engine, vector_store,
+     hypothesis_generator, data_collector, research_loop)
+    """
+    missing = [k for k in RESEARCH_STACK_KEYS if k not in stack]
+    if missing:
+        raise KeyError(f"research stack incomplete, missing: {missing}")
+    return tuple(stack[k] for k in RESEARCH_STACK_KEYS)
+
+
+BACKGROUND_TASK_KEYS = (
+    "worker",
+    "wal_checkpoint",
+    "restart_signal",
+    "sla_watchdog",
+    "order_cron",
+    "prop_resolver",
+)
+
+
+def bind_background_tasks(tasks: dict):
+    """Return spawn_background_tasks()'s dict as an ordered tuple matching
+    api.py's module-global task assignment order."""
+    return tuple(tasks[k] for k in BACKGROUND_TASK_KEYS)
+
+
+async def cancel_tasks(*tasks) -> None:
+    """Cancel each task and await its termination, swallowing CancelledError.
+
+    Preserves api.py's historical per-task cancel/await/except pattern
+    (each task is cancelled then awaited individually, in order) while
+    collapsing six near-identical blocks into one call.
+    """
+    for task in tasks:
+        if not task:
+            continue
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+async def close_research_stack(
+    *,
+    data_collector=None,
+    hypothesis_generator=None,
+    vector_store=None,
+    backtest_engine=None,
+    historical_fetcher=None,
+    hypothesis_manager=None,
+    clv_tracker=None,
+    learned_correlation_store=None,
+) -> None:
+    """Close the research/backtest stack in api.py's historical shutdown order.
+
+    backtest_engine / historical_fetcher / hypothesis_manager / clv_tracker
+    are closed unconditionally (they always exist by the time shutdown runs);
+    the rest tolerate None exactly as the pre-split inline sequence did.
+    """
+    if data_collector:
+        await data_collector.close()
+    if hypothesis_generator:
+        await hypothesis_generator.close()
+    if vector_store:
+        await vector_store.close()
+    await backtest_engine.close()  # type: ignore[union-attr]
+    await historical_fetcher.close()  # type: ignore[union-attr]
+    await hypothesis_manager.close()  # type: ignore[union-attr]
+    await clv_tracker.close()  # type: ignore[union-attr]
+    if learned_correlation_store:
+        await learned_correlation_store.close()
+
+
 async def stop_live_state_collector() -> None:
     """Cancel the live state collector so the HTTP client closes cleanly."""
     try:
