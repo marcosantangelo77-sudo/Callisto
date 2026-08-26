@@ -45,6 +45,8 @@ DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 # update tools/signals/paper.py only after a separately reviewed live path.
 from tools.signals.paper import _PAPER_TRADE_SIGNAL_STATUSES
 from tools.signals.paper import allowed_paper_statuses, reject_non_paper
+from tools.signals.schedule import game_date_from_commence
+
 
 
 def _signal_confidence(edge: float) -> str:
@@ -3839,29 +3841,8 @@ class BacktestEngine:
         now = datetime.now(timezone.utc).isoformat()
 
         def _game_date_from_commence(game_obj: dict) -> str:
-            """Venue-local game date for this game.
-
-            Pre-fix this sliced ``commence_time[:10]`` which is the UTC date.
-            For a Dodgers 7:30pm PT home game (``02:30Z`` next day) that
-            returned tomorrow's UTC date, causing silent day-of-week and
-            day/night cohort corruption. Now: convert to the venue's local
-            timezone via ``tools.game_dates.local_game_date``.
-            """
-            from tools.game_dates import local_game_date as _lgd
-
-            ct = game_obj.get("commence_time", "")
-            if not ct:
-                return today
-            home = game_obj.get("home_team", "")
-            sp = game_obj.get("sport_key") or sport or ""
-            d = _lgd(ct, sp, home)
-            if d is not None:
-                return d.isoformat()
-            # Fallback to pre-existing UTC-slice behavior only if the helper
-            # couldn't parse the timestamp — better than inventing a date.
-            if len(ct) >= 10:
-                return ct[:10]
-            return today
+            """Thin wrapper over the canonical helper in tools.signals.schedule."""
+            return game_date_from_commence(game_obj, sport=sport, today=today)
 
         # Parse hypothesis-specific filters (same as main backtest path)
         thesis = h.get("thesis", "")
