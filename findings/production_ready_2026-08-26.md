@@ -11,6 +11,66 @@ the kernel in one PR.
 
 ---
 
+## 0. Recommendation (operator asked: harness vs website?)
+
+Do **not** pick a distribution channel yet. That question is premature.
+Callisto does not fail because it lacks an installer or a URL. It fails
+because it does not have one daily ritual.
+
+**Ship it as a personal research appliance on hardware you own.**
+Closer to Ollama or a homelab notebook than to a SaaS site or a
+"downloadable client for some website." Git clone is enough packaging
+until a second human has to install it.
+
+### What you already have (do not invent a fourth front door)
+
+| Surface | File | What it actually is |
+| --- | --- | --- |
+| Product front door | `callisto.py` | `ask` / `runs` / `show` / `status` / `doctor` — one question, sealed or refused, persisted, re-hashed |
+| Control plane | `api.py` | Local FastAPI. Fine as a daemon. Wrong as a public API. |
+| Calibration gym | `tools/autonomous.py` `ResearchLoop` | The thing ChatGPT does not have: unattended hypothesize → backtest → paper |
+| Wrong face | `web/dashboard/` | Read-only **betting ops** UI: LIVE hypotheses, orders, portfolio, ingestion |
+
+`callisto.py` is the product that matches `BUILD_MANDATE.md`. The dashboard
+is the leftover sportsbook identity. FastAPI should stay a loopback
+control plane for the appliance, not become "the website."
+
+### Day in the life (this is the product)
+
+1. You ask: `python callisto.py ask "…"`. You get a sealed (or refused)
+   answer, sources, objections, artifact hashes, a run record on disk.
+2. You can `show` that run later and the hashes still match. If they
+   don't, the answer is trash — that is the product.
+3. Overnight, `ResearchLoop` runs **paper-only** on sports because
+   outcomes resolve in hours. That loop exists to earn the confidence
+   numbers on (1), not to place bets.
+4. When you want to look without a terminal, a local page on
+   `127.0.0.1` shows **runs, seals, loop health, paper calibration** —
+   not LIVE orders. Retarget `web/dashboard`; do not grow the betting
+   panels.
+
+### Explicitly not recommended
+
+- A public website or multi-tenant SaaS. The kernel is one process, one
+  sqlite writer, loopback-or-token auth, process-global loop, live-adjacent
+  betting code. A login page does not fix that.
+- A downloadable harness whose job is to feed a website. That is two
+  products and the website would become the brain.
+- Making `web/dashboard` (LIVE / orders / portfolio) the face of the
+  system. That trains every future change toward a sportsbook.
+- An Electron/installer/brew pack this month. Distribution is not the
+  bottleneck. Fail-closed evidence and one front door are.
+
+### What "production-ready" means for this operator
+
+Production-ready is **a box you can leave on overnight that will not
+lie and will not spend money.** It is not "ready for customers." There
+is one operator. When the kernel is fail-closed and `ask` returns
+models/graphs/math you can re-run, you have a product. Packaging and
+any website are skins on that process.
+
+---
+
 ## 1. The honest diagnosis
 
 Callisto is not 29% of a product. It is a **laboratory** that accumulated
@@ -40,25 +100,28 @@ production. A public sportsbook SaaS is the wrong destination.
 
 ---
 
-## 2. How you ship this (harness, not website)
+## 2. How you ship this
 
-### v1 is a downloadable local harness
+### v1 is already in the tree: grow `callisto.py`, do not invent a store listing
 
-Ship a **single-operator appliance**: git clone / `uv` / a future installer,
-then a CLI and an optional loopback UI talking to a process on the same
-machine.
+The daily interface should be the CLI that exists, plus a retargeted
+local viewer later. A future installer is optional sugar:
 
 ```text
-callisto init          # local sqlite, generate CALLISTO_SEAL_KEY, bind 127.0.0.1
-callisto research "…"  # AGP pipeline, sealed session, artifacts on disk
-callisto loop          # paper-only ResearchLoop (hypothesis → backtest → gate)
-callisto serve         # FastAPI on 127.0.0.1:8420, no 0.0.0.0
+python callisto.py doctor
+python callisto.py ask "…"
+python callisto.py show <run_id>
+python callisto.py status
+# daemon (already api.py + watchdog): loopback only, paper loop, no Telegram arming
 ```
 
 The trust boundary is the operator's machine. That matches the security
 model that already exists (loopback-or-token, sqlite single-writer, Hermes
 on the same host). It also matches the compute model: local models do
 volume, a frontier model (Nous/OX, Claude, OpenRouter) does hard judgments.
+
+Distribution (`uv tool`, a zip, a website) is a later skin. Do not
+block Stage A/B on picking one.
 
 ### Do not ship a website first
 
@@ -79,12 +142,11 @@ A website can exist **later**, as a thin viewer: pull sealed artifacts from
 a local kernel, or a "bring your own kernel" dashboard. It must not become
 the kernel.
 
-### What "downloadable" means in practice
+### What the appliance must actually do
 
-Not an Electron wrapper around 135k lines. A **harness**:
+Not an Electron wrapper around 135k lines. Five properties:
 
-1. One entrypoint (`callisto.py` / a console script) that does not require
-   `start.bat` lore.
+1. One entrypoint (`callisto.py`) that does not require `start.bat` lore.
 2. Paper-only money path. Live executor, Telegram arming, `OrderManager`
    default-on — attic or explicit `callisto arm --i-understand`.
 3. One inference control plane (`ProviderRouter` + `providers.yaml`). The
@@ -93,8 +155,7 @@ Not an Electron wrapper around 135k lines. A **harness**:
 4. A research loop that can run unattended **without mutating history**.
 5. Sealed sessions on disk the operator can copy, hash, and re-verify.
 
-Hermes + Nous Portal is a valid inference backend for that harness. It is
-not the product.
+Hermes + Nous Portal is a valid inference backend. It is not the product.
 
 ---
 
@@ -134,13 +195,15 @@ while manufacturing signals and blocking `/health`.
 
 ## 4. The product, named in one paragraph
 
-**Callisto v1** is a local deep-research harness with a paper-trading
-calibration loop. You install it on a machine you own. You ask it
-questions. It returns sealed sessions: claims, evidence bytes, charts,
-code. In parallel, a research loop proposes hypotheses, backtests them
-on a stratified window, and promotes only what survives gates — into
-**paper**, never into live, until a human arms a separate, default-off
-executor. Sports markets are the gym. The sport is not the company.
+**Callisto v1** is a personal research appliance: `callisto ask` in the
+foreground, a paper-only `ResearchLoop` in the background, FastAPI only
+as a loopback daemon. You ask it questions. It returns sealed sessions:
+claims, evidence bytes, charts, code. The loop proposes hypotheses,
+backtests them on a stratified window, and promotes only what survives
+gates — into **paper**, never into live, until a human arms a separate,
+default-off executor. Sports markets are the gym. The sport is not the
+company. A website, if it ever exists, is a viewer of those sealed
+runs — not the brain.
 
 That is shippable. Everything else is a later skin.
 
