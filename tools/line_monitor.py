@@ -54,7 +54,7 @@ from tools.odds_api_io import (
 # odds-api.io Pro with superior coverage + DK/FD/Action Network scrapers as
 # fallbacks; oddspapi was redundant and was spending our 250/month quota on
 # sports we cover elsewhere.
-from tools.prop_scraper_free import scrape_all_props, store_prop_snapshot, ensure_prop_schema
+from tools.prop_scraper_free import ensure_prop_schema  # noqa: F401 (back-compat re-export)
 from tools.lines.ingest import (
     WS_SPORT_TO_MONITORED,
     canonicalize_book_top,
@@ -80,6 +80,18 @@ from tools.lines.movement import (
     MovementRecorder,
     extract_probs,
     filter_significant,
+)
+from tools.lines.monitor_loop import (
+    collect_status_counts,
+    compute_adaptive_interval,
+    fetch_ev_opportunities,
+    fetch_recent_movements,
+    fetch_snapshot_history,
+    handle_sharp_signals,
+    record_significant_movements,
+    run_monitor_cycle,
+    snapshot_props,
+    snapshot_sport_fallback,
 )
 from tools.lines.snapshot_ops import (
     cache_snapshot_for_backtest,
@@ -504,6 +516,11 @@ class LineMonitor:
     async def _monitor_loop(self) -> None:
         """Main monitoring loop — snapshot, compare, alert.
 
+        Delegates each cycle body to tools.lines.monitor_loop.run_monitor_cycle
+        (credit-aware fallback switch, adaptive interval stretch, per-sport
+        backoff, free prop cascade). This wrapper owns the pause/ack
+        handshake and the inter-cycle sleep.
+
         When Odds API credits are low (<10 remaining), switches to free
         fallback sources instead of pausing for an hour:
         1. DraftKings scraper (free, unlimited)
@@ -517,61 +534,12 @@ class LineMonitor:
                 continue
             self._pause_ack.clear()
             try:
-                credits = get_credit_status()
-                use_fallback = False
-
-                if not credits.get("api_key_set"):
-                    # No Odds API key at all — go straight to fallbacks
-                    logger.info("ODDS_API_KEY not set — using free fallback sources")
-                    use_fallback = True
-
-                remaining = credits.get("remaining")
-                if remaining is not None and remaining < 50:
-                    logger.info(f"Odds API credits low ({remaining}) — switching to free scrapers (DK + FanDuel)")
-                    use_fallback = True
-
-                # Adaptive interval: stretch credits across the month
-                # ~9 credits per full cycle (3 sports × 3 markets)
-                interval = SNAPSHOT_INTERVAL
-                if not use_fallback and remaining is not None:
-                    if remaining < 50:
-                        interval = max(SNAPSHOT_INTERVAL, 3600)  # 1hr when low
-                        logger.info(f"Credits low ({remaining}) — slowing to {interval}s")
-                    elif remaining < 100:
-                        interval = max(SNAPSHOT_INTERVAL, 1800)  # 30min when moderate
-
-                # Cycle counter for backoff scheduling
-                if not hasattr(self, "_cycle_n"):
-                    self._cycle_n = 0
-                self._cycle_n += 1
-
-                for sport in MONITORED_SPORTS:
-                    if self._paused:
-                        break  # Exit early — autonomous loop waiting for us
-                    s = sport.strip()
-                    # Backoff for out-of-season / chronically failing sports:
-                    # 5+ consecutive failures → skip 3 cycles between attempts
-                    # 10+ → skip 7 cycles between attempts
-                    fail_count = self._consecutive_failures.get(s, 0)
-                    if fail_count >= 10 and self._cycle_n % 8 != 0:
-                        continue
-                    if fail_count >= 5 and self._cycle_n % 4 != 0:
-                        continue
-                    try:
-                        if use_fallback:
-                            await asyncio.wait_for(self._snapshot_sport_fallback(s), timeout=120)
-                        else:
-                            await asyncio.wait_for(self._snapshot_sport(s), timeout=120)
-                    except asyncio.TimeoutError:
-                        logger.warning(f"Snapshot for {s} timed out after 120s — skipping")
-                        self._consecutive_failures[s] = self._consecutive_failures.get(s, 0) + 1
-
-                # Prop snapshots — free cascade (DK + FD + BetMGM), no credits
-                if not self._paused:
-                    try:
-                        await asyncio.wait_for(self._snapshot_props(), timeout=180)
-                    except asyncio.TimeoutError:
-                        logger.warning("Prop snapshot timed out after 180s — skipping")
+                interval = await run_monitor_cycle(
+                    self,
+                    monitored_sports=MONITORED_SPORTS,
+                    snapshot_interval=SNAPSHOT_INTERVAL,
+                    get_credit_status=get_credit_status,
+                )
 
                 # If paused mid-cycle (broke out of sport loop), skip the
                 # interval sleep and loop back immediately so _pause_ack fires.
@@ -591,86 +559,22 @@ class LineMonitor:
     async def _snapshot_props(self) -> None:
         """Scrape player props from all free sources for all monitored sports.
 
-        Runs the DK + FanDuel + BetMGM prop cascade for each sport,
-        stores results in prop_snapshots table. Zero credit cost.
+        Delegates to tools.lines.monitor_loop.snapshot_props.
         """
-        # Only scrape props for sports that have prop markets
-        prop_sports = [s.strip() for s in MONITORED_SPORTS
-                       if s.strip() in ("basketball_nba", "baseball_mlb",
-                                        "icehockey_nhl", "americanfootball_nfl")]
-        if not prop_sports:
-            return
-
-        total_stored = 0
-        for sport in prop_sports:
-            if self._paused:
-                break
-            try:
-                result = await scrape_all_props(sport)
-                if result.get("error") or not result.get("props"):
-                    continue
-                if self._paused:
-                    break
-                async with self._snapshot_lock:
-                    self._in_flight_db = True
-                    try:
-                        stored = await store_prop_snapshot(result["props"], sport, self.db_path)
-                    finally:
-                        self._in_flight_db = False
-                total_stored += stored
-                logger.info(
-                    f"Props {sport}: {stored} lines stored "
-                    f"({result.get('multi_book_count', 0)} multi-book)"
-                )
-            except Exception as e:
-                logger.warning(f"Prop snapshot failed for {sport}: {e}")
-
-        if total_stored > 0:
-            logger.info(f"Prop snapshot cycle complete: {total_stored} total lines stored")
+        await snapshot_props(self, MONITORED_SPORTS)
 
     async def _snapshot_sport_fallback(self, sport: str) -> None:
         """Take an odds snapshot using all available sources.
 
         Called when Odds API credits are exhausted or unavailable.
-        Delegates the scraper cascade to tools.lines.fallback_cascade
-        (priority: odds-api.io Pro -> DK -> Action Network -> FD ->
-        Fanatics). Merges all successful sources for maximum
-        multi-book coverage. BetMGM is disabled and OddsPapi removed —
-        see fallback_cascade module docstring.
+        Delegates to tools.lines.monitor_loop.snapshot_sport_fallback.
         """
-        from tools.lines.fallback_cascade import collect_free_sources, merge_free_sources
-
-        scraped = await collect_free_sources(
+        await snapshot_sport_fallback(
+            self,
             sport,
             odds_api_io_get_odds=odds_api_io_get_odds,
             odds_api_io_usage=odds_api_io_usage,
         )
-
-        if not scraped:
-            # Track consecutive failures for self-healing alerts
-            self._consecutive_failures[sport] = self._consecutive_failures.get(sport, 0) + 1
-            count = self._consecutive_failures[sport]
-            logger.warning(
-                f"All fallback sources failed for {sport} — skipping snapshot "
-                f"(consecutive failures: {count})"
-            )
-            if count >= self._FAILURE_ALERT_THRESHOLD:
-                try:
-                    await telegram.alert_system(
-                        f"ALL odds sources failing for {sport} "
-                        f"({count} consecutive cycles). Check DK, FD, Action Network, "
-                        f"Odds-API.io connectivity.",
-                        is_error=True,
-                    )
-                except Exception:
-                    pass  # Don't let Telegram errors break the monitor
-            return
-
-        # Reset consecutive failure counter on success
-        self._consecutive_failures[sport] = 0
-
-        new_snapshot = merge_free_sources(scraped, sport)
-        await self._process_snapshot(sport, new_snapshot)
 
     async def _snapshot_sport(self, sport: str) -> None:
         """Take an odds snapshot for a sport and compare with previous.
@@ -835,42 +739,13 @@ class LineMonitor:
                 logger.info(
                     f"MOVEMENT DETECTED: {sport} — {len(significant)} significant moves"
                 )
-                for mov in significant:
-                    await self._record_movement(sport, mov)
-                    await self._evaluate_movement(sport, mov, new_snapshot)
-                    # Publish line movement event
-                    try:
-                        from tools.event_bus import get_event_bus, EVENT_LINE_MOVED
-                        await get_event_bus().publish(EVENT_LINE_MOVED, {
-                            "sport": sport, **mov,
-                        })
-                    except Exception:
-                        pass
+                await record_significant_movements(self, sport, significant, new_snapshot)
 
             # Detect sharp money (one book moved, others didn't)
             sharp_signals = detect_sharp_money(old_snapshot, new_snapshot)
             if sharp_signals:
                 logger.info(f"SHARP MONEY: {sport} — {len(sharp_signals)} signals")
-                for sig in sharp_signals:
-                    self._alerts.append({"sport": sport, "type": "sharp_money", **sig})
-                    # Alert on high-confidence sharp moves only (3+ stale books)
-                    stale = sig.get("stale_books", [])
-                    moved = sig.get("moved_books", [])
-                    if len(stale) >= 3 and moved:
-                        try:
-                            from tools.telegram import alert_sharp_move
-                            await alert_sharp_move(
-                                game=sig.get("game", ""),
-                                team=sig.get("team", ""),
-                                market=sig.get("market", ""),
-                                moved_books=moved,
-                                stale_books=stale,
-                            )
-                        except Exception:
-                            pass
-                # Cap alerts to prevent unbounded growth
-                if len(self._alerts) > 100:
-                    self._alerts = self._alerts[-100:]
+                await handle_sharp_signals(self._alerts, sport, sharp_signals)
 
             # Compute KL divergence between previous and current snapshot
             # Measures information flow — how much the market "learned" between snapshots.
@@ -981,78 +856,29 @@ class LineMonitor:
 
     async def get_recent_movements(self, sport: Optional[str] = None, limit: int = 20) -> list[dict]:
         """Get recent line movements from the database."""
-        if sport:
-            cursor = await self._db.execute(
-                "SELECT * FROM line_movements WHERE sport = ? ORDER BY detected_at DESC LIMIT ?",
-                (sport, limit),
-            )
-        else:
-            cursor = await self._db.execute(
-                "SELECT * FROM line_movements ORDER BY detected_at DESC LIMIT ?",
-                (limit,),
-            )
-        rows = await cursor.fetchall()
-        cols = [d[0] for d in cursor.description]
-        return [dict(zip(cols, row)) for row in rows]
+        return await fetch_recent_movements(self._db, sport=sport, limit=limit)
 
     async def get_ev_opportunities(self, status: str = "open", limit: int = 20) -> list[dict]:
         """Get current +EV opportunities."""
-        cursor = await self._db.execute(
-            "SELECT * FROM ev_opportunities WHERE status = ? ORDER BY detected_at DESC LIMIT ?",
-            (status, limit),
-        )
-        rows = await cursor.fetchall()
-        cols = [d[0] for d in cursor.description]
-        return [dict(zip(cols, row)) for row in rows]
+        return await fetch_ev_opportunities(self._db, status=status, limit=limit)
 
     async def get_snapshot_history(self, sport: str, limit: int = 10) -> list[dict]:
         """Get snapshot history for a sport (metadata only, no full JSON)."""
-        cursor = await self._db.execute(
-            "SELECT id, sport, timestamp, game_count, credits_remaining "
-            "FROM odds_snapshots WHERE sport = ? ORDER BY timestamp DESC LIMIT ?",
-            (sport, limit),
-        )
-        rows = await cursor.fetchall()
-        cols = [d[0] for d in cursor.description]
-        return [dict(zip(cols, row)) for row in rows]
+        return await fetch_snapshot_history(self._db, sport, limit=limit)
 
     async def get_status(self) -> dict:
         """Return monitor status with DB-backed counts."""
-        db_snapshots = 0
-        db_movements = 0
-        db_closing_lines = 0
-        latest_snapshot_at = None
-        try:
-            if self._db:
-                row = await (await self._db.execute(
-                    "SELECT COUNT(*), MAX(timestamp) FROM odds_snapshots"
-                )).fetchone()
-                if row:
-                    db_snapshots = row[0] or 0
-                    latest_snapshot_at = row[1]
-                row2 = await (await self._db.execute(
-                    "SELECT COUNT(*) FROM line_movements"
-                )).fetchone()
-                db_movements = row2[0] if row2 else 0
-                try:
-                    row3 = await (await self._db.execute(
-                        "SELECT COUNT(*) FROM closing_lines"
-                    )).fetchone()
-                    db_closing_lines = row3[0] if row3 else 0
-                except Exception:
-                    pass  # Table may not exist yet
-        except Exception:
-            pass
+        counts = await collect_status_counts(self._db) if self._db else {}
 
         return {
             "running": self._running,
             "monitored_sports": MONITORED_SPORTS,
             "snapshot_interval_seconds": SNAPSHOT_INTERVAL,
             "cached_snapshots": list(self._snapshots.keys()),
-            "db_snapshots_total": db_snapshots,
-            "db_movements_total": db_movements,
-            "db_closing_lines": db_closing_lines,
-            "latest_snapshot_at": latest_snapshot_at,
+            "db_snapshots_total": counts.get("db_snapshots_total", 0),
+            "db_movements_total": counts.get("db_movements_total", 0),
+            "db_closing_lines": counts.get("db_closing_lines", 0),
+            "latest_snapshot_at": counts.get("latest_snapshot_at"),
             "recent_alerts_in_memory": len(self._alerts),
             "credits": get_credit_status(),
         }
