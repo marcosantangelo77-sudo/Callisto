@@ -1,23 +1,14 @@
-"""
-Masters Tournament specialized analysis module.
+"""Masters Tournament analysis package.
 
-The Masters is an annual event — standard "train on history, forward-test on upcoming games"
-doesn't apply. Instead we use:
-  1. Historical Masters results (2010-2025) as the backtest dataset
-  2. Leave-one-out cross-validation (train on all years except Y, test on Y, repeat)
-  3. Rolling-window backtesting (train on N prior years, test on next)
-  4. Current PGA Tour season stats to generate 2026 pre-tournament predictions
+Split from the former monolithic ``tools/golf_masters.py``:
 
-Data sources:
-  - ESPN leaderboard API for historical results
-  - PGA Tour stats pages for strokes gained components
-  - Masters field from Augusta.com / news
-
-This module is now a facade over ``tools.golf``; the implementation lives there
-split by concern (db, historical, field, backtest, predictions).
+- ``tools.golf.db``          — schema, DB path, connection helpers
+- ``tools.golf.historical``  — historical results collection (ESPN + embedded fallback)
+- ``tools.golf.field``       — current season stats & Masters field
+- ``tools.golf.backtest``    — leave-one-out / rolling-window backtests
+- ``tools.golf.predictions`` — 2026 predictions & composite scoring
 """
 
-from tools.golf import *  # noqa: F401,F403
 from tools.golf.db import DB_PATH, MASTERS_SCHEMA, ensure_masters_schema
 from tools.golf.historical import (
     _fetch_espn_masters_year,
