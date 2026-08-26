@@ -31,12 +31,16 @@ Split history:
   - Slice 3: portfolio Kelly orchestration (``portfolio``), preflight gates
     (``preflight``), drawdown hypothesis CAS (``kill_switch``), Telegram
     message builders (``notify``).
-  - Slice 4 (this): the remaining session/DB orchestration moved out too —
+  - Slice 4: the remaining session/DB orchestration moved out too —
     read-only bankroll/PnL/exposure queries and the status dict assembly in
     ``tools.betexec.db_state``, the full size → cap → preflight → navigate →
     place → record pipeline in ``tools.betexec.execution``, and the
     drawdown kill-switch flow + local-only arm gate + health status
     gathering in ``tools.betexec.lifecycle``.
+  - Slice 5 (this): the last executor-bound helpers moved out — DB +
+    directory bootstrap / teardown in ``tools.betexec.bootstrap``, the
+    instance-level browser-session methods in ``tools.betexec.session``,
+    and the execute_bet dependency binding in ``tools.betexec.wiring``.
 
 This module is now a thin facade: it re-exports the authoritative helpers
 for backwards compatibility and keeps ``BetExecutor`` as an adapter that
@@ -90,6 +94,9 @@ from tools.betexec import portfolio as betexec_portfolio
 from tools.betexec import db_state as betexec_db_state
 from tools.betexec import execution as betexec_execution
 from tools.betexec import lifecycle as betexec_lifecycle
+from tools.betexec import bootstrap as betexec_bootstrap
+from tools.betexec import session as betexec_session
+from tools.betexec import wiring as betexec_wiring
 from tools.betexec.kill_switch import pause_live_hypotheses, attach_pause_result
 from tools.betexec.notify import build_bet_placed_message
 from tools.betexec.preflight import evaluate_preflight
@@ -164,16 +171,7 @@ class BetExecutor:
 
     async def initialize(self) -> None:
         """Initialize database connection and ensure directories exist."""
-        self._db = await aiosqlite.connect(DB_PATH)
-        # Tag for WriteCoordinator routing (single-writer pattern).
-        from tools.db_writer import tag_connection as _tag
-        _tag(self._db, DB_PATH)
-        await self._db.execute("PRAGMA busy_timeout = 60000")
-        SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-        SESSION_DIR.mkdir(parents=True, exist_ok=True)
-
-        await betexec_logging.ensure_executor_log_schema(self._db)
-        logger.info("Bet executor initialized")
+        await betexec_bootstrap.initialize(self)
 
     async def get_bankroll(self) -> float:
         """Get current bankroll balance."""
@@ -343,10 +341,7 @@ class BetExecutor:
 
     async def launch_browser(self) -> None:
         """Launch Playwright browser with persistent session."""
-        self._context, self._page = await betexec_browser.launch_persistent_session(
-            SESSION_DIR
-        )
-        self._browser = self._context
+        await betexec_session.launch_browser(self)
 
     async def ensure_logged_in(self) -> bool:
         """
@@ -355,12 +350,7 @@ class BetExecutor:
         The first time, the browser opens visible so Marco can log in manually.
         After that, cookies persist in SESSION_DIR.
         """
-        if not self._page:
-            await self.launch_browser()
-
-        ok = await betexec_browser.check_logged_in(self._page)
-        self._logged_in = ok
-        return ok
+        return await betexec_session.ensure_logged_in(self)
 
     async def navigate_to_game(
         self,
@@ -369,7 +359,7 @@ class BetExecutor:
         event_id: str = "",
     ) -> bool:
         """Navigate to a specific game on DraftKings."""
-        return await betexec_browser.navigate_to_game(self._page, sport, team)
+        return await betexec_session.navigate_to_game(self, sport, team)
 
     async def place_bet_on_slip(
         self,
@@ -381,7 +371,7 @@ class BetExecutor:
 
         Returns dict with success status, screenshot path, and confirmation details.
         """
-        return await betexec_slip.place_bet_on_slip(self._page, selection_text, stake)
+        return await betexec_session.place_bet_on_slip(self, selection_text, stake)
 
     async def execute_bet(
         self,
@@ -409,39 +399,23 @@ class BetExecutor:
         SECURITY (audit H-1, H-4): the read-bankroll → size → exposure-check → write
         sequence remains serialized by ``self._bankroll_lock`` inside the pipeline.
         """
-        async def _ensure_logged_in():
-            # Preserve legacy short-circuit: an already-known-good session
-            # never touches the browser (matches pre-split facade check).
-            if self._logged_in:
-                return True
-            return await self.ensure_logged_in()
-
         return await betexec_execution.run_execute_bet(
-            db=self._db,
-            bankroll_lock=self._bankroll_lock,
-            enabled=self._enabled,
-            sport=sport,
-            team=team,
-            market=market,
-            side=side,
-            odds=odds,
-            fair_prob=fair_prob,
-            edge=edge,
-            hypothesis_id=hypothesis_id,
-            event_id=event_id,
-            game_description=game_description,
-            confidence=confidence,
-            point=point,
-            stake_override=stake_override,
-            compute_stake_fn=self.compute_stake,
-            preflight_fn=self.preflight_check,
-            ensure_logged_in_fn=_ensure_logged_in,
-            navigate_fn=self.navigate_to_game,
-            place_fn=self.place_bet_on_slip,
-            record_bet_fn=self._record_bet,
-            log_action_fn=self._log_action,
-            notify_fn=self._notify,
-            build_message_fn=build_bet_placed_message,
+            **betexec_wiring.bind_execution_pipeline(
+                self,
+                sport=sport,
+                team=team,
+                market=market,
+                side=side,
+                odds=odds,
+                fair_prob=fair_prob,
+                edge=edge,
+                hypothesis_id=hypothesis_id,
+                event_id=event_id,
+                game_description=game_description,
+                confidence=confidence,
+                point=point,
+                stake_override=stake_override,
+            )
         )
 
     @staticmethod
@@ -552,14 +526,4 @@ class BetExecutor:
 
     async def shutdown(self):
         """Clean shutdown."""
-        if self._browser:
-            await self._browser.close()
-            self._browser = None
-            self._context = None
-            self._page = None
-        if self._db:
-            await self._db.close()
-            self._db = None
-        self._enabled = False
-        self._logged_in = False
-        logger.info("Bet executor shut down")
+        await betexec_bootstrap.shutdown(self)
