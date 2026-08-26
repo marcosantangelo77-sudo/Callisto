@@ -77,8 +77,8 @@ class TestLastCycleHealth:
         loop._cycles = 5
         loop._phase_failures_ledger.record(cycle=4, phase="collect_data", kind="timeout")
         assert loop._last_cycle_ok() is True
-        # Count still reports failures from the latest failing cycle.
-        assert loop._last_cycle_phase_failures() == 1
+        # Count is scoped to the current cycle, not the latest failing one.
+        assert loop._last_cycle_phase_failures() == 0
 
     def test_count_scoped_to_latest_failing_cycle(self):
         loop = _StubLoop()

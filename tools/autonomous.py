@@ -7940,30 +7940,30 @@ class ResearchLoop:
                 logger.warning(f"Claude spinning diagnosis failed: {e}")
 
     def _last_cycle_phase_failures(self) -> int:
-        """Number of phase failures recorded during the most recent cycle."""
-        latest = self._phase_failures_ledger.latest(1)
-        if not latest:
+        """Number of phase failures recorded during the current cycle.
+
+        Older cycles stay on the ledger for history; this count is only
+        ``cycle == self._cycles`` so a clean cycle reports 0 even if a
+        previous cycle failed.
+        """
+        if self._cycles == 0:
             return 0
-        last_cycle = latest[-1]["cycle"]
         return sum(
             1
-            for entry in self._phase_failures_ledger.latest(self._phase_failures_ledger.count)
-            if entry["cycle"] == last_cycle
+            for entry in self._phase_failures_ledger.latest(
+                self._phase_failures_ledger.count
+            )
+            if entry["cycle"] == self._cycles
         )
 
     def _last_cycle_ok(self) -> bool:
-        """True iff no phase failed during the most recent cycle.
+        """True iff no phase failed during the current cycle.
 
         Failures are non-fatal (the loop continues), but a cycle in which any
         phase failed or timed out must not report as healthy. If no cycle has
-        run yet (or no failure was ever recorded), the loop is healthy.
+        run yet, the loop is healthy.
         """
-        if self._cycles == 0:
-            return True
-        latest = self._phase_failures_ledger.latest(1)
-        if not latest:
-            return True
-        return latest[-1]["cycle"] < self._cycles
+        return self._last_cycle_phase_failures() == 0
 
     def get_status(self) -> dict:
         """Return research loop status."""
