@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
-# Launch ONE Ox Alpha worker (Hermes CLI → Nous Portal stealth/ox-alpha).
+# Launch ONE Ox Alpha worker (Hermes CLI → OpenRouter or Nous Portal).
 #
 # Usage:
 #   bash scripts/nous-supervisor.sh <task-name> <worktree> <prompt-file> [idle-minutes]
 #
-# Contract (ORCHESTRATION_HANDOFF.md):
+# Provider:
+#   CALLISTO_HERMES_PROVIDER=openrouter|nous
+#   Default: openrouter when OPENROUTER_API_KEY is set (env or ~/.hermes/.env),
+#   else nous. OpenRouter HTTP for stealth/ox-alpha is the fast path
+#   (~4s vs ~12s Nous CLI fork). Never print the key.
+#
+# Contract:
 #   * Foreground. The caller owns the PTY. Do not nohup this script.
-#   * Hermes argv includes --provider nous -m stealth/ox-alpha
-#   * At most 3 concurrent Hermes processes on the host (CALLISTO_HERMES_MAX_PROCS)
-#   * Refuse to start if Nous Portal is not logged in
+#   * Hermes argv includes --provider <openrouter|nous> -m stealth/ox-alpha
+#   * At most CALLISTO_HERMES_MAX_PROCS concurrent Hermes processes
 #   * Refuse to start against master / a missing worktree / a missing prompt
 #   * Do not print, copy, or log credentials
-#
-# ChatGPT's workstation used ~/callisto-wt/nous-supervisor.sh (not in this
-# repo). This file is the in-tree equivalent so a cloud runner and the
-# workstation share one launcher.
 set -euo pipefail
 
 TASK_NAME="${1:-}"
@@ -50,10 +51,50 @@ if [[ "$running" -ge "$MAX_PROCS" ]]; then
   die "already ${running} hermes processes (cap ${MAX_PROCS}). wait for a slot."
 fi
 
-# Honest login check — python, no token print.
-if ! python3 "${ROOT}/scripts/oxa_status.py" >/tmp/oxa_status_${TASK_NAME}.txt; then
-  cat /tmp/oxa_status_${TASK_NAME}.txt >&2 || true
-  die "Nous Portal is not logged in. Run: hermes auth add nous --type oauth --no-browser"
+# Load OPENROUTER_API_KEY from ~/.hermes/.env without printing it.
+if [[ -z "${OPENROUTER_API_KEY:-}" && -f "${HOME}/.hermes/.env" ]]; then
+  _or_key="$(python3 - <<'PY'
+from pathlib import Path
+p = Path.home() / ".hermes" / ".env"
+for line in p.read_text(encoding="utf-8").splitlines():
+    s = line.strip()
+    if not s or s.startswith("#") or "=" not in s:
+        continue
+    k, v = s.split("=", 1)
+    if k.strip() == "OPENROUTER_API_KEY":
+        v = v.strip().strip('"').strip("'")
+        if v:
+            print(v)
+            break
+PY
+)"
+  if [[ -n "${_or_key}" ]]; then
+    export OPENROUTER_API_KEY="${_or_key}"
+  fi
+  unset _or_key
+fi
+
+PROVIDER="${CALLISTO_HERMES_PROVIDER:-}"
+if [[ -z "${PROVIDER}" ]]; then
+  if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+    PROVIDER="openrouter"
+  else
+    PROVIDER="nous"
+  fi
+fi
+MODEL="${CALLISTO_HERMES_MODEL:-stealth/ox-alpha}"
+
+if [[ "${PROVIDER}" == "nous" ]]; then
+  # Honest login check — python, no token print.
+  if ! python3 "${ROOT}/scripts/oxa_status.py" >/tmp/oxa_status_${TASK_NAME}.txt; then
+    cat /tmp/oxa_status_${TASK_NAME}.txt >&2 || true
+    die "Nous Portal is not logged in. Run: hermes auth add nous --type oauth --no-browser"
+  fi
+elif [[ "${PROVIDER}" == "openrouter" ]]; then
+  [[ -n "${OPENROUTER_API_KEY:-}" ]] \
+    || die "OPENROUTER_API_KEY is not set (env or ~/.hermes/.env)"
+else
+  die "unknown CALLISTO_HERMES_PROVIDER=${PROVIDER} (want openrouter or nous)"
 fi
 
 LOG_DIR="${CALLISTO_OXA_LOG_DIR:-${ROOT}/logs/oxa}"
@@ -75,12 +116,12 @@ EOF
 )"
 
 echo "nous-supervisor: task=${TASK_NAME} worktree=${WORKTREE_ABS} branch=${branch}"
-echo "nous-supervisor: model=stealth/ox-alpha provider=nous idle_minutes=${IDLE_MINUTES}"
+echo "nous-supervisor: model=${MODEL} provider=${PROVIDER} idle_minutes=${IDLE_MINUTES}"
 echo "nous-supervisor: log=${LOG}"
 
 hermes \
-  --provider nous \
-  -m stealth/ox-alpha \
+  --provider "$PROVIDER" \
+  -m "$MODEL" \
   --in "$WORKTREE_ABS" \
   --no-restore-cwd \
   --yolo \
