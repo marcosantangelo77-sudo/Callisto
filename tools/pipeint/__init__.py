@@ -1,25 +1,11 @@
-"""
-Pipeline integrity checker — detects silent failures, stalled pipelines,
-and broken data flows that the standard health check misses.
+"""Pipeline integrity checks split into focused modules.
 
-The standard /health endpoint only checks if processes are running.
-This module checks if they are PRODUCING VALID OUTPUT.
-
-Three bugs that motivated this module:
-  1. Paper trading had a wrong import — silently swallowed by bare
-     `except Exception`, 194 hypotheses stuck with 0 trades for days
-  2. Backtest engine found 0 edges across 734 events because it compared
-     consensus against itself — nobody checked that 0% positive edge rate
-     is abnormal
-  3. Composite TCI was flat at 51.9% but kept being used as a signal
-
-Design: Run as part of the autonomous loop. Log all results to a
-dedicated table for trend analysis. Surface issues in /health and
-/system/full-status.
-
-Implementation lives in the ``tools.pipeint`` package; this module is a
-facade that preserves the original import surface
-(``from tools.pipeline_integrity import get_checker, ...``).
+- tools.pipeint.core: constants, thresholds, IntegrityIssue
+- tools.pipeint.checks_data_flow: data-flow checks (paper trades, hypotheses,
+  backtests, odds snapshots, signal pipeline)
+- tools.pipeint.checks_quality: output-sanity checks (temporal isolation,
+  calibration, zero/stale metrics, rejection rate)
+- tools.pipeint.checker: PipelineIntegrityChecker orchestrator + singleton
 """
 
 from tools.pipeint.checker import (
