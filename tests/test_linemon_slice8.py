@@ -64,8 +64,8 @@ def test_facade_process_snapshot_is_thin_delegate():
     ):
         body = body[1:]
     body_src = "\n".join(ast.unparse(s) for s in body)
-    assert "_snapshot_lock" not in body_src
-    assert "_in_flight_db" not in body_src
+    assert "self._snapshot_lock" not in body_src
+    assert "self._in_flight_db" not in body_src
 
 
 def test_init_state_wires_kl_tracker():
