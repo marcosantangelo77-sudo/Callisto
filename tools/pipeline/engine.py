@@ -779,7 +779,10 @@ class ResearchPipeline:
                 hit = cp.load(trace.run, "fetch_leaf",
                               ckpt.hash_inputs(_fetch_inputs(q)))
                 if hit is not None:
-                    fetch_hits[i] = hit
+                    # Pre-validate BEFORE treating the leaf as cached: an
+                    # unvalidatable payload must not skip retrieval.
+                    if _validated_admitted_fetches(hit.payload) is not None:
+                        fetch_hits[i] = hit
 
         fresh = [i for i in range(n_leaves) if i not in fetch_hits]
 
@@ -858,8 +861,11 @@ class ResearchPipeline:
                 trace.stages.append(ckpt.StageOutcome(
                     stage="fetch_leaf", resumed=True, payload=ck.payload,
                     produced_at=ck.produced_at))
-                fetches_i = [_fetch_from_payload(r)
-                             for r in ck.payload["fetches"]]
+                # THE ONE shared decode/validation path — same predicate
+                # the hit-detection pre-check used, so this cannot fail
+                # here; raw checkpoint fetches reach result evidence,
+                # answer evidence, and ledger replay only through it.
+                fetches_i = _validated_admitted_fetches(ck.payload)
                 # Restore the FULL retrieval trace — admitted AND rejected —
                 # whether this stage was fresh or served from the checkpoint.
                 # The gate has already been applied to produce this payload;
@@ -1251,14 +1257,62 @@ class ResearchPipeline:
 
 # ── helpers ───────────────────────────────────────────────────────────────
 
+def _validated_admitted_fetches(payload: dict):
+    """THE single decode/validation boundary for checkpointed fetch-leaf
+    payloads. Every resume consumer (result evidence, answer evidence,
+    ledger replay, independent-key derivation) must go through this.
+
+    Returns the list of admitted FetchResults, or None when admission
+    cannot be VALIDATED: missing/legacy marker, wrong type, negative
+    count, non-list or heterogeneous `fetches`, count mismatch, or any
+    single un-decodable record. None means "no fetch evidence exists" —
+    never a partial prefix that could masquerade as complete evidence.
+    Legacy checkpoints (no `admitted_fetch_count`) validate to None: raw
+    stored fetch records without an admission verdict are not evidence.
+    """
+    n_admitted = payload.get("admitted_fetch_count")
+    if not (isinstance(n_admitted, int)
+            and not isinstance(n_admitted, bool)
+            and n_admitted >= 0):
+        return None
+    raw_fetches = payload.get("fetches")
+    if not (isinstance(raw_fetches, list)
+            and all(isinstance(r, dict) for r in raw_fetches)):
+        return None
+    if len(raw_fetches) != n_admitted:
+        return None
+    try:
+        return [_fetch_from_payload(rec) for rec in raw_fetches]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _independence_key_for_fetch(fr) -> str:
+    """Recompute one restored fetch's independence key with the SAME rule
+    the live retriever used (tools.pipeline.retrieval.independence_key)."""
+    from urllib.parse import urlparse
+    from tools.pipeline.retrieval import independence_key
+    host = urlparse(fr.url or "").netloc or fr.url or ""
+    return independence_key(fr.source_name, host)
+
+
+def _recompute_independent_keys(admitted) -> set:
+    """Derive the independent-source key set from VALIDATED admitted
+    fetches only — never from a serialized `independent_keys` list, which
+    a forged payload could inflate."""
+    return {_independence_key_for_fetch(f) for f in (admitted or [])}
+
+
 def _trace_from_payload(question_id: str, payload: dict):
     """Rebuild a RetrievalTrace from a checkpointed fetch_leaf payload.
 
     Restores the relevance gate's full verdict set — admitted fetches,
-    rejected items with reasons, and the independence keys the live run
-    computed — so a resumed run scores on exactly the evidence (and only
-    the evidence) the live run admitted. Missing legacy fields degrade to
-    empty, never to 'everything was admitted'.
+    rejected items with reasons, and independence keys RECOMPUTED from the
+    validated admitted set — so a resumed run scores on exactly the
+    evidence (and only the evidence) the live run admitted. A payload
+    failing admission validation contributes no admissions and no
+    independent-source credit. Missing legacy fields degrade to empty,
+    never to 'everything was admitted'.
     """
     from tools.pipeline.retrieval import RejectedItem, RetrievalTrace
 
@@ -1270,7 +1324,10 @@ def _trace_from_payload(question_id: str, payload: dict):
             reason=r.get("reason", ""),
             relevance_score=float(r.get("relevance_score") or 0.0),
             content_sha256=r.get("content_sha256", "")))
-    trace.independent_keys = set(payload.get("independent_keys") or [])
+    # Independence is DERIVED from the validated admitted set, never read
+    # from the serialized list: a forged `independent_keys` entry can then
+    # no longer manufacture a second independent voice out of one source.
+    # The serialized value is kept only as a cross-check signal below.
     trace.queries = list(payload.get("queries") or [])
     trace.stop_reason = payload.get("stop_reason", "")
     # Full audit state. Legacy checkpoints lack these fields; degrade to
@@ -1327,40 +1384,26 @@ def _trace_from_payload(question_id: str, payload: dict):
     if isinstance(gain_skipped, list):
         trace.gain_skipped = [copy.deepcopy(gk)
                               for gk in gain_skipped if isinstance(gk, dict)]
-    # Canonical `admitted` hydration (modern format only): hydrate from the
-    # full FetchResult records in checkpoint `fetches` order — the live
-    # pipeline checkpoints exactly `fetches_q == list(trace.admitted)` —
-    # bounded by `admitted_fetch_count`. One-to-one: duplicates and
-    # same-source/same-URL records are preserved verbatim; nothing outside
-    # the stored fetch records is ever fabricated into an admission.
-    # Fail-closed admission (modern format only): the marker must be a real
-    # non-bool nonnegative integer and must EXACTLY agree with the stored
-    # fetch records. Any shortfall — wrong type, negative count, count above
-    # or below the record list, or a single un-hydratable record — leaves
-    # `trace.admitted` empty as safe unknown state. Admission is all-or-
-    # nothing: a partial prefix can never masquerade as complete evidence.
-    n_admitted = payload.get("admitted_fetch_count")
-    marker_ok = (isinstance(n_admitted, int)
-                 and not isinstance(n_admitted, bool)
-                 and n_admitted >= 0)
-    if marker_ok:
-        raw_fetches = payload.get("fetches")
-        # A modern checkpoint's `fetches` must be a HOMOGENEOUS list of
-        # dicts whose original length exactly equals the admitted count.
-        # Filtering malformed elements before comparing would let a valid
-        # prefix masquerade as complete evidence — any non-dict element or
-        # count mismatch voids the whole admission set (fail closed).
-        fetch_records = (raw_fetches if isinstance(raw_fetches, list)
-                         and all(isinstance(r, dict) for r in raw_fetches)
-                         else [])
-        if len(fetch_records) == n_admitted:
-            try:
-                hydrated = [_fetch_from_payload(rec)
-                            for rec in fetch_records]
-            except (KeyError, TypeError, ValueError):
-                hydrated = None  # any bad record voids the whole admission set
-            if hydrated is not None:
-                trace.admitted = hydrated  # fully hydrated, original order
+    # Canonical `admitted` hydration through THE ONE shared decode/
+    # validation path (`_validated_admitted_fetches`). Modern format only;
+    # fail-closed all-or-nothing: any malformed shape voids the entire
+    # admission set rather than admitting a partial prefix. On success the
+    # independent keys are recomputed from these same validated fetches.
+    validated = _validated_admitted_fetches(payload)
+    if validated is not None:
+        trace.admitted = validated  # fully hydrated, original order
+        recomputed = _recompute_independent_keys(validated)
+        declared = payload.get("independent_keys")
+        # Conservative compatibility check: a modern checkpoint whose
+        # serialized keys disagree with the recomputation is internally
+        # inconsistent — refuse the serialized inflation, keep only what
+        # the validated evidence supports.
+        if isinstance(declared, list) and set(declared) != recomputed:
+            logger.warning(
+                "checkpoint %s: serialized independent_keys %r disagree "
+                "with recomputed %r; using recomputed",
+                question_id, sorted(set(declared)), sorted(recomputed))
+        trace.independent_keys = recomputed
     return trace
 
 

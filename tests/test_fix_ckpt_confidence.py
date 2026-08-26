@@ -207,6 +207,9 @@ def test_legacy_payload_without_verdicts_degrades_to_empty_not_admit_all():
 
 
 def test_trace_roundtrip_preserves_rejections():
+    # Independent keys are RECOMPUTED from validated admitted fetches; a
+    # forged extra entry in the serialized list ("forged.example") must
+    # never grant independence the evidence does not support.
     payload = {
         "rejections": [
             {"source_name": "gdelt", "url": "https://g/1",
@@ -215,7 +218,13 @@ def test_trace_roundtrip_preserves_rejections():
              "relevance_score": 0.08,
              "content_sha256": "cd" * 32},
         ],
-        "independent_keys": ["api.openalex.org"],
+        "fetches": [
+            {"source_name": "openalex", "url": "https://api.openalex.org/1",
+             "content_sha256": "ab" * 32, "body": "b", "parsed": None,
+             "question_id": "qX", "fetched_at": ""},
+        ],
+        "admitted_fetch_count": 1,
+        "independent_keys": ["scholarly-aggregator", "forged.example"],
         "queries": ["semiconductor supply chain resilience"],
         "stop_reason": "round budget exhausted",
     }
@@ -225,7 +234,9 @@ def test_trace_roundtrip_preserves_rejections():
     assert r.source_name == "gdelt"
     assert r.content_sha256 == "cd" * 32
     assert abs(r.relevance_score - 0.08) < 1e-9
-    assert tr.independent_keys == {"api.openalex.org"}
+    # Recomputed via the live independence rule: openalex collapses to its
+    # declared overlap family; the forged extra entry is dropped.
+    assert tr.independent_keys == {"scholarly-aggregator"}
 
 
 # ── 5: final validation-gap regressions ────────────────────────────────────
@@ -642,3 +653,185 @@ def test_two_valid_outcomes_still_incoherent():
     assert tr.rounds == []
     kind, expl = classify_null_kind(tr)
     assert kind != "honest_null"
+
+
+# ── 6: resume-evidence bypass regressions ──────────────────────────────────
+
+def _tamper_fetch_leaf(cp_root, mutate):
+    """Rewrite every stored fetch_leaf checkpoint payload in place through
+    mutate(payload) -> payload. Real on-disk tamper: the resume path reads
+    exactly these bytes back."""
+    import pathlib
+    for p in pathlib.Path(cp_root).glob("**/fetch_leaf.*.json"):
+        d = json.loads(p.read_text())
+        d["payload"] = mutate(d["payload"])
+        p.write_text(json.dumps(d))
+
+
+def test_raw_fetch_with_zero_admitted_count_never_becomes_evidence(tmp_path):
+    """EXACT REPRO (blocker 1): a checkpoint payload holding one SHA-valid
+    fetch record but `admitted_fetch_count: 0` used to hydrate raw bytes
+    into `_answer_leaf` after `_trace_from_payload` voided admission,
+    producing 0.9 confidence from unaudited stored bytes. The raw fetches
+    must now contribute NO evidence: admission validation fails, so the
+    leaf re-fetches honestly instead."""
+    led_a = ProvenanceLedger()
+    live = _make(tmp_path / "a", ledger=led_a)
+    ra = _run(live)
+
+    cp = FileCheckpointer(root=tmp_path / "b" / "ckpt")
+    first = _make(tmp_path / "b", ledger=ProvenanceLedger(), checkpointer=cp)
+    _run(first)
+
+    # Corrupt: keep the raw fetch records, void the admission marker.
+    _tamper_fetch_leaf(
+        tmp_path / "b" / "ckpt",
+        lambda pl: {**pl, "admitted_fetch_count": 0})
+
+    calls: list[str] = []
+
+    def counting_transport(url, headers):
+        calls.append(url)
+        for pattern, body in _routes().items():
+            if pattern in url:
+                return 200, body
+        return 404, '{"error": "no fixture route"}'
+
+    model = ScriptedModel({
+        "Architect": [{"content": _decompose()}],
+        "Manager": [{"content": _answer(0.8)}],
+    })
+    led_c = ProvenanceLedger()
+    resumed = ResearchPipeline(
+        model=model, adversary_router=_QuietAdversary(),
+        transport=counting_transport,
+        store=ArtifactStore(root=tmp_path / "c" / "artifacts"), ledger=led_c,
+        checkpointer=cp)
+    rb = _run(resumed)
+
+    # The corrupt payload contributed nothing: the run RE-FETCHED.
+    assert calls, "corrupt checkpoint was served as evidence without refetch"
+    # And scored exactly what the honest live run scored — never 0.9 off
+    # unaudited bytes.
+    assert rb.confidence_score == ra.confidence_score
+
+
+def test_forged_independent_keys_cannot_meet_two_source_requirement(tmp_path):
+    """EXACT REPRO (blocker 2): one validated source plus a serialized
+    `independent_keys` list forged to two entries used to restore two
+    'independent voices' and lift the requirement gate to 0.9/no unmet
+    requirement. Keys must be RECOMPUTED from validated admitted fetches:
+    the resumed run stays capped at SPECULATIVE with the unmet reason."""
+    decomp2 = json.dumps({"sub_questions": [
+        {"text": "what does scholarly research say about semiconductor "
+                 "supply chain resilience",
+         "kind": "descriptive",
+         "question_type": "scholarly work search about semiconductors",
+         "min_source_tier": 2,
+         "min_independent_sources": 2},
+    ]})
+    # Single-source routes: only openalex returns relevant material.
+    routes = _routes(ss="")  # empty ss body
+
+    def _pipe(root, *, conf=0.8, ledger=None, cp=None):
+        return ResearchPipeline(
+            model=ScriptedModel({
+                "Architect": [{"content": decomp2}],
+                "Manager": [{"content": _answer(conf)}],
+            }),
+            adversary_router=_QuietAdversary(),
+            transport=fixture_transport(routes),
+            store=ArtifactStore(root=root / "artifacts"), ledger=ledger,
+            checkpointer=cp)
+
+    led_a = ProvenanceLedger()
+    live = _pipe(tmp_path / "a", ledger=led_a)
+    ra = _run(live)
+    # Control: the LIVE run with one voice against min_independent=2 is
+    # requirement-capped — this is the bar the resume must match.
+    live_leaf = ra.leaves[0]
+    assert live_leaf.requirement_reasons, (
+        "live control should carry unmet independent-source requirement")
+    assert live_leaf.confidence <= 0.54
+
+    cp = FileCheckpointer(root=tmp_path / "b" / "ckpt")
+    warm = _pipe(tmp_path / "b", ledger=ProvenanceLedger(), cp=cp)
+    warm_payloads = []
+
+    orig_save = type(cp).save
+
+    def spy_save(self, *a, **kw):
+        ckpt_ = orig_save(self, *a, **kw)
+        warm_payloads.append(ckpt_)
+        return ckpt_
+
+    type(cp).save = spy_save
+    try:
+        _run(warm)
+    finally:
+        type(cp).save = orig_save
+    assert warm_payloads, "warm run saved nothing"
+
+    # Forge independence into the SERIALIZED key list only.
+    def forge(pl):
+        if "independent_keys" in pl:
+            return {**pl, "independent_keys":
+                    ["api.openalex.org", "forged-publisher.example"]}
+        return pl
+    _tamper_fetch_leaf(tmp_path / "b" / "ckpt", forge)
+
+    # Fresh ledger; transport present but must never be reached.
+    resumed_transport = fixture_transport(routes)
+    led_c = ProvenanceLedger()
+    resumed = ResearchPipeline(
+        model=ScriptedModel({
+            "Architect": [{"content": decomp2}],
+            "Manager": [{"content": _answer(0.9)}],  # model even proposes 0.9
+        }),
+        adversary_router=_QuietAdversary(),
+        transport=resumed_transport,
+        store=ArtifactStore(root=tmp_path / "c" / "artifacts"), ledger=led_c,
+        checkpointer=cp)
+    rb = _run(resumed)
+
+    assert resumed_transport.calls == [], \
+        "resumed run re-fetched; forged checkpoint did not validate"
+    rleaf = rb.leaves[0]
+    assert rleaf.requirement_reasons, (
+        "forged serialized keys satisfied the two-independent-sources "
+        "requirement on ONE validated source")
+    assert rleaf.confidence <= 0.54, rleaf.confidence
+    # And the restored trace carries exactly the recomputed key set.
+    tr_q = resumed._crossrun_traces[rleaf.question_id]
+    assert len(tr_q.independent_keys) == 1
+
+
+def test_valid_checkpoint_control_resume_matches_live(tmp_path):
+    """CONTROL: a genuinely valid modern checkpoint (marker agrees with the
+    records, serialized keys agree with recomputation) still resumes
+    byte-identically — no re-fetch, identical confidence. The strictness
+    added above refuses only corrupt/legacy payloads, never honest ones."""
+    led_a = ProvenanceLedger()
+    live = _make(tmp_path / "a", ledger=led_a)
+    ra = _run(live)
+
+    cp = FileCheckpointer(root=tmp_path / "b" / "ckpt")
+    warm = _make(tmp_path / "b", ledger=ProvenanceLedger(), checkpointer=cp)
+    _run(warm)
+
+    resumed_transport = fixture_transport(_routes())
+    led_c = ProvenanceLedger()
+    resumed = ResearchPipeline(
+        model=ScriptedModel({
+            "Architect": [{"content": _decompose()}],
+            "Manager": [{"content": _answer(0.8)}],
+        }),
+        adversary_router=_QuietAdversary(),
+        transport=resumed_transport,
+        store=ArtifactStore(root=tmp_path / "c" / "artifacts"), ledger=led_c,
+        checkpointer=cp)
+    rb = _run(resumed)
+
+    assert resumed_transport.calls == [], \
+        "valid checkpoint forced an unnecessary re-fetch"
+    assert rb.confidence_score == ra.confidence_score
