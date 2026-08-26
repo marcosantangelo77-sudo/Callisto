@@ -130,7 +130,27 @@ def _persist_run(record: dict) -> Path:
     return path
 
 
+def check_seal_key() -> bool:
+    """Fail-closed gate: True only when CALLISTO_SEAL_KEY is set and valid
+    hex. Unset/blank/non-hex keys mean unkeyed (forgeable) session hashes,
+    which the front door must refuse rather than silently write."""
+    raw = os.getenv("CALLISTO_SEAL_KEY", "").strip()
+    if not raw:
+        print("FAIL: CALLISTO_SEAL_KEY is not set — seals would be unkeyed "
+              "(forgeable SHA-256 checksums)")
+        return False
+    try:
+        bytes.fromhex(raw)
+    except ValueError:
+        print("FAIL: CALLISTO_SEAL_KEY is not valid hex — seals would fall "
+              "back to unkeyed (forgeable); fix the key value")
+        return False
+    return True
+
+
 async def _cmd_ask(args: argparse.Namespace) -> int:
+    if not check_seal_key():
+        return 2
     router = _load_router(args.providers)
     if args.backend:
         if args.backend not in router.endpoints:
