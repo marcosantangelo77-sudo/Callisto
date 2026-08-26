@@ -60,18 +60,30 @@ LOG_DIR="${CALLISTO_OXA_LOG_DIR:-${ROOT}/logs/oxa}"
 mkdir -p "$LOG_DIR"
 LOG="${LOG_DIR}/${TASK_NAME}.log"
 PROMPT="$(cat "$PROMPT_FILE")"
+WORKTREE_ABS="$(cd "$WORKTREE" && pwd)"
 
-echo "nous-supervisor: task=${TASK_NAME} worktree=${WORKTREE} branch=${branch}"
+# Pin the agent to the worktree. --in alone is not enough: OX will happily
+# write under $HOME (verified 2026-08-26). Prefix the brief with a hard cwd
+# rule and pass --no-restore-cwd. --yolo is required for unattended turns;
+# the caller still owns the PTY and can interrupt by PID.
+WRAPPED="$(cat <<EOF
+WORKING DIRECTORY (mandatory): ${WORKTREE_ABS}
+Create, edit, and delete files only under that directory. Do not write to \$HOME, /tmp (except scratch), or any other worktree. Do not touch master. Do not git stash, git reset --hard, or git checkout --.
+
+${PROMPT}
+EOF
+)"
+
+echo "nous-supervisor: task=${TASK_NAME} worktree=${WORKTREE_ABS} branch=${branch}"
 echo "nous-supervisor: model=stealth/ox-alpha provider=nous idle_minutes=${IDLE_MINUTES}"
 echo "nous-supervisor: log=${LOG}"
 
-# Idle window is advisory: Hermes -z is one-shot. Do not `set -x` — the
-# prompt must not land in the shell trace. Do not --ignore-user-config
-# (that drops Portal auth). Pin --in so the worker cannot wander to master.
 hermes \
   --provider nous \
   -m stealth/ox-alpha \
-  --in "$WORKTREE" \
-  -z "$PROMPT" \
+  --in "$WORKTREE_ABS" \
+  --no-restore-cwd \
+  --yolo \
+  -z "$WRAPPED" \
   2>&1 | tee "$LOG"
 exit "${PIPESTATUS[0]}"

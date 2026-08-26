@@ -65,6 +65,19 @@ hermes -z PONG --provider nous -m stealth/ox-alpha --in /tmp
 
 Do not commit `auth.json`, refresh tokens, or API keys.
 
+## Live verification (2026-08-26, this cloud VM)
+
+After the operator approved device-code `C49Q-7VGP`:
+
+| Check | Result |
+|---|---|
+| `hermes portal info` | Auth: ✓ logged in, API `inference-api.nousresearch.com/v1` |
+| `python3 scripts/oxa_status.py` | exit 0, `nous_logged_in=True` |
+| `ProviderRouter.check_health("ox_alpha")` | `{"status": "ok"}` |
+| `hermes -z PONG --provider nous -m stealth/ox-alpha` | `PONG` in ~9s |
+| `hermes -z` file-write probe | wrote `/tmp/oxa_write_probe.txt` (`OK`) — `-z` **does** have tools |
+| `scripts/nous-supervisor.sh` | launches, exit 0; first probe wrote `$HOME/OX_OK.txt` instead of the worktree — supervisor now prefixes a cwd mandate and passes `--no-restore-cwd --yolo` |
+
 ## How to launch a worker after login
 
 ```bash
