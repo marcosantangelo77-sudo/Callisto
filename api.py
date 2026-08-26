@@ -32,6 +32,12 @@ from tools.api import boost_routes as _boost_routes  # noqa: E402
 from tools.api import task_routes as _task_routes  # noqa: E402
 from tools.api import security as _security  # noqa: E402
 from tools.api import lifecycle as _lifecycle  # noqa: E402
+from tools.api.lifecycle import (  # noqa: E402  (slice 7 lifespan glue)
+    bind_background_tasks,
+    cancel_tasks,
+    close_research_stack,
+    unpack_research_stack,
+)
 from tools.api import errors as _errors  # noqa: E402
 from tools.api import serve as _serve  # noqa: E402
 
@@ -194,18 +200,22 @@ async def lifespan(app: FastAPI):
     line_monitor = await _lifecycle.startup_line_monitor()
 
     # Phase 8 — CLV tracker + order management + hypothesis/backtest stack +
-    # research loop.
-    stack = await _lifecycle.startup_research_stack(orchestrator_instance, line_monitor)
-    clv_tracker = stack["clv_tracker"]
-    order_manager_instance = stack["order_manager"]
+    # research loop. The stack dict is unpacked in a pinned order; see
+    # _lifecycle.unpack_research_stack.
+    (
+        clv_tracker,
+        order_manager_instance,
+        hypothesis_manager,
+        historical_fetcher,
+        backtest_engine,
+        vector_store,
+        hypothesis_generator,
+        data_collector,
+        research_loop,
+    ) = unpack_research_stack(
+        await _lifecycle.startup_research_stack(orchestrator_instance, line_monitor)
+    )
     app.state.order_manager = order_manager_instance
-    hypothesis_manager = stack["hypothesis_manager"]
-    historical_fetcher = stack["historical_fetcher"]
-    backtest_engine = stack["backtest_engine"]
-    vector_store = stack["vector_store"]
-    hypothesis_generator = stack["hypothesis_generator"]
-    data_collector = stack["data_collector"]
-    research_loop = stack["research_loop"]
 
     # Phase 9 — pipeline integrity checker + system health monitor + heartbeat.
     system_health, heartbeat = await _lifecycle.startup_watchdogs(research_loop)
@@ -225,14 +235,16 @@ async def lifespan(app: FastAPI):
         DB_PATH
     )
 
-    # Background workers (moved to tools/api/workers.py in slice 5).
-    tasks = _lifecycle.spawn_background_tasks()
-    worker_task = tasks["worker"]
-    wal_checkpoint_task = tasks["wal_checkpoint"]
-    restart_signal_task = tasks["restart_signal"]
-    sla_watchdog_task = tasks["sla_watchdog"]
-    order_cron_task = tasks["order_cron"]
-    prop_resolver_task = tasks["prop_resolver"]
+    # Background workers (moved to tools/api/workers.py in slice 5; the
+    # dict→globals binding order is pinned by tools/api/lifecycle.py).
+    (
+        worker_task,
+        wal_checkpoint_task,
+        restart_signal_task,
+        sla_watchdog_task,
+        order_cron_task,
+        prop_resolver_task,
+    ) = bind_background_tasks(_lifecycle.spawn_background_tasks())
     logger.info(
         f"Callisto API started on port {CALLISTO_PORT} "
         f"(WAL ckpt 5m, restart-signal watcher active, ingestion SLA watchdog 5m, "
@@ -258,42 +270,18 @@ async def lifespan(app: FastAPI):
 
     if autonomous:
         await autonomous.stop()
-    if wal_checkpoint_task:
-        wal_checkpoint_task.cancel()
-        try:
-            await wal_checkpoint_task
-        except asyncio.CancelledError:
-            pass
-    if sla_watchdog_task:
-        sla_watchdog_task.cancel()
-        try:
-            await sla_watchdog_task
-        except asyncio.CancelledError:
-            pass
-    if order_cron_task:
-        order_cron_task.cancel()
-        try:
-            await order_cron_task
-        except asyncio.CancelledError:
-            pass
-    if prop_resolver_task:
-        prop_resolver_task.cancel()
-        try:
-            await prop_resolver_task
-        except asyncio.CancelledError:
-            pass
-    if worker_task:
-        worker_task.cancel()
-        try:
-            await worker_task
-        except asyncio.CancelledError:
-            pass
-    if restart_signal_task:
-        restart_signal_task.cancel()
-        try:
-            await restart_signal_task
-        except asyncio.CancelledError:
-            pass
+    # Background producers/workers stop first, in the historical order:
+    # WAL checkpoint → SLA watchdog → order cron → prop resolver → worker
+    # → restart-signal watcher. Each cancel-and-await step lives in
+    # tools/api/lifecycle.cancel_tasks.
+    await cancel_tasks(
+        wal_checkpoint_task,
+        sla_watchdog_task,
+        order_cron_task,
+        prop_resolver_task,
+        worker_task,
+        restart_signal_task,
+    )
     # Live state collector — cancelled via stop_collector so the HTTP
     # client is closed cleanly. Failure here must NOT stop shutdown.
     await _lifecycle.stop_live_state_collector()
@@ -339,22 +327,22 @@ async def lifespan(app: FastAPI):
         await _stop_writers()
     except Exception:
         logger.exception("WriteCoordinator shutdown error (non-fatal)")
-    if data_collector:
-        await data_collector.close()
-    if hypothesis_generator:
-        await hypothesis_generator.close()
-    if vector_store:
-        await vector_store.close()
-    await backtest_engine.close()
-    await historical_fetcher.close()
-    await hypothesis_manager.close()
-    await clv_tracker.close()
+    # Close the research/backtest stack (order pinned in lifecycle helper),
+    # then every remaining core service, then shared HTTP clients.
+    await close_research_stack(
+        data_collector=data_collector,
+        hypothesis_generator=hypothesis_generator,
+        vector_store=vector_store,
+        backtest_engine=backtest_engine,
+        historical_fetcher=historical_fetcher,
+        hypothesis_manager=hypothesis_manager,
+        clv_tracker=clv_tracker,
+        learned_correlation_store=learned_correlation_store,
+    )
     await line_monitor.stop()
     await monitor.stop()
     await queue.close()
     await memory.close()
-    if learned_correlation_store:
-        await learned_correlation_store.close()
     # Close every shared outbound HTTP client (moved to tools/api/lifecycle.py).
     await _lifecycle.close_http_clients()
     logger.info("Callisto API shut down")
