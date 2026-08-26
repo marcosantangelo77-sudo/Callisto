@@ -83,6 +83,8 @@ def _safe_parse(response: dict, fallback=None):
     Normalizes list-wrapped responses: if the model returns a JSON array
     containing a single dict, unwrap it automatically.
     """
+    if not isinstance(response, dict):
+        return fallback
     parsed = response.get("parsed_json")
     if parsed is None:
         return fallback
