@@ -20,3 +20,7 @@ from tools.loop.phases.pre_live import (  # noqa: F401
     phase_interpret_backtests,
     phase_paper_trade,
 )
+from tools.loop.phases.hypgen import (  # noqa: F401
+    phase_generate_hypotheses,
+    phase_injury_prop_hypotheses,
+)
