@@ -1468,6 +1468,14 @@ from tools.api import odds_extra as _odds_extra
 from tools.api import odds_routes as _odds_routes
 from tools.api import simulate as _simulate
 from tools.api import wiki as _wiki
+from tools.api import model_routes as _model_routes
+from tools.api import data_routes as _data_routes
+from tools.api import hypothesis_routes as _hypothesis_routes
+from tools.api import backtest_routes as _backtest_routes
+from tools.api import research_routes as _research_routes
+from tools.api import system_routes as _system_routes
+from tools.api import debug_routes as _debug_routes
+from tools.api import order_routes as _order_routes
 
 # Debounce window for /health health-file disk writes (seconds).
 _HEALTH_FILE_DEBOUNCE_SECONDS = 10.0
@@ -1817,58 +1825,11 @@ async def simulate_portfolio_endpoint(
 async def get_model_total(sport: str, venue: str = "", wind_mph: float = None,
                           wind_dir: str = "", temp_f: float = None,
                           humidity: float = None, refs: str = ""):
-    """Pace model total projections + environment adjustments for a sport.
-
-    Returns the pace model's independent fair total for each game in the latest
-    odds snapshot, adjusted by environment (venue/weather/refs).  This is an
-    independent total model beyond cross-book divergence.
-    """
-    from tools.edge_scanner import scan_pace_model_total_edges
-
-    # Build weather dict from query params
-    weather_data = None
-    if any(v is not None for v in [wind_mph, temp_f, humidity]):
-        weather_data = {}
-        if wind_mph is not None:
-            weather_data["wind_speed_mph"] = wind_mph
-        if wind_dir:
-            weather_data["wind_direction"] = wind_dir
-        if temp_f is not None:
-            weather_data["temp_f"] = temp_f
-        if humidity is not None:
-            weather_data["humidity_pct"] = humidity
-
-    ref_list = [r.strip() for r in refs.split(",") if r.strip()] or None
-
-    # Get latest snapshot for this sport
-    snapshot = line_monitor._snapshots.get(sport)
-    if not snapshot:
-        raise HTTPException(
-            status_code=503,
-            detail=f"No snapshot available for {sport}. Trigger a snapshot first.",
-        )
-
-    games = snapshot.get("games", [])
-    if not games:
-        raise HTTPException(status_code=503, detail=f"No games in snapshot for {sport}")
-
-    edges = scan_pace_model_total_edges(
-        games=games,
-        sport=sport,
-        weather_data=weather_data,
-        venue_team=venue or None,
-        refs=ref_list,
+    """Pace model total projections + environment adjustments for a sport."""
+    return await _model_routes.get_model_total(
+        sport, venue=venue, wind_mph=wind_mph, wind_dir=wind_dir,
+        temp_f=temp_f, humidity=humidity, refs=refs,
     )
-
-    return {
-        "sport": sport,
-        "game_count": len(games),
-        "model_edges": edges,
-        "edge_count": len(edges),
-        "venue_queried": venue or None,
-        "weather_data": weather_data,
-        "refs": ref_list,
-    }
 
 
 @app.get("/model/environment", dependencies=[Depends(require_admin_or_loopback)])
@@ -1876,263 +1837,41 @@ async def get_model_environment(venue: str, sport: str = "NFL",
                                 wind_mph: float = None, wind_dir: str = "",
                                 temp_f: float = None, humidity: float = None,
                                 precipitation: str = "", refs: str = ""):
-    """Environmental factors for a specific venue/game.
-
-    Returns venue characteristics, weather adjustments, referee tendencies,
-    and the combined total adjustment with confidence level.
-    """
-    from tools.environment import (
-        total_environment_adjustment,
-        get_venue_factors,
+    """Environmental factors for a specific venue/game."""
+    return await _model_routes.get_model_environment(
+        venue, sport=sport, wind_mph=wind_mph, wind_dir=wind_dir,
+        temp_f=temp_f, humidity=humidity, precipitation=precipitation, refs=refs,
     )
-
-    # Build weather dict
-    weather_data = None
-    if any(v is not None for v in [wind_mph, temp_f, humidity]) or precipitation:
-        weather_data = {}
-        if wind_mph is not None:
-            weather_data["wind_speed_mph"] = wind_mph
-        if wind_dir:
-            weather_data["wind_direction"] = wind_dir
-        if temp_f is not None:
-            weather_data["temp_f"] = temp_f
-        if humidity is not None:
-            weather_data["humidity_pct"] = humidity
-        if precipitation:
-            weather_data["precipitation"] = precipitation
-
-    ref_list = [r.strip() for r in refs.split(",") if r.strip()] or None
-
-    sport_code = sport.upper()
-    venue_info = get_venue_factors(venue, sport_code)
-    env_result = total_environment_adjustment(
-        venue=venue,
-        sport=sport_code,
-        weather=weather_data,
-        refs=ref_list,
-    )
-
-    return {
-        "venue": venue_info,
-        "environment": env_result,
-        "weather_input": weather_data,
-        "refs_input": ref_list,
-    }
 
 
 @app.get("/data/injuries/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def get_injuries(sport: str):
-    """Get current injury report from ESPN with model analysis.
-
-    Returns raw injury data plus, for each injured starter/key player,
-    the injury model's quantified impact (spread points, usage redistribution).
-    """
-    from tools.contextual_data import get_injuries as _get_injuries
-    from tools.injury_model import player_impact as _player_impact
-
-    data = await _get_injuries(sport)
-    if data.get("error") or not data.get("injuries"):
-        return data
-
-    # Map sport key to model sport code
-    _model_sport_map = {
-        "basketball_nba": "NBA", "basketball_ncaab": "NBA",
-        "americanfootball_nfl": "NFL", "americanfootball_ncaaf": "NFL",
-        "baseball_mlb": "MLB", "icehockey_nhl": "NHL",
-    }
-    model_sport = _model_sport_map.get(sport, "")
-
-    # Enrich each injury with model analysis (lightweight — no matchup/timing)
-    if model_sport:
-        for inj in data["injuries"]:
-            status = (inj.get("status") or "").lower()
-            if status not in ("out", "doubtful"):
-                continue
-            try:
-                result = _player_impact(
-                    player_name=inj.get("player", ""),
-                    team=inj.get("team", ""),
-                    sport=model_sport,
-                    position=inj.get("position", ""),
-                )
-                inj["model_analysis"] = {
-                    "tier": result.tier,
-                    "spread_impact": result.spread_impact,
-                    "total_impact": result.total_impact,
-                    "confidence": result.confidence,
-                    "notes": result.notes[:3],
-                }
-            except Exception:
-                pass  # silently skip model failures
-
-    return data
+    """Get current injury report from ESPN with model analysis."""
+    return await _model_routes.get_injuries(sport)
 
 
 @app.get("/model/injury-impact/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def injury_impact_model(sport: str):
-    """Run full injury model analysis for today's games.
-
-    Fetches current injuries and scoreboard, then for each game with
-    significant injuries, runs full_injury_analysis (impact quantification,
-    usage redistribution, matchup adjustment, market timing).
-
-    Returns per-game injury impact summaries with prop opportunities.
-    """
-    from tools.contextual_data import get_injuries as _get_injuries, get_scoreboard as _get_sb
-    from tools.injury_model import full_injury_analysis as _full_analysis
-    from dataclasses import asdict
-
-    _model_sport_map = {
-        "basketball_nba": "NBA", "basketball_ncaab": "NBA",
-        "americanfootball_nfl": "NFL", "americanfootball_ncaaf": "NFL",
-        "baseball_mlb": "MLB", "icehockey_nhl": "NHL",
-    }
-    model_sport = _model_sport_map.get(sport, "")
-    if not model_sport:
-        raise HTTPException(status_code=400, detail=f"Sport {sport} not supported by injury model")
-
-    injuries_data = await _get_injuries(sport)
-    scoreboard = await _get_sb(sport)
-    injuries = injuries_data.get("injuries", [])
-    games = scoreboard.get("games", [])
-
-    if not injuries:
-        return {"sport": sport, "games": [], "message": "No injuries reported"}
-
-    # Build team-to-game mapping
-    team_game_map = {}  # team_name_lower -> game dict
-    for g in games:
-        for side in ["home_team", "away_team"]:
-            tn = g.get(side, "").lower()
-            if tn:
-                team_game_map[tn] = g
-
-    # Group injuries by team
-    team_injuries = {}
-    for inj in injuries:
-        status = (inj.get("status") or "").lower()
-        if status not in ("out", "doubtful"):
-            continue
-        team = inj.get("team", "")
-        team_injuries.setdefault(team, []).append(inj)
-
-    results = []
-    for team, injs in team_injuries.items():
-        # Find the game for this team
-        game = team_game_map.get(team.lower())
-        if not game:
-            # Try partial match
-            for tn, g in team_game_map.items():
-                if any(w in tn for w in team.lower().split() if len(w) > 3):
-                    game = g
-                    break
-        if not game:
-            continue
-
-        home = game.get("home_team", "")
-        away = game.get("away_team", "")
-        opponent = away if team.lower() in home.lower() else home
-        game_name = game.get("name", f"{away} at {home}")
-
-        game_result = {
-            "game": game_name,
-            "team": team,
-            "opponent": opponent,
-            "injuries": [],
-        }
-
-        for inj in injs:
-            try:
-                analysis = _full_analysis(
-                    player_name=inj.get("player", ""),
-                    team=team,
-                    sport=model_sport,
-                    opponent=opponent,
-                    position=inj.get("position", ""),
-                    minutes_since_announced=30.0,
-                )
-                # Convert dataclasses to dicts for JSON serialization
-                summary = {
-                    "player": analysis["player"],
-                    "actionable": analysis.get("actionable", False),
-                    "edge_points": analysis.get("edge_points", 0),
-                }
-                impact = analysis.get("impact")
-                if impact:
-                    summary["impact"] = {
-                        "tier": impact.tier,
-                        "spread_impact": impact.spread_impact,
-                        "total_impact": impact.total_impact,
-                        "confidence": impact.confidence,
-                        "notes": impact.notes[:3],
-                    }
-                matchup = analysis.get("matchup_adjusted")
-                if matchup:
-                    summary["matchup"] = {
-                        "base_impact": matchup.base_impact,
-                        "multiplier": matchup.matchup_multiplier,
-                        "adjusted_spread_impact": matchup.adjusted_spread_impact,
-                        "reasoning": matchup.reasoning[:3],
-                    }
-                mkt = analysis.get("market_timing")
-                if mkt:
-                    summary["market_timing"] = {
-                        "pct_adjusted": mkt.pct_adjusted,
-                        "window_remaining_minutes": mkt.window_remaining_minutes,
-                        "edge_remaining": mkt.edge_remaining,
-                        "tier": mkt.significance_tier,
-                        "notes": mkt.notes[:2],
-                    }
-                # Usage redistribution — top 5 beneficiaries
-                redist = analysis.get("redistribution", [])
-                if redist:
-                    summary["prop_opportunities"] = [
-                        {
-                            "player": r.player,
-                            "role": r.role,
-                            "usage_increase": r.usage_increase,
-                            "stat_change": r.projected_stat_change,
-                        }
-                        for r in redist[:5]
-                    ]
-                game_result["injuries"].append(summary)
-            except Exception as e:
-                game_result["injuries"].append({
-                    "player": inj.get("player", ""),
-                    "error": str(e),
-                })
-
-        if game_result["injuries"]:
-            results.append(game_result)
-
-    return {
-        "sport": sport,
-        "model_sport": model_sport,
-        "game_count": len(results),
-        "games": results,
-    }
+    """Run full injury model analysis for today's games."""
+    return await _model_routes.injury_impact_model(sport)
 
 
 @app.get("/data/scoreboard/{sport}", dependencies=[Depends(require_admin_or_loopback)])
 async def get_scoreboard(sport: str):
     """Get live scoreboard from ESPN."""
-    from tools.contextual_data import get_scoreboard as _get_scoreboard
-    return await _get_scoreboard(sport)
+    return await _data_routes.get_scoreboard(sport)
 
 
 @app.get("/data/weather", dependencies=[Depends(require_admin_or_loopback)])
 async def get_weather(latitude: float, longitude: float, venue: str = ""):
     """Get weather forecast for a venue."""
-    from tools.contextual_data import get_weather as _get_weather
-    return await _get_weather(latitude, longitude, venue_name=venue)
+    return await _data_routes.get_weather(latitude, longitude, venue=venue)
 
 
 @app.get("/data/referee", dependencies=[Depends(require_admin_or_loopback)])
 async def referee_info(refs: str, sport: str = "basketball_nba"):
     """Get referee tendency adjustments. Pass refs as comma-separated names."""
-    from tools.contextual_data import get_referee_adjustment
-    ref_list = [r.strip() for r in refs.split(",")]
-    return get_referee_adjustment(ref_list, sport)
+    return _data_routes.referee_info(refs, sport)
 
 
 # --- Line Gap Analysis ---
@@ -2339,25 +2078,13 @@ class BacktestRequest(BaseModel):
 @app.post("/hypothesis", dependencies=[Depends(require_admin_or_loopback)])
 async def create_hypothesis(req: HypothesisCreate):
     """Create a new testable betting hypothesis."""
-    hid = await hypothesis_manager.create_hypothesis(
-        name=req.name,
-        thesis=req.thesis,
-        sport=req.sport,
-        market_type=req.market_type,
-        model_config=req.hypothesis_model_config,
-        edge_threshold=req.edge_threshold,
-        min_sample_size=req.min_sample_size,
-        significance_level=req.significance_level,
-        notes=req.notes,
-    )
-    return {"hypothesis_id": hid}
+    return await _hypothesis_routes.create_hypothesis(req)
 
 
 @app.get("/hypothesis", dependencies=[Depends(require_admin_or_loopback)])
 async def list_hypotheses(status: Optional[str] = None):
     """List all hypotheses, optionally filtered by status."""
-    hypotheses = await hypothesis_manager.list_hypotheses(status=status)
-    return {"count": len(hypotheses), "hypotheses": hypotheses}
+    return await _hypothesis_routes.list_hypotheses(status=status)
 
 
 @app.get(
@@ -2366,10 +2093,7 @@ async def list_hypotheses(status: Optional[str] = None):
 )
 async def get_hypothesis(hypothesis_id: str):
     """Get hypothesis details."""
-    h = await hypothesis_manager.get_hypothesis(hypothesis_id)
-    if not h:
-        raise HTTPException(status_code=404, detail="Hypothesis not found")
-    return h
+    return await _hypothesis_routes.get_hypothesis(hypothesis_id)
 
 
 @app.get(
@@ -2378,7 +2102,7 @@ async def get_hypothesis(hypothesis_id: str):
 )
 async def hypothesis_report(hypothesis_id: str):
     """Full statistical report across all stages."""
-    return await hypothesis_manager.get_hypothesis_report(hypothesis_id)
+    return await _hypothesis_routes.hypothesis_report(hypothesis_id)
 
 
 @app.get(
@@ -2387,164 +2111,43 @@ async def hypothesis_report(hypothesis_id: str):
 )
 async def hypothesis_significance(hypothesis_id: str, stage: str = "backtest"):
     """Run significance tests on a hypothesis at a given stage."""
-    return await hypothesis_manager.evaluate_significance(hypothesis_id, stage)
+    return await _hypothesis_routes.hypothesis_significance(hypothesis_id, stage)
 
 
 @app.post("/hypothesis/{hypothesis_id}/promote", dependencies=[Depends(require_admin)])
 async def promote_hypothesis(hypothesis_id: str):
     """Check readiness and promote to next stage if criteria are met."""
-    readiness = await hypothesis_manager.check_promotion_readiness(hypothesis_id)
-    if readiness.get("ready"):
-        result = await hypothesis_manager.auto_promote(hypothesis_id)
-        return {"promoted": True, **result}
-    return {"promoted": False, **readiness}
+    return await _hypothesis_routes.promote_hypothesis(hypothesis_id)
 
 
 @app.patch("/hypothesis/{hypothesis_id}", dependencies=[Depends(require_admin)])
 async def update_hypothesis(hypothesis_id: str, request: Request):
-    """Update hypothesis status, threshold, model_config, or notes.
-
-    Uses a fresh DB connection per request to avoid stale-handle failures
-    on the long-lived hypothesis_manager._db connection.
-    """
-    import json as _json
-    from tools.schema import open_db
-
-    req = await request.json()
-    if not isinstance(req, dict):
-        raise HTTPException(status_code=422, detail="Body must be a JSON object")
-    # SECURITY (audit C-4 / P2 #25): allowlist top-level fields and validate model_config
-    # against a known schema. Refuses unknown keys to prevent silent passthrough that
-    # downstream code may interpret unsafely.
-    _ALLOWED_PATCH_KEYS = {
-        "status", "promoted_by", "force", "edge_threshold", "model_config", "notes",
-    }
-    unknown = set(req.keys()) - _ALLOWED_PATCH_KEYS
-    if unknown:
-        raise HTTPException(status_code=422, detail=f"Unknown fields: {sorted(unknown)}")
-    if "model_config" in req:
-        mc = req["model_config"]
-        if not isinstance(mc, dict):
-            raise HTTPException(status_code=422, detail="model_config must be an object")
-        from tools.hypothesis import validate_model_config
-        try:
-            req["model_config"] = validate_model_config(mc)
-        except ValueError as ve:
-            raise HTTPException(status_code=422, detail=f"model_config: {ve}")
-    if "notes" in req:
-        if not isinstance(req["notes"], str) or len(req["notes"]) > 5000:
-            raise HTTPException(status_code=422, detail="notes must be string ≤5000 chars")
-    if "edge_threshold" in req:
-        try:
-            et = float(req["edge_threshold"])
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=422, detail="edge_threshold must be numeric")
-        if not (0.0 <= et <= 1.0):
-            raise HTTPException(status_code=422, detail="edge_threshold out of [0,1]")
-        req["edge_threshold"] = et
-
-    h = await hypothesis_manager.get_hypothesis(hypothesis_id)
-    if not h:
-        raise HTTPException(status_code=404, detail="Hypothesis not found")
-    results = {}
-    db = None
-    try:
-        db = await open_db()
-        if "status" in req:
-            new_status = req["status"]
-            promoted_by = req.get("promoted_by", "api")
-            force = req.get("force", False)
-            old_status = h.get("status", "draft")
-
-            # Enforce promotion gates for forward transitions unless force=True
-            stage_order = ["draft", "backtesting", "paper_trading", "live", "retired"]
-            old_idx = stage_order.index(old_status) if old_status in stage_order else -1
-            new_idx = stage_order.index(new_status) if new_status in stage_order else -1
-            is_forward = new_idx > old_idx and new_status not in ("retired", "rejected")
-
-            if is_forward and not force and old_status in ("backtesting", "paper_trading"):
-                readiness = await hypothesis_manager.check_promotion_readiness(hypothesis_id)
-                if not readiness.get("ready"):
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": f"Promotion gate failed: {old_status} → {new_status}",
-                            "checks": readiness.get("checks", []),
-                            "hint": "Pass force=true to override",
-                        },
-                    )
-
-            now = __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ).isoformat()
-            await db.execute(
-                "UPDATE hypotheses SET status = ?, updated_at = ?, "
-                "promoted_at = ?, promoted_by = ? WHERE hypothesis_id = ?",
-                (new_status, now, now, promoted_by, hypothesis_id),
-            )
-            results["status"] = new_status
-            logger.info(f"Hypothesis {hypothesis_id} → {new_status} (by {promoted_by})")
-        if "edge_threshold" in req:
-            await db.execute(
-                "UPDATE hypotheses SET edge_threshold = ?, updated_at = CURRENT_TIMESTAMP "
-                "WHERE hypothesis_id = ?",
-                (req["edge_threshold"], hypothesis_id),
-            )
-            results["edge_threshold"] = req["edge_threshold"]
-        if "model_config" in req:
-            raw = h.get("model_config", "{}")
-            existing = _json.loads(raw) if isinstance(raw, str) else (raw or {})
-            existing.update(req["model_config"])
-            await db.execute(
-                "UPDATE hypotheses SET model_config = ?, updated_at = CURRENT_TIMESTAMP "
-                "WHERE hypothesis_id = ?",
-                (_json.dumps(existing), hypothesis_id),
-            )
-            results["model_config"] = existing
-        if "notes" in req:
-            await db.execute(
-                "UPDATE hypotheses SET notes = ?, updated_at = CURRENT_TIMESTAMP "
-                "WHERE hypothesis_id = ?",
-                (req["notes"], hypothesis_id),
-            )
-            results["notes"] = req["notes"]
-        await db.commit()
-    except Exception as e:
-        logger.error(f"PATCH /hypothesis/{hypothesis_id} failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if db:
-            await db.close()
-    return {"hypothesis_id": hypothesis_id, "updated": results}
+    """Update hypothesis status, threshold, model_config, or notes."""
+    return await _hypothesis_routes.update_hypothesis(hypothesis_id, request)
 
 
 @app.post("/backtest/run", dependencies=[Depends(require_admin)])
 async def run_backtest(req: BacktestRequest):
     """Start a backtest run on a hypothesis against historical data."""
-    return await backtest_engine.run_backtest(
-        hypothesis_id=req.hypothesis_id,
-        start_date=req.start_date,
-        end_date=req.end_date,
-        credit_budget=req.credit_budget,
-    )
+    return await _backtest_routes.run_backtest(req)
 
 
 @app.get("/backtest/run/{run_id}", dependencies=[Depends(require_admin_or_loopback)])
 async def get_backtest_results(run_id: str):
     """Get backtest results for a run."""
-    return await backtest_engine.get_run_results(run_id)
+    return await _backtest_routes.get_backtest_results(run_id)
 
 
 @app.post("/backtest/resolve/{run_id}", dependencies=[Depends(require_admin_or_loopback)])
 async def resolve_backtest(run_id: str, sport: str = "basketball_nba"):
     """Resolve backtest events against actual game results."""
-    return await backtest_engine.resolve_with_scores(run_id, sport)
+    return await _backtest_routes.resolve_backtest(run_id, sport)
 
 
 @app.get("/historical/cache", dependencies=[Depends(require_admin_or_loopback)])
 async def historical_cache_stats():
     """Get historical odds cache statistics."""
-    return await historical_fetcher.get_cache_stats()
+    return await _backtest_routes.historical_cache_stats()
 
 
 @app.post("/historical/fetch", dependencies=[Depends(require_admin)])
@@ -2555,10 +2158,8 @@ async def fetch_historical(
     credit_budget: int = 50,
 ):
     """Fetch historical odds for a date range (cached after first fetch)."""
-    return await historical_fetcher.bulk_fetch_date_range(
-        sport=sport,
-        start_date=start_date,
-        end_date=end_date,
+    return await _backtest_routes.fetch_historical(
+        sport=sport, start_date=start_date, end_date=end_date,
         credit_budget=credit_budget,
     )
 
@@ -2568,133 +2169,56 @@ async def fetch_historical(
 @app.get("/research/status", dependencies=[Depends(require_admin_or_loopback)])
 async def research_status():
     """Get research loop status."""
-    if not research_loop:
-        raise HTTPException(status_code=503, detail="Research loop not initialized")
-    return research_loop.get_status()
+    return await _research_routes.research_status()
 
 
 @app.post("/research/pause", dependencies=[Depends(require_admin)])
 async def research_pause():
     """Pause the research loop."""
-    if not research_loop:
-        raise HTTPException(status_code=503, detail="Research loop not initialized")
-    return await research_loop.pause()
+    return await _research_routes.research_pause()
 
 
 @app.post("/research/resume", dependencies=[Depends(require_admin)])
 async def research_resume():
     """Resume the research loop."""
-    if not research_loop:
-        raise HTTPException(status_code=503, detail="Research loop not initialized")
-    return await research_loop.resume()
+    return await _research_routes.research_resume()
 
 
 @app.post("/research/local-only", dependencies=[Depends(require_admin)])
 async def research_local_only(enabled: bool = True):
     """Toggle local-only mode (no Claude Code calls)."""
-    if not research_loop:
-        raise HTTPException(status_code=503, detail="Research loop not initialized")
-    return research_loop.set_local_only(enabled)
+    return _research_routes.research_local_only(enabled)
 
 
 @app.post("/research/collect", dependencies=[Depends(require_admin)])
 async def research_collect(sport: str = "basketball_nba", date: Optional[str] = None):
     """Manually trigger data collection for a sport."""
-    if not data_collector:
-        raise HTTPException(status_code=503, detail="Data collector not initialized")
-    scores = await data_collector.collect_scores(sport, date)
-    box = await data_collector.collect_box_scores(sport, date)
-    return {"scores": scores, "box_scores": box}
+    return await _research_routes.research_collect(sport, date)
 
 
 @app.post("/research/generate", dependencies=[Depends(require_admin)])
 async def research_generate(sport: str = "basketball_nba", max_hypotheses: int = 20):
     """Manually trigger hypothesis generation."""
-    if not hypothesis_generator:
-        raise HTTPException(status_code=503, detail="Hypothesis generator not initialized")
-    created = await hypothesis_generator.generate_from_templates(
-        sport=sport, max_hypotheses=max_hypotheses,
-    )
-    return {"generated": len(created), "hypotheses": created}
+    return await _research_routes.research_generate(sport, max_hypotheses)
 
 
 @app.post("/research/batch-reject", dependencies=[Depends(require_admin)])
 async def batch_reject_hypotheses(request: Request):
-    """Batch-reject draft hypotheses matching regex patterns.
-
-    Body: {"patterns": ["rest|b2b", "weather"], "dry_run": true}
-    Only operates on status='draft'. Returns count and sample of affected.
-    """
-    import re
-    from tools.schema import open_db
-
+    """Batch-reject draft hypotheses matching regex patterns."""
     body = await request.json()
-    patterns = body.get("patterns", [])
-    dry_run = body.get("dry_run", True)
-
-    if not patterns:
-        raise HTTPException(status_code=400, detail="patterns list required")
-
-    compiled = [re.compile(p, re.IGNORECASE) for p in patterns]
-
-    db = await open_db()
-    try:
-        cursor = await db.execute(
-            "SELECT hypothesis_id, name, thesis, sport FROM hypotheses WHERE status = 'draft'"
-        )
-        rows = await cursor.fetchall()
-
-        matched = []
-        for row in rows:
-            hid, name, thesis, sport = row
-            text = f"{name or ''} {thesis or ''}"
-            if any(p.search(text) for p in compiled):
-                matched.append({"id": hid, "name": name, "sport": sport})
-
-        if not dry_run and matched:
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc).isoformat()
-            ids = [m["id"] for m in matched]
-            for i in range(0, len(ids), 500):
-                chunk = ids[i:i+500]
-                placeholders = ",".join("?" * len(chunk))
-                params = tuple([now] + chunk)
-                await db.execute(
-                    f"UPDATE hypotheses SET status = 'rejected', updated_at = ?, "
-                    f"promoted_by = 'batch_purge:generic_edge' "
-                    f"WHERE hypothesis_id IN ({placeholders})",
-                    params,
-                )
-            await db.commit()
-            logger.info(f"Batch rejected {len(matched)} generic draft hypotheses")
-
-        by_sport = {}
-        for m in matched:
-            by_sport[m["sport"]] = by_sport.get(m["sport"], 0) + 1
-
-        return {
-            "matched": len(matched),
-            "dry_run": dry_run,
-            "by_sport": by_sport,
-            "sample": [m["name"] for m in matched[:20]],
-        }
-    finally:
-        await db.close()
+    return await _research_routes.batch_reject_hypotheses(body)
 
 
 @app.get("/research/sports", dependencies=[Depends(require_admin_or_loopback)])
 async def get_research_sports():
     """Get all researched sports — all compete equally."""
-    from tools.autonomous import RESEARCH_SPORTS
-    return {"sports": RESEARCH_SPORTS}
+    return await _research_routes.get_research_sports()
 
 
 @app.get("/embeddings/stats", dependencies=[Depends(require_admin_or_loopback)])
 async def embedding_stats(collection: Optional[str] = None):
     """Get embedding store statistics."""
-    if not vector_store:
-        raise HTTPException(status_code=503, detail="Vector store not initialized")
-    return await vector_store.get_collection_stats(collection)
+    return await _data_routes.embedding_stats(collection)
 
 
 @app.post("/embeddings/search", dependencies=[Depends(require_admin_or_loopback)])
@@ -2704,225 +2228,34 @@ async def embedding_search(
     top_k: int = 10,
 ):
     """Search embeddings by text similarity."""
-    if not vector_store:
-        raise HTTPException(status_code=503, detail="Vector store not initialized")
-    return await vector_store.search_text(collection, query, top_k)
+    return await _data_routes.embedding_search(collection, query, top_k)
 
 
 @app.get("/data/stats", dependencies=[Depends(require_admin_or_loopback)])
 async def data_collection_stats():
     """Get data collection statistics."""
-    if not data_collector:
-        raise HTTPException(status_code=503, detail="Data collector not initialized")
-    return await data_collector.get_collection_stats()
+    return await _data_routes.data_collection_stats()
 
 
-def _evaluate_health_signals(report: dict) -> tuple[bool, str, list[str]]:
-    """
-    Audit the assembled health report for real degradation signals.
-
-    Returns (healthy, severity, reasons). `healthy=False` if any signal trips;
-    severity escalates "warning" -> "critical". `reasons` enumerates every
-    concrete reason for downstream debugging.
-
-    Demotion matrix:
-      write_coordinators[*].writes_failed / writes_total > 1%  -> warning
-      write_coordinators[*].queue_depth > 100                  -> warning
-      watchdog_monitoring.last_ping_ago_seconds > 60           -> critical
-      task_queue.depth > 50 OR oldest_pending_seconds > 600    -> warning
-      stalled_phases nonempty                                   -> warning
-      pipeline_integrity.healthy == False                       -> critical
-      subsystems[*].is_open == True                             -> critical
-    """
-    reasons: list[str] = []
-    severity = "ok"
-
-    def _bump(new: str) -> None:
-        nonlocal severity
-        order = {"ok": 0, "warning": 1, "critical": 2}
-        if order[new] > order[severity]:
-            severity = new
-
-    # --- WriteCoordinator signals ---
-    for wc in report.get("write_coordinators") or []:
-        if not isinstance(wc, dict):
-            continue
-        name = wc.get("db_path") or wc.get("name") or "writer"
-        total = wc.get("writes_total") or 0
-        failed = wc.get("writes_failed") or 0
-        if total > 0 and (failed / max(total, 1)) > 0.01:
-            pct = (failed / total) * 100
-            reasons.append(
-                f"writes_failed_rate[{name}]: {failed}/{total} ({pct:.2f}%)"
-            )
-            _bump("warning")
-        qd = wc.get("queue_depth") or 0
-        if qd > 100:
-            reasons.append(f"writer_queue_depth[{name}]: {qd}")
-            _bump("warning")
-
-    # --- Watchdog liveness ---
-    wm = report.get("watchdog_monitoring") or {}
-    last_ping = wm.get("last_ping_ago_seconds")
-    total_pings = wm.get("total_pings") or 0
-    # Don't flag during the first few checks after boot (no external pinger yet)
-    if isinstance(last_ping, (int, float)) and last_ping > 60 and total_pings > 5:
-        reasons.append(f"watchdog_last_ping_ago: {last_ping:.0f}s")
-        _bump("critical")
-
-    # --- Task queue backlog ---
-    tq = report.get("task_queue") or {}
-    depth = tq.get("depth") or 0
-    oldest = tq.get("oldest_pending_seconds")
-    if depth > 50:
-        reasons.append(f"task_queue_depth: {depth}")
-        _bump("warning")
-    if isinstance(oldest, (int, float)) and oldest > 600:
-        reasons.append(
-            f"task_queue_oldest_pending: {oldest/60:.1f}min"
-        )
-        _bump("warning")
-
-    # --- Stalled research phases ---
-    stalled = report.get("stalled_phases") or []
-    if stalled:
-        reasons.append(f"stalled_phases: {','.join(sorted(stalled))}")
-        _bump("warning")
-
-    # --- Pipeline integrity (already degrades healthy) ---
-    pi = report.get("pipeline_integrity") or {}
-    if isinstance(pi, dict) and pi.get("healthy") is False:
-        issues = pi.get("issues") or pi.get("critical_issues") or []
-        if issues:
-            reasons.append(f"pipeline_broken: {len(issues)} critical issue(s)")
-        else:
-            reasons.append("pipeline_broken: integrity check failed")
-        _bump("critical")
-
-    # --- Tripped subsystem breakers ---
-    for name, sub in (report.get("subsystems") or {}).items():
-        if isinstance(sub, dict) and sub.get("is_open"):
-            err = (sub.get("last_error") or "")[:100]
-            reasons.append(f"breaker_open[{name}]: {err}")
-            _bump("critical")
-
-    return (severity == "ok", severity, reasons)
-
-
-async def _build_health_report() -> dict:
-    """Assemble the full /health payload. Shared by /health and /readyz."""
-    import time as _time
-    if not hasattr(app.state, "_last_health_ping"):
-        app.state._last_health_ping = _time.time()
-        app.state._health_ping_count = 0
-    app.state._last_health_ping = _time.time()
-    app.state._health_ping_count += 1
-
-    if not system_health:
-        return {
-            "healthy": False,
-            "severity": "critical",
-            "reasons": ["system_health monitor not initialized"],
-            "error": "Health monitor not initialized",
-        }
-    report = system_health.get_full_report()
-
-    # Pipeline integrity — use cached results from the last run (fast)
-    try:
-        checker = get_integrity_checker()
-        integrity = checker.get_latest_report()
-        report["pipeline_integrity"] = integrity
-        if not integrity.get("healthy", True):
-            report["pipeline_broken"] = True
-    except Exception as e:
-        logger.error(f"Pipeline integrity report failed: {e}", exc_info=True)
-        report["pipeline_integrity"] = {
-            "status": "error",
-            "error": f"integrity check failed: {e}",
-        }
-
-    # Watchdog self-monitoring
-    _health_gap = _time.time() - getattr(app.state, "_last_health_ping", _time.time())
-    if _health_gap > 300 and getattr(app.state, "_health_ping_count", 0) > 5:
-        logger.warning(
-            f"No watchdog health ping for {_health_gap:.0f}s — "
-            "watchdog may be dead"
-        )
-    report["watchdog_monitoring"] = {
-        "last_ping_ago_seconds": round(_health_gap, 1),
-        "total_pings": getattr(app.state, "_health_ping_count", 0),
-    }
-
-    # WriteCoordinator stats
-    try:
-        from tools.db_writer import all_stats as _writer_stats
-        report["write_coordinators"] = _writer_stats()
-    except Exception:
-        report["write_coordinators"] = []
-
-    # Task queue depth + oldest pending (cheap: indexed scan)
-    try:
-        if queue is not None and getattr(queue, "_db", None) is not None:
-            try:
-                await queue._db.commit()
-            except Exception:
-                pass
-            row = await queue._db.execute_fetchall(
-                """SELECT COUNT(*),
-                          COALESCE(MIN(created_at), 0)
-                     FROM task_queue
-                    WHERE status = 'PENDING'"""
-            )
-            depth = 0
-            oldest_s: Optional[float] = None
-            if row:
-                depth = int(row[0][0] or 0)
-                oldest_epoch = row[0][1]
-                if oldest_epoch:
-                    try:
-                        oldest_s = max(0.0, _time.time() - float(oldest_epoch))
-                    except (TypeError, ValueError):
-                        oldest_s = None
-            report["task_queue"] = {
-                "depth": depth,
-                "oldest_pending_seconds": round(oldest_s, 1) if oldest_s is not None else None,
-            }
-    except Exception as e:
-        report["task_queue"] = {"error": str(e)}
-
-    # Now evaluate demotion signals and stamp reasons
-    healthy, severity, reasons = _evaluate_health_signals(report)
-    # Only downgrade — the subsystem loop already sets healthy=False on breakers.
-    if not healthy:
-        report["healthy"] = False
-    report["severity"] = severity if not healthy else "ok"
-    report["reasons"] = reasons
-    return report
+# Health evaluation logic moved to tools/api/system_routes.py.
+_evaluate_health_signals = _system_routes.evaluate_health_signals
+_build_health_report = _system_routes.build_health_report
+# Regime lookups (detect_regime et al.) stay off the event loop via
+# `await asyncio.to_thread(detect_regime, sp)` inside tools/api/system_routes.py.
 
 
 @app.get("/health")
 async def health_check():
     """
-    Comprehensive health check — Layer 2.
-    Returns all subsystem statuses, circuit breaker states, error rates,
-    and pipeline integrity (is the system producing expected output).
-    The sentinel (Layer 3) and watchdog poll this to detect problems.
-
-    `healthy` is demoted based on concrete signals:
-      - WriteCoordinator failure rate / queue depth
-      - Watchdog ping staleness
-      - Task queue backlog / oldest pending
-      - Stalled research phases
-      - Pipeline integrity failures
-      - Tripped subsystem circuit breakers
-    See `reasons[]` in the response for every specific cause.
+    Comprehensive health check — Layer 2 (subsystems, breakers, integrity).
+    PUBLIC: polled by the sentinel and watchdog; must never gain an admin dep.
     """
-    report = await _build_health_report()
     # Write health file for sentinel to read if HTTP is down.
     # Debounced: watchdog polls this endpoint frequently, so skip the disk
     # write if the last successful write was < 10s ago. Offload to a thread
     # so sync JSON IO never blocks the event loop. Never fail /health here.
     global _HEALTH_FILE_LAST_WRITE_TS
+    report = await _build_health_report()
     if system_health:
         import time as _time
         now_ts = _time.time()
@@ -2937,32 +2270,14 @@ async def health_check():
 
 @app.get("/health/livez")
 async def health_livez():
-    """k8s-style liveness: process is up and responsive.
-    Always 200 unless the event loop is deadlocked (in which case this
-    handler wouldn't respond at all)."""
-    import time as _time
-    return {"alive": True, "ts": _time.time()}
+    """k8s-style liveness: process is up and responsive. PUBLIC."""
+    return _system_routes.health_livez()
 
 
 @app.get("/health/readyz")
 async def health_readyz():
-    """k8s-style readiness: ready to serve traffic.
-    Returns 503 if any demotion condition is met."""
-    report = await _build_health_report()
-    if not report.get("healthy", False):
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "ready": False,
-                "severity": report.get("severity", "critical"),
-                "reasons": report.get("reasons", []),
-            },
-        )
-    return {
-        "ready": True,
-        "severity": "ok",
-        "uptime_seconds": report.get("uptime_seconds"),
-    }
+    """k8s-style readiness: ready to serve traffic. PUBLIC; 503 when degraded."""
+    return await _system_routes.health_readyz()
 
 
 @app.get("/health/detailed", dependencies=[Depends(require_admin_or_loopback)])
@@ -2971,185 +2286,45 @@ async def health_detailed():
     Everything /health returns, plus per-source ingestion SLAs and
     per-subsystem trip history. For external observability tools.
     """
-    report = await _build_health_report()
-
-    # Per-subsystem trip history (added by SystemHealth.get_full_report)
-    report["trip_history"] = report.get("trip_history", [])
-
-    # Per-source ingestion SLAs — best-effort; don't fail the endpoint if
-    # the observability module isn't installed yet.
-    sla_report: dict = {}
-    try:
-        from tools import ingestion_observability  # type: ignore
-        fn = getattr(ingestion_observability, "get_sla_report", None)
-        if callable(fn):
-            maybe = fn()
-            if asyncio.iscoroutine(maybe):
-                sla_report = await maybe
-            else:
-                sla_report = maybe or {}
-    except Exception as e:
-        sla_report = {"unavailable": str(e)}
-    report["ingestion_sla"] = sla_report
-
-    # feat/regime-aware-sizing (2026-04-22): surface the sizer multipliers
-    # currently in effect so operators can see why LIVE stakes may be
-    # reduced. Best-effort — never fail the endpoint on regime lookup.
-    regimes_block: dict = {}
-    try:
-        from tools.market_regime import (
-            current_regime_multiplier,
-            regime_safe_for_trading,
-            detect_regime,
-        )
-        from tools.bet_executor import REGIME_SIZING_ENABLED, REGIME_SAFETY_ENABLED
-        sports = [
-            "baseball_mlb",
-            "basketball_nba",
-            "icehockey_nhl",
-            "americanfootball_nfl",
-            "basketball_ncaab",
-            "basketball_ncaaw",
-        ]
-        per_sport = {}
-        for sp in sports:
-            try:
-                r = await asyncio.to_thread(detect_regime, sp)
-                multiplier = await asyncio.to_thread(current_regime_multiplier, sp)
-                safe = await asyncio.to_thread(regime_safe_for_trading, sp)
-                per_sport[sp] = {
-                    "multiplier": multiplier,
-                    "safe_for_trading": safe,
-                    "season_phase": r.season_phase,
-                    "confidence": round(r.confidence, 3),
-                    "noisy_window": r.noisy_window,
-                }
-            except Exception as e:
-                per_sport[sp] = {"error": str(e)}
-        regimes_block = {
-            "sizing_enabled": REGIME_SIZING_ENABLED,
-            "safety_enabled": REGIME_SAFETY_ENABLED,
-            "per_sport": per_sport,
-        }
-    except Exception as e:
-        regimes_block = {"unavailable": str(e)}
-    report["regimes"] = regimes_block
-
-    return report
+    return await _system_routes.health_detailed()
 
 
 @app.get("/regime/sizer-multipliers", dependencies=[Depends(require_admin_or_loopback)])
 async def regime_sizer_multipliers():
-    """Current regime multiplier per sport, as the portfolio sizer would apply them.
-
-    feat/regime-aware-sizing (2026-04-22). Admin-or-loopback gated — reveals
-    both the raw ``current_regime_multiplier`` from the market_regime module
-    and the clamped value actually used by
-    ``BetExecutor.compute_portfolio_stakes`` after env-toggle + bounds.
-    """
-    from tools.market_regime import (
-        current_regime_multiplier,
-        regime_safe_for_trading,
-        detect_regime,
-    )
-    from tools.bet_executor import (
-        REGIME_SIZING_ENABLED,
-        REGIME_SAFETY_ENABLED,
-        _REGIME_MIN_MULT,
-        _REGIME_MAX_MULT,
-        _clamped_regime_multiplier,
-    )
-    sports = [
-        "baseball_mlb",
-        "basketball_nba",
-        "icehockey_nhl",
-        "americanfootball_nfl",
-        "basketball_ncaab",
-        "basketball_ncaaw",
-    ]
-    out: dict = {}
-    for sp in sports:
-        try:
-            r = await asyncio.to_thread(detect_regime, sp)
-            raw = float(await asyncio.to_thread(current_regime_multiplier, sp))
-            applied = float(await asyncio.to_thread(_clamped_regime_multiplier, sp))
-            safe = await asyncio.to_thread(regime_safe_for_trading, sp)
-            out[sp] = {
-                "raw_multiplier": round(raw, 3),
-                "applied_multiplier": round(applied, 3),
-                "safe_for_trading": safe,
-                "season_phase": r.season_phase,
-                "days_into_phase": r.days_into_phase,
-                "phase_length_days": r.phase_length_days,
-                "confidence": round(r.confidence, 3),
-                "noisy_window": r.noisy_window,
-                "historical_roi_prior": r.historical_roi_prior,
-                "historical_clv_prior": r.historical_clv_prior,
-            }
-        except Exception as e:
-            out[sp] = {"error": str(e)}
-    return {
-        "sizing_enabled": REGIME_SIZING_ENABLED,
-        "safety_enabled": REGIME_SAFETY_ENABLED,
-        "bounds": {"min": _REGIME_MIN_MULT, "max": _REGIME_MAX_MULT},
-        "sports": out,
-    }
+    """Current regime multiplier per sport, as the portfolio sizer would apply them."""
+    return await _system_routes.regime_sizer_multipliers()
 
 
 @app.get("/admin/writer", dependencies=[Depends(require_admin)])
 async def writer_stats():
     """Per-DB WriteCoordinator stats: queue depth, throughput, slowest op."""
-    from tools.db_writer import all_stats as _writer_stats
-    return {"coordinators": _writer_stats()}
+    return _system_routes.writer_stats()
 
 
 @app.get("/health/deep", dependencies=[Depends(require_admin_or_loopback)])
 async def health_deep():
     """
-    Full pipeline integrity suite — runs ALL checks on demand.
-    Slower than /health (queries multiple tables). Use this for
-    debugging pipeline issues, not for polling.
-
-    Returns: complete integrity check results + subsystem health.
+    Full pipeline integrity suite — runs ALL checks on demand. GATED.
     """
-    try:
-        checker = get_integrity_checker()
-        result = await checker.run_all_checks()
-    except Exception as e:
-        logger.error(f"Deep health check failed: {e}", exc_info=True)
-        result = {"error": f"deep check failed: {e}"}
-
-    # Include Layer 2 subsystem status for complete picture
-    if system_health:
-        result["subsystems"] = system_health.get_full_report()
-
-    return result
+    return await _system_routes.health_deep()
 
 
 @app.get("/health/integrity/history", dependencies=[Depends(require_admin_or_loopback)])
 async def integrity_history(limit: int = 50):
     """Get recent pipeline integrity check history."""
-    try:
-        checker = get_integrity_checker()
-        history = await checker.get_history(limit=limit)
-        return {"count": len(history), "checks": history}
-    except Exception as e:
-        logger.error(f"Integrity history fetch failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    return await _system_routes.integrity_history(limit=limit)
 
 
 @app.get("/claude/status", dependencies=[Depends(require_admin_or_loopback)])
 async def claude_status():
     """Get Claude Code availability and usage stats."""
-    from tools.claude_code import get_usage_stats
-    return get_usage_stats()
+    return await _system_routes.claude_status()
 
 
 @app.post("/admin/claude/reset", dependencies=[Depends(require_admin)])
 async def reset_claude_rate_limit():
     """Force-reset Claude Code rate limit state after hourly limit resets."""
-    from tools.claude_code import reset_rate_limit
-    return reset_rate_limit()
+    return _system_routes.reset_claude_rate_limit()
 
 
 @app.get("/system/full-status", dependencies=[Depends(require_admin_or_loopback)])
@@ -3157,137 +2332,8 @@ async def full_system_status():
     """
     Single endpoint for checking everything from your phone.
     Returns all subsystem statuses in one call.
-    Pipeline integrity is front-and-center so DEGRADED/BROKEN status
-    is immediately visible in every Claude Code session start.
     """
-    from tools.claude_code import get_usage_stats as claude_stats
-
-    status = {
-        "timestamp": __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
-    }
-
-    # Pipeline integrity first — this is the most important signal
-    try:
-        checker = get_integrity_checker()
-        integrity = checker.get_latest_report()
-        status["pipeline_integrity"] = integrity
-    except Exception as e:
-        logger.error(f"Pipeline integrity report failed in full-status: {e}", exc_info=True)
-        status["pipeline_integrity"] = {
-            "status": "error",
-            "error": f"integrity check failed: {e}",
-        }
-
-    status["autonomous_loop"] = autonomous.get_status() if autonomous else None
-    status["research_loop"] = research_loop.get_status() if research_loop else None
-    status["claude_code"] = claude_stats()
-    status["line_monitor"] = (await line_monitor.get_status()) if line_monitor else None
-
-    # Live in-game state collector — exposes running bool, active games,
-    # and 24h counters so we can verify from /system/full-status that
-    # the detector path is actually firing.
-    try:
-        from tools.live_state import (
-            get_collector_status as _live_status,
-            get_collector_counters_24h as _live_counters,
-        )
-        live_status = _live_status()
-        try:
-            live_status.update(await _live_counters(db_path=DB_PATH))
-        except Exception as e:
-            logger.debug(f"live_state 24h counters failed: {e}")
-        status["live_state_collector"] = live_status
-    except Exception as e:
-        status["live_state_collector"] = {"error": f"{e!r}"}
-
-    # Add hypothesis summary — ground-truth from DB, not in-memory counters
-    if hypothesis_manager:
-        try:
-            db = hypothesis_manager._db
-            # Status counts direct from DB
-            cursor = await db.execute(
-                "SELECT status, COUNT(*) FROM hypotheses GROUP BY status"
-            )
-            status_counts = {row[0]: row[1] for row in await cursor.fetchall()}
-            total = sum(status_counts.values())
-
-            # Ground-truth backtest event/signal counts — deduplicated by event_id
-            # (each game generates multiple rows across books; dedup to match
-            # evaluate_significance which keeps best-edge row per event)
-            cursor = await db.execute(
-                "SELECT COUNT(DISTINCT event_id), "
-                "COUNT(DISTINCT CASE WHEN signal_generated = 1 THEN event_id END) "
-                "FROM backtest_events"
-            )
-            row = await cursor.fetchone()
-            total_events = row[0] or 0
-            total_signals = row[1] or 0
-
-            # Per-status event counts — deduplicated by event_id
-            cursor = await db.execute(
-                "SELECT h.status, COUNT(DISTINCT be.event_id), "
-                "COUNT(DISTINCT CASE WHEN be.signal_generated = 1 THEN be.event_id END) "
-                "FROM backtest_events be "
-                "JOIN hypotheses h ON be.hypothesis_id = h.hypothesis_id "
-                "GROUP BY h.status"
-            )
-            events_by_status = {
-                row[0]: {"events": row[1] or 0, "signals": row[2] or 0}
-                for row in await cursor.fetchall()
-            }
-
-            # Active backtesting: only hypotheses with actual events
-            cursor = await db.execute(
-                "SELECT COUNT(DISTINCT be.hypothesis_id) "
-                "FROM backtest_events be "
-                "JOIN hypotheses h ON be.hypothesis_id = h.hypothesis_id "
-                "WHERE h.status = 'backtesting'"
-            )
-            active_backtesting = (await cursor.fetchone())[0] or 0
-
-            status["hypotheses"] = {
-                "total": total,
-                "draft": status_counts.get("draft", 0),
-                "backtesting": status_counts.get("backtesting", 0),
-                "backtesting_with_data": active_backtesting,
-                "paper_trading": status_counts.get("paper_trading", 0),
-                "live": status_counts.get("live", 0),
-                "rejected": status_counts.get("rejected", 0),
-                "retired": status_counts.get("retired", 0),
-                "backtest_events_total": total_events,
-                "backtest_signals_total": total_signals,
-                "events_by_status": events_by_status,
-            }
-        except Exception as e:
-            logger.warning(f"Failed to get hypothesis summary for full-status: {e}")
-
-    # Add embedding stats
-    if vector_store:
-        try:
-            status["embeddings"] = await vector_store.get_collection_stats()
-        except Exception as e:
-            logger.warning(f"Failed to get embedding stats for full-status: {e}")
-
-    # Add data collection stats
-    if data_collector:
-        try:
-            status["data"] = await data_collector.get_collection_stats()
-        except Exception as e:
-            logger.warning(f"Failed to get data collection stats for full-status: {e}")
-
-    # Layer 2 health subsystems
-    if system_health:
-        try:
-            health_report = system_health.get_full_report()
-            status["system_health"] = {
-                "healthy": health_report.get("healthy"),
-                "uptime_hours": health_report.get("uptime_hours"),
-                "stalled_phases": health_report.get("stalled_phases", []),
-            }
-        except Exception as e:
-            logger.warning(f"Failed to get system health for full-status: {e}")
-
-    return status
+    return await _system_routes.full_system_status()
 
 
 # ---------------------------------------------------------------------------
@@ -3389,297 +2435,38 @@ async def admin_restart(confirm: str = "", _auth: None = Depends(require_admin_o
     return {"status": "restarting", "message": "Watchdog will restart with new code in ~15 seconds"}
 
 
-_tracemalloc_snapshot: Optional[tracemalloc.Snapshot] = None
+_tracemalloc_snapshot = _debug_routes._tracemalloc_snapshot
 
 
 @app.get("/debug/memory", dependencies=[Depends(require_admin_or_loopback)])
 async def debug_memory(_auth: None = Depends(require_admin)):
-    """tracemalloc snapshot comparison — identifies the top growing allocations.
-
-    First call takes a baseline snapshot. Subsequent calls compare against
-    the previous snapshot and return the top 30 growing allocations by size.
-    Also forces gc.collect() and reports process RSS.
-    """
-    global _tracemalloc_snapshot
-    import psutil
-
-    gc.collect()
-    process = psutil.Process()
-    rss_mb = process.memory_info().rss / (1024 * 1024)
-
-    if not tracemalloc.is_tracing():
-        raise HTTPException(
-            status_code=409,
-            detail=f"tracemalloc not active — set CALLISTO_TRACEMALLOC=1 and restart to enable (rss_mb={round(rss_mb, 1)})",
-        )
-
-    current = tracemalloc.take_snapshot()
-    current = current.filter_traces((
-        tracemalloc.Filter(False, "<frozen *>"),
-        tracemalloc.Filter(False, "<unknown>"),
-        tracemalloc.Filter(False, tracemalloc.__file__),
-    ))
-
-    result = {
-        "rss_mb": round(rss_mb, 1),
-        "tracemalloc_traced_mb": round(tracemalloc.get_traced_memory()[0] / (1024 * 1024), 1),
-        "tracemalloc_peak_mb": round(tracemalloc.get_traced_memory()[1] / (1024 * 1024), 1),
-    }
-
-    if _tracemalloc_snapshot is not None:
-        # Compare against previous snapshot — shows what GREW
-        stats = current.compare_to(_tracemalloc_snapshot, "lineno")
-        result["comparison"] = "vs_previous_snapshot"
-        result["top_growth"] = [
-            {
-                "file": str(stat.traceback),
-                "size_kb": round(stat.size / 1024, 1),
-                "size_diff_kb": round(stat.size_diff / 1024, 1),
-                "count": stat.count,
-                "count_diff": stat.count_diff,
-            }
-            for stat in stats[:30]
-        ]
-    else:
-        # First call — just show current top allocations
-        stats = current.statistics("lineno")
-        result["comparison"] = "baseline (first call)"
-        result["top_allocations"] = [
-            {
-                "file": str(stat.traceback),
-                "size_kb": round(stat.size / 1024, 1),
-                "count": stat.count,
-            }
-            for stat in stats[:30]
-        ]
-
-    _tracemalloc_snapshot = current
-    return result
+    """tracemalloc snapshot comparison — identifies the top growing allocations."""
+    return await _debug_routes.debug_memory(_auth)
 
 
 @app.get("/debug/memory/top-traces", dependencies=[Depends(require_admin_or_loopback)])
 async def debug_memory_traces(limit: int = 10, _auth: None = Depends(require_admin)):
     """Show full stack traces for the top memory consumers."""
-    if not tracemalloc.is_tracing():
-        raise HTTPException(
-            status_code=409,
-            detail="tracemalloc not active — set CALLISTO_TRACEMALLOC=1 and restart to enable",
-        )
-
-    snapshot = tracemalloc.take_snapshot()
-    snapshot = snapshot.filter_traces((
-        tracemalloc.Filter(False, "<frozen *>"),
-        tracemalloc.Filter(False, "<unknown>"),
-    ))
-    stats = snapshot.statistics("traceback")
-
-    traces = []
-    for stat in stats[:limit]:
-        traces.append({
-            "size_kb": round(stat.size / 1024, 1),
-            "count": stat.count,
-            "traceback": [str(line) for line in stat.traceback.format()],
-        })
-    return {"top_traces": traces}
+    return await _debug_routes.debug_memory_traces(limit=limit)
 
 
 @app.post("/debug/memory/gc")
 async def debug_gc(_auth: None = Depends(require_admin)):
     """Force garbage collection and report stats."""
-    gc.collect()
-    gc.collect()  # Second pass catches ref cycles
-    import psutil
-    rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
-    result = {
-        "rss_mb": round(rss_mb, 1),
-        "gc_counts": gc.get_count(),
-        "gc_stats": gc.get_stats(),
-    }
-    if tracemalloc.is_tracing():
-        result["tracemalloc_traced_mb"] = round(tracemalloc.get_traced_memory()[0] / (1024 * 1024), 1)
-    else:
-        result["tracemalloc"] = "disabled (set CALLISTO_TRACEMALLOC=1 to enable)"
-    return result
+    return await _debug_routes.debug_gc()
 
 
-# PRAGMA allowlist for /admin/sql — read-only diagnostic pragmas only.
-# ANY other PRAGMA (writable_schema=1, journal_mode=OFF, foreign_keys=OFF, etc.)
-# is rejected. Value assignment to even allowed PRAGMAs is rejected.
-_ALLOWED_PRAGMAS = frozenset({
-    "integrity_check",
-    "quick_check",
-    "page_count",
-    "page_size",
-    "wal_autocheckpoint",
-    "wal_checkpoint",
-    "schema_version",
-    "user_version",
-    "cache_size",
-    "freelist_count",
-    "journal_mode",      # read-only query form
-    "database_list",
-    "table_info",
-    "index_list",
-    "index_info",
-    "foreign_key_list",
-    "compile_options",
-})
-
-
-def _validate_admin_sql(sql: str) -> Optional[str]:
-    """AST-validate a /admin/sql query. Return None if OK, else error string.
-
-    Rules:
-      * exactly one statement (sqlparse must parse to exactly one non-empty stmt)
-      * must be SELECT or a whitelisted read-only PRAGMA
-      * PRAGMA forbidden if it assigns a value or is not in _ALLOWED_PRAGMAS
-      * rejects CTEs whose body contains INSERT/UPDATE/DELETE (write-CTEs)
-    """
-    try:
-        import sqlparse
-        from sqlparse.sql import Statement
-    except ImportError:
-        # Degraded-mode fallback: sqlparse isn't installed. Be extra strict —
-        # accept only simple SELECTs with no semicolons and no PRAGMA at all.
-        normalized = sql.strip().rstrip(";")
-        if ";" in normalized:
-            return "Multi-statement queries not allowed"
-        if not normalized.upper().startswith("SELECT"):
-            return "sqlparse unavailable; only single SELECT allowed in degraded mode"
-        forbidden = ("PRAGMA", "DROP", "DELETE", "INSERT", "UPDATE", "ALTER",
-                     "CREATE", "ATTACH", "DETACH", "REINDEX", "VACUUM", "REPLACE")
-        upper = normalized.upper()
-        import re as _re
-        for kw in forbidden:
-            if _re.search(rf"\b{kw}\b", upper):
-                return f"Forbidden keyword: {kw}"
-        return None
-
-    parsed = sqlparse.parse(sql)
-    # sqlparse may return empty statements for trailing semicolons — filter them.
-    real_stmts = [
-        s for s in parsed
-        if isinstance(s, Statement) and s.tokens and str(s).strip().rstrip(";").strip()
-    ]
-    if len(real_stmts) == 0:
-        return "Empty statement"
-    if len(real_stmts) > 1:
-        return "Multi-statement queries not allowed"
-    stmt = real_stmts[0]
-    stmt_type = stmt.get_type()  # 'SELECT', 'PRAGMA', 'UPDATE', 'UNKNOWN', etc.
-
-    # Check for write-verbs anywhere (e.g., hidden inside a WITH ... DELETE CTE).
-    # sqlparse doesn't flag these via get_type() when wrapped in a CTE.
-    upper_sql = str(stmt).upper()
-    import re as _re
-    for kw in ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE",
-               "ATTACH", "DETACH", "REINDEX", "VACUUM", "REPLACE"):
-        if _re.search(rf"\b{kw}\b", upper_sql):
-            return f"Forbidden keyword: {kw}"
-
-    if stmt_type == "SELECT":
-        return None
-
-    # PRAGMA handling — sqlparse classifies the whole "PRAGMA name[=value]"
-    # as a single Identifier token under an UNKNOWN statement type, so we
-    # prefix-sniff the raw upper-cased text instead.
-    stripped_upper = upper_sql.strip().rstrip(";").strip()
-    if stripped_upper.startswith("PRAGMA"):
-        # Extract PRAGMA body + check for assignment.
-        #   Allowed:  PRAGMA integrity_check;   PRAGMA page_count;
-        #   Rejected: PRAGMA writable_schema=1; PRAGMA journal_mode=OFF;
-        #             PRAGMA foreign_keys=OFF;
-        body = stripped_upper[len("PRAGMA"):].strip()
-        if not body:
-            return "Empty PRAGMA"
-        # Reject any assignment syntax
-        if "=" in body:
-            return "PRAGMA value assignment not allowed"
-        # Reject function-call style with args beyond the trivial form,
-        # e.g. PRAGMA wal_checkpoint(TRUNCATE) — keep it very conservative.
-        if "(" in body:
-            name = body.split("(", 1)[0].strip().lower()
-        else:
-            name = body.strip().lower()
-        if name not in _ALLOWED_PRAGMAS:
-            return f"PRAGMA '{name}' not in allowlist"
-        return None
-
-    if stmt_type == "UNKNOWN":
-        return "Unrecognized statement type; only SELECT and whitelisted PRAGMA allowed"
-    return f"Statement type '{stmt_type}' not allowed"
+# /admin/sql validator + handler moved to tools/api/debug_routes.py.
+_validate_admin_sql = _debug_routes.validate_admin_sql
+_ALLOWED_PRAGMAS = _debug_routes._ALLOWED_PRAGMAS
 
 
 @app.post("/admin/sql")
 async def admin_sql(request: Request, _auth: None = Depends(require_admin)):
-    """Read-only SQL query against callisto.db for debugging.
-
-    AST-validated: parses via sqlparse, rejects multi-statement queries,
-    write-verbs (even inside CTEs), and any PRAGMA outside a small read-only
-    allowlist. Also runs under `PRAGMA query_only = ON` and a 10s timeout.
-    """
+    """Read-only SQL query against callisto.db for debugging (AST-validated)."""
     body = await request.json()
-    sql = (body.get("sql") or "").strip()
-    if not sql:
-        raise HTTPException(status_code=400, detail="No SQL provided")
-
-    err = _validate_admin_sql(sql)
-    if err:
-        _auth_logger.warning(
-            "AUTH_ADMIN_SQL_REJECTED host=%s reason=%s sql=%r",
-            (request.client.host if request.client else "?"),
-            err,
-            sql[:300],
-        )
-        raise HTTPException(status_code=400, detail=err)
-
-    # 10-second execution budget. sqlite3's progress handler fires every N
-    # opcodes; returning non-zero aborts the query cleanly.
-    import time as _time
-    import sqlite3 as _sqlite3
-    start = _time.monotonic()
-
-    def _timeout_handler():
-        if _time.monotonic() - start > 10.0:
-            return 1  # abort
-        return 0
-
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("PRAGMA query_only = ON")
-            # Attach progress handler on the underlying sqlite3 connection.
-            # aiosqlite exposes it via `db._conn`; fall back to leaving it off.
-            try:
-                raw_conn = getattr(db, "_conn", None)
-                if raw_conn is not None:
-                    raw_conn.set_progress_handler(_timeout_handler, 10_000)
-            except Exception:
-                pass
-            try:
-                cursor = await db.execute(sql)
-                rows = await cursor.fetchall()
-            except _sqlite3.OperationalError as oe:
-                if "interrupted" in str(oe).lower() or "abort" in str(oe).lower():
-                    raise HTTPException(status_code=504, detail="Query exceeded 10s timeout")
-                raise
-            finally:
-                try:
-                    if raw_conn is not None:
-                        raw_conn.set_progress_handler(None, 0)
-                except Exception:
-                    pass
-            cols = [d[0] for d in cursor.description] if cursor.description else []
-            return {
-                "columns": cols,
-                "rows": [list(r) for r in rows[:500]],  # Cap at 500 rows
-                "row_count": len(rows),
-                "truncated": len(rows) > 500,
-            }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("admin_sql execution failed sql=%r", sql[:300])
-        raise HTTPException(status_code=500, detail=str(e))
+    client_host = request.client.host if request.client else "?"
+    return await _debug_routes.admin_sql(body, client_host=client_host)
 
 
 # ---------------------------------------------------------------------------
@@ -3688,216 +2475,76 @@ async def admin_sql(request: Request, _auth: None = Depends(require_admin)):
 _executor = None
 
 
-async def _get_executor():
-    global _executor
-    if _executor is None:
-        from tools.bet_executor import BetExecutor
-        _executor = BetExecutor()
-        await _executor.initialize()
-    return _executor
+_get_executor = _order_routes.get_executor
 
 
 @app.get("/executor/status", dependencies=[Depends(require_admin_or_loopback)])
 async def executor_status():
     """Get bet executor status."""
-    ex = await _get_executor()
-    return await ex.status()
+    return await _order_routes.executor_status()
 
 
 @app.post("/executor/enable", dependencies=[Depends(require_admin)])
 async def executor_enable():
-    """Enable both the order manager and the legacy bet executor.
-
-    The order_manager is the default active subsystem
-    (CALLISTO_USE_ORDER_MANAGER=1); bet_executor is kept enabled as
-    fallback. Flipping either flag off is an explicit /pause via the
-    subsystem-specific endpoint below.
-    """
-    ex = await _get_executor()
-    ex.enable()
-    # Wire into research loop if available
-    if hasattr(app.state, "research_loop"):
-        app.state.research_loop._bet_executor = ex
-    om = order_manager_instance
-    if om is not None:
-        om.enable()
-    return {
-        "status": "enabled",
-        "order_manager": om.is_enabled if om else None,
-        "bet_executor": ex.is_enabled,
-        "message": "Order manager + bet executor are LIVE",
-    }
+    """Enable both the order manager and the legacy bet executor."""
+    return await _order_routes.executor_enable()
 
 
 @app.post("/executor/disable", dependencies=[Depends(require_admin_or_loopback)])
 async def executor_disable():
     """Disable both subsystems — no orders will be submitted or placed."""
-    ex = await _get_executor()
-    ex.disable()
-    om = order_manager_instance
-    if om is not None:
-        om.disable()
-    return {
-        "status": "disabled",
-        "message": "Order manager + bet executor disabled",
-    }
+    return await _order_routes.executor_disable()
 
 
 @app.get("/orders", dependencies=[Depends(require_admin_or_loopback)])
 async def orders_list(state: Optional[str] = None, limit: int = 50):
     """List orders, optionally filtered by state."""
-    if order_manager_instance is None:
-        raise HTTPException(503, "order_manager not initialised")
-    rows = await order_manager_instance.list_orders(state=state, limit=limit)
-    return {
-        "count": len(rows),
-        "orders": [
-            {
-                "order_id": o.order_id,
-                "hypothesis_id": o.hypothesis_id,
-                "signal_id": o.signal_id,
-                "sport": o.sport,
-                "event_id": o.event_id,
-                "market": o.market,
-                "side": o.side,
-                "price_american": o.price_american,
-                "stake_units": o.stake_units,
-                "stake_dollars": o.stake_dollars,
-                "state": o.state,
-                "book": o.book,
-                "placed_at": o.placed_at,
-                "settled_at": o.settled_at,
-                "pnl_dollars": o.pnl_dollars,
-                "expires_at": o.expires_at,
-                "created_at": o.created_at,
-                "bet_id": o.bet_id,
-                "edge": o.edge,
-            }
-            for o in rows
-        ],
-    }
+    return await _order_routes.orders_list(state=state, limit=limit)
 
 
 @app.get("/orders/{order_id}", dependencies=[Depends(require_admin_or_loopback)])
 async def orders_get(order_id: str):
     """Fetch one order including full state history."""
-    from tools.order_manager import OrderNotFound
-    if order_manager_instance is None:
-        raise HTTPException(503, "order_manager not initialised")
-    try:
-        o = await order_manager_instance.get_order(order_id)
-    except OrderNotFound:
-        raise HTTPException(404, f"order {order_id} not found")
-    return {
-        "order_id": o.order_id,
-        "hypothesis_id": o.hypothesis_id,
-        "signal_id": o.signal_id,
-        "odds_snapshot_id": o.odds_snapshot_id,
-        "sport": o.sport,
-        "event_id": o.event_id,
-        "market": o.market,
-        "side": o.side,
-        "price_american": o.price_american,
-        "stake_units": o.stake_units,
-        "stake_dollars": o.stake_dollars,
-        "state": o.state,
-        "state_history": o.state_history,
-        "book": o.book,
-        "placed_at": o.placed_at,
-        "settled_at": o.settled_at,
-        "pnl_dollars": o.pnl_dollars,
-        "expires_at": o.expires_at,
-        "created_at": o.created_at,
-        "bet_id": o.bet_id,
-        "edge": o.edge,
-        "fair_prob": o.fair_prob,
-    }
+    return await _order_routes.orders_get(order_id)
 
 
 @app.post("/orders/{order_id}/approve", dependencies=[Depends(require_admin)])
 async def orders_approve(order_id: str):
-    from tools.order_manager import OrderNotFound, InvalidTransition
-    if order_manager_instance is None:
-        raise HTTPException(503, "order_manager not initialised")
-    try:
-        o = await order_manager_instance.approve(order_id, reason="http_approve")
-    except OrderNotFound:
-        raise HTTPException(404, f"order {order_id} not found")
-    except InvalidTransition as e:
-        raise HTTPException(409, str(e))
-    return {"status": "approved", "order_id": o.order_id, "state": o.state}
+    return await _order_routes.orders_approve(order_id)
 
 
 @app.post("/orders/{order_id}/reject", dependencies=[Depends(require_admin)])
 async def orders_reject(order_id: str, reason: str = "http_reject"):
-    from tools.order_manager import OrderNotFound, InvalidTransition
-    if order_manager_instance is None:
-        raise HTTPException(503, "order_manager not initialised")
-    try:
-        o = await order_manager_instance.reject(order_id, reason=reason)
-    except OrderNotFound:
-        raise HTTPException(404, f"order {order_id} not found")
-    except InvalidTransition as e:
-        raise HTTPException(409, str(e))
-    return {"status": "rejected", "order_id": o.order_id, "state": o.state}
+    return await _order_routes.orders_reject(order_id, reason=reason)
 
 
 @app.post("/orders/{order_id}/fill", dependencies=[Depends(require_admin)])
 async def orders_fill(order_id: str, actual_price: Optional[int] = None):
-    from tools.order_manager import OrderNotFound, InvalidTransition
-    if order_manager_instance is None:
-        raise HTTPException(503, "order_manager not initialised")
-    try:
-        o = await order_manager_instance.mark_filled(
-            order_id, actual_price=actual_price, reason="http_fill"
-        )
-    except OrderNotFound:
-        raise HTTPException(404, f"order {order_id} not found")
-    except InvalidTransition as e:
-        raise HTTPException(409, str(e))
-    return {"status": "filled", "order_id": o.order_id, "state": o.state,
-            "price_american": o.price_american}
+    return await _order_routes.orders_fill(order_id, actual_price=actual_price)
 
 
 @app.post("/orders/reconcile", dependencies=[Depends(require_admin_or_loopback)])
 async def orders_reconcile():
     """Trigger the settlement reconciler immediately (cron path)."""
-    if order_manager_instance is None:
-        raise HTTPException(503, "order_manager not initialised")
-    stats = await reconcile_filled_orders(order_manager_instance)
-    return {"status": "ok", **stats}
+    return await _order_routes.orders_reconcile()
 
 
 @app.post("/orders/voids", dependencies=[Depends(require_admin_or_loopback)])
 async def orders_voids():
     """Trigger the postponed/cancelled game void-detector immediately."""
-    if order_manager_instance is None:
-        raise HTTPException(503, "order_manager not initialised")
-    stats = await detect_voided_orders(order_manager_instance)
-    return {"status": "ok", **stats}
+    return await _order_routes.orders_voids()
 
 
 @app.post("/orders/expire", dependencies=[Depends(require_admin_or_loopback)])
 async def orders_expire():
     """Trigger the expiry sweep immediately."""
-    if order_manager_instance is None:
-        raise HTTPException(503, "order_manager not initialised")
-    expired = await order_manager_instance.expire_stale()
-    return {"status": "ok", "expired": expired, "count": len(expired)}
+    return await _order_routes.orders_expire()
 
 
 @app.post("/executor/login", dependencies=[Depends(require_admin)])
 async def executor_login():
     """Launch browser for DraftKings login. Browser opens visible for manual login."""
-    ex = await _get_executor()
-    logged_in = await ex.ensure_logged_in()
-    if logged_in:
-        return {"status": "logged_in", "message": "DraftKings session active"}
-    else:
-        return {
-            "status": "login_required",
-            "message": "Browser opened — please log into DraftKings manually. Session will persist.",
-        }
+    return await _order_routes.executor_login()
 
 
 if __name__ == "__main__":
