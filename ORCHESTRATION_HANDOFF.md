@@ -42,37 +42,37 @@ Everything below is a candidate or WIP until independently approved.
 
 ## Live fleet state
 
-Use at most **three direct Hermes/OX terminal workers at once**. This is a
-deliberate host-reliability cap, not a known Nous concurrency limit: four
-simultaneous terminal/test workloads previously led to external process-group
-losses. Portal is free; do not raise the host cap just because OX is free.
-Outside an explicit operator freeze, refill a slot immediately after a
-worker truly exits.
+**Cap is per-host, not a Nous Portal limit.** Workstation lore: four
+simultaneous terminal/test workloads previously killed process groups —
+keep **3** as the `nous-supervisor.sh` default there. This 16 GiB cloud
+VM was probed 2026-08-26: **6 concurrent Hermes/OX processes spawned,
+no 429, no OOM, 13 GiB still available.** Use
+`CALLISTO_HERMES_MAX_PROCS=6` here. Evidence:
+`findings/ox_concurrency_probe_2026-08-26.md`.
 
-Operator freeze is **lifted** (2026-08-26): spawn OX for audit criticals.
-Product-direction work (`findings/production_ready_2026-08-26.md`) is
-orchestrator-owned; do not block it on OX.
+Refill a slot immediately after a worker truly exits, up to the host cap.
 
-### Active OX wave 1 (cloud VM, 2026-08-26)
+Operator freeze is **lifted** (2026-08-26). Product-direction work
+(`findings/production_ready_2026-08-26.md`) is orchestrator-owned.
 
-| Slot | Branch / worktree | Goal |
+### Active OX (cloud VM, after 6-wide probe)
+
+| Slot | Branch / worktree | State |
 | --- | --- | --- |
-| 1 | `cursor/ox-loop-refresh-2ac0` at `/tmp/callisto-ox-loop-refresh` | Gate `_phase_refresh_signals` (default no writes); record `_loop` phase failures. Owns `tools/autonomous.py` only. |
-| 2 | `cursor/ox-autopromote-2ac0` at `/tmp/callisto-ox-autopromote` | `auto_promote` diagnose-only: no `edge_threshold` / `signal_generated` rewrites. Owns `tools/hypothesis.py` only. |
-| 3 | `cursor/ox-eventloop-2ac0` at `/tmp/callisto-ox-eventloop` | `asyncio.to_thread` for portfolio sim + `detect_regime`; debounce health-file IO; bound sim cache. Owns `api.py` only. |
+| 1 | `cursor/ox-loop-refresh-2ac0` `/tmp/callisto-ox-loop-refresh` | LIVE (Hermes `18004` at probe) |
+| 2 | `cursor/ox-autopromote-2ac0` `/tmp/callisto-ox-autopromote` | **exited** after `2f97780` push — unreviewed |
+| 3 | `cursor/ox-eventloop-2ac0` `/tmp/callisto-ox-eventloop` | LIVE |
+| 4 | `cursor/ox-bind-loopback-2ac0` `/tmp/callisto-ox-bind-loopback` | **exited** after `a1fbe37` push — unreviewed |
+| 5 | `cursor/ox-telegram-arming-2ac0` `/tmp/callisto-ox-telegram-arming` | LIVE |
+| 6 | `cursor/ox-seal-fail-closed-2ac0` `/tmp/callisto-ox-seal-fail-closed` | LIVE |
 
-Prompts: `scripts/ox-prompts/wave1-*.md`. Tmux sessions: `ox-loop-refresh`,
-`ox-autopromote`, `ox-eventloop`. Supervisor:
-`bash scripts/nous-supervisor.sh` (in-tree; PR #28 on
-`cursor/ox-alpha-nous-portal-2ac0` if not yet on master).
+Do not merge 2/4 on worker testimony. Independent review required.
 
-### Wave 2 queued (launch when a slot frees)
-
-| Next | Prompt | Exclusive files |
-| --- | --- | --- |
-| bind | `scripts/ox-prompts/wave2-bind-loopback.md` | `start.bat`, `scripts/overnight_setup.py` |
-| telegram | `scripts/ox-prompts/wave2-telegram-arming.md` | `tools/telegram_bot.py`, `tools/order_manager.py` |
-| seal | `scripts/ox-prompts/wave2-seal-fail-closed.md` | `agp/__init__.py`, `tests/test_tier3_epi_seal.py` |
+Prompts: `scripts/ox-prompts/wave1-*.md` and `wave2-*.md`.
+Tmux: `ox-loop-refresh`, `ox-eventloop`, `ox-telegram-arming`,
+`ox-seal-fail-closed` (plus completed `ox-autopromote`, `ox-bind-loopback`).
+Supervisor: `CALLISTO_HERMES_MAX_PROCS=6 bash scripts/nous-supervisor.sh`
+(in-tree on PR #28 if not yet on master).
 
 ### Frozen unreviewed candidates — do not merge yet
 
