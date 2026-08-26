@@ -40,10 +40,11 @@ logger = logging.getLogger("callisto.backtest")
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
-# HARD GATE: generate_paper_trade_signal runs ONLY for paper_trading
-# hypotheses. "live" (or any other status) must NEVER be added here — the live
-# path needs separately tested sizing/caps/kill-switch, not this method.
-_PAPER_TRADE_SIGNAL_STATUSES = frozenset({"paper_trading"})
+# HARD GATE statuses now live in tools.signals.paper (single source of truth).
+# This alias keeps existing callers/imports working; do NOT add "live" here —
+# update tools/signals/paper.py only after a separately reviewed live path.
+from tools.signals.paper import _PAPER_TRADE_SIGNAL_STATUSES
+from tools.signals.paper import allowed_paper_statuses, reject_non_paper
 
 
 def _signal_confidence(edge: float) -> str:
@@ -3818,7 +3819,7 @@ class BacktestEngine:
         must go through a separately reviewed and tested path.
         """
         h = await self.hypothesis_manager.get_hypothesis(hypothesis_id)
-        if not h or h["status"] not in _PAPER_TRADE_SIGNAL_STATUSES:
+        if not h or reject_non_paper(h["status"]):
             return []
 
         config = h["model_config"]
