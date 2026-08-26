@@ -195,3 +195,70 @@ def test_admin_routes_require_auth(route):
             ok = True
             break
     assert ok, f"{route} is not protected by require_admin_or_loopback"
+
+
+# ---------------------------------------------------------------------------
+# 8. Kelly sizing has exactly one core formula
+# ---------------------------------------------------------------------------
+
+
+def test_kelly_core_is_defined_in_tools_kelly():
+    src = _read("tools/kelly.py")
+    assert re.search(r"^def kelly_core\(", src, re.M), (
+        "def kelly_core missing from tools/kelly.py"
+    )
+
+
+def test_kelly_binary_delegates_to_kelly_core():
+    src = _read("tools/sizing.py")
+    m = re.search(r"def kelly_binary\(.*?(?=\ndef |\nclass |\Z)", src, re.S)
+    assert m, "kelly_binary not found in tools/sizing.py"
+    assert "kelly_core" in m.group(0), (
+        "kelly_binary no longer delegates to the single kelly_core formula"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. Dashboard hypotheses panel is hidden by default
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_panel_hyps_is_hidden():
+    src = _read("web/dashboard/index.html")
+    m = re.search(r'<section[^>]*id="panel-hyps"[^>]*>', src)
+    assert m, 'panel-hyps section missing from web/dashboard/index.html'
+    tag = m.group(0)
+    assert re.search(r'\bhidden\b', tag), (
+        "panel-hyps section lost its hidden attribute"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 10. Odds edges GET requires admin-or-loopback
+# ---------------------------------------------------------------------------
+
+
+def test_odds_edges_get_requires_auth():
+    src = _read("api.py")
+    hits = [m.start() for m in re.finditer(re.escape('@app.get("/odds/edges"'), src)]
+    assert hits, '@app.get("/odds/edges" decorator missing from api.py'
+    ok = False
+    for idx in hits:
+        chunk = src[idx:idx + 400]
+        if "require_admin_or_loopback" in chunk:
+            ok = True
+            break
+    assert ok, "/odds/edges GET is not protected by require_admin_or_loopback"
+
+
+# ---------------------------------------------------------------------------
+# 11. Phase ledger exists and is capped at 50 entries
+# ---------------------------------------------------------------------------
+
+
+def test_phase_ledger_exists_and_capped_at_50():
+    src = _read("tools/loop/phase_ledger.py")
+    capped = ("cap 50" in src.lower()) or ("MAX_ENTRIES = 50" in src) or (
+        re.search(r"maxlen\s*=\s*50", src) is not None
+    )
+    assert capped, "phase_ledger does not appear to cap entries at 50"
