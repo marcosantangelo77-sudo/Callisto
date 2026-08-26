@@ -20,118 +20,78 @@ Safety controls:
   - Kill switch via /admin/executor/stop endpoint
   - Every bet logged + screenshotted
   - Minimum edge threshold to execute
+
+Split (2026-08): pure helpers (config constants, DK constants, regime
+lookups, Kelly sizing arithmetic, drawdown evaluation) live in the
+``tools.betexec`` package; this module is the facade that re-exports them
+and keeps the ``BetExecutor`` orchestration + DB/browser surface.
 """
 
 import asyncio
-import json
 import logging
 import os
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from typing import Optional
 
 import aiosqlite
 
+# --- Facade re-exports from tools.betexec (authoritative home) ---
+from tools.betexec.config import (  # noqa: F401
+    DB_PATH,
+    DAILY_LOSS_LIMIT_PCT,
+    DRAWDOWN_PEAK_WINDOW_DAYS,
+    KELLY_FRACTION,
+    MAX_BET_PCT,
+    MAX_DRAWDOWN_PCT,
+    MAX_GAME_EXPOSURE_PCT,
+    MAX_OPEN_EXPOSURE_PCT,
+    MAX_SPORT_EXPOSURE_PCT,
+    MIN_BET_AMOUNT,
+    MIN_EDGE_TO_EXECUTE,
+    REGIME_MAX_MULT as _REGIME_MAX_MULT,
+    REGIME_MIN_MULT as _REGIME_MIN_MULT,
+    REGIME_SAFETY_ENABLED,
+    REGIME_SIZING_ENABLED,
+    SCREENSHOT_DIR,
+    SESSION_DIR,
+    VAR_DAMPENER_HIGH_N as _VAR_DAMPENER_HIGH_N,
+    VAR_DAMPENER_LOW_N as _VAR_DAMPENER_LOW_N,
+)
+from tools.betexec.dk_constants import DK_BASE_URL, DK_SPORT_SLUGS  # noqa: F401
+from tools.betexec.regime import clamped_regime_multiplier, regime_safe
+from tools.betexec.sizing import (
+    apply_exposure_caps,
+    build_portfolio_requests,
+    compute_stake as _compute_stake_helper,
+    signals_n_to_kelly_fraction as _signals_n_to_kelly_fraction_helper,
+)
+from tools.betexec.drawdown import build_kill_switch_alert, evaluate_drawdown
+
 logger = logging.getLogger("callisto.executor")
 
-DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
-SCREENSHOT_DIR = Path("memory/bet_screenshots")
-SESSION_DIR = Path("memory/dk_session")
-
-# --- Safety limits (configurable via env) ---
-MAX_BET_PCT = float(os.getenv("EXECUTOR_MAX_BET_PCT", "0.05"))       # 5% of bankroll per bet
-# SECURITY (audit H-1): hard ceiling on the SUM of all currently-pending stakes.
-# Per-bet caps don't prevent ruin when N concurrent bets clear simultaneously.
-# 25% bankroll exposed at any moment is the documented ceiling; raise via env.
-MAX_OPEN_EXPOSURE_PCT = float(os.getenv("EXECUTOR_MAX_OPEN_EXPOSURE_PCT", "0.25"))
-DAILY_LOSS_LIMIT_PCT = float(os.getenv("EXECUTOR_DAILY_LOSS_PCT", "0.20"))  # 20% of bankroll
-MIN_EDGE_TO_EXECUTE = float(os.getenv("EXECUTOR_MIN_EDGE", "0.02"))  # 2% minimum EV
-KELLY_FRACTION = float(os.getenv("EXECUTOR_KELLY_FRACTION", "0.25")) # Quarter Kelly
-MIN_BET_AMOUNT = float(os.getenv("EXECUTOR_MIN_BET", "1.00"))       # $1 minimum
-
-# --- Portfolio-level caps (feat/portfolio-kelly-live-loop, audit 2026-04-22) ---
-# Prevents N LIVE hyps from all loading up on one MLB game. Per-game cap
-# scales ALL stakes on the same event_id if their sum would exceed bankroll * cap.
-MAX_GAME_EXPOSURE_PCT = float(os.getenv("CALLISTO_MAX_GAME_EXPOSURE_PCT", "0.08"))
-# Per-sport cap: prevent all-MLB days from pushing too much on baseball.
-MAX_SPORT_EXPOSURE_PCT = float(os.getenv("CALLISTO_MAX_SPORT_EXPOSURE_PCT", "0.15"))
-
-# --- Drawdown kill switch (feat/portfolio-kelly-live-loop, audit 2026-04-22) ---
-# If bankroll drops more than MAX_DRAWDOWN_PCT below the 30-day peak, flip
-# _enabled=False on the executor AND set all LIVE hyps to 'drawdown_paused'.
-# Recovery is MANUAL — auto-resume is intentionally not implemented.
-MAX_DRAWDOWN_PCT = float(os.getenv("CALLISTO_MAX_DRAWDOWN_PCT", "0.15"))
-DRAWDOWN_PEAK_WINDOW_DAYS = int(os.getenv("CALLISTO_DRAWDOWN_WINDOW_DAYS", "30"))
-
-# --- Variance-dampener boundaries tied to paper-trade sample size ---
-# < 25 signals: fresh evidence, force half-Kelly (0.125 base fraction)
-# >= 100 signals: full quarter-Kelly allowed (0.25 base fraction)
-# Smooth linear interp in between.
-_VAR_DAMPENER_LOW_N = int(os.getenv("CALLISTO_VAR_DAMPENER_LOW_N", "25"))
-_VAR_DAMPENER_HIGH_N = int(os.getenv("CALLISTO_VAR_DAMPENER_HIGH_N", "100"))
-
-# --- Regime-aware sizing (feat/regime-aware-sizing, 2026-04-22) ---
-# Scale each bet's stake by its sport's current regime multiplier so
-# exposure reflects season phase + volatility. Hard floor/ceiling enforced
-# in-module even if market_regime returns an out-of-range value.
+# Reload-friendly gate flags: recomputed from env when THIS module is
+# reloaded (matches pre-split behaviour where they lived here).
 REGIME_SIZING_ENABLED = os.getenv("CALLISTO_REGIME_SIZING", "1") == "1"
 REGIME_SAFETY_ENABLED = os.getenv("CALLISTO_REGIME_SAFETY", "1") == "1"
-_REGIME_MIN_MULT = 0.1   # never zero-size a live bet; use safety gate for that
-_REGIME_MAX_MULT = 1.5   # cap upside even in the best regime
 
 
 def _clamped_regime_multiplier(sport: str) -> float:
-    """Fetch current_regime_multiplier(sport) and clamp to [_REGIME_MIN_MULT, _REGIME_MAX_MULT].
+    """Facade wrapper — delegates to tools.betexec.regime.
 
-    Any exception (DB missing, import error) degrades to 1.0 so sizing never
-    fails closed due to the regime module. The whole feature is gated by
-    CALLISTO_REGIME_SIZING so callers can disable wholesale.
+    Kept as a module-level function so tests can monkeypatch
+    ``tools.bet_executor._clamped_regime_multiplier`` and so the gate flag
+    consulted is THIS module's (reload/monkeypatch-friendly) attribute.
     """
-    if not REGIME_SIZING_ENABLED:
-        return 1.0
-    try:
-        from tools.market_regime import current_regime_multiplier
-        m = float(current_regime_multiplier(sport))
-    except Exception as e:
-        logger.debug(f"regime multiplier lookup failed for {sport}: {e}; using 1.0")
-        return 1.0
-    return max(_REGIME_MIN_MULT, min(_REGIME_MAX_MULT, m))
+    return clamped_regime_multiplier(
+        sport, gates={"sizing_enabled": globals()["REGIME_SIZING_ENABLED"]}
+    )
 
 
 def _regime_safe(sport: str) -> tuple[bool, str]:
-    """Return (safe, phase) for ``sport``. Safe=True when gate disabled or OK.
-
-    Second value is the season_phase string so callers can include it in log
-    lines (``regime_unsafe_phase=preseason`` etc). Any error degrades to safe.
-    """
-    if not REGIME_SAFETY_ENABLED:
-        return True, ""
-    try:
-        from tools.market_regime import regime_safe_for_trading, detect_regime
-        safe = bool(regime_safe_for_trading(sport))
-        phase = ""
-        if not safe:
-            try:
-                phase = detect_regime(sport).season_phase or ""
-            except Exception:
-                phase = ""
-        return safe, phase
-    except Exception as e:
-        logger.debug(f"regime safety lookup failed for {sport}: {e}; treating as safe")
-        return True, ""
-
-DK_BASE_URL = "https://sportsbook.draftkings.com"
-
-# DraftKings sport slugs for URL navigation
-DK_SPORT_SLUGS = {
-    "basketball_nba": "nba",
-    "basketball_ncaab": "college-basketball",
-    "basketball_ncaaw": "womens-college-basketball",
-    "americanfootball_nfl": "nfl",
-    "baseball_mlb": "mlb",
-    "icehockey_nhl": "nhl",
-    "golf_pga": "golf",
-}
+    """Facade wrapper — delegates to tools.betexec.regime."""
+    return regime_safe(
+        sport, gates={"safety_enabled": globals()["REGIME_SAFETY_ENABLED"]}
+    )
 
 
 class BetExecutor:
@@ -162,6 +122,8 @@ class BetExecutor:
         self._context = None
         self._page = None
         self._db: Optional[aiosqlite.Connection] = None
+        # SAFETY: default-disabled. The executor never arms itself; enable()
+        # must be called explicitly (and refuses under CALLISTO_LOCAL_ONLY).
         self._enabled = False
         self._logged_in = False
         self._daily_pnl = 0.0
@@ -260,18 +222,14 @@ class BetExecutor:
         bankroll: float,
         confidence: float = 0.6,
         p_push: float = 0.0,
-        variance_estimate: float = None,
+        variance_estimate: Optional[float] = None,
     ) -> float:
-        """
-        Compute bet stake using dynamic Kelly with AGP confidence tiers,
-        uncertainty adjustment, and push-aware sizing.
+        """Compute a single-bet stake — canonical Kelly only (source contract).
 
-        Uses kelly_dynamic (confidence + variance aware) as the primary
-        sizer. Falls back to kelly_with_push for spread bets where push
-        is possible. Applies uncertainty_adjusted_kelly when confidence
-        is below VERIFIED tier.
-
-        Returns dollar amount to wager (0 if bet should be skipped).
+        The pure implementation also lives in tools.betexec.sizing; the body
+        is kept inline here because a source-contract test pins that
+        ``BetExecutor.compute_stake`` itself imports from tools.kelly /
+        tools.sizing.
         """
         # Canonical Kelly module is tools.kelly; tools.sizing only provides
         # push-aware helpers with no canonical equivalent.
@@ -335,20 +293,8 @@ class BetExecutor:
 
     @staticmethod
     def _signals_n_to_kelly_fraction(signals_n: int) -> float:
-        """Map observed-signals count to Kelly base fraction.
-
-        feat/portfolio-kelly-live-loop (audit 2026-04-22): half-Kelly for
-        hypotheses with fewer than _VAR_DAMPENER_LOW_N signals, full quarter-
-        Kelly once they cross _VAR_DAMPENER_HIGH_N. Linear interp between.
-        """
-        if signals_n <= _VAR_DAMPENER_LOW_N:
-            return 0.125  # half-Kelly relative to quarter-Kelly floor
-        if signals_n >= _VAR_DAMPENER_HIGH_N:
-            return 0.25  # full quarter-Kelly
-        # Linear interpolation between 0.125 and 0.25
-        span = max(1, _VAR_DAMPENER_HIGH_N - _VAR_DAMPENER_LOW_N)
-        t = (signals_n - _VAR_DAMPENER_LOW_N) / span
-        return 0.125 + t * (0.25 - 0.125)
+        """Map observed-signals count to Kelly base fraction — see tools.betexec.sizing."""
+        return _signals_n_to_kelly_fraction_helper(signals_n)
 
     def compute_portfolio_stakes(
         self,
@@ -381,8 +327,8 @@ class BetExecutor:
             return []
 
         # --- Regime multipliers per sport in the batch (cached for this call) ---
-        # Compute once per distinct sport so a 20-bet batch hits the regime
-        # module at most len(set(sports)) times rather than 20.
+        # Computed once per distinct sport via the module-level helper so a
+        # 20-bet batch hits the regime module at most len(set(sports)) times.
         sports_in_batch = {b.get("sport", "") for b in bets if b.get("sport")}
         regime_mults: dict[str, float] = {
             sp: _clamped_regime_multiplier(sp) for sp in sports_in_batch
@@ -433,45 +379,7 @@ class BetExecutor:
             }]
 
         # Multiple bets: use correlation-aware portfolio Kelly.
-        from tools.kelly import kelly_portfolio
-
-        # If a correlation matrix was passed, override per-bet
-        # ``correlation_with_others`` with the average pairwise correlation
-        # of each bet with every other bet in the batch. This is what the
-        # audit wants: correlations derived from historical co-firing.
-        corr_overrides: dict[int, float] = {}
-        if correlation_matrix:
-            n = len(bets)
-            for i, bi in enumerate(bets):
-                hi = bi.get("hypothesis_id", "")
-                if not hi:
-                    continue
-                pair_corrs = []
-                for j, bj in enumerate(bets):
-                    if i == j:
-                        continue
-                    hj = bj.get("hypothesis_id", "")
-                    if not hj:
-                        continue
-                    key = (hi, hj) if (hi, hj) in correlation_matrix else (hj, hi)
-                    if key in correlation_matrix:
-                        pair_corrs.append(correlation_matrix[key])
-                if pair_corrs:
-                    corr_overrides[i] = sum(pair_corrs) / len(pair_corrs)
-
-        portfolio_bets = []
-        for i, b in enumerate(bets):
-            rho = corr_overrides.get(i, b.get("correlation_with_others", 0.1))
-            portfolio_bets.append({
-                "edge": b.get("edge", 0.0),
-                "odds": b.get("odds", -110),
-                "confidence_score": b.get("confidence", 0.6),
-                "variance_estimate": abs(b.get("edge", 0.01)) * 0.5,
-                "correlation_with_others": rho,
-                "description": b.get("description", ""),
-            })
-
-        sized = kelly_portfolio(portfolio_bets)
+        portfolio_bets, sized = build_portfolio_requests(bets, correlation_matrix)
 
         # First pass: compute raw stakes, apply signals_n dampener + regime
         # multiplier, floor.
@@ -517,44 +425,8 @@ class BetExecutor:
                 "portfolio_summary": item.get("portfolio_summary", {}),
             })
 
-        # Second pass: per-game exposure cap.
-        game_cap = bankroll * MAX_GAME_EXPOSURE_PCT
-        by_game: dict[str, list[int]] = {}
-        for idx, r in enumerate(results):
-            eid = r.get("event_id") or ""
-            if not eid:
-                continue
-            by_game.setdefault(eid, []).append(idx)
-        for eid, idxs in by_game.items():
-            total = sum(results[i]["stake"] for i in idxs)
-            if total > game_cap and total > 0:
-                scale = game_cap / total
-                for i in idxs:
-                    results[i]["stake"] = round(results[i]["stake"] * scale, 2)
-                    results[i]["fraction"] = results[i]["fraction"] * scale
-                    results[i]["game_cap_scale"] = round(scale, 4)
-
-        # Third pass: per-sport exposure cap.
-        sport_cap = bankroll * MAX_SPORT_EXPOSURE_PCT
-        by_sport: dict[str, list[int]] = {}
-        for idx, r in enumerate(results):
-            sp = r.get("sport") or ""
-            if not sp:
-                continue
-            by_sport.setdefault(sp, []).append(idx)
-        for sp, idxs in by_sport.items():
-            total = sum(results[i]["stake"] for i in idxs)
-            if total > sport_cap and total > 0:
-                scale = sport_cap / total
-                for i in idxs:
-                    results[i]["stake"] = round(results[i]["stake"] * scale, 2)
-                    results[i]["fraction"] = results[i]["fraction"] * scale
-                    results[i]["sport_cap_scale"] = round(scale, 4)
-
-        # Final pass: floor below MIN_BET_AMOUNT.
-        for r in results:
-            if r["stake"] < MIN_BET_AMOUNT:
-                r["stake"] = 0.0
+        # Second/third passes: per-game + per-sport caps, then min-bet floor.
+        results = apply_exposure_caps(results, bankroll)
 
         return results
 
@@ -1112,31 +984,17 @@ class BetExecutor:
         peak = await self._rolling_peak()
         await self._record_bankroll_peak(current)
 
-        status: dict = {
-            "current_bankroll": current,
-            "rolling_peak": peak,
-            "drawdown_pct": 0.0,
-            "threshold_pct": MAX_DRAWDOWN_PCT,
-            "triggered": False,
-            "paused_hypotheses": [],
-        }
+        status = evaluate_drawdown(current, peak)
 
-        if peak <= 0 or current >= peak:
-            return status
-
-        drawdown_pct = (peak - current) / peak
-        status["drawdown_pct"] = round(drawdown_pct, 4)
-
-        if drawdown_pct < MAX_DRAWDOWN_PCT:
+        if not status["triggered"]:
             return status
 
         # Kill switch fires.
         logger.error(
             f"DRAWDOWN KILL SWITCH: current=${current:,.2f} peak=${peak:,.2f} "
-            f"drawdown={drawdown_pct:.1%} exceeds threshold {MAX_DRAWDOWN_PCT:.1%}"
+            f"drawdown={status['drawdown_pct']:.1%} exceeds threshold {MAX_DRAWDOWN_PCT:.1%}"
         )
         self._enabled = False
-        status["triggered"] = True
 
         # CAS all LIVE hypotheses to drawdown_paused.
         try:
@@ -1167,15 +1025,8 @@ class BetExecutor:
         # Best-effort Telegram alert.
         try:
             from tools.telegram import send_alert  # noqa: WPS433
-            msg = (
-                f"<b>DRAWDOWN KILL SWITCH FIRED</b>\n"
-                f"\n"
-                f"Current bankroll: ${current:,.2f}\n"
-                f"30d peak: ${peak:,.2f}\n"
-                f"Drawdown: {drawdown_pct:.1%} (threshold {MAX_DRAWDOWN_PCT:.1%})\n"
-                f"\n"
-                f"Executor disabled. {len(status['paused_hypotheses'])} LIVE "
-                f"hyps → drawdown_paused. Manual review required."
+            msg = build_kill_switch_alert(
+                current, peak, status["drawdown_pct"], len(status["paused_hypotheses"])
             )
             await send_alert(msg, throttle_key="drawdown_kill")
         except Exception as e:
