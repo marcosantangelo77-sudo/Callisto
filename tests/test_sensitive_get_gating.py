@@ -43,6 +43,11 @@ SENSITIVE_GETS = [
     "/executor/status",
     "/odds/edges",
     "/odds/opportunities",
+    "/odds/movements",
+    "/odds/snapshots/{sport}",
+    "/odds/status",
+    "/odds/narrative-edges",
+    "/odds/kl-metrics",
 ]
 
 
