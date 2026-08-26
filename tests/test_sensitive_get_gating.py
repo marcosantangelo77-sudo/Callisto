@@ -41,6 +41,8 @@ SENSITIVE_GETS = [
     "/hypothesis/{hypothesis_id}/significance",
     "/system/full-status",
     "/executor/status",
+    "/odds/edges",
+    "/odds/opportunities",
 ]
 
 
@@ -59,6 +61,24 @@ class TestSensitiveGetSourceContract:
         deco = _decorator_for(path)
         assert "require_admin_or_loopback" in deco, (
             f"GET {path} is not gated with require_admin_or_loopback"
+        )
+
+    @pytest.mark.parametrize(
+        ("path", "func"),
+        [
+            ("/edges/live", "get_live_edges"),
+        ],
+    )
+    def test_route_gated_via_signature_auth_param(self, path, func):
+        """Routes gated via an ``_auth`` signature param instead of the decorator.
+
+        Source pin: the function definition itself must carry
+        ``require_admin_or_loopback``.
+        """
+        m = re.search(rf'@app\.get\(\s*"{re.escape(path)}".*?def {func}\(.*?\):', API_SOURCE, re.DOTALL)
+        assert m is not None, f"route {path} ({func}) not found in api.py"
+        assert "require_admin_or_loopback" in m.group(0), (
+            f"GET {path} ({func}) missing _auth: Depends(require_admin_or_loopback)"
         )
 
 
