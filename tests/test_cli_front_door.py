@@ -123,8 +123,11 @@ class TestDoctor:
         assert "config unreadable" in out
         assert "PROBLEMS FOUND" in out
 
-    def test_real_config_reports_ok(self, capsys):
+    def test_real_config_reports_ok(self, capsys, monkeypatch):
         from callisto import _default_providers_path
+        # ask/doctor are fail-closed without a hex seal key; this pin is
+        # about providers+registry, so give doctor a valid key.
+        monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
         rc = _run_doctor(providers=_default_providers_path())
         out = capsys.readouterr().out
         assert "source registry" in out
@@ -177,6 +180,10 @@ class FakeEngine:
 
 
 class TestAsk:
+    @pytest.fixture(autouse=True)
+    def _valid_seal_key(self, monkeypatch):
+        monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+
     @pytest.fixture
     def wired(self, monkeypatch):
         router = FakeRouter()
@@ -294,6 +301,10 @@ def _fake_result():
 
 
 class TestRunPersistence:
+    @pytest.fixture(autouse=True)
+    def _valid_seal_key(self, monkeypatch):
+        monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+
     @pytest.fixture
     def wired(self, monkeypatch):
         router = FakeRouter()

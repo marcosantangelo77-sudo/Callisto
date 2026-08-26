@@ -117,13 +117,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print("  OK: OrderManager.__init__ defaults _enabled = False")
     try:
         be_src = Path(tools.bet_executor.__file__).read_text(encoding="utf-8")
-    except Exception as exc:
-        print(f"  BetExecutor source unreadable: {exc}")
+    except Exception as ext:
+        print(f"  BetExecutor source unreadable: {ext}")
         ok = False
     else:
-        head = be_src[be_src.find("class BetExecutor"):be_src.find("class BetExecutor") + 20000]
-        m = re.search(r"def __init__\(.*?\n(?:.*?\n)*?(    self\._enabled\s*=\s*\w+)", head)
-        if m is None or "False" not in m.group(1):
+        # Match the __init__ body only (8-space class indent). A 4-space
+        # `self._enabled` regex false-failed here even when the default is
+        # False — doctor must not cry wolf on a safe executor.
+        init_m = re.search(
+            r"class BetExecutor\b.*?def __init__\(self\):(.*?)(\n    (?:async )?def )",
+            be_src,
+            re.S,
+        )
+        init_body = init_m.group(1) if init_m else ""
+        if not re.search(r"self\._enabled\s*=\s*False", init_body):
             print("  FAIL: BetExecutor.__init__ does not assign _enabled = False")
             ok = False
         else:

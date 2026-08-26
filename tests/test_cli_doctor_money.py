@@ -72,6 +72,16 @@ def test_money_switches_reported(capsys, monkeypatch):
     assert "CALLISTO_ALLOW_LIVE_EXECUTE: off" in out
 
 
+def test_bet_executor_init_default_disabled_is_ok(capsys, monkeypatch):
+    """Doctor must recognize `        self._enabled = False` (class indent)."""
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+    monkeypatch.delenv("CALLISTO_BIND_HOST", raising=False)
+    rc, out = _doctor(capsys)
+    money = out.split("== money switches ==", 1)[1]
+    assert "OK: BetExecutor.__init__ assigns _enabled = False" in money
+    assert "FAIL: BetExecutor.__init__" not in money
+
+
 def test_seal_key_value_never_printed(capsys, monkeypatch):
     key = "deadbeef" * 8
     monkeypatch.setenv("CALLISTO_SEAL_KEY", key)
