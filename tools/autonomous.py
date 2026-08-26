@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from tools import telegram
+from tools.loop.phase_ledger import PhaseFailureLedger
 from tools.backtest import _signal_confidence
 from tools.edge_confidence import score_edge
 from tools.market_psychology import (
@@ -1419,8 +1420,7 @@ class ResearchLoop:
         # Phase-failure ledger — every _phase_* exception/timeout is recorded
         # here so a "healthy-looking" loop can't silently swallow failures.
         # Capped at 50 entries; oldest dropped when full.
-        self._phase_failures: list[dict] = []
-        self._PHASE_FAILURES_MAX = 50
+        self._phase_failures_ledger = PhaseFailureLedger()
 
         # Self-diagnostics — track already-escalated issues to avoid spam
         # Capped at 500 entries; oldest keys evicted when full.
@@ -2460,17 +2460,9 @@ class ResearchLoop:
         the failure becomes visible via get_status()["phase_failures"].
         """
         try:
-            self._phase_failures.append(
-                {
-                    "cycle": self._cycles,
-                    "phase": phase,
-                    "kind": kind,
-                    "error": repr(exc)[:300] if exc is not None else "timeout",
-                    "ts": time.time(),
-                }
+            self._phase_failures_ledger.record(
+                cycle=self._cycles, phase=phase, kind=kind, exc=exc
             )
-            while len(self._phase_failures) > self._PHASE_FAILURES_MAX:
-                self._phase_failures.pop(0)
         except Exception:
             logger.debug("Failed to record phase failure", exc_info=True)
 
@@ -8233,8 +8225,8 @@ class ResearchLoop:
             "rejections": self._rejections,
             # Phase-failure ledger: last 10 failures + total count so a
             # "healthy-looking" loop can't hide swallowed phase errors.
-            "phase_failures": list(self._phase_failures)[-10:],
-            "phase_failure_count": len(self._phase_failures),
+            "phase_failures": self._phase_failures_ledger.latest(10),
+            "phase_failure_count": self._phase_failures_ledger.count,
             # R2: loop-quality telemetry — calibration trace + per-phase
             # task-class map, consumed by R1's retrodiction harness.
             "calibration": self._calibration_trace.summary(),
