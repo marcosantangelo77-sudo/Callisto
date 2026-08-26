@@ -473,6 +473,74 @@ def test_empty_sources_round_preserved_but_all_corrupt_dropped():
     assert tr.rounds[0]["round"] == 1
 
 
+def _malformed_sources_payload(sources_value):
+    """A round whose `sources` field is omitted or not a JSON list — the
+    exact shapes a corrupt checkpoint produces. The live writer ALWAYS
+    writes a list (possibly empty, e.g. budget stop before fan-out)."""
+    rd = {"round": 1, "query": "chips", "admitted": 0}
+    if sources_value is not _OMIT:
+        rd["sources"] = sources_value
+    return {
+        "fetches": [], "rejections": [], "admitted_fetch_count": 0,
+        "rounds": [rd],
+        "skipped_sources": [], "gain_skipped": [],
+        "independent_keys": [],
+        # queries must be empty: classify_gap's "no query was ever issued"
+        # signal is what keeps the unknown state from laundering.
+        "queries": [],
+        "stop_reason": "budget"}
+
+
+_OMIT = object()
+
+
+@pytest.mark.parametrize("sources_value", [_OMIT, None,
+                                           {"name": "openalex"}, "openalex",
+                                           7])
+def test_non_list_or_missing_sources_field_fails_closed(sources_value):
+    """Regression: a round with a missing/non-list `sources` value used to
+    be normalized to `"sources": []` and then classified as an honest
+    zero-source round (honest_null + empty crossrun sources). Only an
+    explicitly present list is legitimate; anything else drops the round
+    fail-closed so the unknown state stays unknown."""
+    from tools.gaps import GapKind, classify_gap, classify_null_kind
+    from tools.pipeline.crossrun import record_run
+
+    payload = json.loads(json.dumps(
+        _malformed_sources_payload(sources_value)))
+    tr = _trace_from_payload("q1", payload)
+    assert tr.rounds == [], (sources_value, tr.rounds)
+
+    gap = classify_gap(_gap_registry(), tr, _gap_question())
+    assert gap.kind is not GapKind.HONEST_NULL, (
+        f"corrupt checkpoint (sources={sources_value!r}) must never "
+        "launder into an honest null")
+    kind, expl = classify_null_kind(tr)
+    assert kind != "honest_null"
+
+    # cross-run memory must not see an empty-source set for this leaf
+    rec = record_run(type("R", (), {"fetches": []})(), {"q1": tr},
+                     "default", QUESTION)
+    assert isinstance(rec.get("sources"), dict)
+    assert rec["sources"] == {}, (
+        "malformed restored payload laundered into crossrun source set")
+
+
+def test_explicit_empty_sources_list_is_legitimate_honest_round():
+    """The ONLY legitimate empty-source shape: explicitly present
+    `"sources": []` survives restoration and classifies honestly."""
+    from tools.gaps import classify_null_kind
+
+    payload = json.loads(json.dumps(
+        _malformed_sources_payload([])))
+    payload["queries"] = ["chips"]
+    tr = _trace_from_payload("q1", payload)
+    assert len(tr.rounds) == 1
+    assert tr.rounds[0]["sources"] == []
+    kind, expl = classify_null_kind(tr)
+    assert kind == "honest_null"
+
+
 @pytest.mark.parametrize("bad_admitted", [
     {"bad": 1}, [1, 2], 7, 1.0, ["t"], ["yes"],
 ])

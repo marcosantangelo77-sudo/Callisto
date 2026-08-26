@@ -382,8 +382,10 @@ def test_malformed_nested_audit_degrades_without_crash():
         "stop_reason": "round budget exhausted"}))
     tr = _trace_from_payload("q1", payload)
     assert tr.rounds[0]["sources"] == [{"name": "beta", "error": "503"}]
-    assert tr.rounds[1]["sources"] == []
-    assert len(tr.rounds) == 2
+    # fail closed on the sources FIELD: a non-list shape (dict here) is
+    # malformed checkpoint data, not a legitimate empty-source round —
+    # the whole round is dropped instead of normalized to [].
+    assert len(tr.rounds) == 1
     assert tr.skipped_sources == [{"name": "delta", "reason": "gap"}]
     assert tr.gain_skipped == [{"round": 2, "source": "epsilon"}]
     kind, expl = classify_null_kind(tr)  # must not raise

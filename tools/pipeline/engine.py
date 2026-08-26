@@ -1285,13 +1285,22 @@ def _trace_from_payload(question_id: str, payload: dict):
             if not isinstance(r, dict):
                 continue
             sources = r.get("sources")
-            had_sources = isinstance(sources, list) and len(sources) > 0
+            # Fail closed on the sources FIELD itself: only an explicitly
+            # present JSON list represents a legitimate round. A missing
+            # `sources` key or a non-list shape (None/dict/string/int) is
+            # malformed checkpoint data — defaulting it to [] would let the
+            # forged round travel through classify_null_kind /
+            # classify_gap / crossrun.record_run as an honest zero-source
+            # round, laundering corrupt data as "rounds ran, nothing
+            # admitted". Drop the round; unknown stays unknown.
+            if not isinstance(sources, list):
+                continue
+            had_sources = len(sources) > 0
             rr = copy.deepcopy(r)
-            rr["sources"] = (
-                [norm for norm in
-                 (_normalize_round_source(src) for src in sources)
-                 if norm is not None]
-                if isinstance(sources, list) else [])
+            rr["sources"] = [
+                norm for norm in
+                (_normalize_round_source(src) for src in sources)
+                if norm is not None]
             # Fail closed at the ROUND level: a round that originally
             # listed sources but whose outcomes were ALL malformed carries
             # no trustworthy audit state. Keeping it would leave an empty
