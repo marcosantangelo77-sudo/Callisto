@@ -122,34 +122,43 @@ def _persist_run(record: dict) -> Path:
     """Write the run record atomically; returns its path. The filename is
     the timestamped run id — `callisto runs` / `callisto show` read it.
 
-    Publication sequence:
-      1. Reserve the id by O_EXCL-creating `<id>.json.resv` — a private
-         reservation marker that no `*.json` glob (runs/show/_load_run)
-         ever matches, so readers can never observe it as a run record,
-         let alone an empty final file.
-      2. Revalidate final absence UNDER the reservation: another writer
-         may have published this exact id and released its reservation
-         between our cheap existence pre-check and our O_EXCL win, so
-         holding the reservation alone does not prove the slot is free.
-      3. Write the complete payload to a `.tmp` sibling and fsync it.
-      4. os.replace() the tmp onto the final `<id>.json` — atomic swap,
-         so no reader ever sees a partial or empty final JSON — then fsync
-         both the published file and the directory for durability.
+    Publication sequence, split into an explicit PRE-publication phase and
+    a POST-publication phase (the boundary is the os.replace()):
 
-    Every step after the O_EXCL claim runs under a `finally` that closes
-    the reservation fd and unlinks the marker (plus any tmp), so no normal
-    exception path — including a failed reservation fsync — leaks a stale
-    `.resv`. Only a hard process crash can leave one behind; even then a
-    crashed writer leaves at most a stale `.resv`, never malformed `*.json`.
+      PRE (all failures are retryable and must leave no sidecars):
+        1. Reserve the id by O_EXCL-creating `<id>.json.resv` — a private
+           reservation marker that no `*.json` glob ever matches.
+        2. Revalidate final absence UNDER the reservation: another writer
+           may have published this exact id and released its reservation
+           between our cheap existence pre-check and our O_EXCL win.
+        3. Write the complete payload to a `.tmp` sibling, flush() it, and
+           fsync the tmp file. Any write/flush/fsync failure here is a
+           pre-commit failure: cleanup removes both the tmp and the resv,
+           and the same sequence slot may be safely retried.
+
+      COMMIT: os.replace(tmp, final) — atomic swap; no reader ever sees a
+        partial or empty final JSON. This call is the point of no return.
+
+      POST (failures here are NEVER retried as new records):
+        4. fsync the published file, then the directory, for durability.
+           If either durability confirmation fails, we deliberately raise
+           `DurabilityError` naming the already-published path instead of
+           retrying: retrying would observe `_000.json` visible on disk and
+           publish the SAME logical run again as `_001.json`. The record is
+           published and readable; only its crash-durability guarantee is
+           in doubt, and that is reported honestly rather than papered over
+           by a duplicate. The existing final file is never overwritten.
+
+    Cleanup of the reservation fd/marker and any tmp sibling runs in
+    `finally` blocks scoped so that even a failing close()/unlink() cannot
+    skip other required cleanup or mask the real outcome. Only a hard
+    process crash can leave a stale `.resv`; never malformed `*.json`.
     """
     stamp = record["recorded_at"].replace(":", "").replace("-", "")
     qhash = hashlib.sha256(
         str(record.get("question", "")).encode("utf-8")).hexdigest()[:8]
     base = _runs_dir()
     payload = json.dumps(record, indent=2).encode("utf-8")
-    # A post-reservation failure cleans its own claim (see `finally`
-    # below), freeing the exact slot again — so such failures retry the
-    # SAME sequence number rather than burning a new one.
     attempts_left = 1000
     seq = 0
     while attempts_left:
@@ -169,9 +178,26 @@ def _persist_run(record: dict) -> Path:
         except FileExistsError:
             seq += 1          # slot genuinely taken; move on
             continue
+
+        published_path: Path | None = None
         try:
-            os.write(fd, b"")
-            os.fsync(fd)               # durable reservation
+            try:
+                try:
+                    os.write(fd, b"")
+                    os.fsync(fd)           # durable reservation
+                except OSError:
+                    # Reservation fsync failed: pre-publication, so the same
+                    # slot is still safe to retry once cleanup (outer finally)
+                    # has removed the marker.
+                    continue
+            finally:
+                # Release the reservation descriptor before publishing;
+                # unlinking happens in the outer finally below.
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass                    # best-effort close
+                fd = -1                     # mark closed
             # Revalidate under the reservation: writer A may have published
             # this exact id and released its reservation between our cheap
             # exists() check and our O_EXCL win. Replacing over A's record
@@ -179,36 +205,94 @@ def _persist_run(record: dict) -> Path:
             if path.exists():
                 seq += 1
                 continue
+
+            # ── PRE-publication: build + durably flush the tmp payload ──
             tmp = path.with_suffix(".json.tmp")
-            with open(tmp, "wb") as fh:
-                fh.write(payload)
-                fh.flush()
-                os.fsync(fh.fileno())
             try:
-                os.replace(tmp, path)  # atomic content publication
+                with open(tmp, "wb") as fh:
+                    fh.write(payload)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                # ── COMMIT: atomic content publication (point of no return) ──
+                os.replace(tmp, path)
+            except OSError:
+                # Pre-commit failure: remove the tmp sidecar and retry the
+                # same slot. If replace DID succeed but raised afterwards
+                # (impossible for os.replace itself, but be conservative),
+                # treat the final file's presence as authoritative below.
+                if not path.exists():
+                    tmp.unlink(missing_ok=True)
+                    continue
+                # Fall through: publication actually happened.
+                published_path = path
+            else:
+                published_path = path
+
+            if published_path is not None:
+                # ── POST-publication durability confirmation ──
+                # Never retried as a new record from here: `_000.json` is
+                # now visible, so any retry loop would publish the same
+                # logical run again under `_001.json`.
+                problems = []
                 ffd = os.open(path, os.O_RDONLY)
                 try:
                     os.fsync(ffd)      # durability of published content
+                except OSError as exc:
+                    problems.append(f"final-file fsync failed: {exc}")
                 finally:
-                    os.close(ffd)
+                    try:
+                        os.close(ffd)
+                    except OSError:
+                        pass
                 dfd = os.open(base, os.O_RDONLY)
                 try:
                     os.fsync(dfd)      # directory entry durability
+                except OSError as exc:
+                    problems.append(f"directory fsync failed: {exc}")
                 finally:
-                    os.close(dfd)
+                    try:
+                        os.close(dfd)
+                    except OSError:
+                        pass
+                if problems:
+                    # Deliberate documented outcome: the record IS published
+                    # at `path`; raise rather than duplicate it. The resv
+                    # marker is still removed by the outer finally.
+                    raise DurabilityError(path, "; ".join(problems))
                 return path
-            finally:
-                tmp.unlink(missing_ok=True)
-        except OSError:
-            pass              # slot cleaned; retry this seq
         finally:
-            # Release the claim on EVERY post-reservation outcome: success
-            # (record now published), failure, or retry-to-next-slot.
-            os.close(fd)
-            resv.unlink(missing_ok=True)
+            # Comprehensive best-effort cleanup: the reservation marker on
+            # every outcome, plus the tmp sibling if one still exists. Each
+            # step is independent — one failure cannot skip the others.
+            if fd != -1:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            try:
+                resv.unlink(missing_ok=True)
+            except OSError:
+                pass
+            try:
+                path.with_suffix(".json.tmp").unlink(missing_ok=True)
+            except OSError:
+                pass
     raise RuntimeError(
         "could not allocate a unique run id after 1000 attempts "
         f"for stamp {stamp}")
+
+
+class DurabilityError(RuntimeError):
+    """The run record was successfully published at `path`, but confirming
+    its crash durability (file/directory fsync) failed. Callers may treat
+    the record as present-but-unconfirmed; `_persist_run` will NOT silently
+    republish it under a different sequence number."""
+
+    def __init__(self, path: Path, detail: str):
+        super().__init__(
+            f"run record published at {path} but durability could not be "
+            f"confirmed: {detail}")
+        self.path = path
 
 
 async def _cmd_ask(args: argparse.Namespace) -> int:

@@ -607,3 +607,130 @@ def test_fix_failed_reservation_fsync_cleans_marker_and_retries_same_seq(
     assert rec["question"] == "fsync probe"
     assert not list(runs_dir.glob("*.resv")), "leaked .json.resv marker"
     assert not list(runs_dir.glob("*.tmp"))
+
+
+# ── repair-pinning: atomic/clean publication failure paths ────────────────
+
+def test_fix_partial_write_failure_leaves_no_sidecars(runs_dir, monkeypatch):
+    """A partial tmp write()/flush() failure must clean up BOTH the .tmp and
+    the .resv sidecars and may safely retry the SAME sequence slot."""
+    import os as _os
+    real_fsync = _os.fsync
+    state = {"failed": False}
+
+    def flaky_fsync(fd):
+        # First fsync of the payload phase = tmp fsync (reservation fsync
+        # happens first; let it pass). Fail exactly once.
+        if not state["failed"]:
+            state["failed"] = True
+            raise OSError("simulated tmp fsync failure")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(_os, "fsync", flaky_fsync)
+    p = callisto._persist_run(_record(q="tmp fsync probe"))
+    assert "_000" in p.stem, f"pre-publication failure burned a slot: {p.stem}"
+    rec, _ = callisto._load_run(p.stem)
+    assert rec["question"] == "tmp fsync probe"
+    assert not list(runs_dir.glob("*.tmp")), "leaked .json.tmp sidecar"
+    assert not list(runs_dir.glob("*.resv")), "leaked .json.resv marker"
+    finals = list(runs_dir.glob("*.json"))
+    assert len(finals) == 1
+
+
+def test_fix_final_file_fsync_failure_raises_not_duplicates(
+        runs_dir, monkeypatch):
+    """After os.replace succeeds, a final-file fsync failure must NOT fall
+    into the retry loop (which would publish the same logical run again as
+    _001.json). The published record stays; the outcome is raised."""
+    import os as _os
+    real_fsync = _os.fsync
+    real_replace = _os.replace
+    state = {"replaced": False}
+
+    def spy_replace(src, dst):
+        out = real_replace(src, dst)
+        if str(dst).endswith(".json"):
+            state["replaced"] = True
+        return out
+
+    def flaky_fsync(fd):
+        if state["replaced"]:
+            raise OSError("simulated final-file fsync failure")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(_os, "replace", spy_replace)
+    monkeypatch.setattr(_os, "fsync", flaky_fsync)
+    with pytest.raises(callisto.DurabilityError) as ei:
+        callisto._persist_run(_record(q="durability probe"))
+    # Exactly ONE record for this run exists — no duplicate under _001.
+    finals = [p for p in runs_dir.glob("*.json")
+              if "durability" in json.loads(p.read_text())["question"]]
+    assert len(finals) == 1
+    assert finals[0] == ei.value.path
+    json.loads(finals[0].read_text(encoding="utf-8"))  # complete, loadable
+    assert not list(runs_dir.glob("*.resv"))
+    assert not list(runs_dir.glob("*.tmp"))
+
+
+def test_fix_directory_fsync_failure_never_duplicates(runs_dir, monkeypatch):
+    """A directory-fsync failure after successful publication must not cause
+    a second record for the same call."""
+    import os as _os
+    real_fsync = _os.fsync
+    real_replace = _os.replace
+    state = {"count": 0}
+
+    def counting_replace(src, dst):
+        out = real_replace(src, dst)
+        if str(dst).endswith(".json"):
+            state["count"] += 1
+        return out
+
+    def flaky_fsync(fd):
+        # Let reservation + tmp fsync through; fail the first POST-publish
+        # fsync (the final-file one), which precedes the directory fsync.
+        if state["count"] >= 1:
+            raise OSError("simulated post-publication fsync failure")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(_os, "replace", counting_replace)
+    monkeypatch.setattr(_os, "fsync", flaky_fsync)
+    with pytest.raises(callisto.DurabilityError):
+        callisto._persist_run(_record(q="dirfsync probe"))
+    assert state["count"] == 1, "same logical run was replaced/published twice"
+    assert len(list(runs_dir.glob("*.json"))) == 1
+
+
+def test_fix_cleanup_close_failure_still_cleans_and_publishes(
+        runs_dir, monkeypatch):
+    """A failing os.close during cleanup must not skip unlinking the .resv,
+    turn a successfully published record into a retry/duplicate, or leave
+    stale sidecars behind."""
+    import os as _os
+    real_close = _os.close
+    state = {"closed": False}
+
+    def flaky_close(fd):
+        try:
+            return real_close(fd)
+        finally:
+            if not state["closed"]:
+                state["closed"] = True
+                raise OSError("simulated cleanup close failure")
+
+    monkeypatch.setattr(_os, "close", flaky_close)
+    p = callisto._persist_run(_record(q="cleanup probe"))
+    rec, _ = callisto._load_run(p.stem)
+    assert rec["question"] == "cleanup probe"
+    assert len(list(runs_dir.glob("*.json"))) == 1
+    assert not list(runs_dir.glob("*.resv")), "resv not unlinked after close err"
+    assert not list(runs_dir.glob("*.tmp"))
+
+
+def test_fix_durability_error_is_deliberate_documented_outcome(runs_dir):
+    """The DurabilityError contract: it names the already-published path and
+    carries it as `.path`, so callers can decide without a re-lookup."""
+    exc = callisto.DurabilityError(
+        runs_dir / "x.json", "final-file fsync failed: boom")
+    assert exc.path == runs_dir / "x.json"
+    assert str(runs_dir / "x.json") in str(exc)
