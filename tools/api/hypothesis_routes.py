@@ -196,3 +196,18 @@ async def update_hypothesis(hypothesis_id: str, request: Request):
         if db:
             await db.close()
     return {"hypothesis_id": hypothesis_id, "updated": results}
+
+
+from pydantic import BaseModel, Field
+
+
+class HypothesisCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=256)
+    thesis: str = Field(..., min_length=1, max_length=10000)
+    sport: str = Field(..., min_length=1, max_length=50)
+    market_type: str = Field(..., min_length=1, max_length=100)
+    hypothesis_model_config: dict = Field(default_factory=dict)
+    edge_threshold: float = Field(default=0.02, ge=0.0, le=1.0)
+    min_sample_size: int = Field(default=1000, ge=1, le=10_000_000)
+    significance_level: float = Field(default=0.05, gt=0.0, lt=1.0)
+    notes: str = Field(default="", max_length=5000)

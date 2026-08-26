@@ -55,9 +55,13 @@ class TestSourceContract:
     def test_simulate_portfolio_offloaded(self):
         src = _api_source()
         assert "asyncio.to_thread(" in src
-        # to_thread wrapping simulate_portfolio in the endpoint body.
-        assert "await asyncio.to_thread(\n        simulate_portfolio" in src or \
-               "await asyncio.to_thread(simulate_portfolio" in src
+        # to_thread wrapping simulate_portfolio in the endpoint body — the
+        # call site lives in tools/api/simulate.py since slice 5.
+        from tools.api import simulate as _sim
+        import inspect as _inspect
+
+        sim_src = _inspect.getsource(_sim.simulate_portfolio_endpoint)
+        assert "await asyncio.to_thread(\n        simulate_portfolio" in sim_src
 
     def test_detect_regime_offloaded(self):
         src = _api_source()

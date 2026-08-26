@@ -50,3 +50,13 @@ async def fetch_historical(sport: str, start_date: str, end_date: str,
         end_date=end_date,
         credit_budget=credit_budget,
     )
+
+
+from pydantic import BaseModel
+
+
+class BacktestRequest(BaseModel):
+    hypothesis_id: str
+    start_date: str
+    end_date: str
+    credit_budget: int = 50
