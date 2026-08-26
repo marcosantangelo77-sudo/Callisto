@@ -156,6 +156,7 @@ async def mgr_and_captor(tmp_path):
     captor = _Captor()
     m = OrderManager(db_path=str(tmp_path / "recon.db"), telegram_sender=captor)
     await m.initialize()
+    m.enable()  # default-disabled: arm for tests
     await _setup_schema(m._db)
     try:
         yield m, captor

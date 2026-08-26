@@ -198,7 +198,8 @@ class OrderManager:
         self._db: Optional[aiosqlite.Connection] = None
         # Default to the real telegram module; tests inject a mock.
         self._telegram_sender = telegram_sender
-        self._enabled = True
+        # Fail-closed: orders are refused until enable() is called explicitly.
+        self._enabled = False
         self._init_lock = asyncio.Lock()
 
     async def initialize(self) -> None:

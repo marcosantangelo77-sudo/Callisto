@@ -153,12 +153,12 @@ async def _cmd_resume_all(
     manager, args: list[str], send, bet_executor=None
 ) -> str:
     manager.enable()
-    if bet_executor is not None:
-        try:
-            bet_executor.enable()
-        except Exception:
-            pass
-    await send("RESUMED: order_manager + bet_executor enabled.")
+    # NOTE: intentionally does NOT arm bet_executor — chat resume is not
+    # an admin action, and the executor's HTTP arming is require_admin.
+    await send(
+        "RESUMED: order_manager enabled. bet_executor remains DISABLED "
+        "until armed via admin HTTP endpoint."
+    )
     return "resumed"
 
 
