@@ -24,8 +24,10 @@ Real constraints, declared honestly:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
+from pathlib import Path
 from typing import Optional
 
 _HERMES = os.path.expanduser("~/.hermes/bin/hermes")
@@ -63,6 +65,57 @@ def reset_proc_semaphore() -> None:
 
 def hermes_available() -> bool:
     return os.path.exists(_HERMES) or bool(shutil.which("hermes"))
+
+
+def _auth_store_path() -> Path:
+    override = os.getenv("HERMES_HOME", "").strip()
+    root = Path(override) if override else Path.home() / ".hermes"
+    return root / "auth.json"
+
+
+def hermes_logged_in() -> bool:
+    """True iff a Nous Portal credential exists in the Hermes auth store.
+
+    Does not print, return, or log token material. Does not hit the network —
+    a quarantined/expired session still counts as "present" so callers can
+    attempt a completion and surface Hermes' own auth error. False means
+    `hermes portal login` / `hermes auth add nous` has never succeeded here.
+
+    ChatGPT's workstation workers worked because `~/.hermes/auth.json` already
+    held a Nous session. A fresh cloud VM with only the CLI binary is NOT
+    logged in; treating `hermes_available()` as health was the false green.
+    """
+    path = _auth_store_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError, TypeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    nous = (data.get("providers") or {}).get("nous")
+    if isinstance(nous, dict):
+        last_err = nous.get("last_auth_error")
+        relogin = isinstance(last_err, dict) and last_err.get("relogin_required")
+        has_cred = bool(
+            (isinstance(nous.get("access_token"), str) and nous["access_token"].strip())
+            or (isinstance(nous.get("refresh_token"), str) and nous["refresh_token"].strip())
+        )
+        if has_cred and not relogin:
+            return True
+        if relogin and not has_cred:
+            return False
+        if has_cred:
+            return True
+    pool = (data.get("credential_pool") or {}).get("nous")
+    if isinstance(pool, list):
+        for entry in pool:
+            if not isinstance(entry, dict):
+                continue
+            # Presence of a pool entry means a login was stored. Do not read
+            # secret fields — fingerprint / id is enough to know *a* cred exists.
+            if entry.get("id") or entry.get("secret_fingerprint") or entry.get("auth_type"):
+                return True
+    return False
 
 
 def resolve_binary(binary: Optional[str] = None) -> str:

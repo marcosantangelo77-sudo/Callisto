@@ -349,8 +349,9 @@ class TestRouterDispatch:
             "    screening: oxa\n")
         router = inference.ProviderRouter(config_path=str(cfg))
         res = asyncio.run(router.check_health("oxa"))
-        # On a machine WITH the CLI installed this is ok; without, an honest
-        # error naming the missing binary. Either way: no HTTP attempted.
+        # Binary-present is no longer "ok". Missing binary OR missing Portal
+        # login are both honest errors; either way: no HTTP attempted.
         assert res["status"] in ("ok", "error")
         if res["status"] == "error":
-            assert "binary" in res["error"]
+            err = res["error"].lower()
+            assert ("binary" in err) or ("portal" in err) or ("logged" in err)

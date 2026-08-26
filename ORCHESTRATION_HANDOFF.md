@@ -73,10 +73,11 @@ Prepared but deliberately **not launched** prompts:
 /private/tmp/ox_checkpoint_trace_outcome_rejection_shape_repair_prompt.md
 ```
 
-Workers are launched through:
+Workers are launched through the in-repo supervisor (workstation copy at
+`~/callisto-wt/nous-supervisor.sh` is the same contract):
 
 ```bash
-bash /Users/marcosantangelo/callisto-wt/nous-supervisor.sh \
+bash scripts/nous-supervisor.sh \
   <task-name> <worktree> <prompt-file> 180
 ```
 
