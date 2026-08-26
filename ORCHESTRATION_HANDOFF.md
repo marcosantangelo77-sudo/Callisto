@@ -4,6 +4,22 @@ This is a live handoff for the next orchestrator (for example Cursor + Grok).
 It records verified state, not agent self-reports. Update it after every
 review, merge, worker replacement, or provider incident.
 
+## 2026-08-26 — audit gate (complete; fleet still frozen)
+
+Operator required a 5-dimension architecture/security audit **before** resuming
+the candidate-review queue below. That audit is done:
+
+- Report: `findings/brutal_audit_2026-08-26.md` (orchestrator-verified).
+- Dimension-1 detail: `findings/architecture_brutal_audit_2026-08-26.md`.
+- Production readiness: **29/100**. Do not arm live betting. Do not treat
+  `start.bat`'s `0.0.0.0` bind as loopback.
+
+Ox Alpha workers were **not** dispatched this turn. Hermes CLI is installed on
+the cloud runner but is not logged into Nous Portal (`hermes -z --provider nous
+-m stealth/ox-alpha` fails closed). Do not launch the supervisor until Portal
+auth exists. Independent review of `dbcc751` and `1ec9778` is the next action
+once the operator releases the audit gate.
+
 ## Mission and operating boundary
 
 The operator asked for a high-throughput but safe Callisto improvement loop:
