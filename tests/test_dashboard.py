@@ -120,21 +120,18 @@ def _build(client_stub: FakeUpstream, db_path: str):
 # ---------------------------------------------------------------------------
 
 
-def test_index_served_and_has_six_panels(empty_db):
+def test_index_served_research_panels_not_live_trading(empty_db):
     app = _build(FakeUpstream(), empty_db)
     with TestClient(app) as c:
         r = c.get("/")
         assert r.status_code == 200, r.text
         html = r.text
-        for panel_id in [
-            "panel-state",
-            "panel-hyps",
-            "panel-orders",
-            "panel-portfolio",
-            "panel-ingestion",
-            "panel-alerts",
-        ]:
-            assert panel_id in html, f"missing panel {panel_id} in index"
+        for panel_id in ("panel-state", "panel-ingestion", "panel-alerts"):
+            assert panel_id in html, f"missing research panel {panel_id} in index"
+        for panel_id in ("panel-hyps", "panel-orders", "panel-portfolio"):
+            assert panel_id not in html, (
+                f"{panel_id} must stay deleted from the default dashboard"
+            )
 
 
 def test_static_app_js_served(empty_db):
