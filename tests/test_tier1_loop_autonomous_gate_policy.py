@@ -178,7 +178,10 @@ class TestStaticNoUnboundedThresholdWrite:
 
     def test_guard_code_present_in_phase(self):
         import inspect
-        src = inspect.getsource(auto.ResearchLoop._phase_interpret_backtests)
+        # Implementation moved to tools.loop.phases_impl; the wrapper delegates.
+        src = inspect.getsource(auto.ResearchLoop._phase_interpret_backtests) + inspect.getsource(
+            __import__("tools.loop.phases_impl", fromlist=["phase_interpret_backtests"]).phase_interpret_backtests
+        )
         assert "GATE POLICY REFUSED" in src
         assert "MIN_EDGE_THRESHOLD_FLOOR" in src
 
@@ -186,5 +189,7 @@ class TestStaticNoUnboundedThresholdWrite:
         # The prompt asks Claude to lower thresholds; that's fine as ADVICE.
         # The enforcement lives in the apply step, which this file pins.
         import inspect
-        src = inspect.getsource(auto.ResearchLoop._phase_interpret_backtests)
+        src = inspect.getsource(auto.ResearchLoop._phase_interpret_backtests) + inspect.getsource(
+            __import__("tools.loop.phases_impl", fromlist=["phase_interpret_backtests"]).phase_interpret_backtests
+        )
         assert "lower thresholds on promising hypotheses" in src  # advice intact
