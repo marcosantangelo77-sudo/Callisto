@@ -350,10 +350,16 @@ class TestSafetyPins:
     PAPER_SIGNAL_STATUSES = {"paper"}  # 'live' must NEVER join this set
 
     def test_bet_executor_still_refuses_under_local_only(self):
-        from tools import bet_executor  # noqa: F401  (import = exists)
+        from tools import bet_executor
+        from tools.betexec import lifecycle
 
-        src = Path(bet_executor.__file__).read_text(encoding="utf-8")
-        assert 'os.getenv("CALLISTO_LOCAL_ONLY"' in src
+        facade = Path(bet_executor.__file__).read_text(encoding="utf-8")
+        assert "arm_gate_refusal" in facade
+        assert "enable" in facade
+        assert lifecycle.LOCAL_ONLY_ENV == "CALLISTO_LOCAL_ONLY"
+        gate = Path(lifecycle.__file__).read_text(encoding="utf-8")
+        assert "os.getenv(LOCAL_ONLY_ENV" in gate
+        assert "CALLISTO_LOCAL_ONLY" in gate
 
     def test_paper_signal_statuses_do_not_gain_live(self):
         from tools import bet_executor
