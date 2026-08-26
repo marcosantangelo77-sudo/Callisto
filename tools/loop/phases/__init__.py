@@ -29,3 +29,7 @@ from tools.loop.phases.collect_eval import (  # noqa: F401
     phase_embed_data,
     phase_evaluate,
 )
+from tools.loop.phases.backtest_run import (  # noqa: F401
+    phase_backtest,
+    phase_validate,
+)
