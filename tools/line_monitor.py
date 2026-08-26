@@ -12,7 +12,10 @@ Stores snapshots in SQLite for historical analysis.
 
 Internals live in tools/lines/: ingest (snapshot conversion/merging),
 edge_report (consensus + +EV evaluation), movement (tracking/KL),
-schema (DDL bootstrap), ws_stream (WS + incremental ingestion).
+monitor_loop (cycle body), schema (DDL bootstrap), snapshot_ops
+(snapshot storage/CLV/microstructure), ws_stream (WS + incremental
+ingestion) and process_snapshot (per-sport fetch, enrichment, storage,
+movement/EV pipeline — slice 5).
 The LineMonitor import path is unchanged.
 """
 
@@ -75,10 +78,23 @@ from tools.lines.monitor_loop import (
     snapshot_props,
     snapshot_sport_fallback,
 )
+from tools.lines.process_snapshot import (
+    capture_closing_lines as _capture_closing_lines_impl,
+    enrich_with_dk as _enrich_with_dk_impl,
+    enrich_with_fanatics as _enrich_with_fanatics_impl,
+    enrich_with_fd as _enrich_with_fd_impl,
+    enrich_with_mgm as _enrich_with_mgm_impl,
+    evaluate_movement as _evaluate_movement_impl,
+    fallback_snapshot as _fallback_snapshot_impl,
+    model_agreement as _model_agreement_impl,
+    process_snapshot_inner as _process_snapshot_inner_impl,
+    record_movement as _record_movement_core,
+    snapshot_sport as _snapshot_sport_impl,
+)
 from tools.lines.schema import connect_and_tag, ensure_line_schema
 from tools.lines.snapshot_ops import (
+    capture_closing_lines as _capture_closing_lines_ops_impl,
     cache_snapshot_for_backtest,
-    capture_closing_lines as _capture_closing_lines_impl,
     default_closing_window,
     insert_snapshot_record,
     normalize_close_source,
@@ -387,18 +403,10 @@ class LineMonitor:
         """Take an odds snapshot using all available sources.
 
         Called when Odds API credits are exhausted or unavailable.
-        Delegates to tools.lines.monitor_loop.snapshot_sport_fallback.
+        Delegates to tools.lines.process_snapshot.fallback_snapshot
+        (which forwards to tools.lines.monitor_loop.snapshot_sport_fallback).
         """
-        from tools.odds_api_io import (
-            get_odds as odds_api_io_get_odds,
-            get_usage_status as odds_api_io_usage,
-        )
-        await snapshot_sport_fallback(
-            self,
-            sport,
-            odds_api_io_get_odds=odds_api_io_get_odds,
-            odds_api_io_usage=odds_api_io_usage,
-        )
+        await _fallback_snapshot_impl(self, sport)
 
     async def _snapshot_sport(self, sport: str) -> None:
         """Take an odds snapshot for a sport and compare with previous.
@@ -407,63 +415,31 @@ class LineMonitor:
         1. DK/FD lines are fresh from source (target books)
         2. More bookmakers in the snapshot = better devig consensus
         3. If Odds API data is stale, scrapers overwrite it
+
+        Delegates to tools.lines.process_snapshot.snapshot_sport.
         """
-        from tools.odds_api_io import get_odds as odds_api_io_get_odds
-
-        try:
-            # Primary: Odds-API.io Pro (15 books, 30K req/hr)
-            # the-odds-api.com is out of credits — skip it entirely.
-            new_snapshot = await odds_api_io_get_odds(sport)
-
-            if new_snapshot.get("error") or not new_snapshot.get("games"):
-                logger.warning(f"Snapshot error for {sport}: {new_snapshot.get('error', 'no games')} — trying fallbacks")
-                await self._snapshot_sport_fallback(sport)
-                return
-
-            # Enrich with fresh scraper data from all free sources (always)
-            new_snapshot = await self._enrich_with_dk(sport, new_snapshot)
-            new_snapshot = await self._enrich_with_fd(sport, new_snapshot)
-            new_snapshot = await self._enrich_with_fanatics(sport, new_snapshot)
-
-            await self._process_snapshot(sport, new_snapshot)
-
-        except Exception as e:
-            logger.error(f"Snapshot failed for {sport}: {e}")
+        await _snapshot_sport_impl(self, sport)
 
     async def _enrich_with_dk(self, sport: str, snapshot: dict) -> dict:
         """Merge fresh DK scraper data into an Odds API snapshot (see ingest.enrich_with_scraper)."""
-        from tools.dk_scraper import scrape_dk_odds
-        return await enrich_with_scraper(sport, snapshot, scrape_dk_odds, "draftkings", ("draft_kings",))
+        return await _enrich_with_dk_impl(sport, snapshot)
 
     async def _enrich_with_fd(self, sport: str, snapshot: dict) -> dict:
         """Merge fresh FanDuel scraper data into an odds snapshot (see ingest.enrich_with_scraper)."""
-        from tools.fanduel_scraper import scrape_fd_odds
-        return await enrich_with_scraper(sport, snapshot, scrape_fd_odds, "fanduel", ("fan_duel",))
+        return await _enrich_with_fd_impl(sport, snapshot)
 
     async def _enrich_with_mgm(self, sport: str, snapshot: dict) -> dict:
         """Merge fresh BetMGM scraper data into an odds snapshot (see ingest.enrich_with_scraper)."""
-        from tools.betmgm_scraper import scrape_betmgm_odds
-        return await enrich_with_scraper(sport, snapshot, scrape_betmgm_odds, "betmgm", ("bet_mgm",))
+        return await _enrich_with_mgm_impl(sport, snapshot)
 
     async def _enrich_with_fanatics(self, sport: str, snapshot: dict) -> dict:
         """Merge fresh Fanatics scraper data into an odds snapshot.
 
-        Same pattern as the other enrichment helpers. Fanatics is the
-        secondary book (per project_sportsbooks) so we always pull a
-        fresh scrape when the sport is supported. Silent on failure — the
-        Fanatics endpoints are UNDOCUMENTED and we expect them to break
-        periodically; @tracked_ingestion records the outage.
+        Delegates to tools.lines.process_snapshot.enrich_with_fanatics.
+        Silent on failure — the Fanatics endpoints are UNDOCUMENTED and we
+        expect them to break periodically; @tracked_ingestion records the outage.
         """
-        try:
-            from tools.fanatics_scraper import FANATICS_LEAGUE_KEYS
-        except Exception:
-            return snapshot
-        if sport not in FANATICS_LEAGUE_KEYS:
-            return snapshot
-        from tools.fanatics_scraper import fetch_fanatics_odds
-        return await enrich_with_scraper(
-            sport, snapshot, fetch_fanatics_odds, "fanatics", ("fanatics_sportsbook",),
-        )
+        return await _enrich_with_fanatics_impl(sport, snapshot)
 
     @staticmethod
     def _matchup_key(home: str, away: str) -> str:
@@ -476,7 +452,7 @@ class LineMonitor:
         in-flight snapshot is running. Sets _in_flight_db for legacy callers.
 
         Shared pipeline used by both primary (Odds API) and fallback
-        (DraftKings scraper, OddsPapi) snapshot paths.
+        (DraftKings scraper) snapshot paths.
         """
         async with self._snapshot_lock:
             self._in_flight_db = True
@@ -486,136 +462,23 @@ class LineMonitor:
                 self._in_flight_db = False
 
     async def _process_snapshot_inner(self, sport: str, new_snapshot: dict) -> None:
-        """Inner snapshot processing — separated so _in_flight_db wraps all DB ops."""
-        now = datetime.now(timezone.utc).isoformat()
-        game_count = new_snapshot.get("game_count", 0)
-        credits_remaining = new_snapshot.get("credits", {}).get("remaining")
-        source = new_snapshot.get("source", "odds_api")
+        """Inner snapshot processing — separated so _in_flight_db wraps all DB ops.
 
-        # Stamp fetched_at on every bookmaker entry in the snapshot JSON so
-        # downstream consumers (backtest replay, CLV backfill, edge rescan)
-        # can compute freshness decay even when the outer row timestamp has
-        # drifted from the actual fetch time. Idempotent — if a line already
-        # has fetched_at (e.g. came from the WS path) we keep the earlier
-        # stamp rather than overwriting with a later process-time.
-        stamp_snapshot_fetched_at(new_snapshot, now)
-
-        # ingest_source defaults to the snapshot's 'ingest_source' tag; callers
-        # in the WS/incremental paths set this to 'ws' or 'incremental'. The
-        # legacy 'source' field above is the provider name ('odds_api',
-        # 'draftkings', etc.) and is a different axis.
-        ingest_source = new_snapshot.get("ingest_source", "interval")
-
-        # WS/incremental deltas arrive as SINGLE-bookmaker, single-game
-        # snapshots. If we hand that to _process_snapshot_inner as-is it
-        # would overwrite the multi-book _snapshots[sport] with the delta,
-        # breaking the next consensus scan. Merge instead: take the most
-        # recent full snapshot for this sport and splice the WS delta onto
-        # it so downstream edge scanning still has every book present.
-        if ingest_source in ("ws", "incremental"):
-            prior = self._snapshots.get(sport)
-            if prior is not None and new_snapshot.get("games"):
-                new_snapshot = merge_delta_into_snapshot(prior, new_snapshot, now)
-
-        # Store snapshot (retry-wrapped; see tools.lines.snapshot_ops).
-        await insert_snapshot_record(
-            self._db,
-            sport=sport,
-            snapshot=new_snapshot,
-            now_iso=now,
-            game_count=game_count,
-            credits_remaining=credits_remaining,
-            ingest_source=ingest_source,
-        )
-
-        logger.info(f"Snapshot {sport} ({source}): {game_count} games, credits={credits_remaining}")
-
-        # Publish snapshot event to event bus
-        try:
-            from tools.event_bus import get_event_bus, EVENT_SNAPSHOT_TAKEN
-            await get_event_bus().publish(EVENT_SNAPSHOT_TAKEN, {
-                "sport": sport, "game_count": game_count,
-                "source": source, "credits_remaining": credits_remaining,
-            })
-        except Exception:
-            pass  # Event bus not critical
-
-        # ALWAYS cache in historical_odds_cache for backtesting.
-        # Every live snapshot becomes backtest-grade data. This is the
-        # primary mechanism for building historical depth.
-        await cache_snapshot_for_backtest(self._db, sport=sport, snapshot=new_snapshot, now_iso=now)
-
-        # Run edge scanner on every snapshot
-        from tools.edge_scanner import full_edge_scan
-        edge_report = full_edge_scan(new_snapshot)
-        self._latest_edge_reports[sport] = edge_report
-        total_edges = edge_report.get("total_edges", 0)
-        if total_edges > 0:
-            logger.info(f"Edge scan {sport}: {total_edges} edges found")
-
-        # Store market microstructure metrics from edge scan
-        await store_market_microstructure(self._db, sport=sport, edge_report=edge_report, now_iso=now)
-
-        # NOTE: Raw edges are NOT sent to Telegram here.
-        # The autonomous loop analyzes candidates via full AGP sessions
-        # and only alerts after the Architect confirms the edge is real.
-
-        # Compare with previous snapshot
-        old_snapshot = self._snapshots.get(sport)
-        if old_snapshot:
-            from tools.odds_api import detect_line_movement
-            from tools.edge_scanner import detect_sharp_money
-            movements = detect_line_movement(old_snapshot, new_snapshot)
-            significant = filter_significant(movements)
-
-            if significant:
-                logger.info(
-                    f"MOVEMENT DETECTED: {sport} — {len(significant)} significant moves"
-                )
-                await record_significant_movements(self, sport, significant, new_snapshot)
-
-            # Detect sharp money (one book moved, others didn't)
-            sharp_signals = detect_sharp_money(old_snapshot, new_snapshot)
-            if sharp_signals:
-                logger.info(f"SHARP MONEY: {sport} — {len(sharp_signals)} signals")
-                await handle_sharp_signals(self._alerts, sport, sharp_signals)
-
-            # Compute KL divergence between previous and current snapshot
-            # Measures information flow — how much the market "learned" between snapshots.
-            await self._compute_and_store_kl(sport, old_snapshot, new_snapshot)
-
-        # ── CLV bridge: capture closing lines for games about to start ──
-        # If a game starts within the next snapshot interval, this is the
-        # last snapshot we'll get before tip-off — treat it as the closing line.
-        await self._capture_closing_lines(sport, new_snapshot)
-
-        self._snapshots[sport] = new_snapshot
+        Delegates to tools.lines.process_snapshot.process_snapshot_inner.
+        """
+        await _process_snapshot_inner_impl(self, sport, new_snapshot)
 
     async def _capture_closing_lines(self, sport: str, snapshot: dict) -> None:
         """Push closing lines to CLV tracker for games about to start.
 
-        Delegates to tools.lines.snapshot_ops.capture_closing_lines.
+        Delegates to tools.lines.process_snapshot.capture_closing_lines
+        (which forwards to tools.lines.snapshot_ops.capture_closing_lines).
         """
-        try:
-            # Import CLV tracker from the global API state
-            from api import clv_tracker as _clv
-            if _clv is None:
-                return
-
-            await _capture_closing_lines_impl(
-                _clv,
-                sport=sport,
-                snapshot=snapshot,
-                closing_window_seconds=default_closing_window(SNAPSHOT_INTERVAL),
-            )
-        except ImportError:
-            pass  # CLV tracker not available
-        except Exception as e:
-            logger.warning(f"CLV closing line capture failed for {sport}: {e}")
+        await _capture_closing_lines_impl(self, sport, snapshot)
 
     async def _record_movement(self, sport: str, movement: dict) -> None:
-        """Record a line movement (delegates to tools.lines.snapshot_ops)."""
-        await _record_movement_impl(self._db, self._alerts, sport=sport, movement=movement)
+        """Record a line movement (delegates to tools.lines.process_snapshot)."""
+        await _record_movement_core(self, sport, movement)
 
     async def _compute_and_store_kl(self, sport: str, old_snapshot: dict, new_snapshot: dict) -> None:
         """Compute KL divergence between two consecutive snapshots per game.
@@ -636,42 +499,12 @@ class LineMonitor:
     async def _evaluate_movement(self, sport: str, movement: dict, snapshot: dict) -> None:
         """Evaluate whether a line movement creates a +EV opportunity.
 
-        Delegates to tools.lines.edge_report.MovementEvaluator.
+        Delegates to tools.lines.process_snapshot.evaluate_movement; the
+        evaluator itself (tools.lines.edge_report.MovementEvaluator) is
+        lazily constructed against this monitor's DB connection.
         """
-        if self._evaluator is None:
-
-            async def _insert_ev(row: dict) -> None:
-                from tools.db_utils import execute_with_retry, commit_with_retry
-                await execute_with_retry(
-                    self._db,
-                    "INSERT INTO ev_opportunities "
-                    "(detected_at, sport, game_id, team, market, bookmaker, "
-                    "american_odds, implied_probability, estimated_true_prob, "
-                    "edge, expected_value, kelly_fraction, steam_only) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        row["detected_at"], row["sport"], row["game_id"],
-                        row["team"], row["market"], row["bookmaker"],
-                        row["american_odds"], row["implied_probability"],
-                        row["estimated_true_prob"], row["edge"],
-                        row["expected_value"], row["kelly_fraction"],
-                        row["steam_only"],
-                    ),
-                    max_retries=5,
-                    operation=f"ev_opportunity insert {row['sport']}",
-                )
-                await commit_with_retry(
-                    self._db, max_retries=5,
-                    operation=f"ev_opportunity commit {row['sport']}",
-                )
-
-            self._evaluator = MovementEvaluator(
-                insert_ev=_insert_ev,
-                get_edge_report=lambda s: self._latest_edge_reports.get(s),
-            )
-
-        await self._evaluator.evaluate(
-            sport, movement, snapshot,
+        await _evaluate_movement_impl(
+            self, sport, movement, snapshot,
             require_model_agreement=REQUIRE_MODEL_AGREEMENT,
         )
 
@@ -683,9 +516,10 @@ class LineMonitor:
         Delegates to tools.lines.edge_report.check_model_agreement using the
         latest cached edge report for this sport.
         """
-        report = self._latest_edge_reports.get(sport) or {}
-        game_id = str(game.get("id", ""))
-        return check_model_agreement(report=report, game_id=game_id, team=team, market=market)
+        return _model_agreement_impl(
+            self, sport=sport, game=game, team=team, market=market,
+            direction=direction,
+        )
 
     async def get_recent_movements(self, sport: Optional[str] = None, limit: int = 20) -> list[dict]:
         """Get recent line movements from the database."""
