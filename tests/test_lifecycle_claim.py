@@ -473,3 +473,55 @@ def test_invalid_current_key_seal_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setenv("CALLISTO_SEAL_KEY", "22" * 32)
     with pytest.raises(ClaimError, match="integrity seal"):
         store.load(c.claim_id)
+
+
+def test_public_digest_never_substitutes_for_hmac(tmp_path, monkeypatch):
+    # Attack: with CALLISTO_SEAL_KEY configured, tamper with a keyed entry
+    # and replace its HMAC seal with the public sha256 of the seal payload.
+    # The public digest must never substitute for an HMAC under a key ring.
+    import hashlib as _h
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Digest downgrade claim")
+    c.seal_preregistration(p)
+    store.save(c)
+
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    lines = path.read_text().splitlines()
+    tail = json.loads(lines[-1])
+    forged = dict(tail, state=dict(tail["state"], confidence=0.99))
+    forged["seal"] = _h.sha256(
+        ClaimStore._entry_seal_payload(
+            forged["prev"], forged["saved_at"], forged["state"]
+        ).encode("utf-8")).hexdigest()
+    lines[-1] = json.dumps(forged, sort_keys=True, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ClaimError, match="integrity seal"):
+        store.load(c.claim_id)
+    # Even the legacy opt-in must not resurrect a forged keyed entry.
+    with pytest.raises(ClaimError, match="integrity seal"):
+        store.load(c.claim_id, allow_legacy_unsigned=True)
+
+
+def test_unkeyed_journal_still_loads_without_key_configured(tmp_path, monkeypatch):
+    # Control: a journal written and read entirely without keys keeps its
+    # unkeyed SHA-256 seals valid — the legacy boundary is deployment-wide,
+    # never a per-entry fallback inside a keyed history.
+    monkeypatch.delenv("CALLISTO_SEAL_KEY", raising=False)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Unkeyed control claim")
+    c.seal_preregistration(p)
+    store.save(c)
+    loaded = store.load(c.claim_id)
+    assert loaded is not None and loaded.to_dict() == c.to_dict()
+
+    # But once a key IS configured, those same public-digest seals fail
+    # closed rather than silently bridging into a keyed deployment.
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "cd" * 32)
+    with pytest.raises(ClaimError, match="integrity seal"):
+        store.load(c.claim_id)

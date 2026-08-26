@@ -406,19 +406,29 @@ class ClaimStore:
     @staticmethod
     def _verify_entry_seal(seal: str, prev_hash: str, saved_at: str,
                            state: dict) -> bool:
-        """Verify a journal entry seal per the project key-rotation policy.
+        """Verify a journal entry seal per the claim-journal key policy.
 
-        Mirrors AGPSession.verify_seal(): accept the current-key digest first,
-        then any CALLISTO_SEAL_KEY_OLD rotation key, then the legacy unkeyed
-        SHA-256 digest. Constant-time comparison throughout; fail closed.
+        When any seal key is configured (CALLISTO_SEAL_KEY or
+        CALLISTO_SEAL_KEY_OLD), the seal MUST be a valid HMAC-SHA256 under
+        that key ring — the legacy public SHA-256 digest is NEVER accepted,
+        so an attacker cannot downgrade a keyed entry to a forgeable public
+        digest. Only when NO key is configured (unkeyed deployments) does the
+        public SHA-256 digest verify, matching how such journals were written.
+        Constant-time comparison throughout; fail closed.
+
+        Legacy policy (exact boundary): the unkeyed SHA-256 digest is valid
+        ONLY for journals produced entirely without keys (no CALLISTO_SEAL_KEY
+        set at write time and none configured at load time). A keyed or mixed
+        history never accepts a public digest, so substitution of an HMAC with
+        sha256(_entry_seal_payload(...)) fails closed.
         """
         payload = ClaimStore._entry_seal_payload(prev_hash, saved_at, state)
         encoded = payload.encode("utf-8")
-        candidates = [_seal_digest(payload),
-                      hashlib.sha256(encoded).hexdigest()]
-        for key in _seal_keys():
-            candidates.append(
-                hmac.new(key, encoded, hashlib.sha256).hexdigest())
+        candidates = [hmac.new(key, encoded, hashlib.sha256).hexdigest()
+                      for key in _seal_keys()]
+        if not candidates:
+            # Unkeyed deployment: seals were written as plain SHA-256.
+            candidates.append(hashlib.sha256(encoded).hexdigest())
         return any(hmac.compare_digest(c, seal) for c in candidates)
 
     def save(self, claim: Claim) -> int:
@@ -451,10 +461,10 @@ class ClaimStore:
         or missing per-entry integrity seal raises ClaimError — a tampered or
         flattering history never silently loads.
 
-        Key rotation: seals are verified per the project policy (current key,
-        then CALLISTO_SEAL_KEY_OLD rotation keys, then the legacy unkeyed
-        digest) so journals survive key rotation fail-closed against invalid
-        seals.
+        Key policy: when any seal key is configured, seals must verify as
+        HMAC-SHA256 under the current key or a CALLISTO_SEAL_KEY_OLD rotation
+        key; the public SHA-256 digest is never accepted for keyed entries.
+        Only wholly unkeyed deployments accept plain SHA-256 seals.
 
         Legacy policy (explicit, opt-in): wholly unsigned journals written
         before per-entry sealing carry only ``prev`` pointers; their FIRST/
