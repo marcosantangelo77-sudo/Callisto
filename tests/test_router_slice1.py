@@ -20,6 +20,7 @@ MOVED_MODULES = (
     INFROUTER / "local_only.py",
     INFROUTER / "state.py",
     INFROUTER / "empirical.py",
+    INFROUTER / "http.py",
 )
 
 # Names that must remain importable from inference_router (and be the
