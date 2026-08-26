@@ -74,9 +74,19 @@ class ResolutionRecord:
 
     @property
     def counted(self) -> bool:
-        """Only hit/miss/stale count toward track record; void = malformed
-        resolution, excluded (but recorded)."""
+        """hit/miss/stale are all recorded in the track record; void =
+        malformed resolution, excluded entirely (but still visible here)."""
         return self.outcome in ("hit", "miss", "stale")
+
+    @property
+    def resolved(self) -> bool:
+        """True only for GENUINE resolutions (hit/miss). A 'stale' record
+        means the descendant NEVER produced an outcome — it is unresolved,
+        can never provide sample-size credit, Wilson/hit-rate support, a
+        lift-eligibility count, or a source-class/provenance upgrade. It
+        may only contribute to the staleness PENALTY on an otherwise
+        well-resolved parent."""
+        return self.outcome in ("hit", "miss")
 
 
 def _rec_from_mapping(m) -> dict:
@@ -124,40 +134,64 @@ INHERITED_CEILING_BY_SOURCE: dict[str, float] = {
 
 SPECULATIVE_CAP = TIER_PROBABLE_MIN   # just under PROBABLE band start
 
+# Documented maximum staleness demotion: penalty = rate * stale_fraction,
+# with stale_fraction in [0, 1], so the penalty can never fall below -rate.
+STALENESS_PENALTY_RATE = 0.20
+
+
+def stale_penalty_rate() -> float:
+    """The documented staleness-penalty rate, for display-only consumers
+    (tools/why.py, tools/calibration/instrument.py) that must describe the
+    applied penalty without recomputing the math themselves."""
+    return STALENESS_PENALTY_RATE
+
+
 
 @dataclass
 class TrackRecord:
-    n_resolved: int          # hit + miss (+ stale, weighted)
+    n_resolved: int          # genuine resolutions ONLY (hit + miss)
     n_hit: int
     n_stale: int
     brier: Optional[float]   # mean of {1: miss/hit} + quantile skill losses
-    stale_fraction: float
+    stale_fraction: float    # n_stale / (n_resolved + n_stale), bounded [0, 1]
 
     @property
     def hit_rate(self) -> float:
-        scored = max(1, self.n_resolved - self.n_stale)
-        return self.n_hit / scored if (self.n_resolved - self.n_stale) > 0 else 0.0
+        """Hits over GENUINE resolutions. Stales are already excluded from
+        n_resolved, so subtracting them again could push this above 1.0 —
+        an impossible hit rate that would flatter the parent."""
+        return self.n_hit / self.n_resolved if self.n_resolved > 0 else 0.0
 
 
 def summarize_track_record(records: Iterable[ResolutionRecord]) -> TrackRecord:
+    """Track record built from RESOLVED descendants only. Stale records are
+    never evidence: they appear solely in n_stale / stale_fraction so they
+    can penalize a parent that already has enough genuine resolutions.
+    stale_fraction is stale / (genuine_resolved + stale) — always within
+    [0, 1], so the staleness penalty can never exceed its documented −0.20
+    maximum no matter how many stales pile up."""
     recs = [r for r in normalize_records(records) if r.counted]
-    n = len(recs)
-    hits = sum(1 for r in recs if r.outcome == "hit")
+    ev = [r for r in recs if r.resolved]
+    n = len(ev)
+    hits = sum(1 for r in ev if r.outcome == "hit")
     stales = sum(1 for r in recs if r.outcome == "stale")
     # Brier-style mean error: binary outcomes contribute 0/1; quantile
     # descendants contribute their normalized pinball score (regardless of
     # hit/miss label — a sharp forecast that "hit" still earns calibration
     # credit; a sloppy one that "missed" is scored by how sloppy).
     errs: list[float] = []
-    for r in recs:
+    for r in ev:
         if r.pinball_score is not None:
             errs.append(min(1.0, max(0.0, float(r.pinball_score))))
         elif r.outcome == "hit":
             errs.append(0.0)
-        else:  # miss or stale — unresolved by its own deadline
+        else:  # miss — genuinely resolved, and wrong
             errs.append(1.0)
     brier = sum(errs) / len(errs) if errs else None
-    stale_frac = (stales / n) if n else 0.0
+    # Bounded fraction over ALL counted records (genuine + stale), so the
+    # staleness penalty stays inside its documented [-0.20, 0] range even
+    # when stales vastly outnumber resolutions (e.g. 5 hits + 100 stales).
+    stale_frac = (stales / (stales + n)) if (stales + n) else 0.0
     return TrackRecord(n_resolved=n, n_hit=hits, n_stale=stales,
                        brier=brier, stale_fraction=stale_frac)
 
@@ -196,22 +230,31 @@ def inherited_ceiling(records: Iterable) -> float:
       - few/poor resolutions           -> cap rises slowly, bounded by
         Wilson lower bound on the descendant hit rate AND their Brier-style
         error, AND the best provenance-assigned source class among them;
-      - staleness penalizes (mirrors cascade demotion);
+      - STALE descendants are unresolved and earn NOTHING: they do not
+        count toward MIN_RESOLVED_FOR_LIFT, Wilson support, calibration,
+        or the provenance cap — they only demote via the staleness
+        penalty once the parent has enough genuine resolutions;
       - the result NEVER exceeds the evidence-implied ceiling — this
         function only lowers scores, never raises them.
     """
-    recs = [r for r in normalize_records(records) if r.counted]
-    n = len(recs)
+    counted_recs = [r for r in normalize_records(records) if r.counted]
+    # Only GENUINE resolutions (hit/miss) are evidence. A stale descendant
+    # never answered its question: it cannot buy sample size, accuracy
+    # support, calibration credit, or a provenance upgrade — no second
+    # route from stale data into lift exists.
+    evidence = [r for r in counted_recs if r.resolved]
+    n = len(evidence)
 
-    # Hard floor case: nothing has ever resolved under this claim.
+    # Hard floor case: not enough genuine resolutions under this claim.
     if n < MIN_RESOLVED_FOR_LIFT:
         return SPECULATIVE_CAP
 
-    tr = summarize_track_record(recs)
+    tr = summarize_track_record(counted_recs)
 
-    # Accuracy the data supports (95% one-sided Wilson LB on hit rate).
-    support = wilson_lower_bound(tr.n_hit, tr.n_resolved - tr.n_stale) \
-        if tr.n_resolved - tr.n_stale > 0 else 0.0
+    # Accuracy the data supports (95% one-sided Wilson LB on hit rate),
+    # over resolved descendants only.
+    support = wilson_lower_bound(tr.n_hit, tr.n_resolved) \
+        if tr.n_resolved > 0 else 0.0
 
     # Calibration quality: map mean error to a 0..1 factor.
     # brier 0.00 -> 1.0 ; 0.25 -> 0.5 ; >= 0.50 -> 0.0
@@ -227,7 +270,7 @@ def inherited_ceiling(records: Iterable) -> float:
 
     # Staleness penalty: unresolved-at-deadline sub-claims demote the parent
     # (mirrors existing cascade demotion). Up to −0.20.
-    penalty = 0.20 * tr.stale_fraction
+    penalty = STALENESS_PENALTY_RATE * tr.stale_fraction
     score = base - penalty
 
     # Provenance gate: inherited confidence is capped by the BEST source
@@ -235,7 +278,7 @@ def inherited_ceiling(records: Iterable) -> float:
     # a parent VERIFIED even in aggregate.
     best_class = "INFERRED"
     rank = {"INFERRED": 0, "SIGNAL": 1, "SECONDARY": 2, "PRIMARY": 3}
-    for r in recs:
+    for r in evidence:
         if rank.get(r.best_source_class, 0) > rank.get(best_class, 0):
             best_class = r.best_source_class
     src_cap = INHERITED_CEILING_BY_SOURCE.get(best_class, SPECULATIVE_CAP)

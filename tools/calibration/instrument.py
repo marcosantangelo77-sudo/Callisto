@@ -266,11 +266,19 @@ def replay_parent_chain(*, best_leaf_confidence: float,
         "run(): proposed = max(answered leaf confidence)"))
     clamped, tier = clamp_parent_confidence(cur, descendant_resolutions or [])
     ceil_ = inherited_ceiling_for_display(descendant_resolutions or [])
+    # Precise terminology: a stale record is unresolved-at-deadline, not a
+    # resolved descendant. Report resolved and stale separately so an
+    # operator can never read n_descendants as genuine evidence.
+    from tools.research_program import normalize_records
+    _recs = normalize_records(descendant_resolutions or [])
+    n_genuine = sum(1 for r in _recs if r.resolved)
+    n_stale = sum(1 for r in _recs if r.outcome == "stale")
     tr.steps.append(AttributionStep(
         "inheritance_clamp", cur, clamped,
         f"tools/research_program.clamp_parent_confidence -> "
         f"inherited_ceiling={ceil_} (tier {tier}); "
-        f"n_descendants={len(descendant_resolutions or [])}"))
+        f"n_descendants={len(_recs)} "
+        f"(n_resolved_genuine={n_genuine}; n_stale_not_evidence={n_stale})"))
     cur = clamped
     objs = list(objections)
     blocking = next((o for o in objs

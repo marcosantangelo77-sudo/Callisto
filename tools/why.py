@@ -39,6 +39,9 @@ from tools.research_program import (
     INHERITED_CEILING_BY_SOURCE,
     MIN_RESOLVED_FOR_LIFT,
     inherited_ceiling,
+    normalize_records,
+    stale_penalty_rate,
+    summarize_track_record,
 )
 
 SCHEMA_VERSION = 1
@@ -229,6 +232,11 @@ class WhyExplanation:
     rejected: list[RejectedWhy] = field(default_factory=list)
     steps: list[StepWhy] = field(default_factory=list)
     largest_constraint: str = ""
+    # Stale descendants are unresolved-at-deadline records — never resolved
+    # evidence. Reported separately so the explanation cannot imply they
+    # counted toward the inheritance lift.
+    stale_descendants: int = 0
+    stale_penalty_applied: float = 0.0
 
     # ── machine-readable ────────────────────────────────────────────────
 
@@ -250,6 +258,8 @@ class WhyExplanation:
             "rejected_at_ingestion": [r.to_dict() for r in self.rejected],
             "score_walk": [s.to_dict() for s in self.steps],
             "largest_constraint": self.largest_constraint,
+            "stale_descendants": self.stale_descendants,
+            "stale_penalty_applied": self.stale_penalty_applied,
         }
 
     # ── plain language ──────────────────────────────────────────────────
@@ -279,6 +289,11 @@ class WhyExplanation:
                 lines.append(f"  - {c.kind}: ceiling {val}. {c.detail}{star}")
         else:
             lines.append("  - no structural ceiling applied.")
+        if self.stale_descendants:
+            lines.append(
+                f"  - staleness: {self.stale_descendants} stale descendant "
+                "record(s) are NOT resolved evidence; they apply a "
+                f"-{self.stale_penalty_applied:.2f} staleness penalty only.")
         lines.append("")
 
         lines.append(f"ADVERSARY ({len(self.objections)} objection(s), "
@@ -422,12 +437,30 @@ def explain_result(result, ledger=None,
             detail=("evidence requirements unmet on some leaf: "
                     + "; ".join(reasons))))
     inh_cap = inherited_ceiling(descendant_resolutions or [])
-    n_resolved = len(list(descendant_resolutions or []))
+    # Only genuine resolutions (hit/miss) count toward the lift gate — a
+    # stale record is unresolved-at-deadline and must not be reported as
+    # resolved evidence (mirrors tools/research_program.inherited_ceiling).
+    _recs = normalize_records(descendant_resolutions or [])
+    n_resolved = sum(1 for r in _recs if r.resolved)
+    n_stale = sum(1 for r in _recs if r.outcome == "stale")
+    # The staleness demotion this record set applies, recomputed FROM THE
+    # SAME RULES as tools/research_program (display-only; never feeds back
+    # into scoring): bounded rate x stale/(resolved + stale), so it can
+    # never exceed its documented -0.20 maximum.
+    self_stale_penalty = 0.0
+    if n_stale and n_resolved >= MIN_RESOLVED_FOR_LIFT:
+        tr_ = summarize_track_record(_recs)
+        self_stale_penalty = round(
+            stale_penalty_rate() * tr_.stale_fraction, 4)
     inh_detail = (f"{n_resolved} resolved descendant(s) feed the inheritance "
                   f"rule; ceiling from their track record is {inh_cap:.2f}")
     if n_resolved < MIN_RESOLVED_FOR_LIFT:
         inh_detail += (f"; fewer than {MIN_RESOLVED_FOR_LIFT} resolutions ever "
                        "caps the parent at SPECULATIVE regardless of eloquence")
+    if n_stale:
+        inh_detail += (f"; {n_stale} stale descendant(s) are NOT resolved "
+                       "evidence — they only demote via the staleness penalty "
+                       f"(-{self_stale_penalty:.2f})")
     ceilings.append(CeilingWhy(kind="inheritance", value=inh_cap,
                                detail=inh_detail))
 
@@ -512,8 +545,7 @@ def explain_result(result, ledger=None,
         # The inheritance rule with too-few resolutions is a STRUCTURAL cap
         # ("SPECULATIVE forever"), binding even when a lower numeric cap
         # happens to sit beneath it.
-        n_res = len(list(descendant_resolutions or []))
-        if n_res < MIN_RESOLVED_FOR_LIFT:
+        if n_resolved < MIN_RESOLVED_FOR_LIFT:
             next(c for c in ceilings if c.kind == "inheritance").binding = True
 
     largest = _largest_constraint(steps, ceilings, veto_text,
@@ -534,6 +566,8 @@ def explain_result(result, ledger=None,
         rejected=rejected,
         steps=steps,
         largest_constraint=largest,
+        stale_descendants=n_stale,
+        stale_penalty_applied=self_stale_penalty,
     )
 
 
@@ -666,6 +700,9 @@ def explain_stored(payload: dict) -> WhyExplanation:
                          if k in StepWhy.__dataclass_fields__})
                for s in payload.get("score_walk", [])],
         largest_constraint=payload.get("largest_constraint", ""),
+        stale_descendants=int(payload.get("stale_descendants", 0)),
+        stale_penalty_applied=float(
+            payload.get("stale_penalty_applied", 0.0)),
     )
     expl = _expl
     if not expl.largest_constraint:
