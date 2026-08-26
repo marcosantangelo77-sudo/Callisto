@@ -976,3 +976,95 @@ def test_fix_durability_error_is_deliberate_documented_outcome(runs_dir):
         runs_dir / "x.json", "final-file fsync failed: boom")
     assert exc.path == runs_dir / "x.json"
     assert str(runs_dir / "x.json") in str(exc)
+
+
+# ── review repros: provenance + post-commit race ──────────────────────────
+
+def test_fix_byte_identical_foreign_final_is_indeterminate_not_success(
+        runs_dir, monkeypatch):
+    """Review repro 1: os.replace raises while an external writer places
+    BYTE-IDENTICAL JSON at the destination. Byte equality proves content,
+    not provenance — the outcome must be PublicationIndeterminate, never
+    ordinary success, and no duplicate may be published."""
+    import os as _os
+    stamp = "20260824T070000+0000".replace(":", "").replace("-", "")
+    qhash = hashlib.sha256(b"twin probe").hexdigest()[:8]
+    twin_path = runs_dir / f"{stamp}_{qhash}_000.json"
+
+    real_fsync = _os.fsync
+    state = {"fsyncs": 0, "replaced": False}
+
+    def racing_fsync(fd):
+        result = real_fsync(fd)
+        state["fsyncs"] += 1
+        if state["fsyncs"] == 2:
+            # External writer places a BYTE-IDENTICAL payload at the final
+            # path (same dict → same json.dumps(indent=2) bytes).
+            twin_path.write_text(
+                json.dumps(_record(q="twin probe"), indent=2),
+                encoding="utf-8")
+        return result
+
+    def failing_replace(src, dst):
+        if str(dst).endswith(".json") and not state["replaced"]:
+            state["replaced"] = True
+            raise OSError("simulated replace failure")
+        return real_replace(src, dst)
+
+    real_replace = _os.replace
+    monkeypatch.setattr(_os, "fsync", racing_fsync)
+    monkeypatch.setattr(_os, "replace", failing_replace)
+
+    with pytest.raises(callisto.PublicationIndeterminate) as ei:
+        callisto._persist_run(_record(q="twin probe"))
+    assert ei.value.path == twin_path
+    # No duplicate of our payload was published under another seq.
+    ours = [p for p in runs_dir.glob("*.json") if p != twin_path]
+    assert not ours
+
+
+def test_fix_external_race_after_commit_is_not_normal_success(
+        runs_dir, monkeypatch):
+    """Review repro 2: after a SUCCESSFUL replace, an external writer
+    replaces the final with malformed foreign content before verification.
+    The outcome must NOT be a normal success for content this call did not
+    publish-and-observe; it must surface a publication indeterminate."""
+    import os as _os
+    stamp = "20260824T070000+0000".replace(":", "").replace("-", "")
+    qhash = hashlib.sha256(b"postcommit race").hexdigest()[:8]
+    final_path = runs_dir / f"{stamp}_{qhash}_000.json"
+
+    real_replace = _os.replace
+    state = {"replaced": False}
+
+    def spy_replace(src, dst):
+        out = real_replace(src, dst)
+        if str(dst).endswith(".json") and not state["replaced"]:
+            state["replaced"] = True
+            # External writer displaces the final AFTER the atomic swap
+            # but BEFORE _persist_run re-verifies it.
+            final_path.write_text("{corrupted by external writer!",
+                                  encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(_os, "replace", spy_replace)
+
+    with pytest.raises(callisto.PublicationIndeterminate) as ei:
+        callisto._persist_run(_record(q="postcommit race"))
+    assert ei.value.path == final_path
+    # Foreign content left untouched; no duplicate published.
+    assert final_path.read_text(encoding="utf-8") == \
+        "{corrupted by external writer!"
+    assert not [p for p in runs_dir.glob("*.json") if p != final_path]
+
+
+def test_fix_valid_publication_still_ordinary_success(runs_dir):
+    """Control: with no injected faults, publication succeeds normally and
+    the record round-trips through legacy lookup."""
+    p = callisto._persist_run(_record(q="happy path probe"))
+    rec, loaded = callisto._load_run(p.stem)
+    assert rec is not None and rec["question"] == "happy path probe"
+    assert loaded == p
+    assert len(list(runs_dir.glob("*.json"))) == 1
+    assert not list(runs_dir.glob("*.tmp"))
+    assert not list(runs_dir.glob("*.resv"))

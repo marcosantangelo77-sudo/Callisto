@@ -57,6 +57,16 @@ def _runs_dir() -> Path:
             root = state_dir() / "runs"
         except Exception:
             root = Path.home() / ".local" / "state" / "callisto" / "runs"
+    # First-run durability caveat (documented, deliberate): when this call
+    # CREATES the runs directory, the parent-directory entry for the new
+    # dir itself is not fsynced here — many filesystems reject directory
+    # fsync of a not-yet-durable parent, and adding a best-effort parent
+    # fsync would shift the fsync sequencing contract relied upon by
+    # persistence tests and the reservation/tmp fsync ordering. Until some
+    # later successful directory fsync (every publication performs one),
+    # crash durability of the freshly created runs dir itself is
+    # unconfirmed. Every *record* published inside it still gets full
+    # file+directory fsync treatment in _persist_run.
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -140,7 +150,11 @@ def _persist_run(record: dict) -> Path:
         partial or empty final JSON. This call is the point of no return.
 
       POST (failures here are NEVER retried as new records):
-        4. fsync the published file, then the directory, for durability.
+        4. Re-verify the final still holds this call's payload — an
+           external writer may have displaced it between the rename and
+           verification. A displaced/foreign final is reported as
+           `PublicationIndeterminate`, never a normal success.
+        5. fsync the published file, then the directory, for durability.
            If either durability confirmation fails, we deliberately raise
            `DurabilityError` naming the already-published path instead of
            retrying: retrying would observe `_000.json` visible on disk and
@@ -232,21 +246,35 @@ def _persist_run(record: dict) -> Path:
                     # cleanup (finally below) the same slot is reusable.
                     action = "retry"
             # 4. COMMIT: atomic content publication (point of no return).
+            #    Capture the tmp inode BEFORE the attempt: on success (or
+            #    success-then-error) the tmp name is gone, and inode
+            #    identity between final and that captured stat is the only
+            #    sound proof this call published.
+            tmp_stat = None
             if action is None:
+                try:
+                    tmp_stat = os.stat(tmp)
+                except OSError:
+                    tmp_stat = None
                 try:
                     os.replace(tmp, path)
                     published_path = path
                 except OSError:
                     # os.replace gives no guarantee whether the swap
-                    # happened before the error. Only byte-exact evidence
-                    # of THIS call's payload counts as publication;
-                    # anything else at `path` is foreign content that must
-                    # be neither overwritten nor returned as ours.
-                    verdict = _published_payload_matches(path, payload)
-                    if verdict is True:
-                        # Byte-exact match: this call demonstrably published.
+                    # happened before the error. Only provable provenance
+                    # counts as publication: the destination inode being
+                    # THIS call's tmp inode (`_final_is_our_tmp`). A present,
+                    # byte-identical foreign file proves content, not
+                    # provenance, and is classified indeterminate; an
+                    # absent destination is a clean retryable failure.
+                    # Byte equality alone proves content, not provenance:
+                    # an external writer may have placed byte-identical
+                    # JSON at the destination. Only the inode of OUR tmp
+                    # file appearing at `path` proves THIS call published.
+                    if _final_is_our_tmp(path, tmp_stat):
                         published_path = path
-                    elif verdict is False and not path.exists():
+                    elif (not path.exists()
+                          and _published_payload_matches(path, payload) is False):
                         # Destination provably absent: nothing was published
                         # and no foreign content exists. Pre-commit failure:
                         # cleanup removes the tmp and the slot may be retried.
@@ -255,7 +283,7 @@ def _persist_run(record: dict) -> Path:
                         detail = (
                             "os.replace failed and the destination could "
                             "not be read for verification"
-                            if verdict is None else
+                            if not path.exists() else
                             "os.replace failed and the destination holds "
                             "different (foreign/malformed) content")
                         error = PublicationIndeterminate(detail, path)
@@ -264,6 +292,18 @@ def _persist_run(record: dict) -> Path:
             #    a new record from here: `_000.json` is visible, so any
             #    retry loop would republish the same logical run as
             #    `_001.json`.
+            if action is None:
+                # Post-commit external race: an external writer may have
+                # replaced the final between our rename and this check.
+                # A final that no longer holds THIS call's payload must
+                # never yield a normal success — report indeterminate
+                # (the record was published but has since been displaced).
+                if not _published_payload_matches(path, payload):
+                    error = PublicationIndeterminate(
+                        "the published final no longer matches this "
+                        "call's intended payload (external race after "
+                        "commit)", path)
+                    action = "fail"
             if action is None:
                 problems = []
                 try:
@@ -349,6 +389,28 @@ def _persist_run(record: dict) -> Path:
     raise RuntimeError(
         "could not allocate a unique run id after 1000 attempts "
         f"for stamp {stamp}")
+
+
+def _final_is_our_tmp(path: Path, tmp_stat: "os.stat_result | None") -> bool:
+    """Provenance check: does `path` now reference the SAME inode as the
+    `.tmp` file this call created, per `tmp_stat` (captured BEFORE the
+    replace attempt)?
+
+    Byte-exact content matching is NOT proof of provenance — an external
+    writer can place byte-identical JSON at the destination after a failed
+    rename. os.replace() makes the destination name point at the source
+    inode, so identity of st_ino/st_dev proves THIS call published. If the
+    tmp could not be stat'ed before the attempt, provenance cannot be
+    established and the caller must treat publication as indeterminate.
+    """
+    if tmp_stat is None:
+        return False
+    try:
+        fstat = os.stat(path)
+    except OSError:
+        return False
+    return (fstat.st_ino, fstat.st_dev) == \
+        (tmp_stat.st_ino, tmp_stat.st_dev)
 
 
 def _published_payload_matches(path: Path, payload: bytes) -> bool | None:
