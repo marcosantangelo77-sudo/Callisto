@@ -37,6 +37,7 @@ from tools.lines.ws_stream import (
     start_ws as _start_ws_impl,
     stop_ws_and_incremental as _stop_ws_and_incremental_impl,
 )
+from tools.lines.movement import KLDivergenceTracker
 
 logger = logging.getLogger("callisto.line_monitor")
 
@@ -49,8 +50,9 @@ def init_state(
 ) -> None:
     """Set every attribute the original LineMonitor.__init__ established.
 
-    Extracted verbatim so behavior is byte-identical; the facade's
-    __init__ just forwards here.
+    Extracted so LineMonitor.__init__ is a one-line forward. Also wires
+    the KL tracker and lazy movement evaluator (historically set on the
+    facade after this call).
     """
     monitor.db_path = db_path
     monitor._db = None
@@ -88,6 +90,10 @@ def init_state(
     # Unix seconds of the last /odds/updated poll, per sport. Used as
     # the `since` cursor on the next call.
     monitor._last_incremental_since = {}
+
+    # Extracted collaborators (historically set on LineMonitor.__init__).
+    monitor._kl_tracker = KLDivergenceTracker(db_path=db_path)
+    monitor._evaluator = None
 
 
 async def initialize(monitor, *, ensure_prop_schema) -> None:

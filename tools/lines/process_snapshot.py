@@ -14,7 +14,8 @@ contract:
     mon._evaluator              MovementEvaluator | None (lazy)
     mon._in_flight_db           True while a DB write is in progress
     mon._snapshot_lock          asyncio.Lock guarding _process_snapshot
-    mon._process_snapshot       shared entry point (lock wrapper)
+    mon._process_snapshot       shared entry point (lock wrapper in
+                                process_snapshot() below)
 
 No network calls happen at import time and nothing here touches paper-trade
 signal statuses or live betting paths.
@@ -153,6 +154,23 @@ async def fallback_snapshot(monitor, sport: str) -> None:
 
 
 # ── Snapshot processing pipeline ----------------------------------------------
+
+async def process_snapshot(monitor, sport: str, new_snapshot: dict) -> None:
+    """Lock + in-flight guard around snapshot processing.
+
+    Acquires ``monitor._snapshot_lock`` so ``wait_for_drain()`` can
+    guarantee no in-flight snapshot is running, then sets
+    ``_in_flight_db`` for legacy callers. Dispatches to
+    ``monitor._process_snapshot_inner`` so tests can override the inner
+    method on the facade instance.
+    """
+    async with monitor._snapshot_lock:
+        monitor._in_flight_db = True
+        try:
+            await monitor._process_snapshot_inner(sport, new_snapshot)
+        finally:
+            monitor._in_flight_db = False
+
 
 async def process_snapshot_inner(monitor, sport: str, new_snapshot: dict) -> None:
     """Inner snapshot processing — separated so _in_flight_db wraps all DB ops.

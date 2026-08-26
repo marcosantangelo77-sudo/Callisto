@@ -84,6 +84,7 @@ from tools.lines.process_snapshot import (
     evaluate_movement as _evaluate_movement_impl,
     fallback_snapshot as _fallback_snapshot_impl,
     model_agreement as _model_agreement_impl,
+    process_snapshot as _process_snapshot_locked,
     process_snapshot_inner as _process_snapshot_inner_impl,
     record_movement as _record_movement_core,
     snapshot_sport as _snapshot_sport_impl,
@@ -169,9 +170,6 @@ class LineMonitor:
 
     def __init__(self, db_path: str = DB_PATH):
         init_state(self, db_path, monitored_sports=MONITORED_SPORTS)
-        # Extracted collaborators (tools/lines/)
-        self._kl_tracker = KLDivergenceTracker(db_path=db_path)
-        self._evaluator: Optional[MovementEvaluator] = None
 
     async def initialize(self) -> None:
         """Create tables for odds snapshots and alerts.
@@ -319,14 +317,10 @@ class LineMonitor:
         in-flight snapshot is running. Sets _in_flight_db for legacy callers.
 
         Shared pipeline used by both primary (Odds API) and fallback
-        (DraftKings scraper) snapshot paths.
+        (DraftKings scraper) snapshot paths. Lock + in-flight guard live
+        in tools.lines.process_snapshot.process_snapshot.
         """
-        async with self._snapshot_lock:
-            self._in_flight_db = True
-            try:
-                await self._process_snapshot_inner(sport, new_snapshot)
-            finally:
-                self._in_flight_db = False
+        await _process_snapshot_locked(self, sport, new_snapshot)
 
     async def _process_snapshot_inner(self, sport: str, new_snapshot: dict) -> None:
         """Inner snapshot processing — separated so _in_flight_db wraps all DB ops.
