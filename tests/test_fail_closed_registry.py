@@ -47,9 +47,10 @@ def test_no_uvicorn_wildcard_bind(rel):
 
 
 def test_paper_trade_signal_statuses_is_paper_only():
-    src = _read("tools/backtest.py")
+    # Canonical frozenset lives in tools/signals/paper.py after the extract.
+    src = _read("tools/signals/paper.py")
     m = re.search(r"_PAPER_TRADE_SIGNAL_STATUSES\s*=\s*(.+)", src)
-    assert m, "_PAPER_TRADE_SIGNAL_STATUSES assignment missing from tools/backtest.py"
+    assert m, "_PAPER_TRADE_SIGNAL_STATUSES assignment missing from tools/signals/paper.py"
     literal = m.group(1).strip()
     assert literal == 'frozenset({"paper_trading"})', (
         f"unexpected literal: {literal!r}"
@@ -63,6 +64,9 @@ def test_paper_trade_signal_statuses_is_paper_only():
     }
     assert values == {"paper_trading"}
     assert "live" not in values
+    bt = _read("tools/backtest.py")
+    assert "from tools.signals.paper import _PAPER_TRADE_SIGNAL_STATUSES" in bt
+    assert re.search(r"_PAPER_TRADE_SIGNAL_STATUSES\s*=\s*frozenset", bt) is None
 
 
 # ---------------------------------------------------------------------------
