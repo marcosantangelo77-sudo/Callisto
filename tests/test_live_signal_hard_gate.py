@@ -65,7 +65,11 @@ def test_source_gate_does_not_accept_live():
     import inspect
 
     src = inspect.getsource(BacktestEngine.generate_paper_trade_signal)
-    assert "_PAPER_TRADE_SIGNAL_STATUSES" in src
+    # Gate moved to tools.signals.paper.reject_non_paper (extraction slice 1)
+    assert "reject_non_paper" in src
+    # Belt-and-braces: the canonical frozenset must still be wired through
+    from tools.backtest import _PAPER_TRADE_SIGNAL_STATUSES
+    assert _PAPER_TRADE_SIGNAL_STATUSES == frozenset({"paper_trading"})
     assert 'h["status"] != "paper_trading"' not in src
     assert '"paper_trading", "live"' not in src
     assert '"live", "paper_trading"' not in src
