@@ -52,6 +52,18 @@ def test_inference_source_cites_measured_latency():
     )
 
 
+def test_supervisor_launches_hermes_as_agent_runtime_not_transport():
+    """Hermes is the OX agent runtime (supervisor) — never a completion
+    transport inside either inference plane."""
+    from pathlib import Path
+
+    sup = Path(inference.__file__).parent / "scripts" / "nous-supervisor.sh"
+    if sup.is_file():
+        src = sup.read_text(encoding="utf-8")
+        assert "-m \"$MODEL\"" in src
+        assert "stealth/ox-alpha" in src
+
+
 def test_kernel_ladder_does_not_use_hermes_cli_transport():
     """MODEL_LADDER entries and complete() must not name hermes_cli as a
     kernel transport. (ProviderRouter may still mention hermes_cli.)"""
