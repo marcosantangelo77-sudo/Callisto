@@ -2473,8 +2473,56 @@ async def simulate_poisson_game(req: PoissonRequest):
 # Pre-LIVE bankroll Monte Carlo simulation endpoint
 # feat/bankroll-montecarlo-sim (2026-04-22)
 # =========================================================================
-_PORTFOLIO_SIM_CACHE: dict[tuple, tuple[float, dict]] = {}
+from collections import OrderedDict
+
+# Debounce window for /health health-file disk writes (seconds).
+_HEALTH_FILE_DEBOUNCE_SECONDS = 10.0
+_HEALTH_FILE_LAST_WRITE_TS = 0.0
+
+_PORTFOLIO_SIM_CACHE: "OrderedDict[tuple, tuple[float, dict]]" = OrderedDict()
+_PORTFOLIO_SIM_CACHE_MAX_ENTRIES = 32
 _PORTFOLIO_SIM_CACHE_TTL = 3600  # 1 hour
+
+
+def _get_portfolio_sim_cache(key):
+    """Return (ts, payload) for a fresh cache entry, else None. LRU-refreshing."""
+    entry = _PORTFOLIO_SIM_CACHE.get(key)
+    if entry is None:
+        return None
+    ts, payload = entry
+    import time as _time
+    now = _time.time()
+    if (now - ts) >= _PORTFOLIO_SIM_CACHE_TTL:
+        # Expired: drop it so it cannot accumulate.
+        _PORTFOLIO_SIM_CACHE.pop(key, None)
+        return None
+    # Refresh recency for LRU eviction.
+    _PORTFOLIO_SIM_CACHE.move_to_end(key)
+    return entry
+
+
+def _store_portfolio_sim_cache(key, payload):
+    """Insert into the bounded LRU cache; evict oldest past 32 entries."""
+    while len(_PORTFOLIO_SIM_CACHE) >= _PORTFOLIO_SIM_CACHE_MAX_ENTRIES:
+        _PORTFOLIO_SIM_CACHE.popitem(last=False)
+    _PORTFOLIO_SIM_CACHE[key] = payload
+
+
+async def _fetch_live_hypothesis_ids(db_path: str) -> list:
+    """Read LIVE hypothesis IDs from sqlite off the event loop."""
+    import sqlite3 as _sqlite3
+
+    def _read():
+        conn = _sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT hypothesis_id FROM hypotheses WHERE status = 'live'"
+            ).fetchall()
+        finally:
+            conn.close()
+        return [r[0] for r in rows]
+
+    return await asyncio.to_thread(_read)
 
 
 @app.get("/simulate/portfolio", dependencies=[Depends(require_admin_or_loopback)])
@@ -2505,16 +2553,8 @@ async def simulate_portfolio_endpoint(
     horizon_days = max(1, min(int(horizon_days), 365))
 
     if all_live:
-        import sqlite3 as _sqlite3
         db = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
-        conn = _sqlite3.connect(db)
-        try:
-            rows = conn.execute(
-                "SELECT hypothesis_id FROM hypotheses WHERE status = 'live'"
-            ).fetchall()
-        finally:
-            conn.close()
-        ids = [r[0] for r in rows]
+        ids = await _fetch_live_hypothesis_ids(db)
     else:
         ids = [x.strip() for x in hypothesis_ids.split(",") if x.strip()]
 
@@ -2526,11 +2566,12 @@ async def simulate_portfolio_endpoint(
 
     cache_key = (tuple(sorted(ids)), n_sims, horizon_days, float(starting_bankroll), float(kelly_fraction))
     now = _time.time()
-    cached = _PORTFOLIO_SIM_CACHE.get(cache_key)
-    if cached and (now - cached[0]) < _PORTFOLIO_SIM_CACHE_TTL:
+    cached = _get_portfolio_sim_cache(cache_key)
+    if cached:
         return {"cached": True, "age_seconds": round(now - cached[0], 1), **cached[1]}
 
-    result = simulate_portfolio(
+    result = await asyncio.to_thread(
+        simulate_portfolio,
         hypothesis_ids=ids,
         n_sims=n_sims,
         horizon_days=horizon_days,
@@ -2538,7 +2579,7 @@ async def simulate_portfolio_endpoint(
         kelly_fraction=kelly_fraction,
     )
     payload = result.to_dict(include_paths=False)
-    _PORTFOLIO_SIM_CACHE[cache_key] = (now, payload)
+    _store_portfolio_sim_cache(cache_key, (now, payload))
     return {"cached": False, **payload}
 
 
@@ -3708,9 +3749,20 @@ async def health_check():
     See `reasons[]` in the response for every specific cause.
     """
     report = await _build_health_report()
-    # Write health file for sentinel to read if HTTP is down
+    # Write health file for sentinel to read if HTTP is down.
+    # Debounced: watchdog polls this endpoint frequently, so skip the disk
+    # write if the last successful write was < 10s ago. Offload to a thread
+    # so sync JSON IO never blocks the event loop. Never fail /health here.
+    global _HEALTH_FILE_LAST_WRITE_TS
     if system_health:
-        system_health.write_health_file()
+        import time as _time
+        now_ts = _time.time()
+        if (now_ts - _HEALTH_FILE_LAST_WRITE_TS) >= _HEALTH_FILE_DEBOUNCE_SECONDS:
+            try:
+                await asyncio.to_thread(system_health.write_health_file)
+                _HEALTH_FILE_LAST_WRITE_TS = now_ts
+            except Exception:
+                pass
     return report
 
 
@@ -3793,10 +3845,12 @@ async def health_detailed():
         per_sport = {}
         for sp in sports:
             try:
-                r = detect_regime(sp)
+                r = await asyncio.to_thread(detect_regime, sp)
+                multiplier = await asyncio.to_thread(current_regime_multiplier, sp)
+                safe = await asyncio.to_thread(regime_safe_for_trading, sp)
                 per_sport[sp] = {
-                    "multiplier": current_regime_multiplier(sp),
-                    "safe_for_trading": regime_safe_for_trading(sp),
+                    "multiplier": multiplier,
+                    "safe_for_trading": safe,
                     "season_phase": r.season_phase,
                     "confidence": round(r.confidence, 3),
                     "noisy_window": r.noisy_window,
@@ -3847,13 +3901,14 @@ async def regime_sizer_multipliers():
     out: dict = {}
     for sp in sports:
         try:
-            r = detect_regime(sp)
-            raw = float(current_regime_multiplier(sp))
-            applied = _clamped_regime_multiplier(sp)
+            r = await asyncio.to_thread(detect_regime, sp)
+            raw = float(await asyncio.to_thread(current_regime_multiplier, sp))
+            applied = float(await asyncio.to_thread(_clamped_regime_multiplier, sp))
+            safe = await asyncio.to_thread(regime_safe_for_trading, sp)
             out[sp] = {
                 "raw_multiplier": round(raw, 3),
                 "applied_multiplier": round(applied, 3),
-                "safe_for_trading": regime_safe_for_trading(sp),
+                "safe_for_trading": safe,
                 "season_phase": r.season_phase,
                 "days_into_phase": r.days_into_phase,
                 "phase_length_days": r.phase_length_days,
