@@ -2003,19 +2003,19 @@ async def resolve_bet(bet_id: int, resolution: BetResolution):
     return await clv_tracker.resolve_bet(bet_id, resolution.result, resolution.payout)
 
 
-@app.get("/bets/clv-report")
+@app.get("/bets/clv-report", dependencies=[Depends(require_admin_or_loopback)])
 async def clv_report(sport: Optional[str] = None):
     """Get CLV performance report — THE metric for edge measurement."""
     return await clv_tracker.get_clv_report(sport=sport)
 
 
-@app.get("/bets")
+@app.get("/bets", dependencies=[Depends(require_admin_or_loopback)])
 async def list_bets(result: Optional[str] = None, sport: Optional[str] = None, limit: int = 50):
     """Get bet history."""
     return await clv_tracker.get_all_bets(result=result, sport=sport, limit=limit)
 
 
-@app.get("/bets/bankroll")
+@app.get("/bets/bankroll", dependencies=[Depends(require_admin_or_loopback)])
 async def bankroll_history(limit: int = 50):
     """Get bankroll balance history."""
     return await clv_tracker.get_bankroll_history(limit=limit)
@@ -2375,7 +2375,7 @@ async def line_analysis_endpoint(sport: str):
     }
 
 
-@app.get("/bets/clv-forecast")
+@app.get("/bets/clv-forecast", dependencies=[Depends(require_admin_or_loopback)])
 async def clv_forecast(sport: Optional[str] = None):
     """Forecast pre-game CLV for all pending bets using closing line prediction.
 
@@ -3152,14 +3152,17 @@ async def create_hypothesis(req: HypothesisCreate):
     return {"hypothesis_id": hid}
 
 
-@app.get("/hypothesis")
+@app.get("/hypothesis", dependencies=[Depends(require_admin_or_loopback)])
 async def list_hypotheses(status: Optional[str] = None):
     """List all hypotheses, optionally filtered by status."""
     hypotheses = await hypothesis_manager.list_hypotheses(status=status)
     return {"count": len(hypotheses), "hypotheses": hypotheses}
 
 
-@app.get("/hypothesis/{hypothesis_id}")
+@app.get(
+    "/hypothesis/{hypothesis_id}",
+    dependencies=[Depends(require_admin_or_loopback)],
+)
 async def get_hypothesis(hypothesis_id: str):
     """Get hypothesis details."""
     h = await hypothesis_manager.get_hypothesis(hypothesis_id)
@@ -3168,13 +3171,19 @@ async def get_hypothesis(hypothesis_id: str):
     return h
 
 
-@app.get("/hypothesis/{hypothesis_id}/report")
+@app.get(
+    "/hypothesis/{hypothesis_id}/report",
+    dependencies=[Depends(require_admin_or_loopback)],
+)
 async def hypothesis_report(hypothesis_id: str):
     """Full statistical report across all stages."""
     return await hypothesis_manager.get_hypothesis_report(hypothesis_id)
 
 
-@app.get("/hypothesis/{hypothesis_id}/significance")
+@app.get(
+    "/hypothesis/{hypothesis_id}/significance",
+    dependencies=[Depends(require_admin_or_loopback)],
+)
 async def hypothesis_significance(hypothesis_id: str, stage: str = "backtest"):
     """Run significance tests on a hypothesis at a given stage."""
     return await hypothesis_manager.evaluate_significance(hypothesis_id, stage)
@@ -3928,7 +3937,7 @@ async def reset_claude_rate_limit():
     return reset_rate_limit()
 
 
-@app.get("/system/full-status")
+@app.get("/system/full-status", dependencies=[Depends(require_admin_or_loopback)])
 async def full_system_status():
     """
     Single endpoint for checking everything from your phone.
@@ -4473,7 +4482,7 @@ async def _get_executor():
     return _executor
 
 
-@app.get("/executor/status")
+@app.get("/executor/status", dependencies=[Depends(require_admin_or_loopback)])
 async def executor_status():
     """Get bet executor status."""
     ex = await _get_executor()
