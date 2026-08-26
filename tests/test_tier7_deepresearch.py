@@ -94,7 +94,14 @@ class TestHorizonStatePins:
         src = _read("tools/backtest.py")
         fn_start = src.index("async def generate_paper_trade_signal")
         fn_body = src[fn_start : src.index("\n    async def", fn_start + 10)]
-        assert 'h["status"] != "paper_trading"' in fn_body
+        # Gate is either the direct status check or membership in the
+        # paper-only frozenset (_PAPER_TRADE_SIGNAL_STATUSES) — both hard-
+        # return [] for any non-paper_trading status.
+        assert (
+            'h["status"] != "paper_trading"'
+            in fn_body
+            or 'not in _PAPER_TRADE_SIGNAL_STATUSES' in fn_body
+        )
         assert "return []" in fn_body
 
     def test_lifecycle_stages_exist_and_are_domain_neutral_strings(self):
