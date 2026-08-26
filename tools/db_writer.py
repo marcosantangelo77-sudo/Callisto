@@ -97,6 +97,9 @@ class WriteCoordinator:
         self._db: Optional[aiosqlite.Connection] = None
         self._queue: Optional[asyncio.Queue] = None
         self._task: Optional[asyncio.Task] = None
+        # Producers currently blocked in _submit() awaiting Queue.put() on a
+        # full queue. stop() must settle these too, not only queued entries.
+        self._pending_puts: set[asyncio.Future] = set()
         self._running = False
         # Counters for /health visibility.
         self._writes_total = 0
@@ -141,10 +144,12 @@ class WriteCoordinator:
             return
         self._running = False
         # Send a shutdown sentinel so the drain loop exits cleanly after
-        # processing any already-queued work.
+        # processing any already-queued work. The sentinel enqueue is bounded
+        # by the CALLER'S drain timeout — never a hard-coded delay — so a full
+        # queue under backpressure cannot inflate stop() beyond the budget.
         if self._queue is not None:
             try:
-                await asyncio.wait_for(self._queue.put((_SHUTDOWN, None, None, None)), timeout=2.0)
+                await asyncio.wait_for(self._queue.put((_SHUTDOWN, None, None, None)), timeout=drain_timeout_s)
             except asyncio.TimeoutError:
                 pass
         if self._task is not None:
@@ -157,6 +162,45 @@ class WriteCoordinator:
                     await self._task
                 except (asyncio.CancelledError, Exception):
                     pass
+        # Settle producers blocked in _submit() on Queue.put(): cancel their
+        # admission tasks first (so nothing can enqueue after the sweep below)
+        # and let each blocked producer observe CancelledError. Any put that
+        # had already landed before cancellation took effect is picked up by
+        # the queue sweep that follows.
+        if self._pending_puts:
+            for put_fut in list(self._pending_puts):
+                put_fut.cancel()
+            await asyncio.gather(*list(self._pending_puts), return_exceptions=True)
+            self._pending_puts.clear()
+        # Forced-shutdown settlement: if the drain task was cancelled/timed
+        # out, anything still sitting in the queue has a future that no one
+        # will ever resolve — its caller would hang forever after stop().
+        # Sweep the queue and settle every remaining entry with an explicit
+        # shutdown error (never silently swallowed: callers see it raise).
+        if self._queue is not None:
+            shutdown_err = RuntimeError(
+                "WriteCoordinator shut down before this write could be applied"
+            )
+            abandoned = 0
+            while True:
+                try:
+                    item = self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if isinstance(item, tuple) and len(item) >= 4:
+                    fut = item[3]
+                    if isinstance(fut, asyncio.Future) and not fut.done():
+                        fut.set_exception(shutdown_err)
+                        abandoned += 1
+            if abandoned:
+                logger.warning(
+                    f"WriteCoordinator stopped with {abandoned} queued op(s) "
+                    f"unsettled; rejected each caller with a shutdown error"
+                )
+            self._writes_failed += abandoned
+        # Clear lifecycle references so a later start() is a clean restart.
+        self._task = None
+        self._queue = None
         if self._db is not None:
             try:
                 await self._db.close()
@@ -198,9 +242,27 @@ class WriteCoordinator:
             )
         loop = asyncio.get_event_loop()
         fut: asyncio.Future = loop.create_future()
-        await self._queue.put((op_type, sql, payload, fut))
+        # Admission runs as a tracked task so stop() can settle producers
+        # blocked here on a full queue (cancel them) and so no entry can
+        # land in the queue after stop()'s settlement sweep.
+        put_task = loop.create_task(self._queue.put((op_type, sql, payload, fut)))
+        self._pending_puts.add(put_task)
+        try:
+            # Raises CancelledError if stop() settles this producer during
+            # shutdown; otherwise admission completed normally.
+            await put_task
+        except asyncio.CancelledError:
+            if self._running:
+                # Cancellation came from outside (the producer itself), not
+                # from stop(); don't mask it.
+                raise
+            raise RuntimeError(
+                "WriteCoordinator shut down before this write could be admitted"
+            )
+        finally:
+            self._pending_puts.discard(put_task)
         # Track high-water mark for visibility.
-        qsize = self._queue.qsize()
+        qsize = self._queue.qsize() if self._queue is not None else 0
         if qsize > self._queue_high_water:
             self._queue_high_water = qsize
         return await fut
