@@ -495,3 +495,20 @@ def test_r2_devig_retail_keeps_power_identity():
     assert "error" not in ref
     assert a == pytest.approx(ref["fair_probabilities"][0], abs=1e-12)
     assert b == pytest.approx(ref["fair_probabilities"][1], abs=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Blocker R2-5 — boost_evaluator.devig_additive must share the gate too
+# ---------------------------------------------------------------------------
+
+def test_r2_boost_devig_additive_rejects_unsanitary_books():
+    """devig_additive previously bypassed the market-sanity gate and returned
+    confident (0.5, 0.5) for zero-hold books; it now raises like the rest."""
+    from tools.boost_evaluator import devig_additive
+    with pytest.raises(ValueError):
+        devig_additive(-100, -100)      # zero hold
+    with pytest.raises(ValueError):
+        devig_additive(-200, -200)      # ~33% hold
+    # Healthy control keeps its additive semantics.
+    a, b = devig_additive(-110, -110)
+    assert abs(a + b - 1.0) < 1e-6

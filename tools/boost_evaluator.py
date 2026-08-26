@@ -17,12 +17,11 @@ import logging
 from typing import Optional
 
 from tools.odds_api import calculate_implied_probability, calculate_ev
+from tools.devig import additive_devig
 from tools.math_utils import (
     no_vig_price,
-    calculate_overround,
     calculate_hold,
     american_to_decimal,
-    american_to_implied,
     fair_prob_to_american,
 )
 
@@ -48,19 +47,18 @@ def devig_additive(side_a_odds: int, side_b_odds: int) -> tuple[float, float]:
     Devig using the additive method — subtract equal vig from each side.
 
     Less accurate than multiplicative for lopsided markets but simpler.
-    Uses math_utils.calculate_overround for the overround calculation.
+
+    Routes through the shared market-sanity gate (tools.devig.additive_devig):
+    invalid American odds or an unsanitary book (zero-hold, crossed, or
+    excessive overround) raises ValueError instead of returning
+    trustworthy-looking probabilities.
+
+    Returns (fair_prob_a, fair_prob_b).
     """
     dec_a = american_to_decimal(side_a_odds)
     dec_b = american_to_decimal(side_b_odds)
-    overround = calculate_overround([dec_a, dec_b])
-    half_vig = overround / 2
-
-    implied_a = american_to_implied(side_a_odds)
-    implied_b = american_to_implied(side_b_odds)
-
-    fair_a = implied_a - half_vig
-    fair_b = implied_b - half_vig
-    return round(max(0, fair_a), 6), round(max(0, fair_b), 6)
+    fair_a, fair_b = additive_devig([dec_a, dec_b])
+    return round(fair_a, 6), round(fair_b, 6)
 
 
 def devig_multibook(book_odds: list[dict]) -> float:
