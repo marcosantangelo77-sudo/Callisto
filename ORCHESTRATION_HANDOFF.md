@@ -242,17 +242,14 @@ Do not merge WIP checkpoints or candidates with an unresolved reviewer BLOCK.
 
 ## First actions for the successor
 
-1. Check OX liveness: `python3 scripts/oxa_status.py` (exit 0), then the
-   fleet-health sqlite snippet above plus `pgrep -af hermes` and tmux
-   sessions `ox-loop-refresh`, `ox-autopromote`, `ox-eventloop`.
-2. When a wave-1 worker **exits**, independently review its SHA (focused
-   tests + adversarial repros). Do not merge on OX testimony. Recycle the
-   slot onto the next wave-2 prompt.
-3. Do not merge `dbcc751` / `1ec9778` until that independent review is done.
-   Keep market `ae2cf32` blocked and Claim `399fb44` parked.
-4. Product direction is in `findings/production_ready_2026-08-26.md`. Do not
-   start a website/SaaS effort until Stage A (fail-closed) lands.
-5. Preserve this file and all pushed branches when changing orchestrators.
+1. Count Hermes: must be **6** on this VM (`CALLISTO_HERMES_MAX_PROCS=6`).
+   If under 6, launch the next disjoint audit prompt immediately. Do not ask.
+2. Zombies: `OX_DONE.md` + pushed commit + `waiting on model` / idle `$` →
+   interrupt that PTY (Ctrl-C / SIGINT on that PID only). Never `pkill hermes`.
+3. On exit: independent focused tests + adversarial greps, then queue squash.
+   Do not merge on OX testimony.
+4. Do not widen `generate_paper_trade_signal` to `live`.
+5. Preserve this file and all pushed branches.
 
 ## Security and hygiene reminders
 
