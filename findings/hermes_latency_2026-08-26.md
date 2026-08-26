@@ -21,3 +21,7 @@ The historical ~14s figure holds as the median, but tail latency is high
 (one run at ~31s). Any Stage C "one inference plane" design that assumes
 sub-10s hermes fork latency is not supported by this data; budget for
 p50 ≈ 12s and max ≥ 30s.
+
+Cross-link: this measurement is pinned in `inference.py`'s TWO INFERENCE
+PLANES comment block; `tests/test_inference_planes.py` fails if either
+plane or the citation is deleted.

@@ -7,11 +7,14 @@ Callisto intentionally has TWO routing planes:
 2. CLI/pipeline plane: ``ProviderRouter`` backed by ``config/providers.yaml``
    via ``load_providers_config``.
 
-Canonical *future* routing is ProviderRouter, but the kernel may only be
-pointed at it after measuring Hermes CLI fork latency (~14s historically).
-Until then both planes are live. These tests pin that both exist; if one
-is deleted without a deliberate migration, they fail.
+Measured Hermes CLI fork latency is p50 ≈ 11.9s / max ≈ 31.4s
+(findings/hermes_latency_2026-08-26.md), so unifying onto ProviderRouter
+this wave is forbidden. These tests pin that both planes exist, that the
+measurement citation stays in inference.py, and that neither
+MODEL_LADDER nor complete() names ``hermes_cli`` as a kernel transport.
 """
+
+import inspect
 
 import inference
 
@@ -33,3 +36,37 @@ def test_providers_config_exists_with_at_least_one_provider():
     providers = cfg.get("providers")
     assert isinstance(providers, dict)
     assert len(providers) >= 1
+
+
+def test_inference_source_cites_measured_latency():
+    """The latency pin must survive: deleting the measurement silently
+    would let someone unify on a sub-10s assumption."""
+    src = inspect.getsource(inference)
+    has_p50_pin = ("p50" in src and "11.9" in src) or (
+        "hermes_latency_2026-08-26.md" in src
+    )
+    assert has_p50_pin, (
+        "inference.py lost its measured-latency pin (p50 11.9s / "
+        "findings/hermes_latency_2026-08-26.md); re-add it before touching "
+        "the two-plane structure"
+    )
+
+
+def test_kernel_ladder_does_not_use_hermes_cli_transport():
+    """MODEL_LADDER entries and complete() must not name hermes_cli as a
+    kernel transport. (ProviderRouter may still mention hermes_cli.)"""
+    src = inspect.getsource(inference)
+    ladder_start = src.index("MODEL_LADDER")
+    ladder_end = src.index("}", ladder_start)
+    kernel_src = src[ladder_start:ladder_end]
+    assert "hermes_cli" not in kernel_src, "MODEL_LADDER mentions hermes_cli"
+
+    complete_fn = getattr(inference, "complete", None)
+    if complete_fn is not None:
+        complete_src = inspect.getsource(complete_fn)
+        assert "hermes_cli" not in complete_src, "complete() mentions hermes_cli"
+    for name in dir(inference):
+        obj = getattr(inference, name)
+        if callable(obj) and (name.startswith("complete") or "complete_sync" in name):
+            s = inspect.getsource(obj)
+            assert "hermes_cli" not in s, f"{name} mentions hermes_cli"

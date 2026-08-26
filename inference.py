@@ -166,10 +166,12 @@ QWEN36_MODEL = "qwen36"
 # 2. ProviderRouter + config/providers.yaml (loaded via load_providers_config)
 #    is the CLI/pipeline plane: endpoint-pool routing used by callisto.py.
 #
-# Canonical FUTURE routing is ProviderRouter; a later PR may point the kernel
-# at it — but only after measuring Hermes CLI fork latency (~14s historically).
-# Until that lands, both planes coexist intentionally. See
-# tests/test_inference_planes.py, which pins this duplication.
+# MEASURED (findings/hermes_latency_2026-08-26.md): Hermes CLI one-shot fork
+# latency p50 = 11.9s, max = 31.4s (n=3). That is far above any per-call
+# kernel budget, so UNIFYING MODEL_LADDER onto ProviderRouter (or pointing
+# inference.complete() at it) is FORBIDDEN this wave. Both planes stay.
+# A future unification PR must re-measure and beat p50 << 12s first. See
+# tests/test_inference_planes.py, which pins both planes and this pin.
 MODEL_LADDER: dict[str, list[dict]] = {
     "reasoning": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
