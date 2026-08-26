@@ -181,8 +181,14 @@ class Preregistration:
     def verify_seal(self) -> bool:
         if not self.seal_hash or not self.sealed_at:
             return False
-        expected = _seal_digest(_canonical({
-            **self._payload(), "sealed_at": self.sealed_at}))
+        # Fail-closed, mirroring AGPSession.verify_seal(): a set-but-invalid
+        # CALLISTO_SEAL_KEY makes _seal_digest raise AGPSealKeyInvalid; that
+        # must surface as False (unverifiable), never as an exception.
+        try:
+            expected = _seal_digest(_canonical({
+                **self._payload(), "sealed_at": self.sealed_at}))
+        except Exception:
+            return False
         return hmac.compare_digest(expected, self.seal_hash)
 
     def _guard(self) -> None:
