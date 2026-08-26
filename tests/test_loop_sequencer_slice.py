@@ -129,17 +129,22 @@ class TestSequencerExtraction:
 
     def test_loop_iterates_sequencer_tables(self):
         import ast
+        from pathlib import Path
 
         from tools.loop import sequencer
 
-        src = open(auto.__file__).read()
+        # _loop moved to CycleLoopMixin in tools.auto.research (auto-slice3);
+        # keep the pin on the implementation, not the facade class body.
+        src = (Path(auto.__file__).parent / "auto" / "research.py").read_text(
+            encoding="utf-8"
+        )
         tree = ast.parse(src)
-        rl = next(
+        mixin = next(
             n for n in ast.walk(tree)
-            if isinstance(n, ast.ClassDef) and n.name == "ResearchLoop"
+            if isinstance(n, ast.ClassDef) and n.name == "CycleLoopMixin"
         )
         loop_fn = next(
-            n for n in rl.body
+            n for n in mixin.body
             if isinstance(n, ast.AsyncFunctionDef) and n.name == "_loop"
         )
         text = ast.unparse(loop_fn)
@@ -152,7 +157,7 @@ class TestSequencerExtraction:
             ), f"_loop still hardcodes _phase_{name}"
 
     def test_loop_phase_methods_untouched_elsewhere(self):
-        # The phase method bodies still live in autonomous.py.
+        # Facade still defines the live-execute gate and thin _phase_* wrappers.
         src = open(auto.__file__).read()
         assert "async def _phase_live_execute" in src
         assert "async def _phase_paper_trade" in src
