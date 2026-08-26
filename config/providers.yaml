@@ -129,6 +129,23 @@ providers:
     cost_per_1k_input: 0.0
     cost_per_1k_output: 0.0
 
+  openrouter_ox:
+    # Same Ox Alpha weights over OpenRouter HTTP (no Hermes process fork).
+    # Key lives in OPENROUTER_API_KEY — never in this file. Local GPU still
+    # wins when healthy; this is the click-swap API path and the overnight
+    # grunt when the 5060 Ti is dark.
+    backend: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    model: stealth/ox-alpha
+    context_tokens: 128000
+    temperature: 0.2
+    structured_output: false
+    tool_calls: true
+    max_concurrency: 4
+    cost_per_1k_input: 0.0
+    cost_per_1k_output: 0.0
+
 routing:
   # task_class -> one endpoint (exact) or a LIST of endpoints in failover
   # order. Canonical classes below; call-site legacy names are bridged in
@@ -145,14 +162,14 @@ routing:
   # of a fresh CLI fork (~12s startup) per completion. Measured on this
   # machine, 2026-08-23: CLI per-call 11.4-20.3s vs proxy warm calls 1.2-2.4s.
   task_classes:
-    hypothesis_generation: [gpu1, frontier, ox_alpha_proxy, ox_alpha]
-    research_synthesis: [gpu1, frontier, ox_alpha_proxy, ox_alpha]
-    screening: [gpu1_fast, ox_alpha_proxy, ox_alpha]
-    extraction: [gpu1_fast, ox_alpha_proxy, ox_alpha]
-    classification: [gpu1_fast, ox_alpha_proxy, ox_alpha]
-    backtest_interpretation: [gpu1, frontier, ox_alpha_proxy, ox_alpha]
-    promotion_judgment: [frontier, gpu1, ox_alpha_proxy, ox_alpha]   # frontier preferred; falls back LOCAL if budget spent/unset
-    adversarial_review: [frontier, gpu1, ox_alpha_proxy, ox_alpha]
+    hypothesis_generation: [gpu1, openrouter_ox, frontier, ox_alpha_proxy, ox_alpha]
+    research_synthesis: [gpu1, openrouter_ox, frontier, ox_alpha_proxy, ox_alpha]
+    screening: [gpu1_fast, openrouter_ox, ox_alpha_proxy, ox_alpha]
+    extraction: [gpu1_fast, openrouter_ox, ox_alpha_proxy, ox_alpha]
+    classification: [gpu1_fast, openrouter_ox, ox_alpha_proxy, ox_alpha]
+    backtest_interpretation: [gpu1, openrouter_ox, frontier, ox_alpha_proxy, ox_alpha]
+    promotion_judgment: [frontier, gpu1, openrouter_ox, ox_alpha_proxy, ox_alpha]   # frontier preferred; falls back LOCAL if budget spent/unset
+    adversarial_review: [frontier, gpu1, openrouter_ox, ox_alpha_proxy, ox_alpha]
 
   escalation:
     # Cheap checks first. Escalation is the design, not an apology.
