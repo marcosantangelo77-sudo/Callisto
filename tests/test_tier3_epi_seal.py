@@ -5,7 +5,8 @@ Pins:
    (legacy sessions must keep verifying).
 2. With CALLISTO_SEAL_KEY set, new seals are HMAC and a DB-write attacker
    who recomputes the public SHA-256 CANNOT forge a passing seal.
-3. Legacy unkeyed seals still verify under the keyed regime.
+3. Legacy unkeyed seals are REJECTED once CALLISTO_SEAL_KEY is set
+   (fail-closed: a DB-write attacker cannot forge via public SHA-256).
 4. Rotation via CALLISTO_SEAL_KEY_OLD.
 5. Tamper detection still fires in all regimes.
 """
@@ -112,16 +113,19 @@ class TestKeyedSeal:
         finally:
             del os.environ["CALLISTO_SEAL_KEY"]
 
-    def test_legacy_unkeyed_seal_still_verifies_under_keyed_regime(self):
-        """Old rows sealed before keying must not be invalidated when the
-        operator sets CALLISTO_SEAL_KEY."""
+    def test_unkeyed_seal_rejected_under_keyed_regime(self):
+        """A legacy unkeyed SHA-256 seal must NOT pass once the operator sets
+        CALLISTO_SEAL_KEY — otherwise a DB-write attacker could forge a seal
+        by recomputing the public hash without ever knowing the key. This
+        matches tools/memory_epistemics.py, which refuses unkeyed when a key
+        is set."""
         s = _make_session()
         s.seal()  # unkeyed (no env)
         stored = json.dumps(s.to_dict())
         import os
         os.environ["CALLISTO_SEAL_KEY"] = "34" * 32
         try:
-            assert AGPSession.verify_seal(stored) is True
+            assert AGPSession.verify_seal(stored) is False
         finally:
             del os.environ["CALLISTO_SEAL_KEY"]
 
