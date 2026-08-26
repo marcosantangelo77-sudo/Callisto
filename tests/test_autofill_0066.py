@@ -532,11 +532,21 @@ class TestNoAuthCreep:
         assert "_WRITE_METHODS" in API_SOURCE
         assert '{"POST", "PATCH", "PUT", "DELETE"}' in API_SOURCE
         sec = (REPO / "tools" / "api" / "security.py").read_text(encoding="utf-8")
-        assert "method = request.method.upper()" in sec
-        assert 'if method not in {"POST", "PATCH", "PUT", "DELETE"}' in sec
+        sec_tree = ast.parse(sec)
+        gate_fn = None
+        for node in sec_tree.body:
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == (
+                "enforce_default_secure"
+            ):
+                gate_fn = node
+        assert gate_fn is not None, "enforce_default_secure disappeared"
+        gate_src = ast.get_source_segment(sec, gate_fn) or ""
+        assert 'if method not in {"POST", "PATCH", "PUT", "DELETE"}' in gate_src
         # GETs return None (proceed) before any token/loopback check.
-        gate_pos = sec.index('if method not in {"POST", "PATCH", "PUT", "DELETE"}')
-        token_pos = sec.index("admin_token()")
+        gate_pos = gate_src.index(
+            'if method not in {"POST", "PATCH", "PUT", "DELETE"}'
+        )
+        token_pos = gate_src.index("admin_token()")
         assert gate_pos < token_pos
 
     def test_no_bearer_token_read_in_public_handlers(self):
