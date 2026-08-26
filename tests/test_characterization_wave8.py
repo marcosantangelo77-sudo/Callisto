@@ -255,45 +255,48 @@ class TestHealthEndpointsUngated:
 
 
 class TestCallistoSealKeyGate:
+    MODULE = "tools/cli/ask.py"
+
     def test_check_seal_key_exists_on_cli_path(self):
-        src = _read("callisto.py")
+        src = _read(self.MODULE)
         assert re.search(r"^def check_seal_key\(", src, re.M), (
-            "check_seal_key() missing from callisto.py CLI entry module"
+            "check_seal_key() missing from tools/cli/ask.py"
         )
+        assert "check_seal_key" in _read("callisto.py")
 
     def test_check_seal_key_reads_callisto_seal_key(self):
-        body = _function_body(_read("callisto.py"), "check_seal_key")
+        body = _function_body(_read(self.MODULE), "check_seal_key")
         assert "CALLISTO_SEAL_KEY" in body
 
     def test_check_seal_key_rejects_unset_key(self):
-        body = _function_body(_read("callisto.py"), "check_seal_key")
+        body = _function_body(_read(self.MODULE), "check_seal_key")
         assert "if not raw:" in body or "not raw" in body, (
             "unset key must fail closed"
         )
         assert "return False" in body
 
     def test_check_seal_key_validates_hex(self):
-        body = _function_body(_read("callisto.py"), "check_seal_key")
+        body = _function_body(_read(self.MODULE), "check_seal_key")
         assert "fromhex" in body, "key must be hex-validated"
         assert re.search(r"except\s+ValueError", body), (
             "non-hex key must be caught and refused"
         )
 
     def test_check_seal_key_returns_bool_true_on_success(self):
-        body = _function_body(_read("callisto.py"), "check_seal_key")
+        body = _function_body(_read(self.MODULE), "check_seal_key")
         assert re.search(r"return True\s*$", body, re.M)
 
     def test_ask_command_invokes_check_seal_key_first(self):
-        body = _function_body(_read("callisto.py"), "_cmd_ask")
-        assert "check_seal_key()" in body, "_cmd_ask bypasses the seal-key gate"
+        body = _function_body(_read(self.MODULE), "cmd_ask")
+        assert "check_seal_key()" in body, "cmd_ask bypasses the seal-key gate"
         gate_idx = body.find("check_seal_key()")
         load_idx = body.find("_load_router")
         assert load_idx == -1 or gate_idx < load_idx, (
-            "_cmd_ask loads the router before validating CALLISTO_SEAL_KEY"
+            "cmd_ask loads the router before validating CALLISTO_SEAL_KEY"
         )
 
     def test_check_seal_key_failures_print_fail_prefix(self):
-        body = _function_body(_read("callisto.py"), "check_seal_key")
+        body = _function_body(_read(self.MODULE), "check_seal_key")
         assert body.count('"FAIL:') >= 2, (
             "both failure branches must print actionable FAIL messages"
         )
@@ -306,6 +309,7 @@ class TestCallistoSealKeyGate:
 
 class TestInferenceModelLadder:
     MODULE = "inference.py"
+    KERNEL = "inference_kernel.py"
 
     def test_inference_module_exists_at_repo_root(self):
         assert _exists(self.MODULE), (
@@ -314,14 +318,15 @@ class TestInferenceModelLadder:
 
     def test_model_ladder_is_defined_here(self):
         src = _read(self.MODULE)
-        assert re.search(r"^MODEL_LADDER\s*[:=]", src, re.M), (
-            "MODEL_LADDER neither defined nor re-exported by inference.py"
-        )
+        assert (
+            re.search(r"^MODEL_LADDER\s*[:=]", src, re.M)
+            or ("MODEL_LADDER" in src and "from inference_kernel import" in src)
+        ), "MODEL_LADDER neither defined nor re-exported by inference.py"
 
     def test_model_ladder_is_typed_mapping(self):
-        src = _read(self.MODULE)
+        src = _read(self.KERNEL)
         m = re.search(r"MODEL_LADDER\s*:\s*([^=\n]+)=", src)
-        assert m, "MODEL_LADDER lacks a type annotation"
+        assert m, "MODEL_LADDER lacks a type annotation in inference_kernel.py"
         annotation = m.group(1)
         assert "dict" in annotation.lower()
 
@@ -351,7 +356,7 @@ class TestInferenceModelLadder:
         assert "reasoning" in keys, "reasoning ladder missing"
 
     def test_reasoning_ladder_lookup_fallback(self):
-        src = _read(self.MODULE)
+        src = _read(self.KERNEL)
         assert re.search(
             r'MODEL_LADDER\.get\(\s*task_type[^)]*MODEL_LADDER\["reasoning"\]', src
         ), "unknown task types must fall back to the reasoning ladder"
@@ -403,21 +408,16 @@ class TestDashboardLivePanelsHidden:
         if not _exists(self.PAGE):
             pytest.skip("dashboard index.html removed")
         src = _read(self.PAGE)
-        m = re.search(r'<section[^>]*id="%s"[^>]*>' % re.escape(panel_id), src)
-        assert m, f"{panel_id} section missing from dashboard"
-        tag = m.group(0)
-        assert re.search(r"\bhidden\b", tag), f"{panel_id} lost its hidden attribute"
+        m = re.search(rf'<section[^>]*id="{panel_id}"[^>]*>', src)
+        assert m is None, f"{panel_id} must be deleted from the default dashboard"
 
     @pytest.mark.parametrize("panel_id", LIVE_PANELS)
     def test_no_unhidden_variant_of_panel(self, panel_id):
         if not _exists(self.PAGE):
             pytest.skip("dashboard index.html removed")
         src = _read(self.PAGE)
-        tags = re.findall(r'<section[^>]*id="%s"[^>]*>' % re.escape(panel_id), src)
-        assert tags, f"{panel_id} section missing"
-        assert all(re.search(r"\bhidden\b", t) for t in tags), (
-            f"a duplicate of {panel_id} renders without hidden"
-        )
+        tags = re.findall(rf'<section[^>]*id="{panel_id}"[^>]*>', src)
+        assert not tags, f"{panel_id} still present in dashboard HTML"
 
     def test_dashboard_js_does_not_auto_show_panels_without_query_flag(self):
         js = REPO / "web/dashboard/app.js"

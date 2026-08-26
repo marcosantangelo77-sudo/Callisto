@@ -13,21 +13,21 @@ def _read(*parts: str) -> str:
     return (REPO.joinpath(*parts)).read_text(encoding="utf-8")
 
 
-# 1. callisto.py: seal-key gate before ask does anything expensive
+# 1. CLI seal-key gate before ask does anything expensive
 def test_callisto_has_check_seal_key():
-    src = _read("callisto.py")
+    src = _read("tools", "cli", "ask.py")
     assert "def check_seal_key" in src
+    assert "check_seal_key" in _read("callisto.py")
 
 
 def test_cmd_ask_gates_on_check_seal_key_before_router():
-    src = _read("callisto.py")
-    start = src.index("def _cmd_ask(")
-    # body ends at the next top-level def after _cmd_ask
+    src = _read("tools", "cli", "ask.py")
+    start = src.index("async def cmd_ask(")
     nxt = src.find("\ndef ", start + 1)
     body = src[start:nxt if nxt != -1 else len(src)]
     gate = body.index("check_seal_key()")
     router = body.index("_load_router(")
-    assert gate < router, "_cmd_ask must check seal key before loading router/research"
+    assert gate < router, "cmd_ask must check seal key before loading router/research"
 
 
 # 2. paper trading: only paper_trading is a paper signal status

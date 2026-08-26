@@ -194,18 +194,20 @@ class TestHealthUngated:
 
 
 class TestSealKeyFrontDoor:
+    MODULE = "tools/cli/ask.py"
+
     def test_symbol_present(self):
-        assert "def check_seal_key() -> bool:" in _read("callisto.py")
+        assert "def check_seal_key() -> bool:" in _read(self.MODULE)
 
     def test_blank_after_strip_rejected(self):
-        body = _body(_read("callisto.py"), "check_seal_key")
+        body = _body(_read(self.MODULE), "check_seal_key")
         assert '.strip()' in body, "key must be whitespace-stripped before check"
         idx_strip = body.find(".strip()")
         idx_empty = body.find("if not raw:")
         assert -1 < idx_strip < idx_empty
 
     def test_hex_decode_failure_returns_false(self):
-        body = _body(_read("callisto.py"), "check_seal_key")
+        body = _body(_read(self.MODULE), "check_seal_key")
         try_idx = body.find("bytes.fromhex(raw)")
         assert try_idx != -1
         except_part = body[try_idx:]
@@ -213,13 +215,13 @@ class TestSealKeyFrontDoor:
         assert "return False" in except_part[:400]
 
     def test_success_path_only_after_both_checks(self):
-        body = _body(_read("callisto.py"), "check_seal_key")
+        body = _body(_read(self.MODULE), "check_seal_key")
         assert body.rstrip().endswith("return True"), (
             "True must be the terminal statement after both validations"
         )
 
     def test_gate_wired_into_ask_entrypoint(self):
-        body = _body(_read("callisto.py"), "_cmd_ask")
+        body = _body(_read(self.MODULE), "cmd_ask")
         assert re.search(r"if not check_seal_key\(\):", body)
         ret_idx = body.find("return 2")
         gate_idx = body.find("if not check_seal_key()")
@@ -236,9 +238,11 @@ class TestModelLadderContract:
 
     def test_ladder_referenceable_from_module_namespace(self):
         src = _read(self.MODULE)
-        # Either an assignment or an explicit re-export/import.
         assigned = re.search(r"^MODEL_LADDER\b", src, re.M)
-        imported = re.search(r"from\s+[\w.]+\s+import\s+[^\n]*MODEL_LADDER", src, re.M)
+        imported = (
+            "MODEL_LADDER" in src
+            and ("from inference_kernel import" in src or "import inference_kernel" in src)
+        )
         assert assigned or imported, "MODEL_LADDER unavailable from inference.py"
 
     def test_reasoning_key_pinned_when_literal_dict(self):
@@ -257,7 +261,7 @@ class TestModelLadderContract:
         pytest.skip("MODEL_LADDER not a literal dict on this worktree")
 
     def test_get_fallback_used_for_unknown_task_types(self):
-        src = _read(self.MODULE)
+        src = _read("inference_kernel.py")
         assert re.search(r'MODEL_LADDER\[?"reasoning"?\]|MODEL_LADDER\.get', src)
 
 
@@ -313,15 +317,15 @@ class TestDashboardContainment:
         assert (REPO / self.PAGE).exists()
 
     @pytest.mark.parametrize("pid", LIVE_IDS)
-    def test_hidden_attribute_present(self, pid):
+    def test_live_trading_panels_are_absent(self, pid):
         src = _read(self.PAGE)
-        m = re.search(r'<section[^>]*id="%s"[^>]*>' % pid, src)
-        assert m and re.search(r"\bhidden\b", m.group(0))
+        assert not re.search(r'<section[^>]*id="%s"' % pid, src), (
+            f"{pid} must be deleted from the default dashboard, not hidden"
+        )
 
-    def test_hyps_heading_labels_live(self):
+    def test_hyps_heading_does_not_label_live(self):
         src = _read(self.PAGE)
-        m = re.search(r'id="panel-hyps".*?<h2>(.*?)</h2>', src, re.S)
-        assert m and "LIVE" in m.group(1)
+        assert "LIVE hypotheses" not in src
 
     def test_offline_banner_defaults_hidden_too(self):
         src = _read(self.PAGE)

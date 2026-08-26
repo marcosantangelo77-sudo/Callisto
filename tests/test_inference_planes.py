@@ -55,10 +55,15 @@ def test_inference_source_cites_measured_latency():
 def test_kernel_ladder_does_not_use_hermes_cli_transport():
     """MODEL_LADDER entries and complete() must not name hermes_cli as a
     kernel transport. (ProviderRouter may still mention hermes_cli.)"""
-    src = inspect.getsource(inference)
+    from pathlib import Path
+
+    kernel = Path(inference.__file__).with_name("inference_kernel.py")
+    src = kernel.read_text(encoding="utf-8")
     ladder_start = src.index("MODEL_LADDER")
-    ladder_end = src.index("}", ladder_start)
-    kernel_src = src[ladder_start:ladder_end]
+    # First closing brace of the ladder dict assignment, not an import.
+    assign = src.index("MODEL_LADDER:", ladder_start)
+    ladder_end = src.index("\n\n", assign)
+    kernel_src = src[assign:ladder_end]
     assert "hermes_cli" not in kernel_src, "MODEL_LADDER mentions hermes_cli"
 
     complete_fn = getattr(inference, "complete", None)
