@@ -2271,7 +2271,7 @@ async def health_check():
 @app.get("/health/livez")
 async def health_livez():
     """k8s-style liveness: process is up and responsive. PUBLIC."""
-    return _system_routes.health_livez()
+    return await _system_routes.health_livez()
 
 
 @app.get("/health/readyz")
