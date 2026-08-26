@@ -182,3 +182,52 @@ def build_portfolio_cache_key(
 ):
     """Unique input signature for the LRU result cache."""
     return (tuple(sorted(ids)), n_sims, horizon_days, float(starting_bankroll), float(kelly_fraction))
+
+
+async def simulate_portfolio_endpoint(
+    hypothesis_ids: str = "",
+    n_sims: int = 500,
+    horizon_days: int = 90,
+    starting_bankroll: float = 10000.0,
+    kelly_fraction: float = 0.25,
+    all_live: bool = False,
+):
+    """Run a bankroll Monte Carlo simulation for a portfolio of hypotheses.
+
+    Query params:
+      hypothesis_ids: CSV of hypothesis IDs (ignored if all_live=1)
+      all_live: if true, simulate the full current LIVE roster
+      n_sims: number of paths (capped at 5000)
+      horizon_days: per-path horizon (capped at 365)
+      starting_bankroll: dollar amount each path starts with
+      kelly_fraction: Kelly multiplier (0.25 default = quarter-Kelly)
+
+    Results cached 1hr per unique input signature. The blocking
+    ``simulate_portfolio`` call runs on a worker thread via
+    ``asyncio.to_thread`` so the event loop stays responsive.
+    """
+    import time as _time
+    from tools.bankroll_sim import simulate_portfolio
+
+    ids = await resolve_portfolio_ids(hypothesis_ids=hypothesis_ids, all_live=all_live)
+    n_sims, horizon_days = normalize_portfolio_params(n_sims, horizon_days)
+
+    cache_key = build_portfolio_cache_key(
+        ids, n_sims, horizon_days, starting_bankroll, kelly_fraction
+    )
+    now = _time.time()
+    cached = _get_portfolio_sim_cache(cache_key)
+    if cached:
+        return {"cached": True, "age_seconds": round(now - cached[0], 1), **cached[1]}
+
+    result = await asyncio.to_thread(
+        simulate_portfolio,
+        hypothesis_ids=ids,
+        n_sims=n_sims,
+        horizon_days=horizon_days,
+        starting_bankroll=starting_bankroll,
+        kelly_fraction=kelly_fraction,
+    )
+    payload = result.to_dict(include_paths=False)
+    _store_portfolio_sim_cache(cache_key, (now, payload))
+    return {"cached": False, **payload}

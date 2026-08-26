@@ -54,6 +54,9 @@ from tools.order_manager import (
 
 load_dotenv()
 
+from tools.api import boost_routes as _boost_routes  # noqa: E402
+from tools.api import task_routes as _task_routes  # noqa: E402
+
 setup_logging()
 logger = logging.getLogger("callisto.api")
 
@@ -1284,13 +1287,12 @@ public_endpoint("POST", "/task")
 public_endpoint("POST", "/context/sync")
 
 
-class TaskSubmission(BaseModel):
-    query: str = Field(..., min_length=1, max_length=20000)
-    priority: int = Field(default=0, ge=-10, le=10)
+class TaskSubmission(_task_routes.TaskSubmission):
+    pass
 
 
-class TaskResponse(BaseModel):
-    task_id: int
+class TaskResponse(_task_routes.TaskResponse):
+    pass
 
 
 @app.post("/task", response_model=TaskResponse)
@@ -1298,90 +1300,17 @@ async def submit_task(
     submission: TaskSubmission,
     _auth: None = Depends(require_admin_or_loopback),
 ):
-    """Submit a query for AGP session processing.
-
-    Writes are auth-gated: without this, a caller could queue arbitrary LLM
-    work against the billing account. GET /task/{id} is already gated, so
-    writes must match.
-
-    Wiki task short-circuit (feat/wiki-in-the-loop, 2026-04-22):
-      Before enqueueing, embed the query and semantic-search the wiki. If
-      a high-similarity (>0.88) article exists, create the task in COMPLETED
-      state immediately with the wiki article as its result — saving ~5min
-      orchestrator cycles on duplicate queries. Toggle:
-      ``CALLISTO_TASK_SHORT_CIRCUIT=1`` (default on).
-    """
-    try:
-        # Short-circuit pass — safe on any failure (returns None).
-        short_circuit_result = None
-        if os.getenv("CALLISTO_TASK_SHORT_CIRCUIT", "1") == "1":
-            short_circuit_result = await _wiki_task_short_circuit(submission.query)
-
-        task_id = await queue.submit_task(submission.query, submission.priority)
-
-        if short_circuit_result is not None:
-            try:
-                await queue.complete_task(task_id, short_circuit_result)
-                logger.info(
-                    f"Task {task_id} SHORT-CIRCUITED via wiki "
-                    f"(topic={short_circuit_result.get('wiki_topic')}, "
-                    f"sim={short_circuit_result.get('wiki_similarity')})"
-                )
-            except Exception as e:
-                # If we can't mark it complete, leave it PENDING — the worker
-                # will pick it up normally. Not fatal.
-                logger.warning(f"Short-circuit complete_task failed for {task_id}: {e}")
-
-        return TaskResponse(task_id=task_id)
-    except Exception as e:
-        logger.error(f"POST /task failed: {type(e).__name__}: {e}")
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+    """Submit a query for AGP session processing."""
+    return await _task_routes.submit_task(submission)
 
 
-async def _wiki_task_short_circuit(query: str) -> Optional[dict]:
-    """Look up a pre-existing wiki answer for ``query``.
-
-    Returns a result-dict suitable for ``queue.complete_task(...)`` when a
-    high-similarity match is found, else None. All failures return None —
-    the task proceeds normally through the orchestrator.
-    """
-    try:
-        threshold = float(os.getenv("CALLISTO_TASK_SHORT_CIRCUIT_THRESHOLD", "0.88"))
-        from tools.knowledge_wiki import get_wiki
-        wiki = get_wiki()
-        async with aiosqlite.connect(memory.db_path) as wdb:
-            await wdb.execute("PRAGMA busy_timeout = 20000")
-            hits = await wiki.search(wdb, query, top_k=1, min_similarity=0.0)
-        if not hits:
-            return None
-        top = hits[0]
-        sim = top.get("similarity")
-        if not isinstance(sim, (int, float)) or sim < threshold:
-            return None
-        return {
-            "short_circuited": True,
-            "wiki_topic": top.get("topic"),
-            "wiki_title": top.get("title"),
-            "wiki_similarity": round(sim, 4),
-            "wiki_domain": top.get("domain"),
-            "wiki_confidence": top.get("confidence"),
-            "conclusion": top.get("summary") or top.get("content"),
-            "confidence_score": top.get("confidence") or 0.5,
-            "domain": top.get("domain") or "GENERAL",
-            "source": "wiki_short_circuit",
-        }
-    except Exception as e:
-        logger.debug(f"Wiki task short-circuit skipped: {e}")
-        return None
+_wiki_task_short_circuit = _task_routes.wiki_task_short_circuit
 
 
 @app.get("/task/{task_id}")
 async def get_task(task_id: int, _auth: None = Depends(require_admin_or_loopback)):
     """Get task status and result."""
-    task = await queue.get_task(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task
+    return await _task_routes.get_task(task_id)
 
 
 @app.get("/task/{task_id}/chain")
@@ -1397,33 +1326,13 @@ async def get_task_chain(
     Loopback-or-admin gated: same auth posture as GET /task/{id} since
     the chain leaks the same query text.
     """
-    from tools.followup_guard import get_chain_tree
-    async with aiosqlite.connect(memory.db_path) as db:
-        await db.execute("PRAGMA busy_timeout = 30000")
-        tree = await get_chain_tree(db, task_id)
-    if tree.get("error") == "task_not_found":
-        raise HTTPException(status_code=404, detail="Task not found")
-    return tree
+    return await _task_routes.get_task_chain(task_id)
 
 
 @app.get("/session/{session_id}")
 async def get_session(session_id: str, _auth: None = Depends(require_admin_or_loopback)):
-    """Get a sealed AGP session with full provenance.
-
-    Returns 409 CONFLICT if the stored seal_hash fails verification — the
-    session exists but its content has been tampered with or corrupted.
-    """
-    try:
-        session = await memory.get_session(session_id)
-    except AGPSealTampered as e:
-        logger.error("Seal tamper detected on GET /session/%s: %s", session_id, e)
-        raise HTTPException(
-            status_code=409,
-            detail=f"Session {session_id} seal failed verification (tampered or corrupted)",
-        )
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return session
+    """Get a sealed AGP session with full provenance."""
+    return await _task_routes.get_session(session_id)
 
 
 @app.get("/world/{domain}")
@@ -1445,21 +1354,9 @@ async def query_world(
     SECURITY (audit 2026-04-21): `limit` is hard-capped at 500 to prevent
     memory-exhaustion via `?limit=1000000`.
     """
-    try:
-        domain_enum = Domain(domain.upper())
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid domain. Must be one of: {[d.value for d in Domain]}",
-        )
-    # Cap limit defensively — anything beyond 500 materialises gigabytes on
-    # well-populated domains and is almost never a legitimate query.
-    # Also coerces limit to int to reject `?limit=foo`.
-    limit = max(1, min(int(limit), 500))
-    results = await memory.query_world(
-        domain_enum, keyword=keyword, min_confidence=min_confidence, limit=limit
+    return await _task_routes.query_world(
+        domain, keyword=keyword, min_confidence=min_confidence, limit=limit
     )
-    return {"domain": domain_enum.value, "count": len(results), "entries": results}
 
 
 from tools.api import analysis as _analysis
@@ -1890,168 +1787,68 @@ async def prop_gaps(sport: str, event_id: str = ""):
 
 # --- Profit Boost Evaluator ---
 
-class FixedBoostRequest(BaseModel):
-    boosted_odds: int
-    fair_probability: Optional[float] = None
-    odds_for: int = -110
-    odds_against: int = -110
-    max_stake: float = 100
-    description: str = ""
-    book: str = ""
+class FixedBoostRequest(_boost_routes.FixedBoostRequest):
+    pass
 
 
-class PctBoostRequest(BaseModel):
-    boost_pct: float
-    base_odds: int
-    fair_probability: Optional[float] = None
-    odds_for: int = -110
-    odds_against: int = -110
-    max_stake: float = 100
-    description: str = ""
-    book: str = ""
+class PctBoostRequest(_boost_routes.PctBoostRequest):
+    pass
 
 
-class FreeBetRequest(BaseModel):
-    free_bet_amount: float
-    bet_odds: int
-    fair_probability: Optional[float] = None
-    odds_for: int = -110
-    odds_against: int = -110
-    stake_returned: bool = False
-    description: str = ""
-    book: str = ""
+class FreeBetRequest(_boost_routes.FreeBetRequest):
+    pass
 
 
-class HedgeRequest(BaseModel):
-    boost_stake: float
-    boosted_odds: int
-    hedge_odds: int
-    fair_probability: float
+class HedgeRequest(_boost_routes.HedgeRequest):
+    pass
 
 
-class BoostedParlayLeg(BaseModel):
-    american_odds: int
-    market: str
-    description: str = ""
+class BoostedParlayLeg(_boost_routes.BoostedParlayLeg):
+    pass
 
 
-class BoostedParlayRequest(BaseModel):
-    legs: list[BoostedParlayLeg]
-    boosted_parlay_odds: int
-    sport: str
-    max_stake: float = 100
-    description: str = ""
-    book: str = ""
+class BoostedParlayRequest(_boost_routes.BoostedParlayRequest):
+    pass
 
 
-class DevigRequest(BaseModel):
-    odds_a: int
-    odds_b: int
+class DevigRequest(_boost_routes.DevigRequest):
+    pass
 
 
 @app.post("/boosts/evaluate-fixed", dependencies=[Depends(require_admin_or_loopback)])
 async def eval_fixed_boost(req: FixedBoostRequest):
     """Evaluate a fixed profit boost — devig, compare to fair, calculate edge."""
-    from tools.boost_evaluator import evaluate_fixed_boost, devig_multiplicative
-
-    fair_prob = req.fair_probability
-    if fair_prob is None:
-        fair_prob, _ = devig_multiplicative(req.odds_for, req.odds_against)
-
-    return evaluate_fixed_boost(
-        boosted_odds=req.boosted_odds,
-        fair_probability=fair_prob,
-        max_stake=req.max_stake,
-        description=req.description,
-        book=req.book,
-    )
+    return await _boost_routes.eval_fixed_boost(req)
 
 
 @app.post("/boosts/evaluate-percentage", dependencies=[Depends(require_admin_or_loopback)])
 async def eval_pct_boost(req: PctBoostRequest):
     """Evaluate a percentage profit boost token."""
-    from tools.boost_evaluator import evaluate_percentage_boost, devig_multiplicative
-
-    fair_prob = req.fair_probability
-    if fair_prob is None:
-        fair_prob, _ = devig_multiplicative(req.odds_for, req.odds_against)
-
-    return evaluate_percentage_boost(
-        boost_pct=req.boost_pct,
-        base_odds=req.base_odds,
-        fair_probability=fair_prob,
-        max_stake=req.max_stake,
-        description=req.description,
-        book=req.book,
-    )
+    return await _boost_routes.eval_pct_boost(req)
 
 
 @app.post("/boosts/evaluate-free-bet", dependencies=[Depends(require_admin_or_loopback)])
 async def eval_free_bet(req: FreeBetRequest):
     """Evaluate a free bet or no-sweat bet."""
-    from tools.boost_evaluator import evaluate_free_bet, devig_multiplicative
-
-    fair_prob = req.fair_probability
-    if fair_prob is None:
-        fair_prob, _ = devig_multiplicative(req.odds_for, req.odds_against)
-
-    return evaluate_free_bet(
-        free_bet_amount=req.free_bet_amount,
-        bet_odds=req.bet_odds,
-        fair_probability=fair_prob,
-        stake_returned=req.stake_returned,
-        description=req.description,
-        book=req.book,
-    )
+    return await _boost_routes.eval_free_bet(req)
 
 
 @app.post("/boosts/hedge", dependencies=[Depends(require_admin_or_loopback)])
 async def hedge_calc(req: HedgeRequest):
     """Calculate optimal hedge for guaranteed profit."""
-    from tools.boost_evaluator import calculate_hedge
-
-    return calculate_hedge(
-        boost_stake=req.boost_stake,
-        boosted_odds=req.boosted_odds,
-        hedge_odds=req.hedge_odds,
-        fair_probability=req.fair_probability,
-    )
+    return await _boost_routes.hedge_calc(req)
 
 
 @app.post("/boosts/devig", dependencies=[Depends(require_admin_or_loopback)])
 async def devig(req: DevigRequest):
     """Devig a two-way market using multiplicative method."""
-    from tools.boost_evaluator import devig_multiplicative, devig_additive
-
-    mult_a, mult_b = devig_multiplicative(req.odds_a, req.odds_b)
-    add_a, add_b = devig_additive(req.odds_a, req.odds_b)
-
-    return {
-        "multiplicative": {"side_a": mult_a, "side_b": mult_b},
-        "additive": {"side_a": add_a, "side_b": add_b},
-        "recommended": "multiplicative",
-    }
+    return await _boost_routes.devig(req)
 
 
 @app.post("/boosts/evaluate-parlay", dependencies=[Depends(require_admin_or_loopback)])
 async def eval_boosted_parlay(req: BoostedParlayRequest):
-    """Evaluate a boosted parlay using correlation-adjusted fair odds.
-
-    Books often boost parlays with correlated legs, making the boost look
-    more generous than it is. This computes the TRUE fair probability using
-    the correlation engine, then compares to the boosted odds.
-    """
-    from tools.boost_evaluator import evaluate_boosted_parlay
-
-    legs = [leg.dict() for leg in req.legs]
-    return evaluate_boosted_parlay(
-        legs=legs,
-        boosted_parlay_odds=req.boosted_parlay_odds,
-        sport=req.sport,
-        max_stake=req.max_stake,
-        description=req.description,
-        book=req.book,
-    )
+    """Evaluate a boosted parlay using correlation-adjusted fair odds."""
+    return await _boost_routes.eval_boosted_parlay(req)
 
 
 # --- Hypothesis Testing & Backtesting ---
@@ -2352,87 +2149,37 @@ async def list_tasks(
     session_ids, which leak conversation content if reachable non-loopback.
     `/task/{id}` was already gated; this brings the bulk listing in line.
     """
-    # Refresh WAL snapshot to see externally-committed rows
-    try:
-        await queue._db.commit()
-    except Exception:
-        pass
-    limit = max(1, min(int(limit), 500))
-    rows = await queue._db.execute_fetchall(
-        """SELECT task_id, query, status, priority, session_id,
-                  created_at, started_at, completed_at
-           FROM task_queue
-           ORDER BY created_at DESC LIMIT ?""",
-        (limit,)
-    )
-    columns = ["task_id", "query", "status", "priority", "session_id",
-               "created_at", "started_at", "completed_at"]
-    tasks = [dict(zip(columns, row)) for row in rows]
-    if status:
-        tasks = [t for t in tasks if t["status"] == status.upper()]
-    return {"count": len(tasks), "tasks": tasks}
+    return await _task_routes.list_tasks(status=status, limit=limit)
 
 
-class ContextSync(BaseModel):
-    session_summary: str = Field(..., min_length=1, max_length=20000)
-    actionable_queries: list[str] = Field(default_factory=list, max_length=50)
+class ContextSync(_task_routes.ContextSync):
+    pass
 
 @app.post("/context/sync")
 async def sync_context(ctx: ContextSync, _auth: None = Depends(require_admin)):
     """Receive context from a Claude Code session. Queues actionable items."""
-    submitted = []
-    for q in ctx.actionable_queries:
-        if not q or len(q) > 20000:
-            raise HTTPException(status_code=422, detail="actionable_queries entries must be 1-20000 chars")
-        task_id = await queue.submit_task(q, priority=1)
-        submitted.append(task_id)
-    return {
-        "received": True,
-        "tasks_submitted": len(submitted),
-        "task_ids": submitted,
-    }
+    return await _task_routes.sync_context(ctx)
 
 
 _restart_task: Optional[asyncio.Task] = None
+
+
+def _set_restart_task(task: asyncio.Task) -> None:
+    """Sink used by _task_routes.admin_restart to register its delayed-exit
+    task so the shutdown handler can cancel it cleanly (audit H-14)."""
+    global _restart_task
+    _restart_task = task
 
 
 @app.post("/admin/restart")
 async def admin_restart(confirm: str = "", _auth: None = Depends(require_admin_or_loopback)):
     """Graceful restart — exits process, watchdog brings it back with new code.
 
-    Requires confirm=YES to prevent accidental restarts.
-    Without watchdog.bat running, this will KILL the system with no relaunch.
-
-    Auth: admin-token OR loopback.  Previously required CALLISTO_ADMIN_TOKEN
-    unconditionally, which meant localhost scripts (and the human using curl)
-    had no restart path when the token was unset — forcing reliance on the
-    signal file and the watchdog picking it up.  Loopback-allowed restores
-    an in-process restart path even with the token unset.
+    Requires confirm=YES. Auth: admin-token OR loopback.
     """
-    # SECURITY: timing-safe equality (audit C-2). Token is "YES" — short, but pattern is
-    # what matters: never use `==` or `!=` on auth-adjacent strings.
-    if not _secrets.compare_digest(confirm, "YES"):
-        raise HTTPException(
-            status_code=400,
-            detail="Add ?confirm=YES to actually restart. WARNING: without watchdog, system will not relaunch.",
-        )
-    logger.info("RESTART REQUESTED via /admin/restart — shutting down gracefully")
-    send_msg = "Callisto restarting (code reload requested)"
-    try:
-        await telegram.alert_system(send_msg)
-    except Exception as e:
-        logger.info(f"Telegram restart notification failed (non-critical): {e}")
-
-    # Give time for this response to be sent, then exit
-    async def _delayed_exit():
-        await asyncio.sleep(1)
-        logger.info("Exiting for restart...")
-        os._exit(0)
-
-    # Track task so shutdown handler can cancel it cleanly (audit H-14).
-    global _restart_task
-    _restart_task = asyncio.create_task(_delayed_exit())
-    return {"status": "restarting", "message": "Watchdog will restart with new code in ~15 seconds"}
+    return await _task_routes.admin_restart(
+        confirm, set_restart_task=_set_restart_task
+    )
 
 
 _tracemalloc_snapshot = _debug_routes._tracemalloc_snapshot
