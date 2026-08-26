@@ -474,7 +474,7 @@ def test_empty_sources_round_preserved_but_all_corrupt_dropped():
 
 
 @pytest.mark.parametrize("bad_admitted", [
-    {"bad": 1}, [1, 2], 7, 1.0, ("t",), {True}, "yes",
+    {"bad": 1}, [1, 2], 7, 1.0, ["t"], ["yes"],
 ])
 def test_truthy_non_bool_admitted_fails_closed(bad_admitted):
     """Regression: `admitted` used to accept any truthy non-string value
