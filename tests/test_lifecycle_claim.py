@@ -389,3 +389,87 @@ def test_legacy_unsigned_journal_fails_closed_by_default_opt_in_reads(tmp_path):
                            "state": c.to_dict()}, legacy_entry])
     with pytest.raises(ClaimError, match="chain to its predecessor"):
         store.load(c.claim_id, allow_legacy_unsigned=True)
+
+
+def test_old_key_journal_loads_after_rotation(tmp_path, monkeypatch):
+    # Journal sealed under the OLD key must still verify after rotating
+    # CALLISTO_SEAL_KEY to a new current key, per the project's existing
+    # rotation policy (CALLISTO_SEAL_KEY_OLD lists accepted prior keys).
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "aa" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Rotation claim")
+    c.seal_preregistration(p)
+    store.save(c)
+
+    # Rotate to a NEW current key; the old key becomes an accepted rotation key.
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "bb" * 32)
+    monkeypatch.setenv("CALLISTO_SEAL_KEY_OLD", "aa" * 32)
+    loaded = store.load(c.claim_id)
+    assert loaded is not None and loaded.to_dict() == c.to_dict()
+
+    # Without the old key listed, the seal cannot be verified -> fail closed.
+    monkeypatch.setenv("CALLISTO_SEAL_KEY_OLD", "dd" * 32)
+    with pytest.raises(ClaimError, match="integrity seal"):
+        store.load(c.claim_id)
+
+
+def test_stripped_seal_downgrade_rejected_even_with_legacy_opt_in(tmp_path):
+    # Downgrade attack: mutate a signed tail AND delete only its seal. The
+    # legacy opt-in applies solely to WHOLLY unsigned journals; a single
+    # unsigned entry beside sealed entries is tampering, never legacy.
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Downgrade claim")
+    c.seal_preregistration(p)
+    store.save(c)
+    store.save(c)  # two signed entries
+
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    lines = path.read_text().splitlines()
+    tail = json.loads(lines[-1])
+    del tail["seal"]                    # strip ONLY the seal from the tail
+    lines[-1] = json.dumps(tail, sort_keys=True, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ClaimError,
+                       match="sealed and unsigned|no integrity seal"):
+        store.load(c.claim_id)
+    with pytest.raises(ClaimError, match="sealed and unsigned"):
+        store.load(c.claim_id, allow_legacy_unsigned=True)
+
+
+def test_wholly_unsigned_journal_opt_in_still_works_after_mixed_guard(tmp_path):
+    # A wholly unsigned legacy journal remains readable via explicit opt-in.
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Pure legacy")
+    c.seal_preregistration(p)
+    e0 = {"prev": "GENESIS", "saved_at": c.created_at, "state": c.to_dict()}
+    c.attach_evidence(_ev("legacy obs"), note="l1")
+    e1 = {"prev": None, "saved_at": c.created_at, "state": c.to_dict()}
+    path = tmp_path / "claims" / f"claim_{c.claim_id}.jsonl"
+    raw0 = json.dumps(e0, sort_keys=True, ensure_ascii=False)
+    import hashlib as _h
+    e1["prev"] = _h.sha256(raw0.encode()).hexdigest()
+    _write_journal(path, [e0, e1])
+
+    loaded = store.load(c.claim_id, allow_legacy_unsigned=True)
+    assert loaded is not None
+
+
+def test_invalid_current_key_seal_fails_closed(tmp_path, monkeypatch):
+    # Sealed under key A; loading under unrelated key B (no rotation list)
+    # must fail closed, not silently fall back.
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "11" * 32)
+    monkeypatch.delenv("CALLISTO_SEAL_KEY_OLD", raising=False)
+    store = ClaimStore(str(tmp_path / "claims"))
+    p = _prereg(); p.seal()
+    c = Claim(text="Wrong key claim")
+    c.seal_preregistration(p)
+    store.save(c)
+
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "22" * 32)
+    with pytest.raises(ClaimError, match="integrity seal"):
+        store.load(c.claim_id)

@@ -35,7 +35,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Iterable, Optional
 
-from agp import ConfidenceTier, Domain, Evidence, SourceClass, _seal_digest
+from agp import (
+    ConfidenceTier, Domain, Evidence, SourceClass,
+    _seal_digest, _seal_keys,
+)
 from agp.preregistration import Preregistration, Verdict
 from agp.thresholds import MAX_CONFIDENCE_BY_SOURCE
 
@@ -382,18 +385,41 @@ class ClaimStore:
         return os.path.join(self._dir, f"claim_{claim_id}.jsonl")
 
     @staticmethod
-    def _entry_seal(prev_hash: str, saved_at: str, state: dict) -> str:
-        """Keyed integrity seal over an entry's canonical content.
-
-        Uses the project's existing _seal_digest machinery (HMAC-SHA256 when
-        CALLISTO_SEAL_KEY is set). Sealing {prev, saved_at, state} binds EVERY
-        entry's content — including a single-entry journal's first line and
-        every tail entry, which no successor exists to protect.
-        """
-        payload = json.dumps(
+    def _entry_seal_payload(prev_hash: str, saved_at: str, state: dict) -> str:
+        """Canonical payload sealed by every journal entry."""
+        return json.dumps(
             {"prev": prev_hash, "saved_at": saved_at, "state": state},
             sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-        return _seal_digest(payload)
+
+    @classmethod
+    def _entry_seal(cls, prev_hash: str, saved_at: str, state: dict) -> str:
+        """Keyed integrity seal over an entry's canonical content.
+
+        Uses the project's existing _seal_digest machinery (HMAC-SHA256 under
+        CALLISTO_SEAL_KEY when set). Sealing {prev, saved_at, state} binds
+        EVERY entry's content — including a single-entry journal's first line
+        and every tail entry, which no successor exists to protect.
+        """
+        return _seal_digest(
+            cls._entry_seal_payload(prev_hash, saved_at, state))
+
+    @staticmethod
+    def _verify_entry_seal(seal: str, prev_hash: str, saved_at: str,
+                           state: dict) -> bool:
+        """Verify a journal entry seal per the project key-rotation policy.
+
+        Mirrors AGPSession.verify_seal(): accept the current-key digest first,
+        then any CALLISTO_SEAL_KEY_OLD rotation key, then the legacy unkeyed
+        SHA-256 digest. Constant-time comparison throughout; fail closed.
+        """
+        payload = ClaimStore._entry_seal_payload(prev_hash, saved_at, state)
+        encoded = payload.encode("utf-8")
+        candidates = [_seal_digest(payload),
+                      hashlib.sha256(encoded).hexdigest()]
+        for key in _seal_keys():
+            candidates.append(
+                hmac.new(key, encoded, hashlib.sha256).hexdigest())
+        return any(hmac.compare_digest(c, seal) for c in candidates)
 
     def save(self, claim: Claim) -> int:
         """Append current state to the journal. Returns new entry count."""
@@ -425,12 +451,26 @@ class ClaimStore:
         or missing per-entry integrity seal raises ClaimError — a tampered or
         flattering history never silently loads.
 
-        Legacy policy (explicit, opt-in): journals written before per-entry
-        sealing carry only ``prev`` pointers; their FIRST/TAIL entries were
-        unverifiable. Callers may pass allow_legacy_unsigned=True to read such
-        journals — chain checks still apply, but their tail integrity is NOT
-        guaranteed and this must never be enabled on security-sensitive
-        paths. Unsigned entries fail closed by default.
+        Key rotation: seals are verified per the project policy (current key,
+        then CALLISTO_SEAL_KEY_OLD rotation keys, then the legacy unkeyed
+        digest) so journals survive key rotation fail-closed against invalid
+        seals.
+
+        Legacy policy (explicit, opt-in): wholly unsigned journals written
+        before per-entry sealing carry only ``prev`` pointers; their FIRST/
+        TAIL entries were unverifiable. Callers may pass
+        allow_legacy_unsigned=True to read such journals — chain checks still
+        apply, but their tail integrity is NOT guaranteed and this must never
+        be enabled on security-sensitive paths. A PARTIALLY sealed history
+        (any sealed entry plus any unsigned entry) is rejected even with
+        opt-in: stripping a seal from a signed entry is tampering, not a
+        legacy artifact. Unsigned entries fail closed by default.
+
+        Known limitation: this scheme does NOT detect tail truncation (an
+        attacker with write access who holds the key can drop trailing lines);
+        detecting that requires an external head/count anchor, which this
+        journal does not have. Do not treat load() success as proof no lines
+        were removed.
         """
         path = self._journal_path(claim_id)
         if not os.path.exists(path):
@@ -439,6 +479,8 @@ class ClaimStore:
             lines = [ln for ln in f.read().splitlines() if ln.strip()]
         prev = "GENESIS"
         state = None
+        saw_seal = False
+        saw_unsigned = False
         for i, ln in enumerate(lines):
             try:
                 entry = json.loads(ln)
@@ -454,22 +496,34 @@ class ClaimStore:
                         f"(history is not trustworthy)")
                 seal = entry.get("seal")
                 if seal is None:
+                    # Legacy opt-in applies ONLY to a wholly unsigned journal.
+                    # A single unsigned entry alongside any sealed entry means
+                    # a signed record's seal was stripped (downgrade) — that is
+                    # tampering, never a legacy journal, even with opt-in.
+                    saw_unsigned = True
                     if not allow_legacy_unsigned:
                         raise ClaimError(
                             f"tampering detected in claim {claim_id}: "
                             f"journal line {i+1} has no integrity seal "
                             f"(legacy unsigned journal; refusing to load "
                             f"unverified history)")
-                elif not hmac.compare_digest(
-                        str(seal),
-                        self._entry_seal(entry["prev"], entry["saved_at"],
-                                         entry["state"])):
-                    raise ClaimError(
-                        f"tampering detected in claim {claim_id}: journal "
-                        f"line {i+1} failed its integrity seal (content "
-                        f"does not match the sealed record)")
+                else:
+                    saw_seal = True
+                    if not self._verify_entry_seal(
+                            str(seal), entry["prev"], entry["saved_at"],
+                            entry["state"]):
+                        raise ClaimError(
+                            f"tampering detected in claim {claim_id}: "
+                            f"journal line {i+1} failed its integrity seal "
+                            f"(content does not match the sealed record)")
             prev = hashlib.sha256(ln.encode("utf-8")).hexdigest()
             state = entry["state"]
+        if verify and saw_seal and saw_unsigned and allow_legacy_unsigned:
+            raise ClaimError(
+                f"tampering detected in claim {claim_id}: history mixes "
+                f"sealed and unsigned entries — an unsigned entry in a "
+                f"sealed history is a stripped-seal downgrade, not a "
+                f"legacy journal (refusing to load)")
         return Claim.from_dict(state)
 
     def list_ids(self) -> list[str]:
