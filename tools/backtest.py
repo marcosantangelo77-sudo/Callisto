@@ -28,9 +28,9 @@ from dotenv import load_dotenv
 from tools.historical_odds import HistoricalOddsFetcher
 from tools.hypothesis import HypothesisManager
 from tools.math_utils import american_to_decimal, american_to_implied
-from tools.devig import devig_market, power_devig, multiplicative_devig
-from tools.ev import ev_binary, evaluate_edge
-from tools.sizing import kelly_binary
+from tools.devig import devig_market, power_devig, multiplicative_devig  # noqa: F401 (re-exported facade)
+from tools.ev import ev_binary, evaluate_edge  # noqa: F401 (re-exported facade)
+from tools.sizing import kelly_binary 
 from datetime import timedelta
 from tools.temporal_analysis import validate_temporal_isolation
 
@@ -48,19 +48,50 @@ from tools.signals.paper import allowed_paper_statuses, reject_non_paper
 from tools.signals.schedule import game_date_from_commence
 from tools import backtest_io
 
+# Slice-2 extracted helpers (tools/btest package)
+from tools.btest.events_io import (
+    dedup_best_edge_by_event,
+    insert_pending_rows,
+    new_trade_id,
+    signal_confidence as _signal_confidence_impl,
+)
+from tools.btest.market_processing import (
+    SHARP_BOOKS as _SHARP_BOOKS,
+    build_event_row as _build_event_row,
+    clean_outliers as _clean_outliers,
+    collect_book_snapshot_quality as _collect_book_snapshot_quality,
+    devig_pair as _devig_pair,
+    effective_game_market as _effective_game_market,
+    evaluate_side as _evaluate_side,
+    group_sides as _group_sides,
+    index_lines_by_key as _index_lines_by_key,
+    index_props as _index_props,
+)
+from tools.btest.paper_diagnostics import (
+    edge_distribution as _edge_distribution,
+    suppression_reasons as _suppression_reasons,
+)
+from tools.btest.resolution import (
+    build_results_index as _build_results_index,
+    extract_home_away_teams as _extract_home_away_teams,
+    find_scores_for_event as _find_scores_for_event,
+    scores_from_odds_api_game as _scores_from_odds_api_game,
+)
+from tools.btest.run_stats import (
+    compute_signal_metrics as _compute_signal_metrics,
+    fingerprint_stale as _fingerprint_stale,
+    prune_fingerprints as _prune_fingerprints,
+)
+from tools.btest.snapshots import enrich_snapshot_with_multibook
+
 
 def _signal_confidence(edge: float) -> str:
-    """Categorize edge into confidence tiers based on realistic market edges.
+    """Categorize edge into confidence tiers — see tools.btest.events_io.
 
-    Real cross-book edges cap at ~2.5%. Old thresholds (5%/3%) were impossible
-    to hit, making every signal "low". These thresholds reflect actual edge
+    Real cross-book edges cap at ~2.5%. Thresholds reflect actual edge
     distribution: top-decile edges are ~2%+, median is ~1%.
     """
-    if edge >= 0.02:
-        return "high"
-    elif edge >= 0.012:
-        return "medium"
-    return "low"
+    return _signal_confidence_impl(edge)
 
 
 class BacktestEngine:
@@ -113,67 +144,9 @@ class BacktestEngine:
         Returns the original snapshot if already multi-book or no better
         data is available.
         """
-        games = snapshot.get("games", [])
-        if not games:
-            return snapshot
-
-        # Check if snapshot already has multi-book data with the target book
-        max_books = 0
-        has_target = False
-        for g in games:
-            book_keys = {bm.get("key", "").lower() for bm in g.get("bookmakers", [])}
-            max_books = max(max_books, len(book_keys))
-            if target_book in book_keys:
-                has_target = True
-
-        if has_target and max_books >= 2:
-            # Already have multi-book data with target — use as-is
-            return snapshot
-
-        # Try to find a better snapshot in odds_snapshots for this date
-        # Look for snapshots on this date with the most games
-        try:
-            cursor = await self._db.execute(
-                "SELECT snapshot_json FROM odds_snapshots "
-                "WHERE sport = ? AND timestamp LIKE ? AND game_count > 0 "
-                "ORDER BY game_count DESC LIMIT 1",
-                (sport, f"{date_str}%"),
-            )
-            row = await cursor.fetchone()
-            if not row:
-                return snapshot
-
-            better_snapshot = json.loads(row[0])
-            better_games = better_snapshot.get("games", [])
-
-            # Verify the better snapshot actually has multi-book data
-            better_max_books = 0
-            better_has_target = False
-            for g in better_games:
-                book_keys = {bm.get("key", "").lower() for bm in g.get("bookmakers", [])}
-                better_max_books = max(better_max_books, len(book_keys))
-                if target_book in book_keys:
-                    better_has_target = True
-
-            if better_has_target and better_max_books > max_books:
-                # Filter out cross-sport contamination before returning
-                better_snapshot["games"] = [
-                    g for g in better_snapshot.get("games", [])
-                    if not g.get("sport_key") or g["sport_key"] == sport
-                ]
-                for g in better_snapshot["games"]:
-                    if not g.get("sport_key"):
-                        g["sport_key"] = sport
-                logger.info(
-                    f"Enriched {sport} {date_str}: upgraded from {max_books} to "
-                    f"{better_max_books} books (from odds_snapshots)"
-                )
-                return better_snapshot
-
-        except Exception as e:
-            logger.warning(f"Snapshot enrichment failed for {sport} {date_str}: {e}", exc_info=True)
-
-        return snapshot
+        return await enrich_snapshot_with_multibook(
+            self._db, sport, date_str, snapshot, target_book
+        )
 
     async def run_backtest(
         self,
@@ -1089,21 +1062,9 @@ class BacktestEngine:
 
         # If hypothesis wants player props but we only have game lines,
         # fall back to the closest game-level market
-        effective_market = market_type
-        if market_type.startswith("player_") and market_type not in available_markets:
-            # Map prop types to game-level equivalents for backtesting
-            prop_to_game = {
-                "player_points": "totals",
-                "player_rebounds": "totals",
-                "player_assists": "totals",
-                "player_threes": "totals",
-                "player_pra": "totals",
-            }
-            effective_market = prop_to_game.get(market_type, "spreads")
-            if effective_market not in available_markets:
-                effective_market = next(iter(available_markets), None)
-                if not effective_market:
-                    return 0, 0, []
+        effective_market = _effective_game_market(market_type, available_markets)
+        if effective_market is None:
+            return 0, 0, []
 
         available_books = {bm.get("key", "").lower() for bm in game.get("bookmakers", [])}
         bookmaker_count = len(available_books)
@@ -1165,45 +1126,13 @@ class BacktestEngine:
         # re-fetching the upstream snapshot. Defaults to 'pre_commence' for
         # books that don't emit it (legacy / synthetic test data) — the
         # promotion gate only rejects when the sample is >=20% fallback.
-        book_snapshot_quality: dict[str, str] = {}
-        for bm in bookmakers:
-            bk_key = bm.get("key", "").lower()
-            book_snapshot_quality[bk_key] = bm.get("snapshot_quality", "pre_commence")
-
-        # Organize lines by (market, outcome_name, point) -> book -> price
-        lines_by_key = {}
-        for bm in bookmakers:
-            bk_key = bm.get("key", "").lower()
-            bk_name = bm.get("title", bk_key)
-            for mkt in bm.get("markets", []):
-                if mkt["key"] != market_type:
-                    continue
-                for outcome in mkt.get("outcomes", []):
-                    name = outcome.get("name", "")
-                    point = outcome.get("point")
-                    price = outcome.get("price", 0)
-                    key = (mkt["key"], name, point)
-                    if key not in lines_by_key:
-                        lines_by_key[key] = {}
-                    lines_by_key[key][bk_key] = {
-                        "price": price,
-                        "name": bk_name,
-                    }
+        book_snapshot_quality = _collect_book_snapshot_quality(bookmakers)
+        lines_by_key = _index_lines_by_key(bookmakers, market_type)
 
         # For each unique line, find the opposite side and devig
-        # Group by (market, point) to get both sides
-        # For spreads, sides have opposite-sign points (e.g., -7.5 and +7.5)
-        # so group by abs(point) to pair them correctly
-        sides_by_line = {}
-        signed_points = {}  # (mkt_key, group_point, side_name) -> signed point
-        for (mkt_key, name, point), books in lines_by_key.items():
-            group_point = abs(point) if point is not None and mkt_key == "spreads" else point
-            line_key = (mkt_key, group_point)
-            if line_key not in sides_by_line:
-                sides_by_line[line_key] = {}
-            sides_by_line[line_key][name] = books
-            # Track the original signed point for underdog/favorite filtering
-            signed_points[(mkt_key, group_point, name)] = point
+        # Group by (market, point); spreads pair by abs(point) so
+        # -7.5/+7.5 group correctly
+        sides_by_line, signed_points = _group_sides(lines_by_key)
 
         for (mkt_key, point), sides in sides_by_line.items():
             side_names = list(sides.keys())
@@ -1226,14 +1155,9 @@ class BacktestEngine:
                 price_a = side_a_books[bk]["price"]
                 price_b = side_b_books[bk]["price"]
                 try:
-                    dec_a = american_to_decimal(price_a)
-                    dec_b = american_to_decimal(price_b)
-                    if devig_method == "power":
-                        fair, _ = power_devig([dec_a, dec_b])
-                    else:
-                        fair = multiplicative_devig([dec_a, dec_b])
-                    all_fair_a[bk] = fair[0]
-                    all_fair_b[bk] = fair[1]
+                    fa, fb = _devig_pair(price_a, price_b, devig_method)
+                    all_fair_a[bk] = fa
+                    all_fair_b[bk] = fb
                 except (ValueError, ZeroDivisionError) as e:
                     logger.warning(
                         f"Devig failed for book={bk}, market={mkt_key}, "
@@ -1255,12 +1179,7 @@ class BacktestEngine:
             #
             # Sharp books (Pinnacle, Circa, etc.) are excluded as targets —
             # they set the true line. Only soft/retail books are tested.
-            SHARP_BOOKS = {
-                "pinnacle", "lowvig", "lowvig.ag", "circa",
-                "bookmaker.eu", "betonline", "betonline.ag",
-                "betonlineag",
-                "betcris", "betfair_exchange", "sbobet",
-            }
+            SHARP_BOOKS = _SHARP_BOOKS
 
             for eval_target in common_books:
                 # Only evaluate retail/soft books as targets
@@ -1282,14 +1201,8 @@ class BacktestEngine:
 
                 # Filter outliers before computing best-line
                 OUTLIER_THRESHOLD = 0.15
-                clean_a = [(v, bk) for v, bk in others_a
-                            if abs(v - consensus_a) <= OUTLIER_THRESHOLD]
-                clean_b = [(v, bk) for v, bk in others_b
-                            if abs(v - consensus_b) <= OUTLIER_THRESHOLD]
-                if not clean_a:
-                    clean_a = others_a
-                if not clean_b:
-                    clean_b = others_b
+                clean_a = _clean_outliers(others_a, consensus_a)
+                clean_b = _clean_outliers(others_b, consensus_b)
 
                 best_a_val, best_a_book = max(clean_a, key=lambda x: x[0])
                 best_b_val, best_b_book = max(clean_b, key=lambda x: x[0])
@@ -1327,76 +1240,59 @@ class BacktestEngine:
                     if eval_target not in side_books:
                         continue
                     target_price = side_books[eval_target]["price"]
-                    target_implied = american_to_implied(target_price)
-                    ev = ev_binary(fair_val, american_to_decimal(target_price))
-                    kelly = kelly_binary(fair_val, american_to_decimal(target_price))
-                    edge = fair_val - target_implied
-
-                    # Sanity check: absurd edges (>15%) are almost always
-                    # data quality issues (book has team names swapped vs
-                    # consensus). Skip entirely — don't cap and pretend it's real.
-                    MAX_EDGE_MAGNITUDE = 0.15
-                    if abs(edge) > MAX_EDGE_MAGNITUDE:
+                    verdict = _evaluate_side(
+                        fair_val, target_price, edge_threshold,
+                        non_target_count, mkt_key,
+                    )
+                    if verdict["skip"]:
                         continue
-
-                    # Direction sanity: if fair_val > 0.5 but book prices this
-                    # side as a heavy underdog (or vice versa), the consensus
-                    # and book disagree on which team is favored. Data error.
-                    if (fair_val > 0.6 and target_implied < 0.3) or \
-                       (fair_val < 0.3 and target_implied > 0.6):
-                        continue
-
-                    # Require minimum book count for reliable signals —
-                    # with <4 non-target books, devig consensus is noisy
-                    # and produces spurious edges (3.01 avg books on signals
-                    # vs 6.11 on non-signals proved this empirically).
-                    MIN_BOOKS_FOR_SIGNAL = 4
-                    # Heavy favorite filter (h2h only): signals on lines
-                    # with >80% fair probability are noise-dominated.
-                    # At -400 odds, a 2% edge yields $0.50 EV per $100
-                    # risked, and one loss erases 4 wins. Devig consensus
-                    # is also least reliable at probability extremes.
-                    MAX_FAIR_PROB_FOR_SIGNAL = 0.80
-                    heavy_fav = (mkt_key == "h2h"
-                                 and fair_val > MAX_FAIR_PROB_FOR_SIGNAL)
-                    is_signal = (edge >= edge_threshold
-                                 and non_target_count >= MIN_BOOKS_FOR_SIGNAL
-                                 and not heavy_fav)
 
                     events += 1
-                    if is_signal:
+                    if verdict["is_signal"]:
                         signals += 1
 
                     team = side_name
                     event_id = game.get("id") or f"{game_date}|{home}|{away}"
                     event_sport = game.get("sport_key") or h_sport
 
-                    _pending_rows.append((
-                            run_id, event_id, hypothesis_id, event_sport,
-                            None, mkt_key, side_signed_point, team, eval_target,
-                            target_price, round(target_implied, 6),
-                            round(fair_val, 6),
-                            json.dumps({
-                                "edge_method": edge_method,
-                                "books_used": non_target_count,
-                                "target_excluded": True,
-                                "devig_method": devig_method,
-                                "target_book": eval_target,
-                                "best_line_book": best_book,
-                                "best_line_fair_prob": round(best_val, 6),
-                                "consensus_fair_prob": round(consensus_val, 6),
-                                "contributing_books": contrib_books,
-                                "home_team": home,
-                                "away_team": away,
-                                # Lookahead provenance — per-row so the
-                                # promotion gate can count fallbacks vs
-                                # pre-commence without joining upstream.
-                                "snapshot_quality": book_snapshot_quality.get(
-                                    eval_target, "pre_commence"
-                                ),
-                            }),
-                            round(edge, 6), round(ev, 6), round(kelly, 6),
-                            is_signal, game_date, snapshot_time,
+                    _pending_rows.append(_build_event_row(
+                        run_id=run_id,
+                        event_id=event_id,
+                        hypothesis_id=hypothesis_id,
+                        sport=event_sport,
+                        player=None,
+                        market=mkt_key,
+                        line=side_signed_point,
+                        side=side_name,
+                        book=eval_target,
+                        target_price=target_price,
+                        target_implied=verdict["target_implied"],
+                        fair_val=fair_val,
+                        factors={
+                            "edge_method": edge_method,
+                            "books_used": non_target_count,
+                            "target_excluded": True,
+                            "devig_method": devig_method,
+                            "target_book": eval_target,
+                            "best_line_book": best_book,
+                            "best_line_fair_prob": round(best_val, 6),
+                            "consensus_fair_prob": round(consensus_val, 6),
+                            "contributing_books": contrib_books,
+                            "home_team": home,
+                            "away_team": away,
+                            # Lookahead provenance — per-row so the
+                            # promotion gate can count fallbacks vs
+                            # pre-commence without joining upstream.
+                            "snapshot_quality": book_snapshot_quality.get(
+                                eval_target, "pre_commence"
+                            ),
+                        },
+                        edge=verdict["edge"],
+                        ev=verdict["ev"],
+                        kelly=verdict["kelly"],
+                        is_signal=verdict["is_signal"],
+                        game_date=game_date,
+                        snapshot_time=snapshot_time,
                     ))
 
         # Return pending rows to caller for batch INSERT at end of backtest.
@@ -1429,36 +1325,7 @@ class BacktestEngine:
         _pending_rows: list[tuple] = []  # Collect rows for batch INSERT
 
         # Organize props: (player, market, line) -> book -> {Over, Under}
-        prop_lines = {}
-        book_names = {}
-
-        for bm in bookmakers:
-            bk_key = bm.get("key", "").lower()
-            bk_name = bm.get("title", bk_key)
-            book_names[bk_key] = bk_name
-
-            for mkt in bm.get("markets", []):
-                if not mkt["key"].startswith("player_"):
-                    continue
-                # Filter to specific market type if specified
-                if market_type != "player_props" and mkt["key"] != market_type:
-                    continue
-
-                for outcome in mkt.get("outcomes", []):
-                    player = outcome.get("description", "Unknown")
-                    line = outcome.get("point")
-                    side = outcome.get("name", "")  # Over or Under
-                    price = outcome.get("price", 0)
-
-                    if not side or not price:
-                        continue
-
-                    key = (player, mkt["key"], line)
-                    if key not in prop_lines:
-                        prop_lines[key] = {}
-                    if bk_key not in prop_lines[key]:
-                        prop_lines[key][bk_key] = {}
-                    prop_lines[key][bk_key][side] = price
+        prop_lines, book_names = _index_props(bookmakers, market_type)
 
         # Process each prop line
         for (player, mkt_key, line), books in prop_lines.items():
@@ -1478,14 +1345,9 @@ class BacktestEngine:
                 if "Over" not in bk_data or "Under" not in bk_data:
                     continue
                 try:
-                    dec_o = american_to_decimal(bk_data["Over"])
-                    dec_u = american_to_decimal(bk_data["Under"])
-                    if devig_method == "power":
-                        fair, _ = power_devig([dec_o, dec_u])
-                    else:
-                        fair = multiplicative_devig([dec_o, dec_u])
-                    fair_overs.append((fair[0], bk_key))
-                    fair_unders.append((fair[1], bk_key))
+                    fo, fu = _devig_pair(bk_data["Over"], bk_data["Under"], devig_method)
+                    fair_overs.append((fo, bk_key))
+                    fair_unders.append((fu, bk_key))
                 except (ValueError, ZeroDivisionError) as e:
                     logger.warning(
                         f"Devig failed for book={bk_key}, market={mkt_key}, "
@@ -1502,14 +1364,8 @@ class BacktestEngine:
 
             # ── Outlier filter (same logic as _process_game_lines) ──
             OUTLIER_THRESHOLD = 0.15
-            clean_overs = [(v, bk) for v, bk in fair_overs
-                           if abs(v - consensus_over) <= OUTLIER_THRESHOLD]
-            clean_unders = [(v, bk) for v, bk in fair_unders
-                            if abs(v - consensus_under) <= OUTLIER_THRESHOLD]
-            if not clean_overs:
-                clean_overs = fair_overs
-            if not clean_unders:
-                clean_unders = fair_unders
+            clean_overs = _clean_outliers(fair_overs, consensus_over)
+            clean_unders = _clean_outliers(fair_unders, consensus_under)
 
             # Cross-book best line: sharpest devigged fair prob for each side
             best_over_val, best_over_book = max(clean_overs, key=lambda x: x[0])
@@ -1557,48 +1413,40 @@ class BacktestEngine:
 
                 event_id = game.get("id", "")
 
-                _pending_rows.append((
-                        run_id, event_id, hypothesis_id, game.get("sport_key", ""),
-                        player, mkt_key, line, side, target_book,
-                        target_price, round(target_implied, 6),
-                        round(fair_val, 6),
-                        json.dumps({
-                            "edge_method": edge_method,
-                            "books_used": non_target_count,
-                            "devig_method": devig_method,
-                            "best_line_book": best_book,
-                            "best_line_fair_prob": round(best_val, 6),
-                            "consensus_fair_prob": round(consensus, 6),
-                            "contributing_books": contributing_books,
-                        }),
-                        round(edge, 6), round(ev, 6), round(kelly, 6),
-                        is_signal, game_date, snapshot_time,
+                _pending_rows.append(_build_event_row(
+                    run_id=run_id,
+                    event_id=event_id,
+                    hypothesis_id=hypothesis_id,
+                    sport=game.get("sport_key", ""),
+                    player=player,
+                    market=mkt_key,
+                    line=line,
+                    side=side,
+                    book=target_book,
+                    target_price=target_price,
+                    target_implied=round(target_implied, 6),
+                    fair_val=fair_val,
+                    factors={
+                        "edge_method": edge_method,
+                        "books_used": non_target_count,
+                        "devig_method": devig_method,
+                        "best_line_book": best_book,
+                        "best_line_fair_prob": round(best_val, 6),
+                        "consensus_fair_prob": round(consensus, 6),
+                        "contributing_books": contributing_books,
+                    },
+                    edge=round(edge, 6),
+                    ev=round(ev, 6),
+                    kelly=round(kelly, 6),
+                    is_signal=is_signal,
+                    game_date=game_date,
+                    snapshot_time=snapshot_time,
                 ))
 
         # Batch INSERT all rows in one transaction
-        if _pending_rows:
-            import random as _rnd
-            for _attempt in range(5):
-                try:
-                    await self._db.executemany(
-                        "INSERT OR IGNORE INTO backtest_events "
-                        "(run_id, event_id, hypothesis_id, sport, player, market, "
-                        "line, side, book, book_odds_american, book_implied_prob, "
-                        "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
-                        "signal_generated, game_date, snapshot_time) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        _pending_rows,
-                    )
-                    break
-                except Exception as _e:
-                    if "locked" in str(_e).lower() and _attempt < 4:
-                        _wait = min(0.5 * (2 ** _attempt), 8) + _rnd.uniform(0, 0.5)
-                        logger.warning(f"DB locked on backtest props executemany (attempt {_attempt+1}/5), retrying in {_wait:.1f}s")
-                        await asyncio.sleep(_wait)
-                    else:
-                        raise
-            from tools.db_utils import commit_with_retry
-            await commit_with_retry(self._db, operation="backtest props_batch_insert")
+        await insert_pending_rows(
+            self._db, _pending_rows, operation="backtest props_batch_insert"
+        )
         return events, signals
 
     async def _process_prop_snapshots(
@@ -1731,29 +1579,9 @@ class BacktestEngine:
                 ))
 
         # Batch INSERT
-        if _pending_rows:
-            import random as _rnd
-            for _attempt in range(5):
-                try:
-                    await self._db.executemany(
-                        "INSERT OR IGNORE INTO backtest_events "
-                        "(run_id, event_id, hypothesis_id, sport, player, market, "
-                        "line, side, book, book_odds_american, book_implied_prob, "
-                        "model_fair_prob, model_factors, edge, ev_pct, kelly_fraction, "
-                        "signal_generated, game_date, snapshot_time) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        _pending_rows,
-                    )
-                    break
-                except Exception as _e:
-                    if "locked" in str(_e).lower() and _attempt < 4:
-                        _wait = min(0.5 * (2 ** _attempt), 8) + _rnd.uniform(0, 0.5)
-                        logger.warning(f"DB locked on backtest prop_snapshots executemany (attempt {_attempt+1}/5), retrying in {_wait:.1f}s")
-                        await asyncio.sleep(_wait)
-                    else:
-                        raise
-            from tools.db_utils import commit_with_retry
-            await commit_with_retry(self._db, operation="backtest prop_snapshots_batch_insert")
+        await insert_pending_rows(
+            self._db, _pending_rows, operation="backtest prop_snapshots_batch_insert"
+        )
         return events, signals
 
     async def resolve_with_scores(
@@ -1787,23 +1615,11 @@ class BacktestEngine:
             for game in games:
                 if game.get("id") != event_id:
                     continue
-                if not game.get("completed"):
-                    continue
 
-                scores = game.get("scores", [])
-                if not scores or len(scores) < 2:
+                scores = _scores_from_odds_api_game(game)
+                if scores is None:
                     continue
-
-                home_score = None
-                away_score = None
-                for s in scores:
-                    if s.get("name") == game.get("home_team"):
-                        home_score = int(s.get("score", 0))
-                    elif s.get("name") == game.get("away_team"):
-                        away_score = int(s.get("score", 0))
-
-                if home_score is None or away_score is None:
-                    continue
+                home_score, away_score = scores
 
                 total_score = home_score + away_score
                 margin = home_score - away_score
@@ -1875,10 +1691,6 @@ class BacktestEngine:
         # MEMORY FIX: Only load game_results for the date range of unresolved events
         # (±1 day for timezone offsets). Previously loaded ALL rows (14K+), causing
         # ~50 MB allocation per call that CPython's pymalloc never returns to OS.
-        from collections import defaultdict
-        games_by_date = defaultdict(list)
-        seen = set()
-
         unresolved_dates = [row[6] for row in unresolved if row[6]]  # game_date col
         if unresolved_dates:
             min_date = min(unresolved_dates)
@@ -1886,38 +1698,9 @@ class BacktestEngine:
         else:
             min_date = max_date = "2020-01-01"
 
-        result_cursor = await self._db.execute(
-            "SELECT sport, game_date, home_team, away_team, home_score, away_score "
-            "FROM game_results WHERE game_date >= date(?, '-3 day') AND game_date <= date(?, '+3 day')",
-            (min_date, max_date),
+        games_by_date, _dates_with_games, ctx_added = await _build_results_index(
+            self._db, min_date, max_date,
         )
-        result_rows = await result_cursor.fetchall()
-        for r_sport, r_date, r_home, r_away, r_hscore, r_ascore in result_rows:
-            key = (r_sport, r_date, r_home, r_away)
-            seen.add(key)
-            games_by_date[(r_sport, r_date)].append((r_home, r_away, r_hscore, r_ascore))
-
-        # Track unique dates for sport-agnostic fallback lookups
-        _dates_with_games: set = set()
-        for r_sport, r_date, *_ in result_rows:
-            _dates_with_games.add(r_date)
-
-        # Fallback: game_contexts also stores scores from ESPN
-        ctx_cursor = await self._db.execute(
-            "SELECT sport, game_date, home_team, away_team, home_score, away_score "
-            "FROM game_contexts WHERE home_score IS NOT NULL AND away_score IS NOT NULL "
-            "AND game_date >= date(?, '-3 day') AND game_date <= date(?, '+3 day')",
-            (min_date, max_date),
-        )
-        ctx_rows = await ctx_cursor.fetchall()
-        ctx_added = 0
-        for r_sport, r_date, r_home, r_away, r_hscore, r_ascore in ctx_rows:
-            key = (r_sport, r_date, r_home, r_away)
-            if key not in seen:
-                seen.add(key)
-                games_by_date[(r_sport, r_date)].append((r_home, r_away, r_hscore, r_ascore))
-                _dates_with_games.add(r_date)
-                ctx_added += 1
         if ctx_added > 0:
             logger.info(f"Resolution: added {ctx_added} games from game_contexts fallback")
 
@@ -1926,21 +1709,7 @@ class BacktestEngine:
         from datetime import datetime as _dt, timedelta as _td
         for ev_id, event_id, ev_sport, market, side, line, game_date, model_factors in unresolved:
             # Extract home/away from event_id or model_factors
-            home_team = ""
-            away_team = ""
-
-            if event_id and "|" in event_id:
-                parts = event_id.split("|")
-                if len(parts) >= 3:
-                    home_team = parts[1]
-                    away_team = parts[2]
-            elif model_factors:
-                try:
-                    factors = json.loads(model_factors)
-                    home_team = factors.get("home_team", "")
-                    away_team = factors.get("away_team", "")
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            home_team, away_team = _extract_home_away_teams(event_id, model_factors)
 
             if not home_team or not away_team:
                 continue
@@ -1952,26 +1721,10 @@ class BacktestEngine:
             # tools/game_dates.py and migration 007). With local_game_date
             # now canonical across tables, the fuzzy window would just
             # occasionally match bets to the wrong adjacent-day game.
-            scores = None
-            date_candidates = [game_date]
-
-            for try_date in date_candidates:
-                candidates = games_by_date.get((ev_sport, try_date), [])
-                # REMOVED: sport-agnostic fallback. A Cardinals MLB bet was
-                # matching against NBA/NHL games on the same date, producing
-                # random win/loss attribution. Only match within the same sport.
-
-                for r_home, r_away, r_hscore, r_ascore in candidates:
-                    if self._team_matches(home_team, r_home) and self._team_matches(away_team, r_away):
-                        scores = (r_hscore, r_ascore)
-                        break
-                    # Also try swapped home/away (data source differences)
-                    if self._team_matches(home_team, r_away) and self._team_matches(away_team, r_home):
-                        scores = (r_ascore, r_hscore)
-                        break
-                if scores:
-                    break
-
+            scores = _find_scores_for_event(
+                games_by_date, ev_sport, game_date, home_team, away_team,
+                team_matches=self._team_matches,
+            )
             if not scores:
                 match_failures += 1
                 if match_failures <= 5:
@@ -2136,10 +1889,9 @@ class BacktestEngine:
         ic = None
         roi_pct = 0.0
 
+        signal_events: list[tuple] = []
+        expected_rate = 0.5
         if total_decided > 0:
-            from scipy.stats import binomtest, ttest_1samp
-            import numpy as np
-
             # Compute expected win rate from avg book implied probability
             # (NOT 0.5 coin-flip — a 5W-0L record on -300 favorites is NOT
             # as impressive as 5W-0L on coin-flips. The null hypothesis must
@@ -2159,9 +1911,6 @@ class BacktestEngine:
             row_imp = await cursor.fetchone()
             expected_rate = row_imp[0] if row_imp and row_imp[0] else 0.5
 
-            result = binomtest(wins, total_decided, expected_rate, alternative="greater")
-            p_binomial = result.pvalue
-
             # Get per-signal returns for t-test, Sharpe, Sortino, ROI — deduplicated
             cursor = await self._db.execute(
                 "WITH unique_signals AS ("
@@ -2176,58 +1925,15 @@ class BacktestEngine:
             )
             signal_events = await cursor.fetchall()
 
-            returns = []
-            brier_preds = []
-            brier_outcomes = []
-            predicted_edges = []
-            realized_edges = []
-
-            for odds_am, result_str, fair_prob, edge_val in signal_events:
-                if result_str == "won" and odds_am:
-                    try:
-                        from tools.math_utils import american_to_decimal
-                        dec = american_to_decimal(odds_am)
-                        returns.append(dec - 1.0)
-                        if edge_val is not None:
-                            predicted_edges.append(edge_val)
-                            realized_edges.append(dec - 1.0)
-                    except Exception:
-                        returns.append(1.0)
-                elif result_str == "lost":
-                    returns.append(-1.0)
-                    if edge_val is not None:
-                        predicted_edges.append(edge_val)
-                        realized_edges.append(-1.0)
-
-                if fair_prob is not None:
-                    brier_preds.append(fair_prob)
-                    brier_outcomes.append(1 if result_str == "won" else 0)
-
-            if len(returns) >= 2:
-                arr = np.array(returns)
-                t_stat, p_val = ttest_1samp(arr, 0)
-                p_ttest = p_val / 2 if t_stat > 0 else 1 - p_val / 2
-                z_score = t_stat
-                sharpe = float(arr.mean() / arr.std()) if arr.std() > 0 else 0.0
-                neg = arr[arr < 0]
-                if len(neg) > 0 and neg.std() > 0:
-                    sortino = float(arr.mean() / neg.std())
-
-            if returns:
-                roi_pct = sum(returns) / len(returns) * 100
-
-            # Brier score
-            if len(brier_preds) >= 2:
-                bp = np.array(brier_preds)
-                bo = np.array(brier_outcomes)
-                brier = float(np.mean((bp - bo) ** 2))
-
-            # Information coefficient (Pearson correlation)
-            if len(predicted_edges) >= 3:
-                pe = np.array(predicted_edges)
-                re = np.array(realized_edges)
-                if pe.std() > 0 and re.std() > 0:
-                    ic = float(np.corrcoef(pe, re)[0, 1])
+        metrics = _compute_signal_metrics(wins, losses, expected_rate, signal_events)
+        p_binomial = metrics["p_binomial"]
+        p_ttest = metrics["p_ttest"]
+        z_score = metrics["z_score"]
+        sharpe = metrics["sharpe"]
+        sortino = metrics["sortino"]
+        brier = metrics["brier"]
+        ic = metrics["ic"]
+        roi_pct = metrics["roi_pct"]
 
         from tools.db_utils import execute_with_retry, commit_with_retry
         await execute_with_retry(
@@ -2319,12 +2025,13 @@ class BacktestEngine:
             current_fps[row[0]] = (row[1] or 0, row[2] or 0, row[3] or 0)
 
         # Determine which runs actually need recalculation
-        stale_run_ids = []
-        for run_id in run_ids:
-            fp = current_fps.get(run_id, (0, 0, 0))
-            cached_fp = self._run_fingerprints.get(run_id)
-            if fp != cached_fp:
-                stale_run_ids.append(run_id)
+        stale_run_ids = [
+            rid for rid in run_ids
+            if _fingerprint_stale(
+                self._run_fingerprints.get(rid),
+                current_fps.get(rid, (0, 0, 0)),
+            )
+        ]
 
         if not stale_run_ids:
             logger.debug(
@@ -2348,10 +2055,9 @@ class BacktestEngine:
                 logger.warning(f"Failed to recalculate run {run_id}: {e}")
 
         # Prune fingerprint cache — only keep entries for currently active runs
-        if len(self._run_fingerprints) > self._RUN_FP_MAX:
-            active_set = set(run_ids)
-            pruned = {k: v for k, v in self._run_fingerprints.items() if k in active_set}
-            self._run_fingerprints = pruned
+        self._run_fingerprints = _prune_fingerprints(
+            dict(self._run_fingerprints), run_ids, self._RUN_FP_MAX
+        )
 
         if updated:
             logger.info(f"Recalculated stats for {updated}/{len(stale_run_ids)} stale backtest runs (skipped {len(run_ids) - len(stale_run_ids)} unchanged)")
@@ -2512,47 +2218,19 @@ class BacktestEngine:
         #   market[5], line[6], side[7], book[8], odds_american[9], implied[10],
         #   fair_prob[11], model_factors_json[12], edge[13], ev_pct[14],
         #   kelly[15], signal_generated[16], game_date[17], snapshot_time[18])
-        if all_paper_rows:
-            edges = [row[13] for row in all_paper_rows]
-            max_edge = max(edges) if edges else 0
-            min_edge = min(edges) if edges else 0
-            above_thresh = sum(1 for e in edges if e >= edge_threshold)
-            import json as _json
-            books_counts = []
-            for row in all_paper_rows:
-                try:
-                    factors = _json.loads(row[12]) if row[12] else {}
-                    books_counts.append(factors.get("books_used", 0))
-                except Exception:
-                    pass
-            min_books_seen = min(books_counts) if books_counts else 0
-            max_books_seen = max(books_counts) if books_counts else 0
-        else:
-            max_edge = min_edge = 0
-            above_thresh = 0
-            min_books_seen = max_books_seen = 0
+        diag = _edge_distribution(all_paper_rows)
+        max_edge = diag["max_edge"]
+        min_edge = diag["min_edge"]
+        above_thresh = sum(1 for row in all_paper_rows if row[13] >= edge_threshold)
+        min_books_seen = diag["min_books_seen"]
+        max_books_seen = diag["max_books_seen"]
 
         # Diagnose WHY above_thresh > 0 but signals = 0 (prevents false "broken" alarms)
-        suppression_reasons = []
+        suppression_reasons_list = []
         if above_thresh > 0 and total_signals_found == 0 and all_paper_rows:
-            for row in all_paper_rows:
-                edge_val = row[13]
-                if edge_val < edge_threshold:
-                    continue
-                fair_prob = row[11]
-                try:
-                    factors = _json.loads(row[12]) if row[12] else {}
-                except Exception:
-                    factors = {}
-                n_books = factors.get("books_used", 0)
-                if h["market_type"] == "h2h" and fair_prob > 0.80:
-                    suppression_reasons.append(
-                        f"heavy_fav(fair={fair_prob:.3f},edge={edge_val:.4f},book={row[8]})"
-                    )
-                elif n_books < 4:
-                    suppression_reasons.append(
-                        f"min_books(n={n_books},edge={edge_val:.4f},book={row[8]})"
-                    )
+            suppression_reasons_list = _suppression_reasons(
+                all_paper_rows, edge_threshold, h["market_type"]
+            )
 
         logger.info(
             f"Paper trade {hypothesis_id[:12]}: {games_processed}/{len(games)} games processed, "
@@ -2562,10 +2240,10 @@ class BacktestEngine:
             f"edge_range=[{min_edge:.4f}, {max_edge:.4f}], above_thresh={above_thresh}, "
             f"books_range=[{min_books_seen}, {max_books_seen}]"
         )
-        if suppression_reasons:
+        if suppression_reasons_list:
             logger.info(
                 f"Paper trade {hypothesis_id[:12]}: {above_thresh} edge(s) above threshold "
-                f"SUPPRESSED — {'; '.join(suppression_reasons)}"
+                f"SUPPRESSED — {'; '.join(suppression_reasons_list)}"
             )
 
         # Batch-insert paper events so the SELECT below can find signals.
@@ -2598,19 +2276,13 @@ class BacktestEngine:
         )
         rows = await cursor.fetchall()
         cols = [d[0] for d in cursor.description]
+        row_dicts = [dict(zip(cols, row)) for row in rows]
 
         # ── Game-level dedup: keep only best-edge book per game ──
         # Multiple books show edge for the same game. Recording all of them
         # inflates paper_trade counts 5x. Keep only the highest-edge entry
         # per event_id so paper_trades reflects independent betting opportunities.
-        best_by_game: dict[str, dict] = {}
-        for row in rows:
-            event = dict(zip(cols, row))
-            eid = event.get("event_id", "")
-            existing = best_by_game.get(eid)
-            if existing is None or (event.get("edge") or 0) > (existing.get("edge") or 0):
-                best_by_game[eid] = event
-        deduped_events = list(best_by_game.values())
+        deduped_events = dedup_best_edge_by_event(row_dicts)
         multi_book_skipped = len(rows) - len(deduped_events)
         if multi_book_skipped:
             logger.info(
@@ -2636,7 +2308,7 @@ class BacktestEngine:
                 dupes_skipped += 1
                 continue
 
-            trade_id = str(uuid.uuid4())[:12]
+            trade_id = new_trade_id()
 
             # Move to paper_trades table. ``actual_gd`` is already the
             # venue-local date (see _game_date_from_commence above) — write
