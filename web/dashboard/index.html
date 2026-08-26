@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Callisto Ops</title>
+  <title>Callisto — Research Appliance</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
@@ -11,7 +11,7 @@
     <div class="brand">
       <span class="logo-dot" aria-hidden="true"></span>
       <span class="brand-name">Callisto</span>
-      <span class="brand-sub">ops dashboard</span>
+      <span class="brand-sub">research appliance</span>
     </div>
     <div class="status-row">
       <span id="online-pill" class="pill pill-muted">connecting...</span>
@@ -24,26 +24,27 @@
   </div>
 
   <main class="grid">
-    <!-- 1. Live state -->
+    <!-- 1. Loop / seals (research face: loopback status, not live betting) -->
     <section class="panel" id="panel-state">
-      <h2>Live state</h2>
+      <h2>System (loop health)</h2>
       <div class="panel-body" id="state-body">Loading...</div>
     </section>
 
-    <!-- 2. LIVE hypotheses -->
-    <section class="panel wide" id="panel-hyps">
+    <!-- Trading panels: hidden by default; shown only with ?trading=1.
+         This default view is loopback research status, not live betting. -->
+    <section class="panel wide" id="panel-hyps" hidden>
       <h2>LIVE hypotheses <span class="count" id="hyp-count"></span></h2>
       <div class="panel-body" id="hyps-body">Loading...</div>
     </section>
 
     <!-- 3. Recent orders -->
-    <section class="panel wide" id="panel-orders">
+    <section class="panel wide" id="panel-orders" hidden>
       <h2>Recent orders <span class="count" id="orders-count"></span></h2>
       <div class="panel-body" id="orders-body">Loading...</div>
     </section>
 
     <!-- 4. Portfolio -->
-    <section class="panel" id="panel-portfolio">
+    <section class="panel" id="panel-portfolio" hidden>
       <h2>Portfolio</h2>
       <div class="panel-body" id="portfolio-body">Loading...</div>
     </section>

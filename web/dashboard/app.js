@@ -1,4 +1,4 @@
-/* Callisto ops dashboard — vanilla JS, no build step.
+/* Callisto research appliance dashboard — vanilla JS, no build step.
  *
  * Refresh model: poll 6 endpoints every REFRESH_MS. Each panel renders
  * independently so one slow/failed endpoint never blanks the whole UI.
@@ -356,25 +356,43 @@ function setLastRefresh() {
 // Main loop
 // ---------------------------------------------------------------------------
 
+// Research face by default: trading panels stay hidden and their money
+// endpoints are never polled unless the operator opts in with ?trading=1.
+const TRADING_MODE =
+  new URLSearchParams(window.location.search).get("trading") === "1";
+
+function applyTradingMode() {
+  if (!TRADING_MODE) return;
+  ["panel-hyps", "panel-orders", "panel-portfolio"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = false;
+  });
+}
+
 async function refresh() {
+  // Only poll money endpoints (live hypotheses / orders / portfolio) when
+  // the trading panels are actually visible.
   const [status, hyps, orders, portfolio, ingestion, alerts] = await Promise.all([
     jsonFetch(API.status),
-    jsonFetch(API.hyps),
-    jsonFetch(API.orders),
-    jsonFetch(API.portfolio),
+    TRADING_MODE ? jsonFetch(API.hyps) : Promise.resolve({}),
+    TRADING_MODE ? jsonFetch(API.orders) : Promise.resolve({}),
+    TRADING_MODE ? jsonFetch(API.portfolio) : Promise.resolve({}),
     jsonFetch(API.ingestion),
     jsonFetch(API.alerts),
   ]);
 
   renderState(status);
-  renderHyps(hyps);
-  renderOrders(orders);
-  renderPortfolio(portfolio);
+  if (TRADING_MODE) {
+    renderHyps(hyps);
+    renderOrders(orders);
+    renderPortfolio(portfolio);
+  }
   renderIngestion(ingestion);
   renderAlerts(alerts);
 
   setLastRefresh();
 }
 
+applyTradingMode();
 refresh();
 setInterval(refresh, REFRESH_MS);
