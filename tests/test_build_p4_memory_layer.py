@@ -66,13 +66,20 @@ class TestThresholdAgreement(unittest.TestCase):
 
 class TestNoMaxRatchet(unittest.TestCase):
     def test_no_max_upsert_anywhere_in_hermes_memory(self):
-        src = (REPO / "tools" / "hermes_memory.py").read_text()
-        # The ratchet SQL must be gone; only a historical mention in the
-        # record_learning docstring is tolerated.
-        self.assertEqual(src.count("MAX(confidence"), 1,
+        # 2026-08 split: record_learning moved to tools/hmem/memory.py; the
+        # facade (tools/hermes_memory.py) re-exports it. Scan BOTH files.
+        paths = [(REPO / "tools" / "hermes_memory.py"),
+                 (REPO / "tools" / "hmem" / "memory.py")]
+        total = 0
+        for p in paths:
+            src = p.read_text()
+            # The ratchet SQL must be gone; only a historical mention in the
+            # record_learning docstring is tolerated.
+            self.assertNotIn("confidence=MAX(confidence, excluded.confidence) \"\n",
+                             src, "ratchet upsert must not be live SQL")
+            total += src.count("MAX(confidence")
+        self.assertEqual(total, 1,
                          "MAX-ratchet upsert must exist nowhere but the history note")
-        self.assertNotIn("confidence=MAX(confidence, excluded.confidence) \"\n",
-                         src, "ratchet upsert must not be live SQL")
 
     def test_confidence_can_fall(self):
         """Property: for random conf pairs, a lower rewrite stores the LOWER
