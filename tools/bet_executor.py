@@ -273,6 +273,8 @@ class BetExecutor:
 
         Returns dollar amount to wager (0 if bet should be skipped).
         """
+        # Canonical Kelly module is tools.kelly; tools.sizing only provides
+        # push-aware helpers with no canonical equivalent.
         from tools.kelly import kelly_dynamic, kelly_fractional
         from tools.sizing import kelly_with_push, uncertainty_adjusted_kelly
 
