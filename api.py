@@ -1529,7 +1529,7 @@ async def get_movements(sport: Optional[str] = None, limit: int = 20):
     return {"count": len(movements), "movements": movements}
 
 
-@app.get("/odds/opportunities")
+@app.get("/odds/opportunities", dependencies=[Depends(require_admin_or_loopback)])
 async def get_opportunities(status: str = "open", limit: int = 20):
     """Get current +EV betting opportunities."""
     opps = await line_monitor.get_ev_opportunities(status=status, limit=limit)
@@ -1554,7 +1554,7 @@ async def force_snapshot(sport: str):
     }
 
 
-@app.get("/odds/edges")
+@app.get("/odds/edges", dependencies=[Depends(require_admin_or_loopback)])
 async def get_edges(sport: Optional[str] = None):
     """Get latest cross-book edges, sharp money signals, and low-vig opportunities."""
     report = line_monitor.get_edge_report(sport=sport)
@@ -1566,6 +1566,7 @@ async def get_live_edges(
     sport: Optional[str] = None,
     decision: Optional[str] = None,
     limit: int = 50,
+    _auth: None = Depends(require_admin_or_loopback),
 ):
     """Ranked live edge surface from the quant microstructure engine.
 
