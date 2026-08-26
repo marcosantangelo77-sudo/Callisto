@@ -114,24 +114,40 @@ class TestRecordPhaseFailureDelegation:
 
 class TestGetStatusExposesFailures:
     def test_get_status_source_includes_keys(self):
-        src_file = auto.__file__
-        tree = ast.parse(open(src_file).read())
+        from pathlib import Path
+
+        files = [
+            Path(auto.__file__),
+            Path(auto.__file__).parent / "auto" / "status.py",
+        ]
         found = {"phase_failures": False, "phase_failure_count": False}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == "get_status":
-                for sub in ast.walk(node):
-                    if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
-                        if sub.value in found:
-                            found[sub.value] = True
+        for path in files:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name in (
+                    "get_status",
+                    "build_research_loop_status",
+                ):
+                    for sub in ast.walk(node):
+                        if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                            if sub.value in found:
+                                found[sub.value] = True
         assert all(found.values()), f"get_status missing keys: {found}"
 
     def test_researchloop_uses_ledger(self):
-        src_file = auto.__file__
-        tree = ast.parse(open(src_file).read())
-        names = {
-            node.attr
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Attribute) and node.attr.startswith("_phase_failures")
-        }
+        from pathlib import Path
+
+        files = [
+            Path(auto.__file__),
+            Path(auto.__file__).parent / "auto" / "loop_init.py",
+        ]
+        names = set()
+        for path in files:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            names |= {
+                node.attr
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Attribute) and node.attr.startswith("_phase_failures")
+            }
         assert "_phase_failures_ledger" in names
         assert "_phase_failures" not in names

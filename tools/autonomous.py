@@ -35,10 +35,8 @@ by tests/test_live_execute_gate.py.
 """
 
 import asyncio
-import json
 import logging
 import os
-from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger("callisto.autonomous")
@@ -152,7 +150,8 @@ class ResearchLoop(
 
     Still defined in this class body (pinned here by earlier slices' tests):
     the thin ``_phase_*`` delegation wrappers to tools.loop.phases_impl,
-    get_status() reporting, and the gated _phase_live_execute (its
+    thin ``get_status`` / ``__init__`` / ``_check_temporal_overlap``
+    delegates, and the gated _phase_live_execute (its
     CALLISTO_ALLOW_LIVE_EXECUTE env gate must remain the first executable
     statement — see tests/test_live_execute_gate.py).
 
@@ -190,82 +189,18 @@ class ResearchLoop(
         orchestrator=None,
         line_monitor=None,
     ):
-        self.hypothesis_manager = hypothesis_manager
-        self.hypothesis_generator = hypothesis_generator
-        self.backtest_engine = backtest_engine
-        self.data_collector = data_collector
-        self.vector_store = vector_store
-        self.orchestrator = orchestrator
-        self.line_monitor = line_monitor
+        from tools.auto.loop_init import init_research_loop
 
-        self._running = False
-        self._task: Optional[asyncio.Task] = None
-
-        # Timestamps for cadence control
-        self._last_data_collect = 0.0
-        self._last_hypothesis_gen = 0.0
-        self._last_claude_call = 0.0
-
-        # Bulk backfill tracking — one-time 30-day seed when data is thin
-        self._bulk_backfill_done = False
-
-        # Counters
-        self._cycles = 0
-        self._data_collections = 0
-        self._hypotheses_generated = 0
-        self._backtests_run = 0
-        self._claude_escalations = 0
-        self._promotions = 0
-        self._rejections = 0
-
-        # Phase-failure ledger — every _phase_* exception/timeout is recorded
-        # here so a "healthy-looking" loop can't silently swallow failures.
-        # Capped at 50 entries; oldest dropped when full.
-        self._phase_failures_ledger = PhaseFailureLedger()
-
-        # Self-diagnostics — track already-escalated issues to avoid spam
-        # Capped at 500 entries; oldest keys evicted when full.
-        self._diagnostic_issues: set[str] = set()
-        self._DIAGNOSTIC_ISSUES_MAX = 500
-
-        # ── Progress tracking (Ralph loop: detect spinning) ──
-        self._progress_window: list[dict] = []  # last N cycle snapshots
-        PROGRESS_WINDOW_SIZE = 10  # look at last 10 cycles
-        self._spinning_detected = False
-        self._last_progress_check = 0
-        self._consecutive_no_progress = 0
-        # R2: the spinning diagnosis must fire ONCE per spin episode, not on
-        # every subsequent stagnant check. Reset when progress resumes.
-        self._diagnosis_fired_this_episode = False
-
-        # ── R2 loop-quality state ──
-        # Calibration trace: per-iteration confidence/evidence ledger, the
-        # record shape R1's retrodiction harness scores against outcomes.
-        from tools.loop_quality import LoopCalibrationTrace
-        self._calibration_trace = LoopCalibrationTrace(subject="research_loop")
-        # Per-phase task-class allocation for the ProviderRouter: framing
-        # (first) and adversarial review (last) get capability tiers, the
-        # middle grind routes to extraction-class endpoints.
-        from tools.loop_quality import LOOP_PHASE_TASK_CLASSES
-        self.loop_phase_task_classes = dict(LOOP_PHASE_TASK_CLASSES)
-
-        # Regime analysis — uses module-level _regime_cache (shared with AutonomousLoop)
-        # Refreshed every REGIME_ANALYSIS_INTERVAL cycles
-        self._last_regime_analysis = 0
-
-        # Dedup reactive game completion handlers — prevents 14×14 ESPN calls
-        # when 14 games complete on the same date. Cleared each research cycle.
-        self._reactive_collected: set[tuple[str, str]] = set()
-
-        # Deferred work queue + downtime tracker (never-idle loop)
-        from tools.work_queue import get_work_queue, get_downtime_tracker
-        self._work_queue = get_work_queue()
-        self._downtime_tracker = get_downtime_tracker()
-        self._was_claude_available = True  # track transitions
-
-        # Mode control
-        self._paused = False
-        self._local_only = os.getenv("CALLISTO_LOCAL_ONLY", "").lower() in ("1", "true", "yes")
+        init_research_loop(
+            self,
+            hypothesis_manager=hypothesis_manager,
+            hypothesis_generator=hypothesis_generator,
+            backtest_engine=backtest_engine,
+            data_collector=data_collector,
+            vector_store=vector_store,
+            orchestrator=orchestrator,
+            line_monitor=line_monitor,
+        )
 
     # ── Thin _phase_* delegation to tools.loop.phases_impl ─────────────────
     # Kept in this class body: earlier extraction slices pinned these wrappers
@@ -300,32 +235,9 @@ class ResearchLoop(
     @staticmethod
     def _check_temporal_overlap(model_config: dict) -> Optional[str]:
         """Check if training and backtest periods overlap. Returns error message or None."""
-        if isinstance(model_config, str):
-            try:
-                model_config = json.loads(model_config)
-            except (json.JSONDecodeError, TypeError):
-                return None
-        if not isinstance(model_config, dict):
-            return None
+        from tools.auto.temporal import check_temporal_overlap
 
-        training_end = model_config.get("training_period_end")
-        backtest_start = model_config.get("backtest_period_start")
-
-        if not training_end or not backtest_start:
-            return None  # Can't check without both dates
-
-        try:
-            te = datetime.strptime(str(training_end), "%Y-%m-%d").date()
-            bs = datetime.strptime(str(backtest_start), "%Y-%m-%d").date()
-            if bs <= te:
-                return (
-                    f"TEMPORAL OVERLAP: backtest starts {bs} but training ends {te}. "
-                    f"Backtest results are contaminated by training data."
-                )
-        except ValueError:
-            pass
-
-        return None
+        return check_temporal_overlap(model_config)
 
     async def _phase_evaluate(self) -> None:
         return await phases_impl.phase_evaluate(self)
@@ -383,69 +295,6 @@ class ResearchLoop(
 
     def get_status(self) -> dict:
         """Return research loop status."""
-        from tools.claude_code import get_usage_stats as claude_stats
-        from tools.pipeline_integrity import get_checker
+        from tools.auto.status import build_research_loop_status
 
-        # Include pipeline integrity info
-        integrity_report = get_checker().get_latest_report()
-
-        # Include work queue status (async call — best-effort)
-        work_queue_status = {}
-        try:
-            work_queue_status = asyncio.get_event_loop().run_until_complete(
-                self._work_queue.get_status()
-            ) if not asyncio.get_event_loop().is_running() else {}
-        except Exception:
-            pass
-
-        return {
-            "running": self._running,
-            "paused": self._paused,
-            "local_only": self._local_only,
-            "mode": "paused" if self._paused else ("local_only" if self._local_only else "full"),
-            "cycles_completed": self._cycles,
-            "data_collections": self._data_collections,
-            "hypotheses_generated": self._hypotheses_generated,
-            "backtests_run": self._backtests_run,
-            "claude_escalations": self._claude_escalations,
-            "promotions": self._promotions,
-            "rejections": self._rejections,
-            # Phase-failure ledger: last 10 failures + total count so a
-            # "healthy-looking" loop can't hide swallowed phase errors.
-            "phase_failures": self._phase_failures_ledger.latest(10),
-            "phase_failure_count": self._phase_failures_ledger.count,
-            # Per-cycle health: False when any phase failed during the most
-            # recent cycle (failures are non-fatal, but the loop is NOT ok).
-            "last_cycle_ok": self._last_cycle_ok(),
-            "last_cycle_phase_failures": self._last_cycle_phase_failures(),
-            # R2: loop-quality telemetry — calibration trace + per-phase
-            # task-class map, consumed by R1's retrodiction harness.
-            "calibration": self._calibration_trace.summary(),
-            "calibration_records": self._calibration_trace.to_records()[-20:],
-            "phase_task_classes": dict(self.loop_phase_task_classes),
-            "research_sports": RESEARCH_SPORTS,
-            "claude_code": claude_stats(),
-            "pipeline_integrity": integrity_report,
-            "work_queue": work_queue_status,
-            "claude_downtime": self._downtime_tracker.get_status(),
-            "progress": {
-                "spinning_detected": self._spinning_detected,
-                "consecutive_no_progress": self._consecutive_no_progress,
-                "window": self._progress_window[-3:] if self._progress_window else [],
-            },
-            "regime_analysis": {
-                "teams_cached": len(_regime_cache),
-                "teams_with_signals": sum(
-                    1 for v in _regime_cache.values()
-                    if v.get("has_edge_signal")
-                ),
-                "last_run": self._last_regime_analysis,
-                "interval_cycles": REGIME_ANALYSIS_INTERVAL,
-            },
-            "intervals": {
-                "research_cycle_seconds": RESEARCH_CYCLE_INTERVAL,
-                "data_collection_seconds": DATA_COLLECTION_INTERVAL,
-                "hypothesis_gen_seconds": HYPOTHESIS_GEN_INTERVAL,
-                "claude_cooldown_seconds": CLAUDE_ESCALATION_COOLDOWN,
-            },
-        }
+        return build_research_loop_status(self)

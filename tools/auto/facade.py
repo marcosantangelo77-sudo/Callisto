@@ -15,11 +15,14 @@ there composes these mixins so existing callers keep working unchanged:
   - CalibrationMixin:    R2 loop-quality seams (calibration trace recording,
                          iteration-state compaction).
 
-NOTE: the thin ``_phase_*`` delegation wrappers, get_status() and the gated
+NOTE: the thin ``_phase_*`` delegation wrappers, thin ``get_status`` /
+``__init__`` / ``_check_temporal_overlap`` delegates, and the gated
 ``_phase_live_execute`` stay defined in the facade class body
 (tools/autonomous.py) — earlier slices pinned them there by AST
 (tests/test_auto_phases_extract.py, tests/test_loop_sequencer_slice.py,
-tests/test_live_execute_gate.py).
+tests/test_live_execute_gate.py). Slice 5 moved the *bodies* of
+get_status / __init__ / temporal-overlap into tools.auto.status,
+tools.auto.loop_init, and tools.auto.temporal.
 
 SAFETY: nothing in this module arms or widens live betting;
 CALLISTO_ALLOW_LIVE_EXECUTE remains the only live-execution arming switch,

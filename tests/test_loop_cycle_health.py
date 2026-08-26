@@ -123,12 +123,22 @@ class TestPureFunctions:
 
 class TestGetStatusExposesCycleHealth:
     def test_get_status_source_includes_keys(self):
-        tree = ast.parse(open(auto.__file__).read())
+        from pathlib import Path
+
+        files = [
+            Path(auto.__file__),
+            Path(auto.__file__).parent / "auto" / "status.py",
+        ]
         found = {"last_cycle_ok": False, "last_cycle_phase_failures": False}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == "get_status":
-                for sub in ast.walk(node):
-                    if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
-                        if sub.value in found:
-                            found[sub.value] = True
+        for path in files:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name in (
+                    "get_status",
+                    "build_research_loop_status",
+                ):
+                    for sub in ast.walk(node):
+                        if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                            if sub.value in found:
+                                found[sub.value] = True
         assert all(found.values()), f"get_status missing keys: {found}"

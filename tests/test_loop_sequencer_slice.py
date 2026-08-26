@@ -31,20 +31,28 @@ class TestPackageImportable:
 
 
 class TestResearchLoopWiring:
-    def _init_source(self):
-        with open(auto.__file__) as f:
-            return f.read()
+    def _source_trees(self):
+        import ast
+        from pathlib import Path
+
+        facade = Path(auto.__file__)
+        paths = [
+            facade,
+            facade.parent / "auto" / "loop_init.py",
+            facade.parent / "auto" / "status.py",
+        ]
+        return [ast.parse(p.read_text(encoding="utf-8")) for p in paths]
 
     def test_init_creates_ledger(self):
         import ast
 
-        tree = ast.parse(self._init_source())
         assigns = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr in (
-                "_phase_failures_ledger", "_phase_failures", "_PHASE_FAILURES_MAX"
-            ):
-                assigns.add(node.attr)
+        for tree in self._source_trees():
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute) and node.attr in (
+                    "_phase_failures_ledger", "_phase_failures", "_PHASE_FAILURES_MAX"
+                ):
+                    assigns.add(node.attr)
         assert "_phase_failures_ledger" in assigns
         # Raw list / max constant must be gone from the class.
         assert "_phase_failures" not in assigns
@@ -53,13 +61,16 @@ class TestResearchLoopWiring:
     def test_get_status_delegates_to_ledger(self):
         import ast
 
-        tree = ast.parse(self._init_source())
         found = {"latest(10)": False, ".count": False}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == "get_status":
-                src = ast.unparse(node)
-                found["latest(10)"] = "latest(10)" in src
-                found[".count"] = "ledger.count" in src
+        for tree in self._source_trees():
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name in (
+                    "get_status",
+                    "build_research_loop_status",
+                ):
+                    src = ast.unparse(node)
+                    found["latest(10)"] = found["latest(10)"] or "latest(10)" in src
+                    found[".count"] = found[".count"] or "ledger.count" in src
         assert all(found.values()), f"get_status not wired to ledger: {found}"
 
 

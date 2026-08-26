@@ -73,12 +73,15 @@ def test_verify_seal_returns_false_on_exception():
 
 # 5. autonomous get_status exposes last-cycle fields
 def test_get_status_reports_cycle_health():
-    src = _read("tools", "autonomous.py")
+    src = _read("tools", "autonomous.py") + _read("tools", "auto", "status.py")
     start = src.rindex("def get_status(")
+    # Slice 5 moved the dict keys into tools.auto.status.build_research_loop_status;
+    # scan the concatenated sources rather than only the facade wrapper.
+    assert '"last_cycle_ok"' in src
+    assert '"last_cycle_phase_failures"' in src
     nxt = src.find("\n    def ", start + 1)
     body = src[start:nxt if nxt != -1 else len(src)]
-    assert '"last_cycle_ok"' in body
-    assert '"last_cycle_phase_failures"' in body
+    assert "build_research_loop_status" in body or '"last_cycle_ok"' in body
 
 
 # 6. latency finding exists and mentions p50
