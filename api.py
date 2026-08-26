@@ -3,62 +3,68 @@ FastAPI REST layer for Callisto.
 
 Endpoints for task submission, session retrieval, world queries, and health checks.
 Runs on port 8420.
+
+Slice 6 split: auth/security primitives live in tools/api/security.py,
+global exception handlers in tools/api/errors.py, lifespan startup phases
+in tools/api/lifecycle.py, and the __main__ serve loop in
+tools/api/serve.py. api.py keeps the FastAPI app object, the route
+decorators with their original Depends(...) gating, the full shutdown
+sequence (ordering pinned by tests), and backward-compat aliases.
 """
 
 import asyncio
-import gc
 import logging
 import os
-import secrets as _secrets
-import time
-import tracemalloc
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime  # noqa: F401  (kept: parity with historical imports)
 from typing import Optional
 
-import aiosqlite
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request, Security
+from fastapi import Depends, FastAPI, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
 
-from agp import AGPSealTampered, Domain
+from agp import AGPSealTampered, Domain  # noqa: F401  (kept: AGP seal surface)
 from logging_config import setup_logging
-from memory import MemoryStore
-from monitor import HealthMonitor
-from orchestrator import Orchestrator
-from task_queue import TaskQueue
-from tools.line_monitor import LineMonitor
-from tools.clv_tracker import CLVTracker
-from tools.autonomous import AutonomousLoop, ResearchLoop
-from tools import telegram
-from tools.telegram import TelegramListener
-from tools.schema import ensure_schema
-from tools.hypothesis import HypothesisManager
-from tools.historical_odds import HistoricalOddsFetcher
-from tools.backtest import BacktestEngine
-from tools.embeddings import VectorStore
-from tools.hypothesis_generator import HypothesisGenerator
-from tools.data_collector import DataCollector
-from tools.health import SystemHealth
-from tools.pipeline_integrity import get_checker as get_integrity_checker, initialize as init_integrity
-from tools.learned_correlations import LearnedCorrelationStore
-from tools.correlation import set_learned_store, SPORT_CORRELATIONS
-from tools.state_paths import restart_signal_path
-from tools.order_manager import (
-    OrderManager,
-    reconcile_filled_orders,
-    detect_voided_orders,
-    get_manager as _get_order_manager,
-)
 
 load_dotenv()
 
 from tools.api import boost_routes as _boost_routes  # noqa: E402
 from tools.api import task_routes as _task_routes  # noqa: E402
+from tools.api import security as _security  # noqa: E402
+from tools.api import lifecycle as _lifecycle  # noqa: E402
+from tools.api import errors as _errors  # noqa: E402
+from tools.api import serve as _serve  # noqa: E402
+
+from tools.api.workers import (  # noqa: E402
+    _is_internal_query,
+    _maybe_auto_followup,
+    wal_checkpoint_loop,
+    restart_signal_watcher,
+    ingestion_sla_watchdog_loop,
+    _sla_alerted_sources,
+    INGESTION_SLA_CHECK_INTERVAL_S,
+    TASK_WORKER_TIMEOUT_S,
+    _run_session_with_adaptive_timeout,
+    _AdaptiveTimeout,
+    task_worker,
+    order_cron_loop,
+)
+
+# Backward-compat aliases for the auth helpers moved to tools/api/security.py
+# (slice 6). Tests and the mini-app replay in tests/test_api_auth.py poke
+# these on the api module directly.
+_client_is_loopback = _security.client_is_loopback
+_log_auth_denied = _security.log_auth_denied
 
 setup_logging()
 logger = logging.getLogger("callisto.api")
+
+# Adaptive-extension knobs for the adaptive-timeout session runner (now in
+# tools/api/workers.py). Kept as module globals here so tests can monkeypatch.
+_ADAPTIVE_PROGRESS_WINDOW_S = float(os.getenv("CALLISTO_PROGRESS_WINDOW_S", "120"))
+_ADAPTIVE_STALL_WINDOW_S = float(os.getenv("CALLISTO_STALL_WINDOW_S", "240"))
+_ADAPTIVE_EXTENSION_S = float(os.getenv("CALLISTO_EXTENSION_S", "120"))
+_ADAPTIVE_POLL_S = float(os.getenv("CALLISTO_ADAPTIVE_POLL_S", "5"))
 
 DB_PATH = os.getenv("CALLISTO_DB_PATH", "memory/callisto.db")
 
@@ -77,43 +83,18 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 _auth_logger = logging.getLogger("callisto.api.auth")
 
 
-def _client_is_loopback(request: Request) -> bool:
-    """Return True iff the request originated from the local loopback interface.
-
-    Only trusts `request.client.host` — never X-Forwarded-For — because Callisto
-    binds to 127.0.0.1 by default and does not sit behind a trusted proxy. If
-    someone puts it behind one, loopback-trust must be revisited.
-    """
-    host = (request.client.host if request.client else "") or ""
-    return host in ("127.0.0.1", "::1", "localhost")
-
-
-def _log_auth_denied(request: Request, reason: str, status: int) -> None:
-    """Emit a WARNING for every 401/403 so probing is visible in logs."""
-    host = (request.client.host if request.client else "?") or "?"
-    _auth_logger.warning(
-        "AUTH_DENIED host=%s method=%s path=%s status=%d reason=%s",
-        host, request.method, request.url.path, status, reason,
-    )
-
+# ---------------------------------------------------------------------------
+# Auth gates — bodies live in tools/api/security.py; these thin wrappers
+# remain the FastAPI Depends(...) targets so dependency signatures (and the
+# ``api_mod.require_admin`` attribute tests monkeypatch around) are stable.
+# ---------------------------------------------------------------------------
 
 async def require_admin(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Security(_bearer_scheme),
 ) -> None:
     """Hard-gate: require Bearer token. Fails closed if CALLISTO_ADMIN_TOKEN unset."""
-    if not CALLISTO_ADMIN_TOKEN:
-        _log_auth_denied(request, "admin_token_unset", 503)
-        raise HTTPException(
-            status_code=503,
-            detail="CALLISTO_ADMIN_TOKEN not configured; admin endpoint disabled",
-        )
-    if credentials is None or credentials.scheme.lower() != "bearer":
-        _log_auth_denied(request, "missing_bearer", 401)
-        raise HTTPException(status_code=401, detail="Bearer token required")
-    if not _secrets.compare_digest(credentials.credentials, CALLISTO_ADMIN_TOKEN):
-        _log_auth_denied(request, "bad_token", 403)
-        raise HTTPException(status_code=403, detail="Forbidden")
+    await _security.require_admin(request, credentials)
 
 
 async def require_admin_or_loopback(
@@ -121,22 +102,7 @@ async def require_admin_or_loopback(
     credentials: Optional[HTTPAuthorizationCredentials] = Security(_bearer_scheme),
 ) -> None:
     """Soft-gate for read endpoints. Allow loopback when token unset; otherwise require token."""
-    if not CALLISTO_ADMIN_TOKEN:
-        if _client_is_loopback(request):
-            return
-        _log_auth_denied(request, "non_loopback_no_token", 403)
-        raise HTTPException(status_code=403, detail="Loopback only when admin token unset")
-    if credentials is None or credentials.scheme.lower() != "bearer":
-        # Loopback path short-circuit even when a token is set: MCP server and
-        # local research loop don't send Authorization headers. They still need
-        # to self-consume the API. Non-loopback callers must authenticate.
-        if _client_is_loopback(request):
-            return
-        _log_auth_denied(request, "missing_bearer", 401)
-        raise HTTPException(status_code=401, detail="Bearer token required")
-    if not _secrets.compare_digest(credentials.credentials, CALLISTO_ADMIN_TOKEN):
-        _log_auth_denied(request, "bad_token", 403)
-        raise HTTPException(status_code=403, detail="Forbidden")
+    await _security.require_admin_or_loopback(request, credentials)
 
 
 # ---------------------------------------------------------------------------
@@ -161,280 +127,112 @@ def public_endpoint(method: str, path: str) -> None:
     _PUBLIC_WRITE_ENDPOINTS.add((method.upper(), path))
 
 # Shared state
-memory: Optional[MemoryStore] = None
-queue: Optional[TaskQueue] = None
-orchestrator_instance: Optional[Orchestrator] = None
-monitor: Optional[HealthMonitor] = None
-line_monitor: Optional[LineMonitor] = None
+memory: Optional[object] = None
+queue: Optional[object] = None
+orchestrator_instance: Optional[object] = None
+monitor: Optional[object] = None
+line_monitor: Optional[object] = None
 live_state_collector = None  # tools.live_state.LiveStateCollector | None
-clv_tracker: Optional[CLVTracker] = None
-autonomous: Optional[AutonomousLoop] = None
-telegram_listener: Optional[TelegramListener] = None
-hypothesis_manager: Optional[HypothesisManager] = None
-historical_fetcher: Optional[HistoricalOddsFetcher] = None
-backtest_engine: Optional[BacktestEngine] = None
-vector_store: Optional[VectorStore] = None
-hypothesis_generator: Optional[HypothesisGenerator] = None
-data_collector: Optional[DataCollector] = None
-research_loop: Optional[ResearchLoop] = None
-system_health: Optional[SystemHealth] = None
-learned_correlation_store: Optional[LearnedCorrelationStore] = None
+clv_tracker: Optional[object] = None
+autonomous: Optional[object] = None
+telegram_listener: Optional[object] = None
+hypothesis_manager: Optional[object] = None
+historical_fetcher: Optional[object] = None
+backtest_engine: Optional[object] = None
+vector_store: Optional[object] = None
+hypothesis_generator: Optional[object] = None
+data_collector: Optional[object] = None
+research_loop: Optional[object] = None
+system_health: Optional[object] = None
+learned_correlation_store: Optional[object] = None
 worker_task: Optional[asyncio.Task] = None
 wal_checkpoint_task: Optional[asyncio.Task] = None
 restart_signal_task: Optional[asyncio.Task] = None
 order_cron_task: Optional[asyncio.Task] = None
 prop_resolver_task: Optional[asyncio.Task] = None
-order_manager_instance: Optional[OrderManager] = None
-live_state_task: Optional[asyncio.Task] = None
+sla_watchdog_task: Optional[asyncio.Task] = None
+heartbeat: Optional[object] = None
+game_scheduler: Optional[object] = None
 
-
-# Adaptive-extension knobs for the adaptive-timeout session runner (now in
-# tools/api/workers.py). Kept as module globals here so tests can monkeypatch.
-_ADAPTIVE_PROGRESS_WINDOW_S = float(os.getenv("CALLISTO_PROGRESS_WINDOW_S", "120"))
-_ADAPTIVE_STALL_WINDOW_S = float(os.getenv("CALLISTO_STALL_WINDOW_S", "240"))
-_ADAPTIVE_EXTENSION_S = float(os.getenv("CALLISTO_EXTENSION_S", "120"))
-_ADAPTIVE_POLL_S = float(os.getenv("CALLISTO_ADAPTIVE_POLL_S", "5"))
-
-# ---------------------------------------------------------------------------
-# Background-worker infrastructure moved to tools/api/workers.py (slice 5).
-# Thin aliases below keep ``api.task_worker``, ``api._AdaptiveTimeout`` etc.
-# working for tests and operators.
-# ---------------------------------------------------------------------------
-from tools.api.workers import (  # noqa: E402
-    _is_internal_query,
-    _maybe_auto_followup,
-    wal_checkpoint_loop,
-    restart_signal_watcher,
-    ingestion_sla_watchdog_loop,
-    _sla_alerted_sources,
-    INGESTION_SLA_CHECK_INTERVAL_S,
-    TASK_WORKER_TIMEOUT_S,
-    _run_session_with_adaptive_timeout,
-    _AdaptiveTimeout,
-    task_worker,
-    order_cron_loop,
-)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup/shutdown lifecycle manager."""
-    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, autonomous, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task, order_cron_task, order_manager_instance, live_state_collector, live_state_task, prop_resolver_task, heartbeat, game_scheduler
+    """Startup/shutdown lifecycle manager.
 
-    # Start memory profiling only when explicitly requested — tracemalloc tracks every
-    # allocation in C-level metadata (~50-100 bytes each), which adds 55-110 MB of invisible
-    # overhead from the JSON decoder alone (1.1M allocations) plus severe fragmentation.
-    if os.environ.get("CALLISTO_TRACEMALLOC") == "1":
-        tracemalloc.start(3)
-        logger.info("tracemalloc started with 3-frame depth (CALLISTO_TRACEMALLOC=1)")
-    else:
-        logger.info("tracemalloc disabled (set CALLISTO_TRACEMALLOC=1 to enable)")
+    Startup is decomposed into ordered phases in tools/api/lifecycle.py;
+    this coroutine owns the phase ORDER, the module-global wiring, the
+    yield, and the complete inline shutdown sequence whose ordering
+    contract is pinned by tests/test_event_bus_lifecycle.py (producers and
+    drains stop BEFORE the WriteCoordinator).
+    """
+    global memory, queue, orchestrator_instance, monitor, line_monitor, clv_tracker, telegram_listener, hypothesis_manager, historical_fetcher, backtest_engine, vector_store, hypothesis_generator, data_collector, research_loop, system_health, learned_correlation_store, worker_task, wal_checkpoint_task, restart_signal_task, order_cron_task, order_manager_instance, live_state_collector, live_state_task, prop_resolver_task, heartbeat, game_scheduler, autonomous, sla_watchdog_task
 
-    # Single-writer coordinator (root-cause fix for "database is locked").
-    # install_aiosqlite_routing() patches aiosqlite.Connection so EVERY
-    # write — including from modules that use raw db.execute() instead of
-    # our retry helpers — routes through the coordinator transparently.
-    # MUST run before ensure_schema and any other connection so the patched
-    # aiosqlite is in effect for the rest of the process lifetime.
-    from tools.db_writer import (
-        install_aiosqlite_routing as _install_routing,
-        get_writer as _get_writer,
+    # Phase 1 — memory profiling only when explicitly requested.
+    _lifecycle.startup_tracemalloc()
+
+    # Phase 2 — single-writer coordinator (root-cause fix for "database is locked").
+    await _lifecycle.startup_write_coordinator(DB_PATH)
+
+    # Phase 3 — schema + migrations.
+    await _lifecycle.startup_migrations(DB_PATH)
+
+    # Phase 4 — preload priority models into VRAM.
+    await _lifecycle.startup_model_warmup()
+
+    # Phase 5 — learned correlations (Bayesian blend of priors + empirical data).
+    learned_correlation_store = await _lifecycle.startup_correlation_store()
+
+    # Phase 6 — core services.
+    memory, queue, orchestrator_instance, monitor = (
+        await _lifecycle.startup_core_services()
     )
-    _install_routing()
-    await _get_writer(DB_PATH)
-    logger.info(f"WriteCoordinator active for {DB_PATH} (process-wide routing installed)")
-
-    # Startup — ensure DB schema is up to date (now uses patched aiosqlite).
-    await ensure_schema()
-
-    # Followup hardening columns (feat/auto-followup-hardening).
-    # Adds followup_depth / parent_task_id / root_task_id / cost_usd to
-    # task_queue so _maybe_auto_followup can enforce depth + budget caps
-    # and /task/{id}/chain can walk the ancestry tree.
-    try:
-        from tools.followup_guard import ensure_followup_columns
-        async with aiosqlite.connect(DB_PATH) as _fg_db:
-            await _fg_db.execute("PRAGMA busy_timeout = 30000")
-            await ensure_followup_columns(_fg_db)
-    except Exception as e:
-        logger.warning(f"followup_guard column migration failed (non-fatal): {e!r}")
-
-    # Versioned migrations (tools/migrations/NNN_*.py). Runs AFTER
-    # ensure_schema so fresh DBs have the v1 baseline tables; for existing
-    # DBs the bootstrap step marks every migration as already-applied so
-    # nothing re-runs. Uses a dedicated autocommit stdlib connection so
-    # DDL bypasses the WriteCoordinator entirely.
-    from tools.migrations import apply_pending_migrations
-    try:
-        mig_result = apply_pending_migrations(DB_PATH)
-        logger.info(f"Migrations: {mig_result}")
-    except Exception as e:
-        logger.error(f"Migration framework failed: {e!r}")
-        raise
-
-    # Preload priority models into VRAM (devstral-small-2 takes 28s cold, <1s warm)
-    from inference import warmup_models
-    await warmup_models()
-
-    # Learned correlations — Bayesian blend of hardcoded priors + empirical data
-    learned_correlation_store = LearnedCorrelationStore()
-    await learned_correlation_store.initialize()
-    await learned_correlation_store.seed_from_priors(SPORT_CORRELATIONS)
-    set_learned_store(learned_correlation_store)
-
-    memory = MemoryStore()
-    await memory.initialize()
-
-    queue = TaskQueue()
-    await queue.initialize()
-
-    orchestrator_instance = Orchestrator(memory)
-    monitor = HealthMonitor()
-    await monitor.start()
 
     # Line movement monitor — autonomous odds tracking.
     # Sole owner of the application-lifespan odds WebSocket: the provider
     # allows one connection per API key, so nothing else may start
     # start_odds_stream() or a competing OddsWebSocket here.
-    line_monitor = LineMonitor()
-    await line_monitor.initialize()
-    await line_monitor.start()
+    line_monitor = await _lifecycle.startup_line_monitor()
 
-    # CLV tracker — bet tracking and closing line value measurement
-    clv_tracker = CLVTracker()
-    await clv_tracker.initialize()
-
-    # Order management — Telegram-approved manual placement (supersedes
-    # the Playwright executor when CALLISTO_USE_ORDER_MANAGER=1, default).
-    order_manager_instance = await _get_order_manager()
+    # Phase 8 — CLV tracker + order management + hypothesis/backtest stack +
+    # research loop.
+    stack = await _lifecycle.startup_research_stack(orchestrator_instance, line_monitor)
+    clv_tracker = stack["clv_tracker"]
+    order_manager_instance = stack["order_manager"]
     app.state.order_manager = order_manager_instance
+    hypothesis_manager = stack["hypothesis_manager"]
+    historical_fetcher = stack["historical_fetcher"]
+    backtest_engine = stack["backtest_engine"]
+    vector_store = stack["vector_store"]
+    hypothesis_generator = stack["hypothesis_generator"]
+    data_collector = stack["data_collector"]
+    research_loop = stack["research_loop"]
 
-    # Hypothesis testing framework
-    hypothesis_manager = HypothesisManager()
-    await hypothesis_manager.initialize()
-    historical_fetcher = HistoricalOddsFetcher()
-    await historical_fetcher.initialize()
-    backtest_engine = BacktestEngine(
-        hypothesis_manager=hypothesis_manager,
-        historical_fetcher=historical_fetcher,
-    )
-    await backtest_engine.initialize()
-
-    # Vector store + hypothesis generator + data collector
-    vector_store = VectorStore()
-    await vector_store.initialize()
-    hypothesis_generator = HypothesisGenerator(
-        hypothesis_manager=hypothesis_manager,
-        vector_store=vector_store,
-    )
-    await hypothesis_generator.initialize()
-    data_collector = DataCollector()
-    await data_collector.initialize()
-
-    # Autonomous reasoning loop — proactive edge analysis
-    autonomous = AutonomousLoop(orchestrator_instance, line_monitor)
-    await autonomous.start()
-
-    # Research loop — 24/7 hypothesis machine
-    research_loop = ResearchLoop(
-        hypothesis_manager=hypothesis_manager,
-        hypothesis_generator=hypothesis_generator,
-        backtest_engine=backtest_engine,
-        data_collector=data_collector,
-        vector_store=vector_store,
-        orchestrator=orchestrator_instance,
-        line_monitor=line_monitor,
-    )
-    await research_loop.start()
-
-    # Pipeline integrity checker — detects silent failures
-    await init_integrity()
-
-    # System health monitor — Layer 2 resilience
-    system_health = SystemHealth()
-    system_health.research_loop = research_loop
-    system_health.autonomous_loop = autonomous
-    await system_health.start()
-
-    # Heartbeat — independent watchdog for loop stalls and Claude availability
-    from tools.self_repair import Heartbeat
-    heartbeat = Heartbeat()
-    await heartbeat.start()
+    # Phase 9 — pipeline integrity checker + system health monitor + heartbeat.
+    system_health, heartbeat = await _lifecycle.startup_watchdogs(research_loop)
     app.state.heartbeat = heartbeat
 
-    # Telegram listener — bidirectional communication from phone
-    telegram_listener = TelegramListener(
-        orchestrator=orchestrator_instance,
-        line_monitor=line_monitor,
-        clv_tracker=clv_tracker,
+    # Phase 10a — Telegram listener (bidirectional communication from phone).
+    telegram_listener = await _lifecycle.startup_telegram_listener(
+        orchestrator_instance, line_monitor, clv_tracker
     )
-    await telegram_listener.start()
 
-    # Game scheduler — fires events at T-60min and T-15min before games
-    try:
-        from tools.game_scheduler import GameScheduler
-        from tools.event_bus import get_event_bus
-        game_scheduler = GameScheduler(event_bus=get_event_bus())
-        await game_scheduler.start()
-        app.state.game_scheduler = game_scheduler
-        logger.info(f"Game scheduler started — {len(game_scheduler._games)} upcoming games")
-    except Exception as e:
-        logger.warning(f"Game scheduler failed to start: {e}")
+    # Phase 10b — game scheduler + event bus audit drain (non-fatal).
+    game_scheduler = await _lifecycle.startup_game_scheduler(app)
+    await _lifecycle.startup_event_bus_drain()
 
-    # Event bus audit drain — persist important events to SQLite
-    try:
-        bus = get_event_bus()
-        await bus.start_audit_drain()
-        logger.info("Event bus audit drain started")
-    except Exception as e:
-        logger.warning(f"Event bus audit drain failed: {e}")
+    # Phase 10c — live in-game state collector (env-gated, non-fatal).
+    live_state_collector, live_state_task = await _lifecycle.startup_live_state_collector(
+        DB_PATH
+    )
 
-    # Live in-game state collector — polls ESPN every 30s for games
-    # in progress, stores snapshots, and fires live-edge detectors.
-    # Env-gated (default ON) and wrapped in try/except so a failure
-    # here can NEVER break the rest of startup. If the DB migration
-    # hasn't been applied yet, the collector self-disables and logs.
-    live_state_collector = None
-    live_state_task = None
-    if os.environ.get("CALLISTO_LIVE_STATE_ENABLED", "1") == "1":
-        try:
-            from tools.live_state import start_collector as _start_live_collector
-            live_state_collector = await _start_live_collector(db_path=DB_PATH)
-            if live_state_collector is not None:
-                # start_collector already called create_task inside the
-                # collector; we don't need a second task. Expose the
-                # module's task via the collector so shutdown can find it.
-                live_state_task = live_state_collector._task
-                logger.info(
-                    "Live state collector started "
-                    f"(sports={list(live_state_collector.sports)}, interval=30s)"
-                )
-            else:
-                logger.warning(
-                    "Live state collector not started — table missing or disabled"
-                )
-        except Exception as e:
-            logger.warning(f"Live state collector failed to start: {e}")
-            live_state_collector = None
-            live_state_task = None
-    else:
-        logger.info("Live state collector disabled via CALLISTO_LIVE_STATE_ENABLED=0")
-
-    worker_task = asyncio.create_task(task_worker())
-    wal_checkpoint_task = asyncio.create_task(wal_checkpoint_loop())
-    # Signal-file consumer — decouples restart from watchdog liveness.
-    restart_signal_task = asyncio.create_task(restart_signal_watcher())
-    sla_watchdog_task = asyncio.create_task(ingestion_sla_watchdog_loop())
-    order_cron_task = asyncio.create_task(order_cron_loop())
-    # Prop resolution — fills backtest_events.actual_result for player_* markets.
-    # Without this, every prop hypothesis stats at 0 resolved (silent freeze).
-    try:
-        from tools.prop_resolver import prop_resolution_loop
-        prop_resolver_task = asyncio.create_task(prop_resolution_loop())
-        logger.info(
-            "prop_resolution_loop started (15m interval, 500 rows/pass)"
-        )
-    except Exception as e:
-        logger.warning(f"prop_resolution_loop failed to start: {e}")
+    # Background workers (moved to tools/api/workers.py in slice 5).
+    tasks = _lifecycle.spawn_background_tasks()
+    worker_task = tasks["worker"]
+    wal_checkpoint_task = tasks["wal_checkpoint"]
+    restart_signal_task = tasks["restart_signal"]
+    sla_watchdog_task = tasks["sla_watchdog"]
+    order_cron_task = tasks["order_cron"]
+    prop_resolver_task = tasks["prop_resolver"]
     logger.info(
         f"Callisto API started on port {CALLISTO_PORT} "
         f"(WAL ckpt 5m, restart-signal watcher active, ingestion SLA watchdog 5m, "
@@ -442,18 +240,13 @@ async def lifespan(app: FastAPI):
     )
 
     # Notify on Telegram
-    sports = (await line_monitor.get_status()).get("monitored_sports", [])
-    await telegram.alert_system(
-        f"API started on port {CALLISTO_PORT}\n"
-        f"Monitoring: {', '.join(sports)}\n"
-        f"Odds-API.io Pro: 15 books, 30K req/hr + WebSocket\n"
-        f"Autonomous reasoning: ACTIVE\n"
-        f"Research loop: ACTIVE (24/7 hypothesis machine)"
-    )
+    await _lifecycle.announce_startup(CALLISTO_PORT, line_monitor)
 
     yield
 
     # Shutdown
+    from tools import telegram
+
     await telegram.alert_system("Callisto shutting down.", is_error=True)
     await telegram_listener.stop()
     if system_health:
@@ -461,7 +254,10 @@ async def lifespan(app: FastAPI):
         await system_health.stop()
     if research_loop:
         await research_loop.stop()
-    await autonomous.stop()
+    from tools.autonomous import AutonomousLoop  # noqa: F401 — type reference
+
+    if autonomous:
+        await autonomous.stop()
     if wal_checkpoint_task:
         wal_checkpoint_task.cancel()
         try:
@@ -500,11 +296,7 @@ async def lifespan(app: FastAPI):
             pass
     # Live state collector — cancelled via stop_collector so the HTTP
     # client is closed cleanly. Failure here must NOT stop shutdown.
-    try:
-        from tools.live_state import stop_collector as _stop_live_collector
-        await _stop_live_collector()
-    except Exception as e:
-        logger.debug(f"Live state collector shutdown failed: {e}")
+    await _lifecycle.stop_live_state_collector()
     # Cancel orphaned restart task if shutdown beat it (audit H-14).
     if _restart_task and not _restart_task.done():
         _restart_task.cancel()
@@ -522,6 +314,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Game scheduler shutdown error (non-fatal)")
     try:
+        from tools.event_bus import get_event_bus
         await get_event_bus().stop()
         logger.info("Event bus audit drain stopped")
     except Exception:
@@ -529,10 +322,10 @@ async def lifespan(app: FastAPI):
     try:
         if heartbeat:
             await heartbeat.stop()
-            task = getattr(heartbeat, "_task", None)
-            if task is not None and not task.done():
+            hb_task = getattr(heartbeat, "_task", None)
+            if hb_task is not None and not hb_task.done():
                 try:
-                    await task
+                    await hb_task
                 except asyncio.CancelledError:
                     pass
             app.state.heartbeat = None
@@ -562,24 +355,8 @@ async def lifespan(app: FastAPI):
     await memory.close()
     if learned_correlation_store:
         await learned_correlation_store.close()
-    # Close search backend clients
-    from tools.search import close_all_clients
-    await close_all_clients()
-    # Close odds API client
-    from tools.odds_api import close_client as close_odds_client
-    await close_odds_client()
-    # Close contextual data client
-    from tools.contextual_data import close_client as close_ctx_client
-    await close_ctx_client()
-    # Close embedding client
-    from tools.embeddings import close_client as close_embed_client
-    await close_embed_client()
-    # Close data collector client
-    from tools.data_collector import close_client as close_dc_client
-    await close_dc_client()
-    # Close DK scraper client
-    from tools.dk_scraper import close_client as close_dk_client
-    await close_dk_client()
+    # Close every shared outbound HTTP client (moved to tools/api/lifecycle.py).
+    await _lifecycle.close_http_clients()
     logger.info("Callisto API shut down")
 
 
@@ -591,43 +368,22 @@ app = FastAPI(
 )
 
 
-# Global exception handler — convert any unhandled error into a structured 500
-# instead of crashing the request handler. Logs full traceback for debugging.
-from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
-import traceback as _traceback
+# Global exception handlers — convert unhandled errors into structured JSON
+# instead of crashing the request handler. Bodies live in tools/api/errors.py.
+from fastapi.responses import JSONResponse  # noqa: E402
+from fastapi.exceptions import RequestValidationError  # noqa: E402
 
 
 @app.exception_handler(Exception)
 async def _global_exception_handler(request: Request, exc: Exception):
     """Catch any unhandled exception and return a structured JSON error."""
-    # Don't intercept FastAPI's own HTTPException — let it pass through
-    if isinstance(exc, HTTPException):
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={"error": exc.detail, "status": exc.status_code},
-        )
-    tb = _traceback.format_exc()
-    logger.error(
-        f"Unhandled exception in {request.method} {request.url.path}: {exc}\n{tb}"
-    )
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": str(exc),
-            "type": type(exc).__name__,
-            "path": request.url.path,
-        },
-    )
+    return await _errors.global_exception_handler(request, exc)
 
 
 @app.exception_handler(RequestValidationError)
 async def _validation_exception_handler(request: Request, exc: RequestValidationError):
     """Return clean 422 instead of FastAPI's default verbose error."""
-    return JSONResponse(
-        status_code=422,
-        content={"error": "Validation failed", "details": exc.errors()},
-    )
+    return await _errors.validation_exception_handler(request, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -640,41 +396,15 @@ async def _validation_exception_handler(request: Request, exc: RequestValidation
 #
 # Endpoints may still be explicitly gated with `require_admin` (hard token
 # requirement) via per-endpoint dependencies; the middleware only enforces
-# the floor, never relaxes it.
+# the floor, never relaxes it. The gate core lives in
+# tools/api/security.enforce_default_secure.
 # ---------------------------------------------------------------------------
 
 @app.middleware("http")
 async def _default_secure_middleware(request: Request, call_next):
-    method = request.method.upper()
-    if method in _WRITE_METHODS:
-        path = request.url.path
-        if (method, path) not in _PUBLIC_WRITE_ENDPOINTS:
-            # Inline the token/loopback check so we can return JSON rather
-            # than let HTTPException bubble up before routing.
-            if _client_is_loopback(request):
-                # Loopback always allowed — MCP server & research loop path.
-                pass
-            else:
-                auth_header = request.headers.get("authorization", "")
-                if not CALLISTO_ADMIN_TOKEN:
-                    _log_auth_denied(request, "non_loopback_no_token", 403)
-                    return JSONResponse(
-                        status_code=403,
-                        content={"error": "Loopback only when admin token unset", "status": 403},
-                    )
-                if not auth_header.lower().startswith("bearer "):
-                    _log_auth_denied(request, "missing_bearer", 401)
-                    return JSONResponse(
-                        status_code=401,
-                        content={"error": "Bearer token required", "status": 401},
-                    )
-                provided = auth_header.split(" ", 1)[1].strip()
-                if not _secrets.compare_digest(provided, CALLISTO_ADMIN_TOKEN):
-                    _log_auth_denied(request, "bad_token", 403)
-                    return JSONResponse(
-                        status_code=403,
-                        content={"error": "Forbidden", "status": 403},
-                    )
+    response = await _security.enforce_default_secure(request)
+    if response is not None:
+        return response
     return await call_next(request)
 
 
@@ -760,20 +490,20 @@ async def query_world(
     )
 
 
-from tools.api import analysis as _analysis
-from tools.api import bets as _bets
-from tools.api import odds_extra as _odds_extra
-from tools.api import odds_routes as _odds_routes
-from tools.api import simulate as _simulate
-from tools.api import wiki as _wiki
-from tools.api import model_routes as _model_routes
-from tools.api import data_routes as _data_routes
-from tools.api import hypothesis_routes as _hypothesis_routes
-from tools.api import backtest_routes as _backtest_routes
-from tools.api import research_routes as _research_routes
-from tools.api import system_routes as _system_routes
-from tools.api import debug_routes as _debug_routes
-from tools.api import order_routes as _order_routes
+from tools.api import analysis as _analysis  # noqa: E402
+from tools.api import bets as _bets  # noqa: E402
+from tools.api import odds_extra as _odds_extra  # noqa: E402
+from tools.api import odds_routes as _odds_routes  # noqa: E402
+from tools.api import simulate as _simulate  # noqa: E402
+from tools.api import wiki as _wiki  # noqa: E402
+from tools.api import model_routes as _model_routes  # noqa: E402
+from tools.api import data_routes as _data_routes  # noqa: E402
+from tools.api import hypothesis_routes as _hypothesis_routes  # noqa: E402
+from tools.api import backtest_routes as _backtest_routes  # noqa: E402
+from tools.api import research_routes as _research_routes  # noqa: E402
+from tools.api import system_routes as _system_routes  # noqa: E402
+from tools.api import debug_routes as _debug_routes  # noqa: E402
+from tools.api import order_routes as _order_routes  # noqa: E402
 
 # Debounce window for /health health-file disk writes (seconds).
 _HEALTH_FILE_DEBOUNCE_SECONDS = 10.0
@@ -1673,28 +1403,4 @@ async def executor_login():
 
 
 if __name__ == "__main__":
-    import socket
-    import uvicorn
-
-    # Wait for port to be free — the #1 cause of crash-loops.
-    # Windows holds TCP sockets in TIME_WAIT for up to 4 minutes after
-    # the process dies. Without this check, uvicorn bind fails silently
-    # with exit code 0xC0000142 and the watchdog loops forever.
-    for attempt in range(30):  # 30 × 2s = 60s max wait
-        try:
-            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            test_sock.bind((CALLISTO_BIND_HOST, CALLISTO_PORT))
-            test_sock.close()
-            break  # Port is free
-        except OSError:
-            if attempt < 29:
-                import time as _time
-                logger.warning(f"Port {CALLISTO_PORT} in use, waiting... (attempt {attempt+1}/30)")
-                _time.sleep(2)
-            else:
-                logger.error(f"Port {CALLISTO_PORT} still in use after 60s — exiting")
-                import sys
-                sys.exit(1)
-
-    uvicorn.run("api:app", host=CALLISTO_BIND_HOST, port=CALLISTO_PORT, reload=False)
+    _serve.serve(CALLISTO_BIND_HOST, CALLISTO_PORT)
