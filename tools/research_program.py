@@ -141,7 +141,7 @@ class TrackRecord:
     n_hit: int
     n_stale: int
     brier: Optional[float]   # mean of {1: miss/hit} + quantile skill losses
-    stale_fraction: float
+    stale_fraction: float    # n_stale / (n_resolved + n_stale), bounded [0, 1]
 
     @property
     def hit_rate(self) -> float:
@@ -154,7 +154,10 @@ class TrackRecord:
 def summarize_track_record(records: Iterable[ResolutionRecord]) -> TrackRecord:
     """Track record built from RESOLVED descendants only. Stale records are
     never evidence: they appear solely in n_stale / stale_fraction so they
-    can penalize a parent that already has enough genuine resolutions."""
+    can penalize a parent that already has enough genuine resolutions.
+    stale_fraction is stale / (genuine_resolved + stale) — always within
+    [0, 1], so the staleness penalty can never exceed its documented −0.20
+    maximum no matter how many stales pile up."""
     recs = [r for r in normalize_records(records) if r.counted]
     ev = [r for r in recs if r.resolved]
     n = len(ev)
@@ -173,7 +176,10 @@ def summarize_track_record(records: Iterable[ResolutionRecord]) -> TrackRecord:
         else:  # miss — genuinely resolved, and wrong
             errs.append(1.0)
     brier = sum(errs) / len(errs) if errs else None
-    stale_frac = (stales / n) if n else 0.0
+    # Bounded fraction over ALL counted records (genuine + stale), so the
+    # staleness penalty stays inside its documented [-0.20, 0] range even
+    # when stales vastly outnumber resolutions (e.g. 5 hits + 100 stales).
+    stale_frac = (stales / (stales + n)) if (stales + n) else 0.0
     return TrackRecord(n_resolved=n, n_hit=hits, n_stale=stales,
                        brier=brier, stale_fraction=stale_frac)
 

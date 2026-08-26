@@ -217,6 +217,25 @@ class TestStaleNeverEarnsCredit:
                        for i in range(10)]
         assert inherited_ceiling(stales_only) == SPECULATIVE_CAP
 
+    def test_massive_stale_count_keeps_penalty_bounded(self):
+        """Regression: stale_fraction must be stale/(resolved+stale), in
+        [0, 1]. 5 PRIMARY hits + 100 stales must stay a sane nonnegative
+        ceiling with at most the documented −0.20 staleness penalty —
+        never a negative ceiling like the old unbounded stale/resolved
+        fraction produced (~−3.18)."""
+        from tools.research_program import summarize_track_record as s
+        recs = hits(5, best_source_class="PRIMARY") + [
+            ResolutionRecord(f"s{i}", D0, "stale") for i in range(100)]
+        tr = s(recs)
+        assert tr.n_resolved == 5 and tr.n_stale == 100
+        assert 0.0 <= tr.stale_fraction <= 1.0
+        assert tr.hit_rate == pytest.approx(1.0)
+        clean = inherited_ceiling(hits(5, best_source_class="PRIMARY"))
+        bounded = inherited_ceiling(recs)
+        assert SPECULATIVE_CAP <= bounded <= 1.0
+        assert bounded < clean          # penalty still bites
+        assert clean - bounded <= 0.20 + 1e-9   # documented max penalty
+
     def test_four_hits_plus_any_number_of_stales_stay_speculative(self):
         base = inherited_ceiling(hits(4))
         for extra in (1, 5, 50):
