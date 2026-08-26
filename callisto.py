@@ -549,7 +549,11 @@ def _cmd_show(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="callisto",
-        description="Callisto front door — ask, status, doctor.")
+        description="Callisto front door — ask, status, doctor.",
+        epilog="Money safety defaults: live execution is OFF unless "
+               "CALLISTO_ALLOW_LIVE_EXECUTE=1 is set, and the API binds "
+               "to loopback (127.0.0.1) unless CALLISTO_BIND_HOST is set. "
+               "Run `callisto doctor` to check this machine.")
     sub = ap.add_subparsers(dest="command", required=True)
 
     p_ask = sub.add_parser("ask", help="ask one research question")
