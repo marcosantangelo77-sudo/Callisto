@@ -514,7 +514,11 @@ class TestNoAuthCreep:
 
     def test_middleware_only_gates_write_methods(self):
         """The default-secure middleware enforces a floor on WRITE methods
-        only — GET probes like the health trio are never auth-challenged."""
+        only — GET probes like the health trio are never auth-challenged.
+
+        Slice-6 moved the write-gate core into tools.api.security; the
+        facade must still delegate there and GET methods must short-circuit.
+        """
         tree = ast.parse(API_SOURCE)
         fn = None
         for node in tree.body:
@@ -524,15 +528,16 @@ class TestNoAuthCreep:
                 fn = node
         assert fn is not None, "default-secure middleware disappeared"
         src_fn = ast.get_source_segment(API_SOURCE, fn) or ""
-        assert "_WRITE_METHODS" in src_fn
-        # The gate must be nested inside a write-method check: GETs fall
-        # straight through to call_next.
-        m = src_fn.find("if method in _WRITE_METHODS")
-        assert m != -1, (
-            "middleware no longer scopes its token check to write methods — "
-            "public GET probes would be challenged"
-        )
-        assert "request.method.upper()" in src_fn
+        assert "_security.enforce_default_secure" in src_fn
+        assert "_WRITE_METHODS" in API_SOURCE
+        assert '{"POST", "PATCH", "PUT", "DELETE"}' in API_SOURCE
+        sec = (REPO / "tools" / "api" / "security.py").read_text(encoding="utf-8")
+        assert "method = request.method.upper()" in sec
+        assert 'if method not in {"POST", "PATCH", "PUT", "DELETE"}' in sec
+        # GETs return None (proceed) before any token/loopback check.
+        gate_pos = sec.index('if method not in {"POST", "PATCH", "PUT", "DELETE"}')
+        token_pos = sec.index("admin_token()")
+        assert gate_pos < token_pos
 
     def test_no_bearer_token_read_in_public_handlers(self):
         for path in PUBLIC_HEALTH_PATHS:
