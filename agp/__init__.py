@@ -42,7 +42,19 @@ EMPTY_SYNTHESIS_MARKER = "No synthesis produced."
 #
 # Key rotation: verify tries the current key first, then the legacy unkeyed
 # digest, then any key listed in CALLISTO_SEAL_KEY_OLD (comma-separated hex).
+def _seal_key_configured() -> bool:
+    """True when an operator intended keyed sealing (CALLISTO_SEAL_KEY set).
+
+    Distinguishes "no key configured" (legacy unkeyed regime) from "key
+    configured but unusable" (invalid hex — fail-closed regime).
+    """
+    return bool(os.getenv("CALLISTO_SEAL_KEY", "").strip())
+
+
 def _seal_keys() -> list[bytes]:
+    """Parse configured seal keys. Empty result + _seal_key_configured() True
+    means the key was set but invalid hex — a keyed regime with no usable key,
+    which must NOT fall back to accepting/writing unkeyed SHA-256 seals."""
     keys: list[bytes] = []
     current = os.getenv("CALLISTO_SEAL_KEY", "").strip()
     if current:
@@ -50,7 +62,8 @@ def _seal_keys() -> list[bytes]:
             keys.append(bytes.fromhex(current))
         except ValueError:
             logging.getLogger("callisto.agp").error(
-                "CALLISTO_SEAL_KEY is not valid hex — falling back to unkeyed seal"
+                "CALLISTO_SEAL_KEY is not valid hex — failing closed "
+                "(no unkeyed fallback)"
             )
     for old in os.getenv("CALLISTO_SEAL_KEY_OLD", "").split(","):
         old = old.strip()
@@ -131,6 +144,16 @@ class AGPSealRefused(Exception):
 
     Conditions: empty conclusion, EMPTY_SYNTHESIS_MARKER conclusion, zero
     evidence, or filtered_evidence_count > kept evidence count.
+    """
+    pass
+
+
+class AGPSealKeyInvalid(Exception):
+    """Raised when CALLISTO_SEAL_KEY is set but not valid hex.
+
+    A configured-but-unusable key is a keyed regime with no usable key:
+    fail-closed. seal() must not write a forgeable unkeyed SHA-256, and
+    verify_seal() must not accept one.
     """
     pass
 
@@ -223,9 +246,15 @@ def _seal_digest(payload: str) -> str:
     sealed sessions when no key is configured.
     """
     keys = _seal_keys()
+    if not _seal_key_configured():
+        # Legacy unkeyed regime: no CALLISTO_SEAL_KEY at all.
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
     if keys:
         return hmac.new(keys[0], payload.encode("utf-8"), hashlib.sha256).hexdigest()
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    raise AGPSealKeyInvalid(
+        "CALLISTO_SEAL_KEY is set but is not valid hex — refusing to produce "
+        "a forgeable unkeyed SHA-256 seal"
+    )
 
 
 class AGPSession:
@@ -484,8 +513,16 @@ class AGPSession:
         # When a key regime is active, the raw public SHA-256 of the payload
         # is deliberately NOT accepted — otherwise anyone who can write the
         # DB could forge a seal without knowing the key.
-        candidates = [_seal_digest(payload)]
-        if not _seal_keys():
+        try:
+            candidates = [_seal_digest(payload)]
+        except AGPSealKeyInvalid:
+            # Keyed regime with no usable key: fail closed.
+            return False
+        if not _seal_key_configured():
+            # Legacy unkeyed regime only: accept the public SHA-256 of the
+            # payload. When CALLISTO_SEAL_KEY is set (even if invalid hex)
+            # this candidate must NOT be accepted — a keyed regime never
+            # falls back to an unkeyed, forgeable digest.
             candidates.append(hashlib.sha256(payload.encode("utf-8")).hexdigest())
         for key in _seal_keys():
             candidates.append(
