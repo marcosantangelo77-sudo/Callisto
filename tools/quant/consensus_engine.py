@@ -51,6 +51,8 @@ import statistics
 from dataclasses import dataclass, field
 from typing import Optional
 
+from tools.devig import validate_implied_book
+
 # Book sharp tiers. The weights below target a geometric-growth-optimal
 # consensus under the assumption that sharpness on a given market
 # dominates liquidity (true for most player-prop and alt-line markets).
@@ -214,18 +216,35 @@ def power_devig(
 
 def _devig_one_book(line: BookLine) -> Optional[float]:
     """Return book's devigged fair prob for the *target* outcome, or None
-    if we can't reliably devig (e.g., missing paired side and no prior)."""
+    if the book fails the shared market-sanity gate (zero-hold, crossed,
+    excessive hold, or non-finite implied probabilities) — an invalid book
+    must never contribute to a trusted fair value.
+
+    The two-sided path routes through ``validate_implied_book``, the same
+    authoritative boundary used by tools/devig.py, so the consensus engine
+    can never accept a book that any public devig helper would reject.
+    """
     book_key = (line.book or "").lower()
     tier = BOOK_TIER.get(book_key, "soft")
     if line.paired_implied_prob is not None and line.paired_implied_prob > 0:
+        # Market-sanity gate on BOTH sides of this book before devigging.
+        try:
+            validate_implied_book([line.implied_prob, line.paired_implied_prob])
+        except ValueError:
+            return None
         # We have both sides of the two-way market — exact devig.
         if tier == "sharp":
             fair, _ = pinnacle_devig(line.implied_prob, line.paired_implied_prob)
         else:
-            fair, _ = power_devig([line.implied_prob, line.paired_implied_prob])[0], None
-            # power_devig returns a list; take the first element.
-        return fair
+            fair = power_devig([line.implied_prob, line.paired_implied_prob])[0]
+        return fair[0] if isinstance(fair, list) else fair
     # Single-sided: subtract the tier-prior half-vig. Conservative but stable.
+    # Still gated: a non-finite or out-of-range single-sided implied is
+    # invalid external input, not a price.
+    ip = line.implied_prob
+    if isinstance(ip, bool) or not isinstance(ip, (int, float)) \
+            or not math.isfinite(ip) or not 0.0 < ip < 1.0:
+        return None
     vig_prior = DEFAULT_TIER_VIG.get(tier, 0.05)
     est = line.implied_prob / (1.0 + vig_prior / 2.0)
     return max(0.001, min(0.999, est))

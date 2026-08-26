@@ -382,13 +382,19 @@ def clv_points(claim_quote: MarketQuote, close_quote: MarketQuote) -> Optional[f
     devigged; comparing raw-to-raw is exactly the phantom-edge bug this is
     built to avoid. Returns None when devigging is impossible.
     """
-    # fair_probability() is contractually inert for expected invalid-market
-    # failures (it returns the raw implied plus an invalid_book audit), so
-    # this function only ever normalises those to None. A genuine bug — e.g.
-    # a non-finite or out-of-range fair value leaking through on an audit-
-    # clean book — still raises rather than being masked as no-trusted-CLV.
-    f_claim, a_claim = claim_quote.fair_probability()
-    f_close, a_close = close_quote.fair_probability()
+    # Expected invalid external market input (non-finite price, unparseable
+    # kind, unsanitary book) is contractually "no trusted CLV" → None. A
+    # genuine bug — e.g. a non-finite or out-of-range fair value leaking
+    # through on an audit-clean book — still raises rather than being
+    # masked as no-trusted-CLV.
+    try:
+        f_claim, a_claim = claim_quote.fair_probability()
+    except ValueError:
+        return None
+    try:
+        f_close, a_close = close_quote.fair_probability()
+    except ValueError:
+        return None
     for audit in (a_claim, a_close):
         if not audit.get("devigged") or audit.get("invalid_book"):
             return None

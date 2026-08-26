@@ -25,6 +25,8 @@ selection are the next module's job. This is the "prices" layer; the
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -34,6 +36,7 @@ from .consensus_engine import (
     BOOK_TIER,
     ConsensusResult,
     compute_consensus_fair_prob,
+    multiplicative_devig,
 )
 
 
@@ -180,14 +183,28 @@ def _recent_limit_down_penalty(recent_limit_down: bool) -> float:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _devig_placement(line: BookLine) -> float:
-    """Fair probability implied by the placement book's single line."""
+def _devig_placement(line: BookLine) -> Optional[float]:
+    """Fair probability implied by the placement book's single line.
+
+    Returns None when the placement book fails the shared market-sanity
+    gate (zero-hold, crossed, excessive hold, non-finite): an invalid
+    placement must never be scored into a recommendation.
+    """
+    from tools.devig import validate_implied_book
     if line.paired_implied_prob is not None and line.paired_implied_prob > 0:
-        total = line.implied_prob + line.paired_implied_prob
-        return line.implied_prob / total if total > 0 else line.implied_prob
+        try:
+            validate_implied_book([line.implied_prob, line.paired_implied_prob])
+        except ValueError:
+            return None
+        fair, _ = multiplicative_devig(line.implied_prob, line.paired_implied_prob)
+        return fair
+    ip = line.implied_prob
+    if isinstance(ip, bool) or not isinstance(ip, (int, float)) \
+            or not math.isfinite(ip) or not 0.0 < ip < 1.0:
+        return None
     tier = BOOK_TIER.get(line.book.lower(), "soft")
     prior_vig = {"sharp": 0.025, "reference": 0.05, "soft": 0.06}.get(tier, 0.05)
-    return max(0.001, min(0.999, line.implied_prob / (1.0 + prior_vig / 2.0)))
+    return max(0.001, min(0.999, ip / (1.0 + prior_vig / 2.0)))
 
 
 def score_edge(
@@ -201,6 +218,27 @@ def score_edge(
 
     consensus: ConsensusResult = compute_consensus_fair_prob(snap.all_lines)
     placement_fair = _devig_placement(snap.placement_line)
+    if placement_fair is None:
+        # Placement book failed the market-sanity gate: never a recommendation.
+        return RankedEdge(
+            sport=snap.sport,
+            event_id=snap.event_id,
+            market=snap.market,
+            outcome=snap.outcome,
+            placement_book=snap.placement_line.book,
+            placement_implied=snap.placement_line.implied_prob,
+            placement_fair=float("nan"),
+            consensus_fair=consensus.fair_prob,
+            consensus_std_err=consensus.std_err,
+            raw_edge=float("nan"),
+            effective_edge=float("nan"),
+            penalty_total=0.0,
+            penalty_breakdown={},
+            disagreement=True,
+            n_books=consensus.n_books,
+            outlier_books=tuple(consensus.outlier_books),
+            decision="skip",
+        )
     raw_edge = consensus.fair_prob - placement_fair
 
     penalties = {

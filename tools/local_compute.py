@@ -37,14 +37,30 @@ async def local_devig(prices: list[float], method: str = "power") -> list[float]
     """
     from tools.devig import power_devig, multiplicative_devig, shin_devig
 
-    # Convert American odds to implied probabilities if needed
-    converted = []
+    # Convert American odds to DECIMAL odds. The tools.devig helpers take
+    # decimal odds (they invert to implied internally); previously implied
+    # probabilities were passed in here, so a documented call like
+    # local_devig([-110, -110]) blew up on implied 0.5238 <= 1.0.
+    converted: list[float] = []
     for p in prices:
-        if abs(p) > 1:
-            # American odds
-            converted.append(_american_to_implied(p))
+        if isinstance(p, bool) or not isinstance(p, (int, float)) \
+                or not math.isfinite(p):
+            raise ValueError(f"Invalid price in list: {p!r}")
+        if abs(p) >= 100:
+            # American odds — validated and converted through the shared
+            # math_utils boundary.
+            from tools.math_utils import american_to_decimal
+            converted.append(american_to_decimal(int(p)))
+        elif p > 1:
+            # Already decimal odds
+            converted.append(float(p))
+        elif 0 < p < 1:
+            # Implied probability — convert to decimal for the helpers,
+            # then re-validate the book through the authoritative gate.
+            converted.append(1.0 / float(p))
         else:
-            converted.append(p)
+            raise ValueError(f"Price {p!r} is not American odds, decimal "
+                             "odds, or an implied probability")
 
     if method == "power":
         result, _ = power_devig(converted)
@@ -52,8 +68,10 @@ async def local_devig(prices: list[float], method: str = "power") -> list[float]
     elif method == "shin":
         result, _ = shin_devig(converted)
         return result
-    else:
+    elif method == "multiplicative":
         return multiplicative_devig(converted)
+    else:
+        raise ValueError(f"Unknown devig method: {method!r}")
 
 
 async def local_significance_test(events: list[dict]) -> dict:

@@ -61,7 +61,7 @@ def devig_additive(side_a_odds: int, side_b_odds: int) -> tuple[float, float]:
     return round(fair_a, 6), round(fair_b, 6)
 
 
-def devig_multibook(book_odds: list[dict]) -> float:
+def devig_multibook(book_odds: list[dict]) -> Optional[float]:
     """
     Devig using multi-book consensus — average devigged probabilities
     across multiple books, weighting sharper books more heavily.
@@ -69,8 +69,14 @@ def devig_multibook(book_odds: list[dict]) -> float:
     Args:
         book_odds: List of {"bookmaker": str, "odds_for": int, "odds_against": int}
 
-    Returns fair probability for the "for" side.
+    Returns fair probability for the "for" side, or None when no book in
+    the list yields a trustworthy fair value (empty/malformed entries,
+    invalid American odds, or an unsanitary book). Never fabricates a
+    neutral 0.5 — an unpriceable market must not look like a fair coin.
     """
+    if not book_odds or not isinstance(book_odds, list):
+        return None
+
     SHARP_WEIGHT = {"pinnacle": 3.0, "lowvig.ag": 2.5, "circa": 2.5,
                     "bookmaker.eu": 2.0, "betonline.ag": 2.0, "betcris": 2.0}
     DEFAULT_WEIGHT = 1.0
@@ -79,18 +85,27 @@ def devig_multibook(book_odds: list[dict]) -> float:
     total_weight = 0.0
 
     for entry in book_odds:
-        book = entry.get("bookmaker", "").lower()
-        odds_for = entry.get("odds_for", -110)
-        odds_against = entry.get("odds_against", -110)
+        if not isinstance(entry, dict):
+            continue
+        book = (entry.get("bookmaker") or "").lower()
+        odds_for = entry.get("odds_for")
+        odds_against = entry.get("odds_against")
+        if odds_for is None or odds_against is None:
+            continue
 
-        fair_for, _ = devig_multiplicative(odds_for, odds_against)
+        try:
+            fair_for, _ = devig_multiplicative(odds_for, odds_against)
+        except (ValueError, TypeError):
+            # Invalid odds or unsanitary book: this entry contributes
+            # nothing rather than poisoning the average.
+            continue
 
         weight = SHARP_WEIGHT.get(book, DEFAULT_WEIGHT)
         weighted_sum += fair_for * weight
         total_weight += weight
 
     if total_weight == 0:
-        return 0.5
+        return None
 
     return round(weighted_sum / total_weight, 6)
 
@@ -115,7 +130,14 @@ def evaluate_fixed_boost(
         description: Boost description
         book: Sportsbook offering the boost
     """
-    boosted_implied = calculate_implied_probability(boosted_odds)
+    from tools.math_utils import validate_american_odds
+    boosted_am = validate_american_odds(boosted_odds)
+    if not isinstance(fair_probability, (int, float)) or isinstance(fair_probability, bool) \
+            or not (0.0 < float(fair_probability) < 1.0):
+        raise ValueError(
+            f"fair_probability must be strictly inside (0, 1), got {fair_probability!r}")
+
+    boosted_implied = calculate_implied_probability(boosted_am)
     edge = fair_probability - boosted_implied
 
     # Calculate EV

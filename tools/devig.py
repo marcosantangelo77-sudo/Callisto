@@ -104,6 +104,35 @@ MAX_SANE_OVERROUND = 0.20
 _CEILING_ULP_SLACK = 64
 
 
+def validate_implied_book(implied_probs: list[float]) -> list[float]:
+    """Authoritative market-sanity gate on implied probabilities.
+
+    Single shared boundary for every consumer (devig helpers, consensus
+    engine, boost evaluator): a book is valid only when every implied
+    probability is finite and strictly inside (0, 1), the overround is
+    strictly positive (zero-hold and crossed books are rejected), and the
+    total hold stays under ``MAX_SANE_OVERROUND``. Anything else raises
+    ValueError rather than producing a trustworthy-looking fair value.
+    """
+    if not implied_probs:
+        raise ValueError("Empty odds list")
+    for ip in implied_probs:
+        if isinstance(ip, bool) or not isinstance(ip, (int, float)) \
+                or not math.isfinite(ip):
+            raise ValueError(f"Non-finite or non-numeric implied probability: {ip!r}")
+        if not 0.0 < ip < 1.0:
+            raise ValueError(f"Implied probability out of (0, 1): {ip!r}")
+    overround = sum(implied_probs) - 1.0
+    if not math.isfinite(overround) or overround <= 1e-9:
+        raise ValueError(f"Invalid book: overround {overround:.6f} is not strictly "
+                         "positive (zero-hold or crossed book)")
+    if overround >= MAX_SANE_OVERROUND * (1.0 - _CEILING_ULP_SLACK * sys.float_info.epsilon):
+        raise ValueError(f"Invalid book: overround {overround:.4f} exceeds the "
+                         f"{MAX_SANE_OVERROUND:.0%} market-sanity ceiling "
+                         "(stale mix or absurd hold)")
+    return implied_probs
+
+
 def _validate_book(odds_list: list[float]) -> list[float]:
     """Shared market-sanity gate for every public devig entry point.
 
@@ -122,9 +151,7 @@ def _validate_book(odds_list: list[float]) -> list[float]:
             raise ValueError(
                 f"Decimal odds must exceed 1.0, got {o!r}")
     implied = [1 / o for o in odds_list]
-    if any(not math.isfinite(ip) or not 0.0 < ip < 1.0 for ip in implied):
-        raise ValueError("Implied probability out of (0, 1)")
-    overround = sum(implied) - 1.0
+    return validate_implied_book(implied)
     # Market-sanity gate on the book as a whole. A real two-sided book has a
     # small POSITIVE hold (the vig/spread). Zero hold means a no-vig (or
     # self-consistent-arbitrage-free but unpriceable) book and a negative
@@ -203,10 +230,11 @@ def power_devig(odds_list: list[float]) -> tuple[list[float], float]:
     """
     implied = _validate_book(odds_list)
 
-    # Check if already fair
-    total = sum(implied)
-    if abs(total - 1.0) < 0.0001:
-        return implied, 1.0
+    # No "already fair" early return here: a book whose hold is merely
+    # *tiny* (e.g. implied values summing to 1.000099) must still be
+    # normalised through the solver, not echoed back as raw implied.
+    # Exactly-fair input never reaches this point — _validate_book rejects
+    # any non-strictly-positive overround.
 
     def objective(k):
         return sum(ip ** k for ip in implied) - 1.0
@@ -214,6 +242,8 @@ def power_devig(odds_list: list[float]) -> tuple[list[float], float]:
     try:
         k = _brentq(objective, 0.0001, 100.0, xtol=1e-12)
         fair = [ip ** k for ip in implied]
+        total_fair = sum(fair)
+        fair = [p / total_fair for p in fair]
         return fair, k
     except ValueError:
         # Fallback if solver fails
@@ -230,7 +260,6 @@ def shin_devig(odds_list: list[float]) -> tuple[list[float], float]:
       fair_i = [sqrt(z² + 4(1-z)·ip_i²/total) - z] / [2(1-z)]
 
     Solve for z via brentq such that sum(fair_i) = 1.0.
-    Guard: if overround ≈ 0, return raw implied probs with z=0.
 
     Verified:
       [1.909, 1.909] → [0.50, 0.50], z≈0.048
@@ -242,10 +271,10 @@ def shin_devig(odds_list: list[float]) -> tuple[list[float], float]:
     overround), same as the other helpers.
     """
     implied = _validate_book(odds_list)
-    total = sum(implied)
 
-    if abs(total - 1.0) < 0.0001:
-        return implied, 0.0
+    # No "already fair" early return: see power_devig. Exactly-fair input
+    # is rejected by _validate_book before we get here.
+    total = sum(implied)
 
     def shin_probs(z):
         probs = []
@@ -261,7 +290,10 @@ def shin_devig(odds_list: list[float]) -> tuple[list[float], float]:
 
     try:
         z = _brentq(objective, 0.0001, 0.5)
-        return shin_probs(z), z
+        fair = shin_probs(z)
+        total_fair = sum(fair)
+        fair = [p / total_fair for p in fair]
+        return fair, z
     except ValueError:
         logger.warning("Shin devig solver failed, falling back to multiplicative")
         return multiplicative_devig(odds_list), 0.0

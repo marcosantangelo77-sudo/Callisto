@@ -19,6 +19,8 @@ from typing import Optional
 
 from tools.odds_api import calculate_implied_probability
 
+from tools.devig import validate_implied_book
+
 from .consensus_engine import BookLine
 from .edge_ranker import MarketSnapshot, persist_ranked_edges, rank_edges
 
@@ -90,6 +92,17 @@ def _snapshot_rows_from_games(
                         continue
                     parsed.append((name, imp_p, point_f))
                 if len(parsed) != 2:
+                    continue
+                # Market-sanity gate on the SOURCE book before it can feed
+                # the consensus: a zero-hold, crossed, excessive-hold, or
+                # non-finite pair must never create a trusted fair value.
+                try:
+                    validate_implied_book([parsed[0][1], parsed[1][1]])
+                except ValueError:
+                    logger.debug(
+                        "scanner dropping invalid book %s market %s/%s: "
+                        "failed market-sanity gate", book, mkey,
+                        [p[0] for p in parsed])
                     continue
                 for idx in range(2):
                     name, imp_p, point_f = parsed[idx]

@@ -63,7 +63,39 @@ class TestDevig:
         assert abs(fair - pinnacle_fair) < abs(fair - fanduel_fair)
 
     def test_multibook_empty(self):
-        assert devig_multibook([]) == 0.5
+        """Empty/malformed input is expected invalid external data: the safe
+        no-result is None, never a fabricated neutral 0.5 fair value."""
+        assert devig_multibook([]) is None
+        assert devig_multibook([{}]) is None
+
+    def test_multibook_invalid_odds_entry_dropped(self):
+        """An entry with invalid American odds (fractional 100.9) contributes
+        nothing rather than poisoning the consensus."""
+        books = [
+            {"bookmaker": "pinnacle", "odds_for": -110, "odds_against": 100.9},
+            {"bookmaker": "fanduel", "odds_for": -112, "odds_against": -108},
+        ]
+        # Only one valid book remains → its devigged fair value.
+        assert abs(devig_multibook(books) - 0.504330) < 1e-4
+
+    def test_multibook_all_invalid_returns_none(self):
+        # Zero-hold (+100/-100), invalid magnitude (50), and missing fields
+        # are all unsanitary — nothing survives the gate.
+        assert devig_multibook([
+            {"bookmaker": "pinnacle", "odds_for": +100, "odds_against": -100},
+            {"bookmaker": "fanduel", "odds_for": 50, "odds_against": -110},
+            {"bookmaker": "draftkings"},
+        ]) is None
+
+    def test_invalid_boosted_odds_rejected(self):
+        """Fractional American odds like 100.9 can never reach a SLAM."""
+        from tools.boost_evaluator import evaluate_fixed_boost
+        with pytest.raises(ValueError):
+            evaluate_fixed_boost(boosted_odds=100.9, fair_probability=0.55)
+        with pytest.raises(ValueError):
+            evaluate_fixed_boost(boosted_odds=-110, fair_probability=1.5)
+        result = evaluate_fixed_boost(boosted_odds=150, fair_probability=0.5)
+        assert result["rating"] in {"MARGINAL", "GOOD", "STRONG", "EXCEPTIONAL", "NO_EDGE"}
 
 
 class TestFixedBoost:
