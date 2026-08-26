@@ -9,6 +9,10 @@ significant line movements. This is where edges are found:
 
 Runs as a background task within the Callisto API lifecycle.
 Stores snapshots in SQLite for historical analysis.
+
+Internals live in tools/lines/: ingest (snapshot conversion/merging),
+edge_report (consensus + +EV evaluation), movement (tracking/KL).
+The LineMonitor import path is unchanged.
 """
 
 import asyncio
@@ -52,6 +56,32 @@ from tools.odds_api_io import (
 # fallbacks; oddspapi was redundant and was spending our 250/month quota on
 # sports we cover elsewhere.
 from tools.prop_scraper_free import scrape_all_props, store_prop_snapshot, ensure_prop_schema
+from tools.lines.ingest import (
+    WS_SPORT_TO_MONITORED,
+    canonicalize_book_top,
+    enrich_with_scraper,
+    merge_delta_into_snapshot,
+    merge_free_snapshots,
+    matchup_key,
+    stamp_snapshot_fetched_at,
+    ws_sport_to_monitored,
+    ws_update_to_snapshot,
+)
+from tools.lines.edge_report import (
+    MIN_EDGE_ALERT,
+    MovementEvaluator,
+    check_model_agreement,
+    compute_devig_consensus,
+    extract_implied_probs,
+)
+from tools.lines.movement import (
+    POINT_MOVEMENT_THRESHOLD,
+    PRICE_MOVEMENT_THRESHOLD,
+    KLDivergenceTracker,
+    MovementRecorder,
+    extract_probs,
+    filter_significant,
+)
 
 load_dotenv()
 
@@ -70,16 +100,6 @@ MONITORED_SPORTS = os.getenv(
     "basketball_nba,icehockey_nhl,americanfootball_nfl,baseball_mlb,basketball_ncaab,basketball_ncaaw,soccer_mls,golf_pga",
 ).split(",")
 
-# Movement thresholds — what counts as "significant"
-# Tightened from 10/1.0: at -110, +5 is ~2% implied prob change which
-# is a meaningful sharp move. 0.5 captures key-number crosses (3, 7) that
-# can flip cover probability by 5-10%.
-PRICE_MOVEMENT_THRESHOLD = 5     # American odds points (~2% implied prob)
-POINT_MOVEMENT_THRESHOLD = 0.5   # Spread/total half-points (key number sensitivity)
-
-# Minimum edge for alert
-MIN_EDGE_ALERT = 0.03  # 3% edge minimum to flag as interesting
-
 # --- Event-driven odds update config ----------------------------------------
 # These knobs flip Callisto from "poll every 15 min" to event-driven freshness:
 #   * WS_SPORTS — odds-api.io sport slugs to stream live (comma-separated).
@@ -97,214 +117,25 @@ INCREMENTAL_ENABLED = os.getenv("CALLISTO_INCREMENTAL_ENABLED", "1") == "1"
 INCREMENTAL_INTERVAL = int(os.getenv("CALLISTO_INCREMENTAL_INTERVAL_S", "60"))
 REQUIRE_MODEL_AGREEMENT = os.getenv("CALLISTO_REQUIRE_MODEL_AGREEMENT", "1") == "1"
 
-# Map odds-api.io WS sport slugs back to the-odds-api.com sport keys used in
-# odds_snapshots rows. A single WS sport fans out to multiple leagues.
-WS_SPORT_TO_MONITORED: dict[str, list[str]] = {
-    "basketball": ["basketball_nba", "basketball_ncaab", "basketball_ncaaw"],
-    "american-football": ["americanfootball_nfl", "americanfootball_ncaaf"],
-    "baseball": ["baseball_mlb"],
-    "ice-hockey": ["icehockey_nhl"],
-    "soccer": ["soccer_mls", "soccer_epl"],
-}
-
 
 def _ws_sport_to_monitored(ws_sport: str, ws_league: str = "") -> Optional[str]:
-    """Map odds-api.io WS (sport, league) to the-odds-api.com sport key.
-
-    WS messages carry e.g. sport='basketball', league='NBA'. We convert
-    that back to 'basketball_nba' so every downstream consumer (edge
-    scanner, movement detector, odds_snapshots rows) sees the same
-    canonical sport key regardless of whether the event arrived by WS,
-    incremental poll, or 15-min snapshot.
-    """
-    s = (ws_sport or "").lower().strip()
-    lg = (ws_league or "").lower().strip().replace(" ", "_")
-    # Preferred: combine sport + league so basketball_ncaab and
-    # basketball_nba don't collide in edge-scan output.
-    if s == "basketball":
-        if "ncaa" in lg and "w" in lg:
-            return "basketball_ncaaw"
-        if "ncaa" in lg:
-            return "basketball_ncaab"
-        return "basketball_nba"
-    if s in ("american-football", "american_football", "football"):
-        if "ncaa" in lg:
-            return "americanfootball_ncaaf"
-        return "americanfootball_nfl"
-    if s == "baseball":
-        return "baseball_mlb"
-    if s in ("ice-hockey", "ice_hockey", "hockey"):
-        return "icehockey_nhl"
-    if s == "soccer":
-        return "soccer_mls"
-    # Last resort — first matching entry in WS_SPORT_TO_MONITORED.
-    first = WS_SPORT_TO_MONITORED.get(s, [])
-    if first:
-        return first[0]
-    return None
+    """Back-compat wrapper — see tools.lines.ingest.ws_sport_to_monitored."""
+    return ws_sport_to_monitored(ws_sport, ws_league)
 
 
 def _ws_update_to_snapshot(data: dict) -> Optional[tuple[str, dict]]:
-    """Convert a single odds-api.io WS/incremental message into a snapshot.
-
-    Returns (sport_key, snapshot_dict) or None if the message lacks enough
-    structure to route. The snapshot dict is shaped like get_odds() output
-    so _process_snapshot can consume it unchanged — one game, one
-    bookmaker, and the subset of markets that actually changed.
-    """
-    if not isinstance(data, dict):
-        return None
-    event_id = data.get("id") or data.get("event_id")
-    if not event_id:
-        return None
-    ws_sport = data.get("sport", "") or data.get("sport_key", "")
-    ws_league = data.get("league", "")
-    sport_key = _ws_sport_to_monitored(str(ws_sport), str(ws_league))
-    if not sport_key:
-        return None
-
-    bookie_name = data.get("bookie") or data.get("bookmaker") or ""
-    if not bookie_name:
-        return None
-
-    now_iso = datetime.now(timezone.utc).isoformat()
-    # Build an odds-api-shaped bookmaker entry. odds-api.io WS markets look
-    # like {"name": "ML"|"Spread"|"Totals", "outcomes": [{"name", "price",
-    # "point"?}]} — map onto the-odds-api.com's "key" vocabulary.
-    _WS_MARKET_MAP = {
-        "ml": "h2h", "moneyline": "h2h",
-        "spread": "spreads", "spreads": "spreads", "runline": "spreads",
-        "totals": "totals", "total": "totals", "ou": "totals",
-    }
-    bm_markets = []
-    for m in data.get("markets", []) or []:
-        raw = str(m.get("name", "")).lower()
-        key = _WS_MARKET_MAP.get(raw, raw)
-        outcomes = []
-        for oc in m.get("outcomes", []) or []:
-            outcomes.append({
-                "name": oc.get("name", ""),
-                "price": oc.get("price", 0),
-                "point": oc.get("point"),
-                "fetched_at": now_iso,
-            })
-        if outcomes:
-            bm_markets.append({"key": key, "outcomes": outcomes})
-    if not bm_markets:
-        return None
-
-    snapshot = {
-        "sport": sport_key,
-        "game_count": 1,
-        "source": "odds_api_io",
-        "fetched_at": now_iso,
-        "games": [{
-            "id": str(event_id),
-            "sport_key": sport_key,
-            "home_team": data.get("home", "") or data.get("home_team", ""),
-            "away_team": data.get("away", "") or data.get("away_team", ""),
-            "commence_time": data.get("commence") or data.get("commence_time"),
-            "bookmakers": [{
-                "key": canonicalize_book_top(bookie_name),
-                "title": bookie_name,
-                "last_update": now_iso,
-                "fetched_at": now_iso,
-                "markets": bm_markets,
-            }],
-        }],
-    }
-    return sport_key, snapshot
-
-
-def canonicalize_book_top(name: str) -> str:
-    """Thin wrapper — imports lazily to avoid circular imports at module load."""
-    try:
-        from tools.book_keys import canonicalize_book as _cb
-        return _cb(name)
-    except Exception:
-        return (name or "").lower().replace(" ", "_")
+    """Back-compat wrapper — see tools.lines.ingest.ws_update_to_snapshot."""
+    return ws_update_to_snapshot(data)
 
 
 def _merge_delta_into_snapshot(base: dict, delta: dict, now_iso: str) -> dict:
-    """Splice a single-book WS/incremental delta onto the full snapshot.
-
-    Keeps every game + book from `base`, then for each game in `delta`
-    replaces OR appends the matching bookmaker entry. The returned dict is
-    a shallow copy — callers may mutate per-game entries in place.
-
-    Crucially, this preserves multi-book consensus: when DK pushes a WS
-    update, the returned snapshot still has every other book's quote from
-    the last 15-min snapshot (aged but weighted-down via fetched_at decay
-    in edge_scanner), and DK's entry is replaced with the fresh quote.
-    """
-    import copy
-    merged = {
-        "sport": base.get("sport", delta.get("sport", "")),
-        "game_count": base.get("game_count", 0),
-        "source": delta.get("source", base.get("source", "odds_api")),
-        "fetched_at": now_iso,
-        "ingest_source": delta.get("ingest_source", "ws"),
-        "games": [copy.deepcopy(g) for g in base.get("games", [])],
-    }
-    # Index base games by id for O(1) splice.
-    by_id: dict[str, dict] = {}
-    for g in merged["games"]:
-        gid = str(g.get("id", ""))
-        if gid:
-            by_id[gid] = g
-
-    for dgame in delta.get("games", []) or []:
-        gid = str(dgame.get("id", ""))
-        if not gid or gid not in by_id:
-            # New event that hasn't been seen in base — append wholesale.
-            merged["games"].append(copy.deepcopy(dgame))
-            continue
-        target = by_id[gid]
-        target.setdefault("bookmakers", [])
-        existing = target["bookmakers"]
-        for dbm in dgame.get("bookmakers", []) or []:
-            dkey = (dbm.get("key") or "").lower()
-            dtitle = (dbm.get("title") or "").lower()
-            replaced = False
-            for i, bm in enumerate(existing):
-                bmkey = (bm.get("key") or "").lower()
-                bmtitle = (bm.get("title") or "").lower()
-                if dkey and bmkey == dkey:
-                    existing[i] = copy.deepcopy(dbm)
-                    replaced = True
-                    break
-                if dtitle and bmtitle == dtitle:
-                    existing[i] = copy.deepcopy(dbm)
-                    replaced = True
-                    break
-            if not replaced:
-                existing.append(copy.deepcopy(dbm))
-    merged["game_count"] = len(merged["games"])
-    return merged
+    """Back-compat wrapper — see tools.lines.ingest.merge_delta_into_snapshot."""
+    return merge_delta_into_snapshot(base, delta, now_iso)
 
 
 def _stamp_snapshot_fetched_at(snapshot: dict, now_iso: str) -> None:
-    """Stamp `fetched_at` on every bookmaker entry in a snapshot.
-
-    Prefers an existing `fetched_at` (so WS-delivered deltas retain their
-    true ingest time even when later merged into a 15-min snapshot frame)
-    and falls back to `last_update` → `now_iso` otherwise. The outermost
-    snapshot dict also receives `fetched_at` so per-provider tooling
-    (scraper fallback, incremental poll) can pass the stamp through without
-    digging into every bookmaker.
-    """
-    snapshot.setdefault("fetched_at", now_iso)
-    for game in snapshot.get("games", []) or []:
-        for bm in game.get("bookmakers", []) or []:
-            # Bookmaker-level fetched_at — don't overwrite WS stamps
-            if not bm.get("fetched_at"):
-                bm["fetched_at"] = bm.get("last_update") or now_iso
-            # Outcome-level for granular freshness (WS messages deliver a
-            # single outcome change; stamp that outcome)
-            for mkt in bm.get("markets", []) or []:
-                for oc in mkt.get("outcomes", []) or []:
-                    if not oc.get("fetched_at"):
-                        oc["fetched_at"] = bm.get("fetched_at", now_iso)
+    """Back-compat wrapper — see tools.lines.ingest.stamp_snapshot_fetched_at."""
+    return stamp_snapshot_fetched_at(snapshot, now_iso)
 
 
 class LineMonitor:
@@ -323,12 +154,14 @@ class LineMonitor:
         from collections import deque
         self._alerts: deque = deque(maxlen=100)  # Hard-capped at 100 (was unbounded list)
         self._latest_edge_reports: dict[str, dict] = {}  # sport -> latest edge scan (only latest per sport)
-        self._kl_cache: dict[str, dict] = {}  # "sport:event_id:market" -> KL metrics (capped in _put_kl)
-        self._KL_CACHE_MAX = 2000  # was 10000 — 5x reduction to limit arena fragmentation
         # Self-healing: track consecutive all-source failures per sport.
         # Alert via Telegram only after 3+ consecutive failures.
         self._consecutive_failures: dict[str, int] = {}  # sport -> count
         self._FAILURE_ALERT_THRESHOLD = 3
+
+        # Extracted collaborators (tools/lines/)
+        self._kl_tracker = KLDivergenceTracker(db_path=db_path)
+        self._evaluator: Optional[MovementEvaluator] = None
 
         # Event-driven odds state (WS + incremental poll) -------------------
         # _ws_client holds the odds-api.io WebSocket handle; _incremental_task
@@ -511,14 +344,14 @@ class LineMonitor:
         self._ws_last_update_at = time.time()
 
         try:
-            mapped = _ws_update_to_snapshot(data)
+            mapped = ws_update_to_snapshot(data)
             if not mapped:
                 return
             sport_key, snap = mapped
             snap["ingest_source"] = "ws"
             # Run through the normal pipeline — this writes fetched_at,
             # triggers edge rescoring for the affected market, and invokes
-            # _evaluate_movement for changed prices.
+            # movement evaluation for changed prices.
             await self._process_snapshot(sport_key, snap)
             # Piggy-back live-edge detector eval. Only fires when the
             # event has a live_game_state row — function no-ops otherwise,
@@ -574,7 +407,7 @@ class LineMonitor:
                     # Each update has the same shape as a WS message —
                     # reuse the same converter.
                     for upd in updates:
-                        mapped = _ws_update_to_snapshot(upd)
+                        mapped = ws_update_to_snapshot(upd)
                         if not mapped:
                             continue
                         s_key, snap = mapped
@@ -885,7 +718,7 @@ class LineMonitor:
         sources = list(scraped.values())
         new_snapshot = sources[0]
         for extra in sources[1:]:
-            new_snapshot = self._merge_free_snapshots(new_snapshot, extra)
+            new_snapshot = merge_free_snapshots(new_snapshot, extra)
 
         new_snapshot["source"] = f"free_cascade_{'_'.join(scraped.keys())}"
         logger.info(
@@ -924,174 +757,21 @@ class LineMonitor:
             logger.error(f"Snapshot failed for {sport}: {e}")
 
     async def _enrich_with_dk(self, sport: str, snapshot: dict) -> dict:
-        """Merge fresh DK scraper data into an Odds API snapshot.
-
-        For each game in the snapshot, if DK scraper has data for the same
-        matchup, update (or add) the DraftKings bookmaker entry with the
-        fresher scraped lines. This is free and gives us the target book's
-        actual current lines rather than potentially cached API data.
-        """
-        try:
-            dk_data = await scrape_dk_odds(sport)
-            if dk_data.get("error") or not dk_data.get("games"):
-                return snapshot
-
-            # Build lookup: normalize team names for matching
-            dk_by_matchup = {}
-            for dk_game in dk_data["games"]:
-                key = self._matchup_key(dk_game.get("home_team", ""), dk_game.get("away_team", ""))
-                if key:
-                    dk_by_matchup[key] = dk_game
-
-            enriched = 0
-            for game in snapshot.get("games", []):
-                key = self._matchup_key(game.get("home_team", ""), game.get("away_team", ""))
-                if not key or key not in dk_by_matchup:
-                    continue
-
-                dk_game = dk_by_matchup[key]
-                dk_bookmaker = None
-                for bm in dk_game.get("bookmakers", []):
-                    if bm.get("key") == "draftkings":
-                        dk_bookmaker = bm
-                        break
-
-                if not dk_bookmaker:
-                    continue
-
-                # Find and replace existing DK entry, or append
-                replaced = False
-                for i, bm in enumerate(game.get("bookmakers", [])):
-                    if bm.get("key", "").lower() in ("draftkings", "draft_kings"):
-                        game["bookmakers"][i] = dk_bookmaker
-                        replaced = True
-                        break
-
-                if not replaced:
-                    game.setdefault("bookmakers", []).append(dk_bookmaker)
-
-                enriched += 1
-
-            if enriched > 0:
-                logger.info(f"DK enrichment {sport}: updated {enriched}/{len(snapshot.get('games', []))} games")
-
-        except Exception as e:
-            logger.warning(f"DK enrichment failed for {sport}: {e}", exc_info=True)
-
-        return snapshot
+        """Merge fresh DK scraper data into an Odds API snapshot (see ingest.enrich_with_scraper)."""
+        return await enrich_with_scraper(sport, snapshot, scrape_dk_odds, "draftkings", ("draft_kings",))
 
     async def _enrich_with_fd(self, sport: str, snapshot: dict) -> dict:
-        """Merge fresh FanDuel scraper data into an odds snapshot.
-
-        Same pattern as _enrich_with_dk: for each game in the snapshot,
-        if the FanDuel scraper has data for the same matchup, update (or add)
-        the FanDuel bookmaker entry with the fresher scraped lines.
-        """
-        try:
-            fd_data = await scrape_fd_odds(sport)
-            if fd_data.get("error") or not fd_data.get("games"):
-                return snapshot
-
-            # Build lookup: normalize team names for matching
-            fd_by_matchup = {}
-            for fd_game in fd_data["games"]:
-                key = self._matchup_key(fd_game.get("home_team", ""), fd_game.get("away_team", ""))
-                if key:
-                    fd_by_matchup[key] = fd_game
-
-            enriched = 0
-            for game in snapshot.get("games", []):
-                key = self._matchup_key(game.get("home_team", ""), game.get("away_team", ""))
-                if not key or key not in fd_by_matchup:
-                    continue
-
-                fd_game = fd_by_matchup[key]
-                fd_bookmaker = None
-                for bm in fd_game.get("bookmakers", []):
-                    if bm.get("key") == "fanduel":
-                        fd_bookmaker = bm
-                        break
-
-                if not fd_bookmaker:
-                    continue
-
-                # Find and replace existing FanDuel entry, or append
-                replaced = False
-                for i, bm in enumerate(game.get("bookmakers", [])):
-                    if bm.get("key", "").lower() in ("fanduel", "fan_duel"):
-                        game["bookmakers"][i] = fd_bookmaker
-                        replaced = True
-                        break
-
-                if not replaced:
-                    game.setdefault("bookmakers", []).append(fd_bookmaker)
-
-                enriched += 1
-
-            if enriched > 0:
-                logger.info(f"FD enrichment {sport}: updated {enriched}/{len(snapshot.get('games', []))} games")
-
-        except Exception as e:
-            logger.warning(f"FD enrichment failed for {sport}: {e}", exc_info=True)
-
-        return snapshot
+        """Merge fresh FanDuel scraper data into an odds snapshot (see ingest.enrich_with_scraper)."""
+        return await enrich_with_scraper(sport, snapshot, scrape_fd_odds, "fanduel", ("fan_duel",))
 
     async def _enrich_with_mgm(self, sport: str, snapshot: dict) -> dict:
-        """Merge fresh BetMGM scraper data into an odds snapshot.
-
-        Same pattern as _enrich_with_dk/_enrich_with_fd.
-        """
-        try:
-            mgm_data = await scrape_betmgm_odds(sport)
-            if mgm_data.get("error") or not mgm_data.get("games"):
-                return snapshot
-
-            mgm_by_matchup = {}
-            for mgm_game in mgm_data["games"]:
-                key = self._matchup_key(mgm_game.get("home_team", ""), mgm_game.get("away_team", ""))
-                if key:
-                    mgm_by_matchup[key] = mgm_game
-
-            enriched = 0
-            for game in snapshot.get("games", []):
-                key = self._matchup_key(game.get("home_team", ""), game.get("away_team", ""))
-                if not key or key not in mgm_by_matchup:
-                    continue
-
-                mgm_game = mgm_by_matchup[key]
-                mgm_bookmaker = None
-                for bm in mgm_game.get("bookmakers", []):
-                    if bm.get("key") == "betmgm":
-                        mgm_bookmaker = bm
-                        break
-
-                if not mgm_bookmaker:
-                    continue
-
-                replaced = False
-                for i, bm in enumerate(game.get("bookmakers", [])):
-                    if bm.get("key", "").lower() in ("betmgm", "bet_mgm"):
-                        game["bookmakers"][i] = mgm_bookmaker
-                        replaced = True
-                        break
-
-                if not replaced:
-                    game.setdefault("bookmakers", []).append(mgm_bookmaker)
-
-                enriched += 1
-
-            if enriched > 0:
-                logger.info(f"BetMGM enrichment {sport}: updated {enriched}/{len(snapshot.get('games', []))} games")
-
-        except Exception as e:
-            logger.warning(f"BetMGM enrichment failed for {sport}: {e}", exc_info=True)
-
-        return snapshot
+        """Merge fresh BetMGM scraper data into an odds snapshot (see ingest.enrich_with_scraper)."""
+        return await enrich_with_scraper(sport, snapshot, scrape_betmgm_odds, "betmgm", ("bet_mgm",))
 
     async def _enrich_with_fanatics(self, sport: str, snapshot: dict) -> dict:
         """Merge fresh Fanatics scraper data into an odds snapshot.
 
-        Same pattern as _enrich_with_dk/_enrich_with_fd. Fanatics is the
+        Same pattern as the other enrichment helpers. Fanatics is the
         secondary book (per project_sportsbooks) so we always pull a
         fresh scrape when the sport is supported. Silent on failure — the
         Fanatics endpoints are UNDOCUMENTED and we expect them to break
@@ -1103,119 +783,14 @@ class LineMonitor:
             return snapshot
         if sport not in FANATICS_LEAGUE_KEYS:
             return snapshot
-
-        try:
-            fan_data = await fetch_fanatics_odds(sport)
-            if fan_data.get("error") or not fan_data.get("games"):
-                return snapshot
-
-            fan_by_matchup: dict[str, dict] = {}
-            for fan_game in fan_data["games"]:
-                key = self._matchup_key(fan_game.get("home_team", ""), fan_game.get("away_team", ""))
-                if key:
-                    fan_by_matchup[key] = fan_game
-
-            enriched = 0
-            for game in snapshot.get("games", []):
-                key = self._matchup_key(game.get("home_team", ""), game.get("away_team", ""))
-                if not key or key not in fan_by_matchup:
-                    continue
-
-                fan_game = fan_by_matchup[key]
-                fan_bookmaker = None
-                for bm in fan_game.get("bookmakers", []):
-                    if bm.get("key") == "fanatics":
-                        fan_bookmaker = bm
-                        break
-
-                if not fan_bookmaker:
-                    continue
-
-                # Replace any existing Fanatics entry (including spelling
-                # variants) with the scraped one, or append if absent.
-                replaced = False
-                for i, bm in enumerate(game.get("bookmakers", [])):
-                    if bm.get("key", "").lower() in ("fanatics", "fanatics_sportsbook"):
-                        game["bookmakers"][i] = fan_bookmaker
-                        replaced = True
-                        break
-
-                if not replaced:
-                    game.setdefault("bookmakers", []).append(fan_bookmaker)
-
-                enriched += 1
-
-            if enriched > 0:
-                logger.info(f"Fanatics enrichment {sport}: updated {enriched}/{len(snapshot.get('games', []))} games")
-
-        except Exception as e:
-            logger.warning(f"Fanatics enrichment failed for {sport}: {e}", exc_info=True)
-
-        return snapshot
-
-    def _merge_free_snapshots(self, base_data: dict, extra_data: dict) -> dict:
-        """Merge two odds snapshots into one multi-book snapshot.
-
-        Uses base_data as the foundation, then adds bookmaker entries from
-        extra_data to matching games. Extra-only games are appended.
-        Works with any pair of sources (DK+FD, DK+MGM, etc.).
-        """
-        merged = {
-            "sport": base_data.get("sport", extra_data.get("sport", "")),
-            "games": [dict(g) for g in base_data.get("games", [])],
-            "source": "merged",
-            "credits": {"remaining": None, "used": None, "api_key_set": True},
-        }
-
-        # Build matchup lookup from base games
-        base_by_matchup = {}
-        for i, game in enumerate(merged["games"]):
-            key = self._matchup_key(game.get("home_team", ""), game.get("away_team", ""))
-            if key:
-                base_by_matchup[key] = i
-
-        extra_only_games = []
-        for extra_game in extra_data.get("games", []):
-            key = self._matchup_key(extra_game.get("home_team", ""), extra_game.get("away_team", ""))
-            if key and key in base_by_matchup:
-                idx = base_by_matchup[key]
-                # Add bookmakers from extra source, skipping duplicates.
-                # A duplicate = same bookmaker key already present in base.
-                existing_keys = {
-                    bm.get("key", "").lower()
-                    for bm in merged["games"][idx].get("bookmakers", [])
-                }
-                for bm in extra_game.get("bookmakers", []):
-                    bm_key = bm.get("key", "").lower()
-                    if bm_key and bm_key in existing_keys:
-                        continue  # Skip — this book already has an entry
-                    merged["games"][idx].setdefault("bookmakers", []).append(bm)
-                    if bm_key:
-                        existing_keys.add(bm_key)
-            else:
-                extra_only_games.append(extra_game)
-
-        merged["games"].extend(extra_only_games)
-        merged["game_count"] = len(merged["games"])
-
-        # Enforce sport_key on all games to prevent cross-sport contamination
-        sport_key = merged["sport"]
-        if sport_key:
-            for g in merged["games"]:
-                if not g.get("sport_key"):
-                    g["sport_key"] = sport_key
-
-        return merged
+        return await enrich_with_scraper(
+            sport, snapshot, fetch_fanatics_odds, "fanatics", ("fanatics_sportsbook",),
+        )
 
     @staticmethod
     def _matchup_key(home: str, away: str) -> str:
         """Normalize team names into a matchup key for cross-source matching."""
-        if not home or not away:
-            return ""
-        # Lowercase, strip common suffixes, sort for consistency
-        h = home.lower().strip()
-        a = away.lower().strip()
-        return f"{min(a, h)}|{max(a, h)}"
+        return matchup_key(home, away)
 
     async def _process_snapshot(self, sport: str, new_snapshot: dict) -> None:
         """Process an odds snapshot — store, scan edges, detect movements.
@@ -1245,7 +820,7 @@ class LineMonitor:
         # drifted from the actual fetch time. Idempotent — if a line already
         # has fetched_at (e.g. came from the WS path) we keep the earlier
         # stamp rather than overwriting with a later process-time.
-        _stamp_snapshot_fetched_at(new_snapshot, now)
+        stamp_snapshot_fetched_at(new_snapshot, now)
 
         # ingest_source defaults to the snapshot's 'ingest_source' tag; callers
         # in the WS/incremental paths set this to 'ws' or 'incremental'. The
@@ -1262,7 +837,7 @@ class LineMonitor:
         if ingest_source in ("ws", "incremental"):
             prior = self._snapshots.get(sport)
             if prior is not None and new_snapshot.get("games"):
-                new_snapshot = _merge_delta_into_snapshot(prior, new_snapshot, now)
+                new_snapshot = merge_delta_into_snapshot(prior, new_snapshot, now)
 
         # Store snapshot — use retry on both execute and commit since autonomous
         # loop does NOT acquire the write lock, so SQLite-level contention can occur.
@@ -1305,7 +880,6 @@ class LineMonitor:
         if game_count > 0:
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             try:
-                from tools.db_utils import execute_with_retry, commit_with_retry
                 await execute_with_retry(
                     self._db,
                     "INSERT OR REPLACE INTO historical_odds_cache "
@@ -1333,7 +907,6 @@ class LineMonitor:
 
         # Store market microstructure metrics from edge scan
         try:
-            from tools.db_utils import execute_with_retry, commit_with_retry
             stored = 0
             for market_key in ["cross_book_h2h", "cross_book_spreads", "cross_book_totals"]:
                 edges = edge_report.get(market_key, [])
@@ -1374,11 +947,7 @@ class LineMonitor:
         old_snapshot = self._snapshots.get(sport)
         if old_snapshot:
             movements = detect_line_movement(old_snapshot, new_snapshot)
-            significant = [
-                m for m in movements
-                if abs(m["price_movement"]) >= PRICE_MOVEMENT_THRESHOLD
-                or abs(m["point_movement"]) >= POINT_MOVEMENT_THRESHOLD
-            ]
+            significant = filter_significant(movements)
 
             if significant:
                 logger.info(
@@ -1548,325 +1117,72 @@ class LineMonitor:
     async def _compute_and_store_kl(self, sport: str, old_snapshot: dict, new_snapshot: dict) -> None:
         """Compute KL divergence between two consecutive snapshots per game.
 
-        For each game present in both snapshots, extract implied probability
-        distributions from each bookmaker and compute KL(new || old) and
-        Jensen-Shannon divergence. High KL = significant price discovery
-        between snapshots. Stores results in kl_metrics table.
-
-        Also caches latest KL per (sport, event_id) in memory for fast
-        lookups by edge_confidence scoring.
+        Delegates to tools.lines.movement.KLDivergenceTracker.
         """
-        try:
-            old_games = {g.get("id"): g for g in old_snapshot.get("games", []) if g.get("id")}
-            new_games = {g.get("id"): g for g in new_snapshot.get("games", []) if g.get("id")}
-
-            common_ids = set(old_games.keys()) & set(new_games.keys())
-            if not common_ids:
-                return
-
-            metrics_batch = []
-            for event_id in common_ids:
-                old_game = old_games[event_id]
-                new_game = new_games[event_id]
-
-                for market_type in ("h2h", "spreads", "totals"):
-                    old_probs = self._extract_implied_probs(old_game, market_type)
-                    new_probs = self._extract_implied_probs(new_game, market_type)
-
-                    if len(old_probs) < 2 or len(new_probs) < 2:
-                        continue
-
-                    # Normalize to same length (use min of both)
-                    n = min(len(old_probs), len(new_probs))
-                    old_sorted = sorted(old_probs)[:n]
-                    new_sorted = sorted(new_probs)[:n]
-
-                    kl = kl_divergence(new_sorted, old_sorted)
-                    js = jensen_shannon(new_sorted, old_sorted)
-
-                    # Only store if there's meaningful divergence
-                    if kl < 1e-8 and js < 1e-8:
-                        continue
-
-                    metric = {
-                        "event_id": event_id,
-                        "sport": sport,
-                        "market_type": market_type,
-                        "kl_divergence": round(kl, 6),
-                        "js_divergence": round(js, 6),
-                        "n_books": n,
-                        "opening_entropy": round(shannon_entropy(old_sorted), 6),
-                        "closing_entropy": round(shannon_entropy(new_sorted), 6),
-                    }
-                    metrics_batch.append(metric)
-
-                    # Cache in memory for edge_confidence lookups (capped to prevent leak)
-                    cache_key = f"{sport}:{event_id}:{market_type}"
-                    if len(self._kl_cache) >= self._KL_CACHE_MAX:
-                        # Evict ~20% oldest entries
-                        evict_n = self._KL_CACHE_MAX // 5
-                        for _ in range(evict_n):
-                            try:
-                                self._kl_cache.pop(next(iter(self._kl_cache)))
-                            except (StopIteration, KeyError):
-                                break
-                    self._kl_cache[cache_key] = metric
-
-            if metrics_batch:
-                stored = await store_kl_metrics(self.db_path, metrics_batch)
-                logger.info(f"KL metrics {sport}: {stored} game-markets computed (max KL={max(m['kl_divergence'] for m in metrics_batch):.4f})")
-
-        except Exception as e:
-            logger.warning(f"KL divergence computation failed for {sport}: {e}")
+        await self._kl_tracker.compute_and_store(sport, old_snapshot, new_snapshot)
 
     @staticmethod
     def _extract_implied_probs(game: dict, market_type: str) -> list[float]:
         """Extract implied probabilities for the first outcome across all bookmakers."""
-        probs = []
-        for bm in game.get("bookmakers", []):
-            for mkt in bm.get("markets", []):
-                if mkt.get("key") != market_type:
-                    continue
-                outcomes = mkt.get("outcomes", [])
-                if not outcomes:
-                    continue
-                price = outcomes[0].get("price", 0)
-                if price == 0:
-                    continue
-                if price > 0:
-                    prob = 100.0 / (price + 100.0)
-                else:
-                    prob = abs(price) / (abs(price) + 100.0)
-                probs.append(prob)
-        return probs
+        return extract_implied_probs(game, market_type)
 
     def get_kl_for_game(self, sport: str, event_id: str, market_type: str = "h2h") -> Optional[dict]:
         """Look up cached KL metrics for a game. Used by edge_confidence scoring."""
-        cache_key = f"{sport}:{event_id}:{market_type}"
-        return self._kl_cache.get(cache_key)
+        return self._kl_tracker.get_for_game(sport, event_id, market_type)
 
     async def _evaluate_movement(self, sport: str, movement: dict, snapshot: dict) -> None:
         """Evaluate whether a line movement creates a +EV opportunity.
 
-        Core overreaction logic:
-        - If a line moved hard in one direction, estimate whether the market overreacted
-        - Use implied probability from NEW line vs cross-bookmaker consensus
-        - Flag if estimated edge > MIN_EDGE_ALERT
+        Delegates to tools.lines.edge_report.MovementEvaluator.
         """
-        # Find the game in the snapshot
-        target_team = movement["team"]
-        market = movement["market"]
-        new_price = movement["new_price"]
+        if self._evaluator is None:
 
-        # Get cross-bookmaker comparison for this game
-        for game in snapshot.get("games", []):
-            # Check if this game contains the team
-            home = game.get("home_team", "")
-            away = game.get("away_team", "")
-            if target_team.lower() not in home.lower() and target_team.lower() not in away.lower():
-                continue
-
-            best = find_best_line(game, market=market, team=target_team)
-            if best.get("error"):
-                continue
-
-            all_lines = best.get("all_lines", [])
-            if len(all_lines) < 2:
-                continue
-
-            # ── Sanity checks (mirrors edge_scanner.py) ──
-
-            # H2H contamination: if lines contain both large positive AND large
-            # negative prices, both sides of the market leaked into one team's
-            # set (e.g. favorite -750 mixed with underdog +610). Skip.
-            if market == "h2h":
-                prices = [l["price"] for l in all_lines]
-                has_big_pos = any(p > 150 for p in prices)
-                has_big_neg = any(p < -150 for p in prices)
-                if has_big_pos and has_big_neg:
-                    logger.warning(
-                        f"Edge eval: H2H contamination for {target_team} — "
-                        f"prices span {min(prices)} to {max(prices)}, skipping"
-                    )
-                    continue
-
-            # ── Devigged consensus: power-devig each book's two-outcome
-            # market, then average the target-side fair probs ──
-            #
-            # The naive approach (averaging raw implied probs) counts the
-            # vig as edge — power devig removes it first.
-            moved_book = movement["bookmaker"]
-            devigged_fair_probs = []
-            for bm in game.get("bookmakers", []):
-                if bm.get("title", bm.get("key", "")) == moved_book:
-                    continue  # exclude the book that moved
-                for mkt in bm.get("markets", []):
-                    if mkt["key"] != market:
-                        continue
-                    outcomes = mkt.get("outcomes", [])
-                    if len(outcomes) < 2:
-                        continue
-                    # Find the target team's outcome and build the pair
-                    target_idx = None
-                    for i, oc in enumerate(outcomes):
-                        if target_team.lower() in oc.get("name", "").lower():
-                            target_idx = i
-                            break
-                    if target_idx is None:
-                        continue
-                    # Convert to decimal odds for devig
-                    try:
-                        decimal_odds = [
-                            american_to_decimal(oc["price"]) for oc in outcomes
-                        ]
-                        if any(d <= 1.0 for d in decimal_odds):
-                            continue
-                        fair_probs, _k = power_devig(decimal_odds)
-                        devigged_fair_probs.append(fair_probs[target_idx])
-                    except (ValueError, ZeroDivisionError):
-                        continue
-
-            if len(devigged_fair_probs) < 2:
-                continue  # need at least 2 books for reliable consensus
-
-            # Implied range sanity on devigged probs.
-            # Tightened to 12% (was 25%) — 12% range across multi-book devig
-            # already indicates contamination. Dedup warning per (team,market)
-            # to prevent log spam (was firing 1300+/hr on Lakers/Suns h2h).
-            fair_range = max(devigged_fair_probs) - min(devigged_fair_probs)
-            if fair_range > 0.12:
-                _warn_key = f"{target_team}|{market}"
-                if not hasattr(self, "_devig_warn_dedup"):
-                    self._devig_warn_dedup = {}
-                _last = self._devig_warn_dedup.get(_warn_key, 0)
-                _now = time.monotonic()
-                if _now - _last > 600:  # warn at most once per 10 min per team+market
-                    logger.warning(
-                        f"Edge eval: implausible devigged range {fair_range:.1%} "
-                        f"for {target_team} {market}, skipping (will dedup for 10min)"
-                    )
-                    self._devig_warn_dedup[_warn_key] = _now
-                continue
-
-            consensus_prob = sum(devigged_fair_probs) / len(devigged_fair_probs)
-
-            # The moved line's implied probability (raw — this is what the book offers)
-            moved_implied = calculate_implied_probability(new_price)
-
-            # Edge = devigged fair prob - book's implied prob
-            edge = consensus_prob - moved_implied
-
-            # Edge cap: real market edges top out ~15%. Anything above 20%
-            # is almost certainly a data/calculation bug.
-            if edge > 0.20:
-                logger.warning(
-                    f"Edge eval: implausible edge {edge:.1%} for {target_team} "
-                    f"{market} @ {movement['bookmaker']}, skipping"
+            async def _insert_ev(row: dict) -> None:
+                from tools.db_utils import execute_with_retry, commit_with_retry
+                await execute_with_retry(
+                    self._db,
+                    "INSERT INTO ev_opportunities "
+                    "(detected_at, sport, game_id, team, market, bookmaker, "
+                    "american_odds, implied_probability, estimated_true_prob, "
+                    "edge, expected_value, kelly_fraction, steam_only) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        row["detected_at"], row["sport"], row["game_id"],
+                        row["team"], row["market"], row["bookmaker"],
+                        row["american_odds"], row["implied_probability"],
+                        row["estimated_true_prob"], row["edge"],
+                        row["expected_value"], row["kelly_fraction"],
+                        row["steam_only"],
+                    ),
+                    max_retries=5,
+                    operation=f"ev_opportunity insert {row['sport']}",
                 )
-                continue
-
-            if abs(edge) >= MIN_EDGE_ALERT:
-                ev_result = calculate_ev(
-                    probability=consensus_prob,
-                    american_odds=new_price,
+                await commit_with_retry(
+                    self._db, max_retries=5,
+                    operation=f"ev_opportunity commit {row['sport']}",
                 )
 
-                if ev_result["is_positive_ev"]:
-                    # MODEL AGREEMENT GATE (audit fix): before this check,
-                    # every consensus-based edge became an ev_opportunities
-                    # row — which meant we were steam-chasing whatever the
-                    # books themselves were agreeing on. Require at least
-                    # one independent model (pace, props, sim) to agree
-                    # with the direction.
-                    model_ok, model_label = await self._check_model_agreement(
-                        sport=sport, game=game, team=target_team,
-                        market=market, direction=("up" if edge > 0 else "down"),
-                    )
-                    steam_only = False
-                    if REQUIRE_MODEL_AGREEMENT and not model_ok:
-                        steam_only = True
-                        logger.info(
-                            f"STEAM-ONLY (model disagrees): {target_team} "
-                            f"{market} @ {new_price} edge={edge:.1%} "
-                            f"models={model_label}"
-                        )
+            self._evaluator = MovementEvaluator(
+                insert_ev=_insert_ev,
+                get_edge_report=lambda s: self._latest_edge_reports.get(s),
+            )
 
-                    from tools.db_utils import execute_with_retry, commit_with_retry
-                    now = datetime.now(timezone.utc).isoformat()
-                    await execute_with_retry(
-                        self._db,
-                        "INSERT INTO ev_opportunities "
-                        "(detected_at, sport, game_id, team, market, bookmaker, "
-                        "american_odds, implied_probability, estimated_true_prob, "
-                        "edge, expected_value, kelly_fraction, steam_only) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            now, sport, game.get("id", ""), target_team, market,
-                            movement["bookmaker"], new_price,
-                            round(moved_implied, 4), round(consensus_prob, 4),
-                            round(edge, 4), ev_result["expected_value"],
-                            ev_result["kelly_fraction"],
-                            1 if steam_only else 0,
-                        ),
-                        max_retries=5,
-                        operation=f"ev_opportunity insert {sport}",
-                    )
-                    await commit_with_retry(self._db, max_retries=5, operation=f"ev_opportunity commit {sport}")
-
-                    logger.info(
-                        f"+EV OPPORTUNITY ({'STEAM' if steam_only else 'MODEL-RATIFIED'}):"
-                        f" {target_team} {market} @ {new_price} "
-                        f"(edge={edge:.1%}, EV=${ev_result['expected_value']}, "
-                        f"Kelly={ev_result['kelly_fraction']:.1%}, "
-                        f"devig_books={len(devigged_fair_probs)})"
-                    )
-                    # Autonomous loop will pick this up and analyze via AGP
-            break
+        await self._evaluator.evaluate(
+            sport, movement, snapshot,
+            require_model_agreement=REQUIRE_MODEL_AGREEMENT,
+        )
 
     async def _check_model_agreement(
         self, *, sport: str, game: dict, team: str, market: str, direction: str,
     ) -> tuple[bool, str]:
         """Return (ok, label) indicating whether any registered model agrees.
 
-        "Agrees" currently means: at least one of (pace model total edge,
-        simulation-validated edge, prop-model edge) flags the same
-        (game_id, team, market) with the same direction. We don't retrain
-        the models here — we just re-read the edge_scan report that
-        _process_snapshot already computed and cached in
-        self._latest_edge_reports.
-
-        A future version can tighten this into a quantitative directional
-        agreement check (e.g. |model_prob - consensus_prob| > 2%). For now
-        the gate is binary: model surfaced THIS game + market at all.
+        Delegates to tools.lines.edge_report.check_model_agreement using the
+        latest cached edge report for this sport.
         """
         report = self._latest_edge_reports.get(sport) or {}
         game_id = str(game.get("id", ""))
-        if not game_id:
-            return False, "no-game-id"
-
-        def _match(edges: list, want_market: str) -> bool:
-            for e in edges or []:
-                if str(e.get("game_id", "")) != game_id:
-                    continue
-                if e.get("market") and e["market"] != want_market:
-                    continue
-                # Team match (best effort — simulation/pace edges don't
-                # always carry team; a game-level match still counts).
-                e_team = (e.get("team") or "").lower()
-                if e_team and team and e_team != team.lower():
-                    continue
-                return True
-            return False
-
-        # Pace model totals fire for totals markets specifically.
-        if market == "totals" and _match(report.get("pace_model_totals", []), "totals"):
-            return True, "pace_model"
-        # Simulation-validated edges confirm spreads + totals.
-        if _match(report.get("simulation_validated", []), market):
-            return True, "simulation"
-        # Cross-book + low-vig edges are themselves consensus-based — they
-        # don't count as INDEPENDENT confirmation. Intentionally omitted.
-        return False, "none"
+        return check_model_agreement(report=report, game_id=game_id, team=team, market=market)
 
     async def get_recent_movements(self, sport: Optional[str] = None, limit: int = 20) -> list[dict]:
         """Get recent line movements from the database."""
