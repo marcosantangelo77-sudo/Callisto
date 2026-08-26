@@ -727,6 +727,248 @@ def test_fix_cleanup_close_failure_still_cleans_and_publishes(
     assert not list(runs_dir.glob("*.tmp"))
 
 
+# ── repair-pinning: exact publication-state semantics ─────────────────────
+
+def test_fix_short_write_never_becomes_final(runs_dir, monkeypatch):
+    """A short fh.write() means the tmp file does NOT hold the intended
+    payload. The defect treated any non-raising write as complete and let a
+    truncated record through os.replace. Now a short write is a
+    pre-publication failure: no final is published, both sidecars are
+    removed, and the SAME sequence slot is retried."""
+    import io as _io
+    real_open = open
+    state = {"failed": False}
+
+    def short_write_open(file, mode="r", *a, **kw):
+        fh = real_open(file, mode, *a, **kw)
+        if "w" in mode and str(file).endswith(".json.tmp"):
+            return _ShortWriter(fh)
+        return fh
+
+    class _ShortWriter:
+        def __init__(self, fh): self._fh = fh
+        def write(self, data):
+            # Fail exactly one write; later attempts (retry) succeed.
+            if not state["failed"]:
+                state["failed"] = True
+                return self._fh.write(data[: len(data) // 2])
+            return self._fh.write(data)
+        def __getattr__(self, name): return getattr(self._fh, name)
+        def __enter__(self): self._fh.__enter__(); return self
+        def __exit__(self, *a): return self._fh.__exit__(*a)
+
+    monkeypatch.setattr("builtins.open", short_write_open)
+    p = callisto._persist_run(_record(q="short write probe"))
+    assert "_000" in p.stem, f"short write burned a slot: {p.stem}"
+    rec, _ = callisto._load_run(p.stem)
+    assert rec["question"] == "short write probe"
+    # Every final json on disk parses AND exactly one exists.
+    finals = list(runs_dir.glob("*.json"))
+    assert len(finals) == 1
+    for f in finals:
+        json.loads(f.read_text(encoding="utf-8"))
+    assert not list(runs_dir.glob("*.tmp")), "leaked .json.tmp sidecar"
+    assert not list(runs_dir.glob("*.resv")), "leaked .json.resv marker"
+
+
+def test_fix_reservation_unlink_failure_is_deliberate_not_swallowed(
+        runs_dir, monkeypatch):
+    """A transient `.resv` unlink failure used to be silently ignored; a
+    later retry then skipped `_000`. Cleanup failure semantics must be
+    deliberate: nothing published + residue => PersistenceCleanupError,
+    never a silent clean-retryable outcome."""
+    import os as _os
+    real_replace = _os.replace
+
+    def fail_once_then_retry(src, dst):
+        if str(dst).endswith(".json"):
+            raise OSError("simulated replace failure")
+        return real_replace(src, dst)
+
+    real_unlink = type(runs_dir).unlink
+
+    calls = {"n": 0}
+
+    def flaky_unlink(self, missing_ok=False):
+        if self.suffix == ".resv" and calls["n"] < 2:
+            calls["n"] += 1
+            raise OSError("simulated transient unlink failure")
+        try:
+            return real_unlink(self, missing_ok=missing_ok)
+        except FileNotFoundError:
+            if missing_ok:
+                return None
+            raise
+
+    monkeypatch.setattr(_os, "replace", fail_once_then_retry)
+    monkeypatch.setattr(type(runs_dir), "unlink", flaky_unlink)
+    with pytest.raises(callisto.PersistenceCleanupError) as ei:
+        callisto._persist_run(_record(q="resv unlink probe"))
+    assert any(".resv" in str(r) for r in ei.value.residues), (
+        "residue list must name the un-removable sidecars")
+    # Nothing was published by this call.
+    assert not list(runs_dir.glob("*.json"))
+
+
+def test_fix_foreign_final_on_replace_error_is_indeterminate(
+        runs_dir, monkeypatch):
+    """If os.replace raises while a FOREIGN/malformed file sits at the
+    destination, `path.exists()` must NOT be read as proof this call
+    published. Publication state is indeterminate: the foreign content is
+    neither overwritten nor returned as this call's payload."""
+    import os as _os
+    stamp = "20260824T070000+0000".replace(":", "").replace("-", "")
+    qhash = hashlib.sha256(b"foreign probe").hexdigest()[:8]
+    foreign_path = runs_dir / f"{stamp}_{qhash}_000.json"
+
+    real_fsync = _os.fsync
+    state = {"fsyncs": 0, "replaced": False}
+    # The foreign file must appear AFTER our under-reservation revalidate
+    # (which correctly shields earlier appearances) but BEFORE os.replace:
+    # the tmp-file fsync — the second fsync inside _persist_run — is that
+    # exact deterministic moment for sequence slot _000.
+    def racing_fsync(fd):
+        result = real_fsync(fd)
+        state["fsyncs"] += 1
+        if state["fsyncs"] == 2:
+            foreign_path.write_text("{not valid json!!", encoding="utf-8")
+        return result
+
+    def failing_replace(src, dst):
+        if str(dst).endswith(".json") and not state["replaced"]:
+            state["replaced"] = True
+            raise OSError("simulated replace failure")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(_os, "fsync", racing_fsync)
+    monkeypatch.setattr(_os, "replace", failing_replace)
+
+    with pytest.raises(callisto.PublicationIndeterminate) as ei:
+        callisto._persist_run(_record(q="foreign probe"))
+    assert ei.value.path == foreign_path
+    # The foreign file was NOT overwritten or claimed.
+    assert foreign_path.read_text(encoding="utf-8") == "{not valid json!!"
+    # No duplicate of our payload was published under another seq.
+    ours = [p for p in runs_dir.glob("*.json")
+            if p != foreign_path]
+    assert not ours
+
+
+def test_fix_real_directory_fsync_failure_raises_durability(
+        runs_dir, monkeypatch):
+    """Existing 'directory fsync' tests actually failed the FILE fsync
+    first. This fails ONLY the directory fsync (post-publication), which
+    must raise DurabilityError naming the published path — never retry or
+    duplicate."""
+    import os as _os
+    real_fsync = _os.fsync
+    real_replace = _os.replace
+    state = {"replaced": False}
+
+    def spy_replace(src, dst):
+        out = real_replace(src, dst)
+        if str(dst).endswith(".json"):
+            state["replaced"] = True
+        return out
+
+    def flaky_fsync(fd):
+        if state["replaced"]:
+            raise OSError("simulated directory fsync failure")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(_os, "replace", spy_replace)
+    monkeypatch.setattr(_os, "fsync", flaky_fsync)
+    with pytest.raises(callisto.DurabilityError) as ei:
+        callisto._persist_run(_record(q="dir only fsync probe"))
+    finals = [p for p in runs_dir.glob("*.json")
+              if "dir only fsync" in json.loads(p.read_text())["question"]]
+    assert len(finals) == 1 and finals[0] == ei.value.path
+    assert "directory fsync failed" in str(ei.value)
+
+
+def test_fix_post_publication_open_failures_reported_with_path(
+        runs_dir, monkeypatch):
+    """Post-publication os.open failures on the final file / runs dir are
+    observation failures AFTER commit: classified as durability-unconfirmed
+    (DurabilityError naming the path), not silent success and not a
+    retryable pre-publication error."""
+    import os as _os
+    real_replace = _os.replace
+    real_open = _os.open
+    state = {"replaced": False}
+
+    def spy_replace(src, dst):
+        out = real_replace(src, dst)
+        if str(dst).endswith(".json"):
+            state["replaced"] = True
+        return out
+
+    def flaky_open(path, *a, **kw):
+        if state["replaced"]:
+            raise OSError("simulated post-publication open failure")
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(_os, "replace", spy_replace)
+    monkeypatch.setattr(_os, "open", flaky_open)
+    with pytest.raises(callisto.DurabilityError) as ei:
+        callisto._persist_run(_record(q="open probe"))
+    finals = [p for p in runs_dir.glob("*.json")
+              if "open probe" in json.loads(p.read_text())["question"]]
+    assert len(finals) == 1 and finals[0] == ei.value.path
+    assert "could not be reopened" in str(ei.value) or            "could not be opened" in str(ei.value)
+    assert not list(runs_dir.glob("*.tmp"))
+    assert not list(runs_dir.glob("*.resv"))
+
+
+def test_cli_reports_published_but_durability_unconfirmed(
+        runs_dir, monkeypatch, capsys):
+    """The CLI defect: a DurabilityError after os.replace reached the user
+    as `NOT SAVED`, inviting a retry that would create a duplicate `_001`.
+    The outcome must be reported as SAVED WITH UNCONFIRMED DURABILITY,
+    including the path, and must NOT say NOT SAVED."""
+    import asyncio
+    from types import SimpleNamespace as NS
+    import callisto as C
+    from callisto import _cmd_ask, build_parser
+
+    class FakeRouter:
+        endpoints = {}
+        task_classes = {}
+        default_tier_name = "gpu1"
+        class cost_ledger:
+            @staticmethod
+            def snapshot(): return {"by_tier": {}}
+        async def check_health(self, tier):
+            return {"status": "ok"}
+
+    def make_engine(router, self_review=False):
+        async def run(q):
+            return NS(sealed=True, refusal_reason="", leaves=[],
+                      confidence_score=0.5, confidence_tier="X",
+                      conclusion="c", fetches=[], objections=[], notes=[],
+                      artifact_refs=[])
+        eng = NS(run=run)
+        return eng
+
+    monkeypatch.setenv("CALLISTO_RUNS_DIR", str(runs_dir))
+    monkeypatch.setattr(C, "_load_router", lambda p: FakeRouter())
+    monkeypatch.setattr(C, "_make_engine", make_engine)
+
+    def boom(record):
+        raise callisto.DurabilityError(
+            runs_dir / "published.json",
+            "directory fsync failed: simulated")
+    monkeypatch.setattr(C, "_persist_run", boom)
+
+    rc = asyncio.run(_cmd_ask(build_parser().parse_args(["ask", "q"])))
+    out = capsys.readouterr().out
+    assert "NOT SAVED" not in out, (
+        "published record mis-reported as unsaved — invites duplicate retry")
+    assert "UNCONFIRMED DURABILITY" in out
+    assert str(runs_dir / "published.json") in out
+    assert rc == 0
+
+
 def test_fix_durability_error_is_deliberate_documented_outcome(runs_dir):
     """The DurabilityError contract: it names the already-published path and
     carries it as `.path`, so callers can decide without a re-lookup."""
