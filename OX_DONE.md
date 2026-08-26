@@ -1,7 +1,7 @@
 # OX TASK: OrderManager.enable refuses CALLISTO_LOCAL_ONLY
 
 - **Branch:** `cursor/ox-om-local-only-2ac0`
-- **Commit:** `541f7af`
+- **Commit:** `4663be2`
 - **Date:** 2026-08-26
 
 ## Change
