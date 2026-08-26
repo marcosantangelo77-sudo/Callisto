@@ -122,12 +122,14 @@ class TestTrustEscalatorArithmetic:
         pin is updated to assert the repair, not the defect."""
         import inspect
         from tools import knowledge_wiki as kw
-        src = inspect.getsource(kw.KnowledgeWiki._get_uncompiled_sources)
+        from tools.wiki.compiler import WikiCompiler
+        # 2026-08 split: source ingestion moved to tools.wiki.compiler.
+        src = inspect.getsource(WikiCompiler._get_uncompiled_sources)
         assert "verify_seal" in src            # seal gate exists at ingestion
         assert "INFERRED" in src               # legacy rows capped as INFERRED
         # Article confidence is min-of-sources, not mean (no manufactured
         # corroboration).
-        src_create = inspect.getsource(kw.KnowledgeWiki._create_article)
+        src_create = inspect.getsource(WikiCompiler._create_article)
         assert "_article_confidence(sources)" in src_create
 
     def test_article_confidence_min_of_sources_not_mean(self):
