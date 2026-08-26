@@ -25,6 +25,7 @@ if "polars" not in sys.modules:
         sys.modules["polars"] = _pl
 
 import tools.autonomous as auto
+from tools.loop.cycle_health import last_cycle_ok, last_cycle_phase_failures
 from tools.loop.phase_ledger import PhaseFailureLedger
 
 
@@ -98,6 +99,26 @@ class TestLastCycleHealth:
         loop._phase_failures_ledger.record(cycle=60, phase="late", kind="timeout")
         assert loop._last_cycle_ok() is False
         assert loop._last_cycle_phase_failures() == 2
+
+
+class TestPureFunctions:
+    """The extracted pure helpers take (cycles, ledger) directly."""
+
+    def test_zero_cycles_is_ok_and_counts_zero(self):
+        ledger = PhaseFailureLedger()
+        assert last_cycle_phase_failures(0, ledger) == 0
+        assert last_cycle_ok(0, ledger) is True
+
+    def test_count_scoped_to_current_cycle(self):
+        ledger = PhaseFailureLedger()
+        ledger.record(cycle=8, phase="a", kind="timeout")
+        ledger.record(cycle=8, phase="b", kind="timeout")
+        ledger.record(cycle=9, phase="c", kind="exception", exc=ValueError("x"))
+        assert last_cycle_phase_failures(9, ledger) == 1
+        assert last_cycle_ok(9, ledger) is False
+        # Older cycle's failures don't leak into a clean current cycle.
+        assert last_cycle_phase_failures(10, ledger) == 0
+        assert last_cycle_ok(10, ledger) is True
 
 
 class TestGetStatusExposesCycleHealth:
