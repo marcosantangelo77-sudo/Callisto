@@ -311,14 +311,22 @@ async def test_forced_shutdown_settles_queued_callers(tmp_db):
     assert coord._queue is None, "queue reference should be cleared"
     assert not coord._running
 
-    # A clean restart works afterwards.
-    await coord.start()
+    # Restore the real _apply BEFORE restarting, so post-restart writes
+    # are not captured by the slow_apply gate (which would hang forever).
+    coord._apply = original_apply
+
+    # A clean restart works afterwards; bound it so a regression fails
+    # fast instead of hanging the suite.
+    await asyncio.wait_for(coord.start(), timeout=5)
     try:
-        rid = await coord.execute("INSERT INTO t (v, who) VALUES (?, ?)", (9, "post-restart"))
+        rid = await asyncio.wait_for(
+            coord.execute("INSERT INTO t (v, who) VALUES (?, ?)", (9, "post-restart")),
+            timeout=5,
+        )
         assert rid > 0
     finally:
         coord._apply = original_apply
-        await coord.stop()
+        await asyncio.wait_for(coord.stop(), timeout=5)
 
 
 @pytest.mark.asyncio
@@ -333,6 +341,12 @@ async def test_graceful_drain_still_applies_all_writes(tmp_db):
             ))
             for i in range(50)
         ]
+        # Deterministically wait for every task to enqueue before stopping
+        # (bounded so an enqueue regression fails fast instead of hanging).
+        async def _all_enqueued():
+            while coord._queue.qsize() < 50:
+                await asyncio.sleep(0)
+        await asyncio.wait_for(_all_enqueued(), timeout=5)
         await coord.stop(drain_timeout_s=10.0)
         rids = await asyncio.gather(*tasks)
         assert all(r > 0 for r in rids)
