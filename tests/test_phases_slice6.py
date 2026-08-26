@@ -70,7 +70,7 @@ def test_neither_repair_nor_impl_imports_autonomous():
     for path in (
         IMPL, REPAIR, pkg / "__init__.py", pkg / "backtest_run.py",
         pkg / "collect_eval.py", pkg / "hypgen.py", pkg / "pre_live.py",
-        pkg / "post_live.py",
+        pkg / "post_live.py", pkg / "shared.py",
     ):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
