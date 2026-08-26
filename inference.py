@@ -158,6 +158,18 @@ GEMMA4_MODEL = "gemma4"  # E4B: 4.5B effective, 9.6GB. Demoted to fallback after
 # cache headroom, clean JSON discipline. Replaces gemma4 as the primary local
 # reasoning/hypothesis-gen/deep-work brain; gemma4 stays as one rung below.
 QWEN36_MODEL = "qwen36"
+# ---------------------------------------------------------------------------
+# TWO INFERENCE PLANES — do not unify or delete either one in drive-by refactors.
+#
+# 1. MODEL_LADDER below (task_type -> ordered model list) is the kernel plane:
+#    it is LIVE and is what inference.complete() walks for every call.
+# 2. ProviderRouter + config/providers.yaml (loaded via load_providers_config)
+#    is the CLI/pipeline plane: endpoint-pool routing used by callisto.py.
+#
+# Canonical FUTURE routing is ProviderRouter; a later PR may point the kernel
+# at it — but only after measuring Hermes CLI fork latency (~14s historically).
+# Until that lands, both planes coexist intentionally. See
+# tests/test_inference_planes.py, which pins this duplication.
 MODEL_LADDER: dict[str, list[dict]] = {
     "reasoning": [
         {"model": "claude_code", "quality": "frontier", "timeout": 180},
