@@ -1,10 +1,9 @@
-"""Pin: ResearchPipeline._run_inner body lives in tools.pipeline.run_inner.
+"""Pin: ResearchPipeline._answer_leaf body lives in tools.pipeline.answer_leaf.
 
 Does NOT import tools.autonomous. Does NOT arm live betting.
 Does NOT add live to paper-signal. Does NOT point MODEL_LADDER at
-ProviderRouter. Facade keeps run() (cross-run wrap) and a thin
-_run_inner wrapper. _answer_leaf stays as a thin class wrapper
-(body in tools.pipeline.answer_leaf; see test_engine_slice2).
+ProviderRouter. Facade keeps a thin _answer_leaf wrapper. EstimateCeiling
+wiring (belief vs entitlement) stays in the extracted body.
 """
 from __future__ import annotations
 
@@ -13,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE = ROOT / "tools" / "pipeline" / "engine.py"
-INNER = ROOT / "tools" / "pipeline" / "run_inner.py"
+ANSWER = ROOT / "tools" / "pipeline" / "answer_leaf.py"
 PAPER = ROOT / "tools" / "signals" / "paper.py"
 
 
@@ -52,52 +51,7 @@ def _imports_autonomous(path: Path) -> bool:
     return False
 
 
-def test_run_inner_lives_in_extracted_module():
-    names = _top_level_func_names(INNER)
-    assert "run_inner" in names
-    facade_top = _top_level_func_names(ENGINE)
-    assert "run_inner" not in facade_top
-    # Helpers stay on the facade module.
-    assert "verify_artifact_gate" in facade_top
-    assert "_fetch_from_payload" in facade_top
-    assert "_trace_from_payload" in facade_top
-    assert "_leaf_from_payload" in facade_top
-
-
-def test_facade_keeps_run_and_thin_run_inner_wrapper():
-    methods = _class_methods(ENGINE, "ResearchPipeline")
-    assert "run" in methods
-    assert "_run_inner" in methods
-    assert "_answer_leaf" in methods
-    wrapper = methods["_run_inner"]
-    dump = ast.dump(wrapper)
-    assert "run_inner" in dump
-    # Thin: no inline decompose/seal work.
-    text = ENGINE.read_text(encoding="utf-8")
-    src = "\n".join(text.splitlines()[wrapper.lineno - 1 : wrapper.end_lineno])
-    assert "seal_hash = session.seal()" not in src
-    assert "verify_artifact_gate(self.store" not in src
-    assert src.count("return") == 1
-    # run() still wraps _run_inner for cross-run memory.
-    run_dump = ast.dump(methods["run"])
-    assert "_run_inner" in run_dump
-
-
-def test_gate_before_seal_in_run_inner():
-    src = INNER.read_text(encoding="utf-8")
-    seal_pos = src.index("seal_hash = session.seal()")
-    gate_pos = src.rindex("verify_artifact_gate(self.store")
-    assert gate_pos < seal_pos
-    assert "verify_artifacts" in src
-
-
-def test_self_bound_to_pipeline():
-    tree = ast.parse(INNER.read_text(encoding="utf-8"))
-    fn = next(
-        n for n in tree.body
-        if isinstance(n, ast.AsyncFunctionDef) and n.name == "run_inner"
-    )
-    # First executable after docstring: self = pipeline
+def _first_assign_after_docstring(fn: ast.AsyncFunctionDef):
     body = list(fn.body)
     if (
         body
@@ -106,34 +60,77 @@ def test_self_bound_to_pipeline():
         and isinstance(body[0].value.value, str)
     ):
         body = body[1:]
-    assert body, "run_inner has no body"
-    first = body[0]
+    return body[0] if body else None
+
+
+def test_answer_leaf_lives_in_extracted_module():
+    names = _top_level_func_names(ANSWER)
+    assert "answer_leaf" in names
+    facade_top = _top_level_func_names(ENGINE)
+    assert "answer_leaf" not in facade_top
+    # Sandbox persist helpers stay on the facade module.
+    assert "_store_sandbox" in facade_top
+    assert "_cleanup_workspace" in facade_top
+
+
+def test_facade_keeps_thin_answer_leaf_wrapper():
+    methods = _class_methods(ENGINE, "ResearchPipeline")
+    assert "_answer_leaf" in methods
+    wrapper = methods["_answer_leaf"]
+    dump = ast.dump(wrapper)
+    assert "answer_leaf" in dump
+    text = ENGINE.read_text(encoding="utf-8")
+    src = "\n".join(text.splitlines()[wrapper.lineno - 1 : wrapper.end_lineno])
+    assert "EstimateCeiling" not in src
+    assert "classify_null_kind" not in src
+    assert "run_python" not in src
+    assert src.count("return") == 1
+
+
+def test_estimate_ceiling_wiring_in_answer_leaf():
+    src = ANSWER.read_text(encoding="utf-8")
+    assert "from agp.estimate import EstimateCeiling" in src
+    assert "out.confidence_estimate" in src
+    assert "out.confidence_ceiling" in src
+    # Historical rounding: round(min(estimate, ceiling), 2)
+    assert "round(" in src
+    assert "min(ec.estimate, ec.ceiling)" in src
+    # answers_question declared signal (R3) still here.
+    assert 'proposal.get("answers_question", True)' in src
+
+
+def test_self_bound_to_pipeline():
+    tree = ast.parse(ANSWER.read_text(encoding="utf-8"))
+    fn = next(
+        n for n in tree.body
+        if isinstance(n, ast.AsyncFunctionDef) and n.name == "answer_leaf"
+    )
+    first = _first_assign_after_docstring(fn)
     assert isinstance(first, ast.Assign)
     assert len(first.targets) == 1
     assert isinstance(first.targets[0], ast.Name) and first.targets[0].id == "self"
     assert isinstance(first.value, ast.Name) and first.value.id == "pipeline"
 
 
-def test_engine_line_count_dropped():
+def test_engine_line_count_dropped_again():
     n = ENGINE.read_text(encoding="utf-8").count("\n")
-    assert n < 900, n
-    inner_n = INNER.read_text(encoding="utf-8").count("\n")
-    assert inner_n >= 500, inner_n
+    assert n < 700, n
+    ans_n = ANSWER.read_text(encoding="utf-8").count("\n")
+    assert ans_n >= 140, ans_n
 
 
-def test_run_inner_does_not_import_autonomous():
-    assert not _imports_autonomous(INNER)
+def test_answer_leaf_does_not_import_autonomous():
+    assert not _imports_autonomous(ANSWER)
     assert not _imports_autonomous(ENGINE)
 
 
-def test_run_inner_does_not_name_model_ladder():
-    for path in (INNER, ENGINE):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Name):
-                assert node.id != "MODEL_LADDER"
-            elif isinstance(node, ast.Attribute):
-                assert node.attr != "MODEL_LADDER"
+def test_answer_leaf_does_not_name_model_ladder():
+    tree = ast.parse(ANSWER.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            assert node.id != "MODEL_LADDER"
+        elif isinstance(node, ast.Attribute):
+            assert node.attr != "MODEL_LADDER"
 
 
 def test_paper_signal_still_paper_trading_only():
@@ -152,7 +149,8 @@ def test_paper_signal_still_paper_trading_only():
     assert "live" not in dump
 
 
-def test_pipeline_package_does_not_eager_import_run_inner():
+def test_pipeline_package_does_not_eager_import_answer_leaf():
     init = (ROOT / "tools" / "pipeline" / "__init__.py").read_text(encoding="utf-8")
     tree = ast.parse(init)
     assert not any(isinstance(n, (ast.Import, ast.ImportFrom)) for n in ast.walk(tree))
+    assert "answer_leaf" not in init

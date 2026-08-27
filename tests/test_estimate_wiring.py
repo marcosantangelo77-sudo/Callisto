@@ -2,7 +2,8 @@
 
 The prototype (agp/estimate.py) separates the model's BELIEF from the
 provenance ENTITLEMENT. This test file proves three things about the one
-wired path (_answer_leaf in tools/pipeline/engine.py):
+wired path (_answer_leaf wrapper in tools/pipeline/engine.py,
+body in tools/pipeline/answer_leaf.py):
 
   1. EQUIVALENCE — the sealed/stored/reported number is bit-identical to
      what the old min() collapse produced. Nothing moved.
