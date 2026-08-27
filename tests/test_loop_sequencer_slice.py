@@ -133,16 +133,22 @@ class TestSequencerExtraction:
 
         from tools.loop import sequencer
 
-        # _loop moved to CycleLoopMixin in tools.auto.research (auto-slice3);
+        # _loop moved to CycleLoopMixin in tools.auto.cycle (auto-slice6);
         # keep the pin on the implementation, not the facade class body.
-        src = (Path(auto.__file__).parent / "auto" / "research.py").read_text(
-            encoding="utf-8"
-        )
-        tree = ast.parse(src)
-        mixin = next(
-            n for n in ast.walk(tree)
-            if isinstance(n, ast.ClassDef) and n.name == "CycleLoopMixin"
-        )
+        auto_dir = Path(auto.__file__).parent / "auto"
+        mixin = None
+        for path in (auto_dir / "cycle.py", auto_dir / "research.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            mixin = next(
+                (
+                    n for n in ast.walk(tree)
+                    if isinstance(n, ast.ClassDef) and n.name == "CycleLoopMixin"
+                ),
+                None,
+            )
+            if mixin is not None:
+                break
+        assert mixin is not None, "CycleLoopMixin missing from tools.auto.cycle/research"
         loop_fn = next(
             n for n in mixin.body
             if isinstance(n, ast.AsyncFunctionDef) and n.name == "_loop"
