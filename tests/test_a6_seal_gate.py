@@ -49,14 +49,23 @@ def test_gate_none_with_no_refs_and_empty_list():
 
 def test_verify_artifacts_has_production_callers():
     """The dead-verification half of A6: verify_artifacts must be wired
-    into a production path (the engine seal path), not only tests."""
-    src = Path("tools/pipeline/engine.py").read_text(encoding="utf-8")
+    into a production path (the engine seal path), not only tests.
+
+    The production call lives in tools.pipeline.run_inner (extracted from
+    ResearchPipeline._run_inner). The gate helper itself stays on engine.py.
+    Scan both files so the pin survives the extract.
+    """
+    engine = Path("tools/pipeline/engine.py").read_text(encoding="utf-8")
+    inner = Path("tools/pipeline/run_inner.py").read_text(encoding="utf-8")
+    src = engine + "\n" + inner
     assert "verify_artifact_gate" in src and "verify_artifacts" in src
     # The gate must sit on the seal path — after SESSION_CLOSE, before seal().
     seal_pos = src.index("seal_hash = session.seal()")
     gate_pos = src.rindex("verify_artifact_gate(self.store")
     assert gate_pos < seal_pos, \
         "artifact gate must run before session.seal()"
+    assert "verify_artifact_gate(self.store" in inner
+    assert "seal_hash = session.seal()" in inner
 
 
 def test_engine_seal_path_refuses_on_phantom_end_to_end():
