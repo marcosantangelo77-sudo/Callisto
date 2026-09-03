@@ -25,8 +25,10 @@ inference planes stay separate (tests/test_inference_planes.py).
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -132,6 +134,65 @@ class TestEndpointIsHostedClassification:
     def test_local_backends_constant_pins_contract(self):
         assert "llama_cpp_server" in LOCAL_BACKENDS
         assert "local" in LOCAL_BACKENDS
+
+    def test_llama_cpp_server_with_openrouter_url_is_hosted(self):
+        """Backend-only classification used to treat this as local."""
+        from tools.infrouter.local_only import HOSTED_URL_MARKERS
+
+        class _Fake:
+            backend = "llama_cpp_server"
+            base_url = "https://openrouter.ai/api/v1"
+            extra = {}
+
+        assert "openrouter" in HOSTED_URL_MARKERS
+        assert endpoint_is_hosted(_Fake()) is True
+
+    def test_llama_cpp_server_localhost_stays_local(self):
+        class _Fake:
+            backend = "llama_cpp_server"
+            base_url = "http://127.0.0.1:8080/v1"
+            extra = {}
+
+        assert endpoint_is_hosted(_Fake()) is False
+
+    def test_llama_cpp_server_lan_box_stays_local(self):
+        class _Fake:
+            backend = "llama_cpp_server"
+            base_url = "http://192.168.1.50:8080/v1"
+            extra = {}
+
+        assert endpoint_is_hosted(_Fake()) is False
+
+    def test_local_backend_with_hosted_provider_extra_is_hosted(self):
+        class _Fake:
+            backend = "local"
+            base_url = "http://127.0.0.1:8645/v1"
+            extra = {"provider": "openrouter", "model": "stealth/ox-alpha"}
+
+        assert endpoint_is_hosted(_Fake()) is True
+
+    def test_local_backend_with_anthropic_url_is_hosted(self):
+        class _Fake:
+            backend = "llama_cpp_server"
+            base_url = "https://api.anthropic.com/v1"
+            extra = {}
+
+        assert endpoint_is_hosted(_Fake()) is True
+
+    def test_misconfigured_local_backend_stripped_from_candidates(
+            self, router, local_only):
+        from tools.infrouter.config import EndpointConfig
+
+        router.endpoints["poison"] = EndpointConfig(
+            name="poison",
+            backend="llama_cpp_server",
+            base_url="https://openrouter.ai/api/v1",
+            model="stealth/ox-alpha",
+        )
+        router.task_classes["_poison_test"] = ["poison", "gpu1"]
+        names = router.candidates_for("_poison_test")
+        assert "poison" not in names
+        assert names == ["gpu1"]
 
 
 # ---------------------------------------------------------------------------
@@ -383,3 +444,50 @@ class TestSafetyPins:
             return  # no status param at all is fine
         default = status_param.default
         assert default != "live"
+
+
+# ---------------------------------------------------------------------------
+# 9. Kernel plane: skip Claude rungs under LOCAL_ONLY without mutating ladder
+# ---------------------------------------------------------------------------
+
+
+class TestKernelLadderLocalOnlySkip:
+    def test_model_ladder_still_lists_claude_code(self):
+        """Skip at walk time; do not delete rungs from MODEL_LADDER."""
+        import inference
+
+        models = [e["model"] for e in inference.MODEL_LADDER["reasoning"]]
+        assert "claude_code" in models
+
+    def test_local_only_skips_claude_even_if_available(self, monkeypatch):
+        """Patched is_available=True must still not spawn Claude."""
+        from inference import escalate_with_ladder
+
+        monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
+        called = {"claude": False}
+
+        async def fake_query(*_a, **_k):
+            called["claude"] = True
+            return {"content": "should-not-run", "error": None}
+
+        class _StubAgent:
+            async def achat(self, messages, options=None):
+                return {
+                    "content": "local-answer",
+                    "tool_calls": [],
+                    "parsed_json": None,
+                    "raw": {},
+                }
+
+        with patch("tools.claude_code.is_available", return_value=True), \
+             patch("tools.claude_code.claude_code_query", side_effect=fake_query), \
+             patch("tools.local_cc_bridge.should_use_bridge", return_value=False), \
+             patch("inference._get_inference", return_value=_StubAgent()):
+            result = asyncio.run(
+                escalate_with_ladder("prompt", task_type="reasoning")
+            )
+
+        assert called["claude"] is False
+        assert result["content"] == "local-answer"
+        assert result["model_used"] != "claude_code"
+        assert result["ladder_step"] != -2

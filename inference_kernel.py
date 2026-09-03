@@ -490,6 +490,19 @@ async def escalate_with_ladder(
 
         try:
             if model == "claude_code":
+                # Fail-closed: never walk the hosted Claude rung under
+                # CALLISTO_LOCAL_ONLY. Skip this copy of the walk only —
+                # do not mutate MODEL_LADDER (tests pin that
+                # _demote_claude_in_ladder keeps the rung present).
+                # claude_available() also returns False, but a patched
+                # True must still not spawn Claude.
+                if os.getenv("CALLISTO_LOCAL_ONLY", "").strip().lower() in (
+                        "1", "true", "yes"):
+                    logger.debug(
+                        f"Ladder step {step}: Claude skipped "
+                        f"(CALLISTO_LOCAL_ONLY)"
+                    )
+                    continue
                 if not claude_available():
                     logger.debug(f"Ladder step {step}: Claude unavailable, skipping")
                     continue
