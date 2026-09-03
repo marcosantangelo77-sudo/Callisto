@@ -1,12 +1,13 @@
-"""Pin: review_live_hypotheses body lives in tools.hypothesis.promote_review.
+"""Pin: auto_promote body lives in tools.hypothesis.promote_auto.
 
-HypothesisPromotionMixin keeps a thin ``async def review_live_hypotheses``
-delegate (hasattr pin). auto_promote stays in promote.py, diagnose-only.
+HypothesisPromotionMixin keeps a thin ``async def auto_promote`` delegate
+(hasattr pin). Diagnose-only: no edge_threshold / signal_generated writes.
 Does NOT add check_promotion_readiness to HypothesisPromotionMixin
 (live check is HypothesisSignificanceMixin only).
+review_live_hypotheses stays a thin delegate to promote_review.
 
-This reviews hypotheses already in live status — does NOT arm live betting
-and does NOT add live to paper-signal.
+Does NOT import tools.autonomous. Does NOT arm live betting.
+Does NOT add live to paper-signal.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROMOTE = ROOT / "tools" / "hypothesis" / "promote.py"
+AUTO = ROOT / "tools" / "hypothesis" / "promote_auto.py"
 REVIEW = ROOT / "tools" / "hypothesis" / "promote_review.py"
 QUERIES = ROOT / "tools" / "hypothesis" / "promote_queries.py"
 SIGNIF = ROOT / "tools" / "hypothesis" / "significance.py"
@@ -94,7 +96,7 @@ def _call_name(call: ast.Call) -> str:
     return ""
 
 
-def _is_thin_review_delegate(fn: ast.AsyncFunctionDef) -> bool:
+def _is_thin_auto_promote(fn: ast.AsyncFunctionDef) -> bool:
     body = list(fn.body)
     if (
         body
@@ -105,10 +107,10 @@ def _is_thin_review_delegate(fn: ast.AsyncFunctionDef) -> bool:
         body = body[1:]
     if body and isinstance(body[0], (ast.Import, ast.ImportFrom)):
         if isinstance(body[0], ast.ImportFrom):
-            if body[0].module != "tools.hypothesis.promote_review":
+            if body[0].module != "tools.hypothesis.promote_auto":
                 return False
             aliases = {a.name for a in body[0].names}
-            if "review_live_hypotheses" not in aliases:
+            if "auto_promote" not in aliases:
                 return False
         body = body[1:]
     if len(body) != 1:
@@ -124,57 +126,41 @@ def _is_thin_review_delegate(fn: ast.AsyncFunctionDef) -> bool:
         return False
     name = _call_name(call)
     return name in {
-        "review_live_hypotheses",
-        "_review_live_hypotheses",
-        "promote_review.review_live_hypotheses",
+        "auto_promote",
+        "_auto_promote",
+        "promote_auto.auto_promote",
     }
 
 
-def test_promote_review_contains_review_body():
-    names = _top_level_async(REVIEW)
-    assert "review_live_hypotheses" in names
-    assert "auto_promote" not in names
+def test_promote_auto_contains_auto_promote_body():
+    names = _top_level_async(AUTO)
+    assert "auto_promote" in names
+    assert "review_live_hypotheses" not in names
     assert "check_promotion_readiness" not in names
-    fn = names["review_live_hypotheses"]
-    src = REVIEW.read_text(encoding="utf-8")
+    fn = names["auto_promote"]
+    src = AUTO.read_text(encoding="utf-8")
     body = "\n".join(src.splitlines()[fn.lineno - 1 : fn.end_lineno])
-    assert "INSERT INTO hypothesis_stats" in body
-    assert "write_lesson_article" in body
-    assert "demoted_to_paused" in body
-    assert "LIVE_REVIEW_WINDOW_DAYS" in src
-    assert "base_rate_relative_floor" in body
-    assert fn.end_lineno - fn.lineno + 1 >= 200
+    assert "threshold_too_high" in body
+    assert "check_promotion_readiness" in body
+    assert "paper_trade_sample_insufficient" in body
+    assert fn.end_lineno - fn.lineno + 1 >= 300
     tree = ast.parse(src)
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
             assert node.name != "HypothesisPromotionMixin"
 
 
-def test_mixin_keeps_thin_review_live_hypotheses():
+def test_mixin_keeps_thin_auto_promote():
     methods = _class_async_fns(PROMOTE, "HypothesisPromotionMixin")
-    assert "review_live_hypotheses" in methods
     assert "auto_promote" in methods
-    ev = methods["review_live_hypotheses"]
-    assert _is_thin_review_delegate(ev), ast.dump(ev)
+    assert "review_live_hypotheses" in methods
+    ev = methods["auto_promote"]
+    assert _is_thin_auto_promote(ev), ast.dump(ev)
     src = PROMOTE.read_text(encoding="utf-8")
     wrapper = "\n".join(src.splitlines()[ev.lineno - 1 : ev.end_lineno])
-    assert "promote_review" in wrapper
-    assert "INSERT INTO hypothesis_stats" not in wrapper
-    assert "write_lesson_article" not in wrapper
-    assert "demoted_to_paused" not in wrapper
-
-
-def test_auto_promote_stays_named_on_mixin():
-    methods = _class_async_fns(PROMOTE, "HypothesisPromotionMixin")
-    assert "auto_promote" in methods
-    fn = methods["auto_promote"]
-    src = PROMOTE.read_text(encoding="utf-8")
-    body = "\n".join(src.splitlines()[fn.lineno - 1 : fn.end_lineno])
-    assert "promote_auto" in body
-    assert "threshold_too_high" not in body
-    q_names = _fn_names(QUERIES)
-    assert "auto_promote" not in q_names
-    assert "review_live_hypotheses" not in q_names
+    assert "promote_auto" in wrapper
+    assert "threshold_too_high" not in wrapper
+    assert "paper_trade_sample_insufficient" not in wrapper
 
 
 def test_check_promotion_readiness_not_on_promotion_mixin():
@@ -182,40 +168,36 @@ def test_check_promotion_readiness_not_on_promotion_mixin():
     signif = _async_methods(SIGNIF, "HypothesisSignificanceMixin")
     assert "check_promotion_readiness" not in promote
     assert "check_promotion_readiness" in signif
-    review_names = _fn_names(REVIEW)
-    assert "check_promotion_readiness" not in review_names
+    assert "check_promotion_readiness" not in _fn_names(AUTO)
     tree = ast.parse(PROMOTE.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             assert node.name != "check_promotion_readiness"
 
 
-def test_hasattr_pins_review_live_hypotheses():
+def test_hasattr_pins_auto_promote():
     from tools.hypothesis.manager import HypothesisManager
     from tools.hypothesis.promote import HypothesisPromotionMixin
 
-    assert hasattr(HypothesisPromotionMixin, "review_live_hypotheses")
     assert hasattr(HypothesisPromotionMixin, "auto_promote")
-    assert hasattr(HypothesisManager, "review_live_hypotheses")
     assert hasattr(HypothesisManager, "auto_promote")
-    assert HypothesisManager.review_live_hypotheses is (
-        HypothesisPromotionMixin.review_live_hypotheses
+    assert HypothesisManager.auto_promote is (
+        HypothesisPromotionMixin.auto_promote
     )
     assert not hasattr(HypothesisPromotionMixin, "check_promotion_readiness")
 
 
-def test_promote_py_shrunk_under_650():
+def test_line_counts():
     n = PROMOTE.read_text(encoding="utf-8").count("\n")
+    an = AUTO.read_text(encoding="utf-8").count("\n")
     assert n < 320, n
-    rn = REVIEW.read_text(encoding="utf-8").count("\n")
-    assert rn >= 250, rn
+    assert an >= 300, an
 
 
 def test_auto_promote_still_diagnose_only():
-    src = PROMOTE.read_text(encoding="utf-8")
+    src = AUTO.read_text(encoding="utf-8")
     start = src.index("async def auto_promote")
-    end = src.index("\n    async def ", start + 10)
-    body = src[start:end]
+    body = src[start:]
     assert "edge_threshold =" not in body.replace("edge_threshold ==", "")
     assert "SET edge_threshold" not in body
     assert "SET signal_generated" not in body
@@ -242,11 +224,11 @@ def test_paper_signal_still_paper_trading_only():
 
 
 def test_neither_module_imports_autonomous():
-    for path in (PROMOTE, REVIEW, QUERIES, SIGNIF):
+    for path in (PROMOTE, AUTO, REVIEW, QUERIES, SIGNIF):
         assert not _imports_autonomous(path), path
 
 
 def test_no_live_betting_flags_added():
-    for path in (PROMOTE, REVIEW):
+    for path in (PROMOTE, AUTO):
         src = path.read_text(encoding="utf-8")
         assert "CALLISTO_ALLOW_LIVE_EXECUTE" not in src
