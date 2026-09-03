@@ -2,7 +2,8 @@
 
 Fail-closed: `check_seal_key()` must pass before any research runs. The
 seal key value itself is never printed. Under CALLISTO_LOCAL_ONLY, a
-hosted `--backend` is refused before any health probe or research.
+hosted `--backend` is refused before any health probe, and a router
+with no local endpoint is refused before the engine starts.
 """
 from __future__ import annotations
 
@@ -63,6 +64,26 @@ def _local_only_forbids_backend(router, name: str) -> bool:
     if isinstance(eps, dict):
         return endpoint_is_hosted(eps.get(name))
     return name in _WELL_KNOWN_HOSTED_RAILS
+
+
+def _local_only_missing_local_pool(router) -> bool:
+    """True when CALLISTO_LOCAL_ONLY is on and no local endpoint remains.
+
+    Without --backend the CLI used to skip every preflight and start
+    research; the hosted strip then raised mid-pipeline. Refuse here
+    without calling check_health — this is classification, not a probe.
+    """
+    from tools.infrouter.local_only import (
+        endpoint_is_hosted,
+        local_only_enabled,
+    )
+    if not local_only_enabled():
+        return False
+    eps = getattr(router, "endpoints", None)
+    if isinstance(eps, dict):
+        return not any(not endpoint_is_hosted(ep) for ep in eps.values())
+    return not any(
+        n not in _WELL_KNOWN_HOSTED_RAILS for n in list(eps or []))
 
 
 # ── ask ────────────────────────────────────────────────────────────────────
@@ -177,6 +198,14 @@ async def cmd_ask(args: argparse.Namespace) -> int:
             print(f"provider '{router.default_tier_name}' unhealthy: "
                   f"{json.dumps(health)[:300]}")
             return 2
+
+    if _local_only_missing_local_pool(router):
+        print(
+            "FAIL: CALLISTO_LOCAL_ONLY is set but no local endpoint "
+            "survives (gpu1/gpu1_fast). Start llama.cpp or unset "
+            "CALLISTO_LOCAL_ONLY — refusing to start research."
+        )
+        return 2
 
     engine = _entry()._make_engine(
         router, self_review=args.self_review)

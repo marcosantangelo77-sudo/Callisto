@@ -396,6 +396,24 @@ class TestAskKeyedBackendPreflight:
         assert rc == 0
         assert calls == []           # candidate chain decides per-task
 
+    def test_local_only_no_backend_hosted_only_pool_refused(
+            self, monkeypatch, capsys, runs_isolated):
+        """LOCAL_ONLY + no --backend + only hosted names: FAIL before
+        engine, and still no check_health probe."""
+        monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
+        router = _Router(endpoints=("openrouter_ox", "ox_alpha"),
+                         task_classes={"decompose": "openrouter_ox"})
+        health_calls = []
+        router.check_health = make_health_spy(router.check_health, health_calls)
+        monkeypatch.setattr(callisto, "_load_router", lambda p: router)
+        monkeypatch.setattr(callisto, "_make_engine", _boom)
+        rc = asyncio.run(callisto._cmd_ask(_ask_args()))
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "FAIL" in out and "no local endpoint" in out
+        assert health_calls == []
+        assert list(runs_isolated.glob("*")) == []
+
 
 def make_health_spy(orig, calls):
     def spy(name):

@@ -230,3 +230,124 @@ def test_ask_local_only_refuses_misconfigured_local_url(
     assert rc == 2
     assert "CALLISTO_LOCAL_ONLY" in out
     assert health_calls == []
+
+
+def test_ask_local_only_no_backend_refuses_hosted_only_pool(
+        monkeypatch, capsys, args):
+    """No --backend + LOCAL_ONLY + only hosted rails must FAIL before
+    the engine, without probing check_health."""
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", VALID_KEY)
+    monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
+    health_calls = []
+    engines = []
+
+    class _Router:
+        endpoints = ["openrouter_ox", "ox_alpha"]
+        task_classes = {"decompose": "openrouter_ox"}
+        default_tier_name = "openrouter_ox"
+        cost_ledger = None
+
+        async def check_health(self, name):
+            health_calls.append(name)
+            return {"status": "ok"}
+
+    monkeypatch.setattr(callisto, "_load_router", lambda p: _Router())
+    monkeypatch.setattr(
+        callisto, "_make_engine",
+        lambda router, self_review=False: engines.append("built") or None)
+    args.backend = None
+    rc = asyncio.run(callisto._cmd_ask(args))
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "FAIL" in out and "no local endpoint" in out
+    assert health_calls == []
+    assert engines == []
+
+
+def test_ask_local_only_no_backend_with_gpu1_skips_health(
+        monkeypatch, capsys, args):
+    """LOCAL_ONLY without --backend still must not probe check_health
+    when a local rail exists — candidate chain decides per task."""
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", VALID_KEY)
+    monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
+    health_calls = []
+
+    class _Ledger:
+        def snapshot(self):
+            return {"by_tier": {}}
+
+    class _Router:
+        endpoints = ["gpu1", "ox_alpha"]
+        task_classes = {"decompose": "gpu1"}
+        default_tier_name = "gpu1"
+        cost_ledger = _Ledger()
+
+        async def check_health(self, name):
+            health_calls.append(name)
+            return {"status": "ok"}
+
+    class _FakeResult:
+        sealed = False
+        confidence_score = 0.0
+        confidence_tier = "UNVERIFIED"
+        refusal_reason = "stub"
+        leaves = []
+        fetches = []
+        objections = []
+        notes = []
+        artifact_refs = []
+
+    class _Engine:
+        async def run(self, q):
+            return _FakeResult()
+
+    monkeypatch.setattr(callisto, "_load_router", lambda p: _Router())
+    monkeypatch.setattr(callisto, "_make_engine",
+                        lambda router, self_review=False: _Engine())
+    monkeypatch.setattr(callisto, "_result_record",
+                        lambda result, q: {"recorded_at": "2026-01-01T00:00",
+                                           "question": q})
+    args.backend = None
+    rc = asyncio.run(callisto._cmd_ask(args))
+    out = capsys.readouterr().out
+    assert health_calls == []
+    assert rc != 0
+    assert "REFUSED" in out
+    assert "no local endpoint" not in out
+
+
+def test_ask_local_only_hosted_only_dict_pool_refused(
+        monkeypatch, capsys, args):
+    from tools.infrouter.config import EndpointConfig
+
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", VALID_KEY)
+    monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
+    health_calls = []
+
+    hosted = EndpointConfig(
+        name="openrouter_ox",
+        backend="openai_compat",
+        base_url="https://openrouter.ai/api/v1",
+        model="stealth/ox-alpha",
+    )
+
+    class _Router:
+        endpoints = {"openrouter_ox": hosted}
+        task_classes = {"decompose": ["openrouter_ox"]}
+        default_tier_name = "openrouter_ox"
+        cost_ledger = None
+
+        async def check_health(self, name):
+            health_calls.append(name)
+            return {"status": "ok"}
+
+    monkeypatch.setattr(callisto, "_load_router", lambda p: _Router())
+    monkeypatch.setattr(callisto, "_make_engine",
+                        lambda router, self_review=False: (_ for _ in ()).throw(
+                            AssertionError("engine built")))
+    args.backend = None
+    rc = asyncio.run(callisto._cmd_ask(args))
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "no local endpoint" in out
+    assert health_calls == []
