@@ -45,27 +45,31 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         cfg = load_providers_config(args.providers)
         default = cfg.get("default_tier") if isinstance(cfg, dict) else None
         provs = cfg.get("providers", {}) if isinstance(cfg, dict) else {}
+        from tools.infrouter.local_only import local_only_enabled
+        local_only = local_only_enabled()
         for name, ep in provs.items():
             mark = "*" if name == default else " "
+            tag = ""
+            if local_only and isinstance(ep, dict) and _raw_provider_is_hosted(ep):
+                tag = "  [stripped]"
             print(f"  {mark}{name:<12} backend={ep.get('backend')}"
                   f" model={ep.get('model','-')}"
-                  f" concurrency={ep.get('max_concurrency','?')}")
+                  f" concurrency={ep.get('max_concurrency','?')}"
+                  f"{tag}")
         if not provs:
             print("  NO PROVIDERS CONFIGURED"); ok = False
-        else:
-            from tools.infrouter.local_only import local_only_enabled
-            if local_only_enabled():
-                local_names = [
-                    name for name, raw in provs.items()
-                    if isinstance(raw, dict) and not _raw_provider_is_hosted(raw)
-                ]
-                if not local_names:
-                    print("  FAIL: CALLISTO_LOCAL_ONLY is on but no local "
-                          "provider (llama_cpp_server/local) survives — "
-                          "ask would refuse")
-                    ok = False
-                else:
-                    print(f"  local endpoints: {', '.join(local_names)}")
+        elif local_only:
+            local_names = [
+                name for name, raw in provs.items()
+                if isinstance(raw, dict) and not _raw_provider_is_hosted(raw)
+            ]
+            if not local_names:
+                print("  FAIL: CALLISTO_LOCAL_ONLY is on but no local "
+                      "provider (llama_cpp_server/local) survives — "
+                      "ask would refuse")
+                ok = False
+            else:
+                print(f"  local endpoints: {', '.join(local_names)}")
     except Exception as exc:
         print(f"  config unreadable: {exc}"); ok = False
 

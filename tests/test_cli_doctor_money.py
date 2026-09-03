@@ -191,3 +191,47 @@ def test_unset_local_only_still_requires_hermes_when_configured(
     assert rc != 0
     assert "those tiers will fail at ask time" in out
     assert "not required" not in out
+    assert "[stripped]" not in out
+
+
+def test_local_only_marks_hosted_providers_stripped(capsys, monkeypatch):
+    import inference
+
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+    monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
+    monkeypatch.delenv("CALLISTO_BIND_HOST", raising=False)
+
+    def _load(_p):
+        return {"default_tier": "gpu1",
+                "providers": {
+                    "gpu1": {
+                        "backend": "llama_cpp_server",
+                        "base_url": "http://127.0.0.1:8080/v1",
+                        "model": "qwen36",
+                    },
+                    "ox_alpha": {"backend": "hermes_cli", "model": "ox-alpha"},
+                    "openrouter_ox": {
+                        "backend": "openai_compat",
+                        "base_url": "https://openrouter.ai/api/v1",
+                        "model": "x",
+                    },
+                }}
+
+    monkeypatch.setattr(inference, "load_providers_config", _load)
+    rc, out = _doctor(capsys)
+    assert rc == 0
+    lines = [ln for ln in out.splitlines() if "backend=" in ln]
+    gpu = next(ln for ln in lines if "gpu1" in ln)
+    ox = next(ln for ln in lines if "ox_alpha" in ln)
+    orx = next(ln for ln in lines if "openrouter_ox" in ln)
+    assert "[stripped]" not in gpu
+    assert "[stripped]" in ox
+    assert "[stripped]" in orx
+
+
+def test_unset_local_only_does_not_mark_stripped(capsys, monkeypatch):
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+    monkeypatch.delenv("CALLISTO_LOCAL_ONLY", raising=False)
+    monkeypatch.delenv("CALLISTO_BIND_HOST", raising=False)
+    rc, out = _doctor(capsys)
+    assert "[stripped]" not in out
