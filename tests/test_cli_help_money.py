@@ -27,6 +27,12 @@ def test_help_mentions_loopback_bind_default():
     assert "loopback" in out and "127.0.0.1" in out
 
 
+def test_help_mentions_local_only_strips_hosted():
+    out = _help_text()
+    assert "CALLISTO_LOCAL_ONLY=1" in out
+    assert "hosted" in out.lower()
+
+
 def test_help_is_short_epilog():
     out = _help_text()
     ep = out.split("options:", 1)[-1] if "options:" in out else ""
@@ -41,3 +47,6 @@ def test_ask_help_inherits_money_defaults():
         [sys.executable, str(REPO / "callisto.py"), "ask", "--help"],
         capture_output=True, text=True)
     assert r.returncode == 0
+    out = r.stdout + r.stderr
+    assert "CALLISTO_LOCAL_ONLY=1" in out
+    assert "gpu1" in out

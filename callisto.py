@@ -72,7 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="callisto",
         description="Callisto front door — ask, status, doctor.",
         epilog="Money safety defaults: live execution is OFF unless "
-               "CALLISTO_ALLOW_LIVE_EXECUTE=1 is set, and the API binds "
+               "CALLISTO_ALLOW_LIVE_EXECUTE=1 is set, hosted inference is "
+               "stripped when CALLISTO_LOCAL_ONLY=1, and the API binds "
                "to loopback (127.0.0.1) unless CALLISTO_BIND_HOST is set. "
                "Run `callisto doctor` to check this machine.")
     sub = ap.add_subparsers(dest="command", required=True)
@@ -80,7 +81,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask = sub.add_parser("ask", help="ask one research question")
     p_ask.add_argument("question")
     p_ask.add_argument("--backend", help="route all task classes to this "
-                                         "provider tier (e.g. ox_alpha, gpu1)")
+                                         "provider tier (e.g. gpu1; hosted "
+                                         "names refused under "
+                                         "CALLISTO_LOCAL_ONLY=1)")
     p_ask.add_argument("--self-review", action="store_true",
                        help="let the adversary run on the same model as the "
                             "author (visible, capped) instead of a separate "

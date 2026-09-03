@@ -611,6 +611,7 @@ class TestFrontDoorParser:
         assert "CALLISTO_ALLOW_LIVE_EXECUTE" in \
             build_parser().epilog
         assert "127.0.0.1" in build_parser().epilog
+        assert "CALLISTO_LOCAL_ONLY=1" in build_parser().epilog
 
 
 # ══════════════════════════════════════════════════════════════════════════
