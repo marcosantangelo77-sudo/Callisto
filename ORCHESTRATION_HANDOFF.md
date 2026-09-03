@@ -42,41 +42,74 @@ Everything below is a candidate or WIP until independently approved.
 
 ## Live fleet state
 
-Use at most **three direct Hermes/OX terminal workers at once**. This is a
-deliberate host-reliability cap, not a known Nous concurrency limit: four
-simultaneous terminal/test workloads previously led to external process-group
-losses. Outside an explicit operator freeze, refill a slot immediately after a
-worker truly exits.
+**Cap is per-host, not a Nous Portal limit.** Workstation lore: four
+simultaneous terminal/test workloads previously killed process groups —
+keep **3** as the `nous-supervisor.sh` default there. This 16 GiB cloud
+VM was probed 2026-08-26: **6 concurrent Hermes/OX processes spawned,
+no 429, no OOM, 13 GiB still available.** Use
+`CALLISTO_HERMES_MAX_PROCS=6` here. Evidence:
+`findings/ox_concurrency_probe_2026-08-26.md`.
 
-At the final freeze snapshot, no direct Hermes/OX worker remained running.
-Each of the three focused turns below exited, and any source work was either
-reviewed/merged or committed and pushed for the successor:
+Refill a slot **immediately** after a worker truly exits. This VM's
+operating target is **six live Hermes/OX workers at all times**. Do not
+ask the operator for permission to refill. A worker with `OX_DONE.md` +
+pushed commit that is still "waiting on model" is a zombie — interrupt
+that PTY/PID only, then launch the next disjoint audit task.
 
-| Priority | Branch / worktree | Goal |
+Operator freeze is **lifted** (2026-08-26). Product-direction work
+(`findings/production_ready_2026-08-26.md`) is orchestrator-owned.
+
+### Live Hermes (target 6/6) — 2026-08-26 04:14Z
+
+| Slot | Branch / worktree | State |
 | --- | --- | --- |
-| 1 | `codex/checkpoint-trace-fidelity` at `/private/tmp/callisto-checkpoint-trace-fidelity` | Completed `dbcc751`; clean/pushed but **unreviewed and unmerged**. It is limited to validated admitted-fetch evidence and derived source keys; malformed outcome/rejection data remains for a later repair. |
-| 2 | `codex/run-persistence-unique-id` at `/private/tmp/callisto-run-persistence-unique-id` | Completed `1ec9778`; clean/pushed but **unreviewed and unmerged**. Do not launch a replacement. |
-| 3 | `codex/db-writer-shutdown` at `/private/tmp/callisto-db-writer-shutdown` | Completed during the freeze; independently reviewed and squash-merged to master as `4c79807`. Do not launch a replacement. |
+| 1 | `cursor/ox-telegram-arming-2ac0` `/tmp/callisto-ox-telegram-arming` | LIVE |
+| 2 | `cursor/ox-seal-fail-closed-2ac0` `/tmp/callisto-ox-seal-fail-closed` | LIVE |
+| 3 | `cursor/ox-get-gating-2ac0` `/tmp/callisto-ox-get-gating` | LIVE (wave 3) |
+| 4 | `cursor/ox-live-signal-hard-gate-2ac0` `/tmp/callisto-ox-live-signal-hard-gate` | LIVE (wave 3) |
+| 5 | `cursor/ox-live-execute-gate-2ac0` `/tmp/callisto-ox-live-execute-gate` | LIVE (wave 3) |
+| 6 | `cursor/ox-cli-seal-warn-2ac0` `/tmp/callisto-ox-cli-seal-warn` | LIVE (wave 3) |
 
-### Handoff freeze — do not dispatch more workers
+### Finished this wave — independent tests passed, squash later
 
-The operator explicitly requested a freeze after the three live turns finish.
-That freeze is now complete: source work has been committed/pushed or safely
-merged, and **no replacement worker was launched**. This includes the
-prepared market follow-up prompt. Cursor/Grok should decide what to run next
-after reading this handoff.
+See `findings/ox_independent_review_2026-08-26.md`.
 
-Prepared but deliberately **not launched** prompts:
+| Branch | SHA |
+| --- | --- |
+| `cursor/ox-autopromote-2ac0` | `2f97780` |
+| `cursor/ox-bind-loopback-2ac0` | `a1fbe37` |
+| `cursor/ox-loop-refresh-2ac0` | `1227f4a` |
+| `cursor/ox-eventloop-2ac0` | `f02c7f2` |
+
+### Next refill queue (disjoint files, in order)
+
+1. Dual Kelly: `tools/kelly.py` + `tools/sizing.py` (+ `bet_executor.compute_stake` if needed)
+2. Remaining ungated GETs missed by get-gating (only if that worker missed any)
+3. Dashboard retarget (`web/dashboard/`) — after fail-closed kernel items
+4. One inference control plane — later, measured
+
+Never idle a slot waiting for the operator.
+
+### Frozen unreviewed candidates — do not merge yet
+
+| Branch / head | Status |
+| --- | --- |
+| `codex/checkpoint-trace-fidelity` / `dbcc751` | Unreviewed. Independent adversarial review still required. |
+| `codex/run-persistence-unique-id` / `1ec9778` | Unreviewed. Independent adversarial review still required. |
+| `codex/db-writer-shutdown` | Already squash-merged as `4c79807`. |
+
+Prepared but still not launched (old freeze leftovers):
 
 ```text
 /private/tmp/ox_market_raw_input_placement_repair_prompt.md
 /private/tmp/ox_checkpoint_trace_outcome_rejection_shape_repair_prompt.md
 ```
 
-Workers are launched through:
+Workers are launched through the in-repo supervisor (workstation copy at
+`~/callisto-wt/nous-supervisor.sh` is the same contract):
 
 ```bash
-bash /Users/marcosantangelo/callisto-wt/nous-supervisor.sh \
+bash scripts/nous-supervisor.sh \
   <task-name> <worktree> <prompt-file> 180
 ```
 
@@ -102,9 +135,9 @@ python3 - <<'PY'
 import os, sqlite3
 con = sqlite3.connect(os.path.expanduser('~/.hermes/state.db'))
 for cwd in [
-    '/private/tmp/callisto-checkpoint-trace-fidelity',
-    '/private/tmp/callisto-run-persistence-unique-id',
-    '/private/tmp/callisto-db-writer-shutdown',
+    '/tmp/callisto-ox-loop-refresh',
+    '/tmp/callisto-ox-autopromote',
+    '/tmp/callisto-ox-eventloop',
 ]:
     print(cwd, con.execute(
         'SELECT id, ended_at, api_call_count, input_tokens, output_tokens, '
@@ -209,20 +242,14 @@ Do not merge WIP checkpoints or candidates with an unresolved reviewer BLOCK.
 
 ## First actions for the successor
 
-1. Read this file, then inspect `master` and the candidate ledger. There are
-   no active supervisor terminals or OX turns to wait for at this snapshot.
-2. Before any dispatch or merge, independently review the pushed but
-   unreviewed `dbcc751` and `1ec9778` candidates against their listed
-   adversarial invariants. The freeze means neither was merged here.
-3. `fd496e6` was squash-merged into master as `47ae16f`; reviewed DB repair
-   `4609e04` was squash-merged as `4c79807`. Keep market `ae2cf32` blocked
-   and Claim `399fb44` parked until their documented conditions are resolved.
-4. If the operator resumes implementation, use the prepared narrow prompts
-   only after confirming no duplicate Hermes process exists and after deciding
-   whether the outstanding Claim deployment policy should be addressed.
-5. Preserve this file and all pushed branches when changing orchestrators.
-   The external OX workers can be monitored with the same process/state-db
-   method if a future fleet is launched.
+1. Count Hermes: must be **6** on this VM (`CALLISTO_HERMES_MAX_PROCS=6`).
+   If under 6, launch the next disjoint audit prompt immediately. Do not ask.
+2. Zombies: `OX_DONE.md` + pushed commit + `waiting on model` / idle `$` →
+   interrupt that PTY (Ctrl-C / SIGINT on that PID only). Never `pkill hermes`.
+3. On exit: independent focused tests + adversarial greps, then queue squash.
+   Do not merge on OX testimony.
+4. Do not widen `generate_paper_trade_signal` to `live`.
+5. Preserve this file and all pushed branches.
 
 ## Security and hygiene reminders
 
