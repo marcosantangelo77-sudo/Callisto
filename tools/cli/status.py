@@ -21,6 +21,14 @@ def _default_db_path() -> str:
                      str(REPO / "memory" / "callisto.db"))
 
 
+def _switch_state(name: str) -> str:
+    """Display must match the actual gates, not 'any non-empty string'."""
+    if name == "CALLISTO_LOCAL_ONLY":
+        from tools.infrouter.local_only import local_only_enabled
+        return "on" if local_only_enabled() else "off"
+    return "on" if os.getenv(name, "").strip() == "1" else "off"
+
+
 def _print_appliance_switches() -> None:
     """Print bind host + money/signal env switches (env only, informational)."""
     bind_host = os.getenv("CALLISTO_BIND_HOST", "").strip() or "127.0.0.1"
@@ -29,9 +37,8 @@ def _print_appliance_switches() -> None:
     for name in ("CALLISTO_LOCAL_ONLY",
                  "CALLISTO_ALLOW_LIVE_EXECUTE",
                  "CALLISTO_ALLOW_SIGNAL_REFRESH"):
-        state = "on" if os.getenv(name, "").strip() else "off"
         short = name.removeprefix("CALLISTO_")
-        print(f"  {short}: {state}")
+        print(f"  {short}: {_switch_state(name)}")
 
 
 def cmd_status(args: argparse.Namespace) -> int:

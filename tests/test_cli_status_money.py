@@ -66,3 +66,19 @@ def test_status_no_db_still_prints_switches(capsys, tmp_path, monkeypatch):
     assert rc == 0
     assert "127.0.0.1" in out
     assert "LOCAL_ONLY" in out
+
+
+def test_status_local_only_zero_displays_off(capsys, tmp_path, monkeypatch):
+    _with_db(tmp_path, monkeypatch)
+    monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "0")
+    rc, out = _status(capsys)
+    assert rc == 0
+    assert "LOCAL_ONLY: off" in out
+
+
+def test_status_signal_refresh_true_displays_off(capsys, tmp_path, monkeypatch):
+    _with_db(tmp_path, monkeypatch)
+    monkeypatch.setenv("CALLISTO_ALLOW_SIGNAL_REFRESH", "true")
+    rc, out = _status(capsys)
+    assert rc == 0
+    assert "ALLOW_SIGNAL_REFRESH: off" in out

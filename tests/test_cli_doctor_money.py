@@ -98,6 +98,24 @@ def test_ipv6_wildcard_bind_fails_closed(capsys, monkeypatch):
     assert "FAIL" in bind_out
 
 
+def test_local_only_falsy_values_display_off(capsys, monkeypatch):
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+    monkeypatch.delenv("CALLISTO_BIND_HOST", raising=False)
+    monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "0")
+    rc, out = _doctor(capsys)
+    assert "CALLISTO_LOCAL_ONLY: off" in out
+    assert "CALLISTO_LOCAL_ONLY: on" not in out
+
+
+def test_live_execute_true_is_not_on(capsys, monkeypatch):
+    """Gate is exactly == '1'; display must not say on for 'true'."""
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+    monkeypatch.delenv("CALLISTO_BIND_HOST", raising=False)
+    monkeypatch.setenv("CALLISTO_ALLOW_LIVE_EXECUTE", "true")
+    rc, out = _doctor(capsys)
+    assert "CALLISTO_ALLOW_LIVE_EXECUTE: off" in out
+
+
 def test_local_only_hosted_only_providers_fail(capsys, monkeypatch):
     """LOCAL_ONLY + only hermes_cli must FAIL before claiming the box
     can ask, and must not require the Hermes binary."""

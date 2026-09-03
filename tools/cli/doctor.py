@@ -168,9 +168,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             ok = False
         else:
             print("  OK: BetExecutor.__init__ assigns _enabled = False")
-    print(f"  CALLISTO_LOCAL_ONLY: {'on' if os.getenv('CALLISTO_LOCAL_ONLY', '').strip() else 'off'}")
+    from tools.infrouter.local_only import local_only_enabled
+    print(f"  CALLISTO_LOCAL_ONLY: {'on' if local_only_enabled() else 'off'}")
     allow_live = os.getenv("CALLISTO_ALLOW_LIVE_EXECUTE", "").strip()
-    print(f"  CALLISTO_ALLOW_LIVE_EXECUTE: {'on' if allow_live else 'off'}")
+    print(f"  CALLISTO_ALLOW_LIVE_EXECUTE: "
+          f"{'on' if allow_live == '1' else 'off'}")
 
     print("\ndoctor:", "OK" if ok else "PROBLEMS FOUND (see above)")
     return 0 if ok else 1

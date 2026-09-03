@@ -285,26 +285,18 @@ class TestDoctorPanelsCharacterization:
         assert "CALLISTO_LOCAL_ONLY: off" in out
 
     @pytest.mark.parametrize("val", ["0", "false", "no", ""])
-    def test_doctor_display_vs_gate_truthiness_divergence(
+    def test_doctor_display_matches_gate_truthiness(
             self, val, monkeypatch, capsys):
-        """Characterization quirk: doctor's money-switch panel prints
-        'on' for ANY non-empty value (plain .strip() truthiness), even
-        though the actual arm gate (is_local_only) treats '0'/'false'/'no'
-        as OFF. The panel is display-only; the gate is the authority. Pin
-        both sides so a future alignment of the display can't silently
-        change the gate."""
+        """Doctor's LOCAL_ONLY panel must match is_local_only /
+        local_only_enabled so an operator is not told the nuclear switch
+        is on while the router still uses hosted rails. The gate is
+        unchanged: only 1/true/yes arm it."""
         _, out = _run_doctor(extra_env={"CALLISTO_LOCAL_ONLY": val},
                              monkeypatch=monkeypatch, capsys=capsys)
-        if val == "":
-            assert "CALLISTO_LOCAL_ONLY: off" in out
-        else:
-            # display says on…
-            assert f"CALLISTO_LOCAL_ONLY: {'on' if val.strip() else 'off'}" in out
-        # …but the gate stays off for these values either way
+        assert "CALLISTO_LOCAL_ONLY: off" in out
         from tools.betexec.lifecycle import arm_gate_refusal
         monkeypatch.setenv("CALLISTO_LOCAL_ONLY", val)
-        assert ("CALLISTO_LOCAL_ONLY" in arm_gate_refusal()) == \
-            (val.lower() in ("1", "true", "yes"))
+        assert arm_gate_refusal() == ""
 
     def test_allow_live_execute_off_by_default(self, monkeypatch, capsys):
         _, out = _run_doctor(
