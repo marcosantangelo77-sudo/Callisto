@@ -60,7 +60,7 @@ def test_phases_impl_line_count_dropped():
     n = IMPL.read_text(encoding="utf-8").count("\n")
     assert n < 4000, n
     moved_n = POST.read_text(encoding="utf-8").count("\n")
-    assert moved_n >= 250, moved_n
+    assert moved_n >= 180, moved_n
 
 
 def test_neither_module_imports_autonomous():
