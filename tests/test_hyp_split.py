@@ -79,10 +79,9 @@ def test_facade_is_materially_shrunk():
 def test_auto_promote_never_writes_edge_threshold_or_signal_generated():
     """auto_promote may LOG a threshold diagnosis and HOLD, but must never
     write to hypotheses.edge_threshold or paper_trades.signal_generated."""
-    promote_src = (PKG / "promote.py").read_text(encoding="utf-8")
-    start = promote_src.index("async def auto_promote")
-    end = promote_src.index("\n    async def ", start + 10)
-    body = promote_src[start:end]
+    auto_src = (PKG / "promote_auto.py").read_text(encoding="utf-8")
+    start = auto_src.index("async def auto_promote")
+    body = auto_src[start:]
 
     # No UPDATE/SET touching edge_threshold or signal_generated anywhere in
     # auto_promote. The only UPDATEs permitted are model_config eval_cycles.
@@ -97,9 +96,9 @@ def test_auto_promote_never_writes_edge_threshold_or_signal_generated():
 
 
 def test_diagnose_helper_is_read_only():
-    src = (PKG / "promote.py").read_text(encoding="utf-8")
+    src = (PKG / "promote_queries.py").read_text(encoding="utf-8")
     start = src.index("async def _diagnose_edge_threshold")
-    end = src.index("\n    async def ", start + 10)
+    end = src.index("\nasync def ", start + 10)
     body = src[start:end]
     assert "UPDATE" not in body
     assert "INSERT" not in body

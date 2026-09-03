@@ -68,9 +68,9 @@ def test_manager_dispatches_to_significance_readiness():
 
 def test_promote_py_shrunk():
     n = PROMOTE.read_text(encoding="utf-8").count("\n")
-    # Floor dropped after review_live_hypotheses extract (slice3 pins n < 650).
-    assert n < 650, n
-    assert n >= 500, n
+    # Floor dropped after auto_promote extract (slice4 pins n < 320).
+    assert n < 320, n
+    assert n >= 200, n
 
 
 def test_auto_promote_still_diagnose_only():
