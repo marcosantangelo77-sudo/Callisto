@@ -5,7 +5,8 @@
 slice2 ``hasattr`` pins keep passing. The bodies live here so
 tools/auto/loop.py can keep shrinking without changing behaviour.
 
-``_loop``, ``_cleanup_dedup``, and ``get_status`` stay on AutonomousLoop.
+``_loop`` stays on AutonomousLoop (full body). ``_cleanup_dedup`` and
+``get_status`` stay as thin class delegates; bodies live in loop_status.
 Do not import the autonomous facade (no cycles).
 Do not arm live betting. Do not add live to paper-signal.
 """
