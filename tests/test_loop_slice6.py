@@ -1,0 +1,213 @@
+"""Slice 6: AutonomousLoop pace + injury-cache helpers live in loop_inj.
+
+Contract:
+- tools/auto/loop.py keeps FunctionDef ``_get_pace_model_confirmation``,
+  ``_get_injuries_for_game`` and AsyncFunctionDef ``_refresh_injury_cache``
+  as thin delegates.
+- The nested bodies are in tools/auto/loop_inj.py (``self = loop``).
+- loop_inj.py must not import tools.autonomous.
+- CALLISTO_ALLOW_LIVE_EXECUTE gate stays out of this module.
+- Paper-signal statuses stay paper_trading-only. Live betting is not armed.
+"""
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+LOOP = ROOT / "tools" / "auto" / "loop.py"
+INJ = ROOT / "tools" / "auto" / "loop_inj.py"
+EDGE = ROOT / "tools" / "auto" / "loop_edge.py"
+PAPER = ROOT / "tools" / "signals" / "paper.py"
+
+
+def _class_methods(path: Path, class_name: str) -> ast.ClassDef:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            return node
+    raise AssertionError(f"{class_name} missing in {path}")
+
+
+def _fn_names(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            names.add(node.name)
+    return names
+
+
+def _imports_autonomous(path: Path) -> bool:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if "autonomous" in a.name:
+                    return True
+        elif isinstance(node, ast.ImportFrom):
+            if "autonomous" in (node.module or ""):
+                return True
+    return False
+
+
+def _call_name(call: ast.Call) -> str:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        parts = []
+        cur = func
+        while isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name):
+            parts.append(cur.id)
+        return ".".join(reversed(parts))
+    return ""
+
+
+def _is_thin_delegate(fn, expected: set[str]) -> bool:
+    body = list(fn.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]
+    if body and isinstance(body[0], (ast.Import, ast.ImportFrom)):
+        body = body[1:]
+    if len(body) != 1:
+        return False
+    stmt = body[0]
+    call = None
+    if isinstance(stmt, ast.Return):
+        val = stmt.value
+        if isinstance(val, ast.Await):
+            val = val.value
+        if isinstance(val, ast.Call):
+            call = val
+    elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+        call = stmt.value
+    if call is None:
+        return False
+    return _call_name(call) in expected
+
+
+def _method(name: str):
+    cls = _class_methods(LOOP, "AutonomousLoop")
+    for node in cls.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    raise AssertionError(name)
+
+
+def test_loop_keeps_pace_and_injury_cache_methods():
+    cls = _class_methods(LOOP, "AutonomousLoop")
+    methods = {
+        n.name
+        for n in cls.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "_get_pace_model_confirmation" in methods
+    assert "_refresh_injury_cache" in methods
+    assert "_get_injuries_for_game" in methods
+
+
+def test_pace_and_injury_cache_are_thin_delegates():
+    fn = _method("_get_pace_model_confirmation")
+    assert _is_thin_delegate(
+        fn,
+        {
+            "get_pace_model_confirmation",
+            "loop_inj.get_pace_model_confirmation",
+        },
+    ), ast.dump(fn)
+    fn = _method("_refresh_injury_cache")
+    assert _is_thin_delegate(
+        fn,
+        {"refresh_injury_cache", "loop_inj.refresh_injury_cache"},
+    ), ast.dump(fn)
+    fn = _method("_get_injuries_for_game")
+    assert _is_thin_delegate(
+        fn,
+        {"get_injuries_for_game", "loop_inj.get_injuries_for_game"},
+    ), ast.dump(fn)
+    loop_src = LOOP.read_text(encoding="utf-8")
+    assert "pace_model_totals" not in loop_src
+    assert "Injury cache refreshed" not in loop_src
+    assert "team_abbr" not in loop_src
+
+
+def test_loop_inj_defines_the_three_functions():
+    names = _fn_names(INJ)
+    assert "get_pace_model_confirmation" in names
+    assert "refresh_injury_cache" in names
+    assert "get_injuries_for_game" in names
+    tree = ast.parse(INJ.read_text(encoding="utf-8"))
+    by_name = {
+        n.name: n
+        for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert [a.arg for a in by_name["get_pace_model_confirmation"].args.args] == [
+        "loop",
+        "sport",
+        "game_name",
+        "report",
+    ]
+    assert [a.arg for a in by_name["refresh_injury_cache"].args.args] == [
+        "loop",
+        "sport",
+    ]
+    assert [a.arg for a in by_name["get_injuries_for_game"].args.args] == [
+        "loop",
+        "sport",
+        "game_name",
+    ]
+    src = INJ.read_text(encoding="utf-8")
+    assert src.count("self = loop") >= 3
+    assert "pace_model_totals" in src
+    assert "Injury cache refreshed" in src
+    assert "team_abbr" in src
+
+
+def test_bodies_not_moved_into_loop_edge():
+    edge_src = EDGE.read_text(encoding="utf-8")
+    assert "def get_pace_model_confirmation" not in edge_src
+    assert "async def refresh_injury_cache" not in edge_src
+    assert "Injury cache refreshed" not in edge_src
+
+
+def test_loop_inj_does_not_import_autonomous():
+    assert not _imports_autonomous(INJ)
+    assert not _imports_autonomous(LOOP)
+
+
+def test_loop_line_count_dropped():
+    n = LOOP.read_text(encoding="utf-8").count("\n")
+    assert n < 230, n
+    d = INJ.read_text(encoding="utf-8").count("\n")
+    assert d >= 70, d
+
+
+def test_paper_signal_still_paper_trading_only():
+    src = PAPER.read_text(encoding="utf-8")
+    assert '_PAPER_TRADE_SIGNAL_STATUSES = frozenset({"paper_trading"})' in src
+    assigned = None
+    tree = ast.parse(src)
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "_PAPER_TRADE_SIGNAL_STATUSES":
+                    assigned = node.value
+    assert assigned is not None
+    dump = ast.dump(assigned)
+    assert "paper_trading" in dump
+    assert "live" not in dump
+
+
+def test_no_live_execute_gate_in_loop_inj():
+    src = INJ.read_text(encoding="utf-8")
+    assert "CALLISTO_ALLOW_LIVE_EXECUTE" not in src
