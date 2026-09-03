@@ -55,6 +55,12 @@ API logs stay on OneDrive for cross-machine diagnostics: `logs/api_stdout_*.log`
 - `GET /odds/movements` — recent line movements
 - `GET /world/{domain}` — query domain memory (FINANCIAL, TECHNICAL, SIGNAL, SYNTHESIS, GENERAL)
 
+## Front door (operator CLI)
+`python callisto.py ask|runs|show|status|doctor` is the local research appliance. `ask` is sealed or refused; do not hand-wire ProviderRouter for a one-off question.
+- `CALLISTO_SEAL_KEY` must be valid hex or `ask` refuses (the value is never printed)
+- `CALLISTO_LOCAL_ONLY=1` strips hosted inference (OpenRouter / ox_alpha); pin `--backend` to a local tier such as `gpu1`
+- Live execution stays OFF unless `CALLISTO_ALLOW_LIVE_EXECUTE=1`
+
 ## Key Rules
 - Never bypass AGP for research — submit to /task
 - Every session starts by syncing with Callisto state

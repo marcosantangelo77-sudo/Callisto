@@ -97,3 +97,13 @@ def test_readme_mentions_front_door():
     assert qs.find("python callisto.py doctor") < qs.find("python api.py")
     # do not document a real-looking key value
     assert not re.search(r"\b[0-9a-fA-F]{32,}\b", qs)
+
+
+def test_claude_md_names_fail_closed_switches():
+    """Session-start CLAUDE.md must name the operator CLI and money switches."""
+    text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "callisto.py" in text
+    assert "CALLISTO_SEAL_KEY" in text
+    assert "CALLISTO_LOCAL_ONLY" in text
+    assert "CALLISTO_ALLOW_LIVE_EXECUTE=1" in text
+    assert "never printed" in text
