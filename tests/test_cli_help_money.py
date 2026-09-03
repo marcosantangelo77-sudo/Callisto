@@ -1,5 +1,6 @@
 """CLI help must state the fail-closed money defaults."""
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -90,4 +91,9 @@ def test_readme_mentions_front_door():
     assert "--backend gpu1" in text
     qs = text.split("Quick Start", 1)[1].split("API Endpoints", 1)[0]
     assert "python callisto.py doctor" in qs
+    assert "CALLISTO_SEAL_KEY" in qs
+    assert "never printed" in qs
+    assert qs.find("CALLISTO_SEAL_KEY") < qs.find("python callisto.py doctor")
     assert qs.find("python callisto.py doctor") < qs.find("python api.py")
+    # do not document a real-looking key value
+    assert not re.search(r"\b[0-9a-fA-F]{32,}\b", qs)

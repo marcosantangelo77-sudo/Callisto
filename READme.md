@@ -70,14 +70,16 @@ Prerequisites: Python 3.11+, Ollama running with all three models loaded.
 # Install dependencies
 pip install -r requirements.txt
 
-# Can this box answer a question right now? (providers, seal key, local pool)
-python callisto.py doctor
-
 # Fix the Manager model (replaces "You are ChatGPT" identity)
 ollama create manager:latest -f modelfiles/Manager.Modelfile
 
-# Configure
-cp .env .env.local  # edit with your Brave API key
+# Configure: Brave API key, and CALLISTO_SEAL_KEY as valid hex
+# (`callisto ask` refuses if the seal key is unset; the value is never printed)
+cp .env .env.local
+# export CALLISTO_SEAL_KEY=<hex>   # e.g. openssl rand -hex 32
+
+# Can this box answer a question right now? (providers, seal key, local pool)
+python callisto.py doctor
 
 # Start the API server (port 8420)
 python api.py
