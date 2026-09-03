@@ -5,6 +5,7 @@ import argparse
 import os
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -19,6 +20,20 @@ def _db_path() -> str:
 def _default_db_path() -> str:
     return os.getenv("CALLISTO_DB_PATH",
                      str(REPO / "memory" / "callisto.db"))
+
+
+def _raw_provider_is_hosted(raw: dict) -> bool:
+    """Classify a providers.yaml entry with the same rules as ask/router."""
+    from tools.infrouter.local_only import endpoint_is_hosted
+    extra = raw.get("extra") or {}
+    if not isinstance(extra, dict):
+        extra = {}
+    fake = SimpleNamespace(
+        backend=raw.get("backend") or "",
+        base_url=raw.get("base_url") or "",
+        extra=extra,
+    )
+    return endpoint_is_hosted(fake)
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -37,6 +52,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                   f" concurrency={ep.get('max_concurrency','?')}")
         if not provs:
             print("  NO PROVIDERS CONFIGURED"); ok = False
+        else:
+            from tools.infrouter.local_only import local_only_enabled
+            if local_only_enabled():
+                local_names = [
+                    name for name, raw in provs.items()
+                    if isinstance(raw, dict) and not _raw_provider_is_hosted(raw)
+                ]
+                if not local_names:
+                    print("  FAIL: CALLISTO_LOCAL_ONLY is on but no local "
+                          "provider (llama_cpp_server/local) survives — "
+                          "ask would refuse")
+                    ok = False
+                else:
+                    print(f"  local endpoints: {', '.join(local_names)}")
     except Exception as exc:
         print(f"  config unreadable: {exc}"); ok = False
 
@@ -51,9 +80,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     needs_hermes = any(p.get("backend") == "hermes_cli"
                        for p in provs.values())
     if needs_hermes and not avail:
-        print("  a configured provider uses backend=hermes_cli but the CLI")
-        print("  is not reachable — those tiers will fail at ask time")
-        ok = False
+        from tools.infrouter.local_only import local_only_enabled
+        if local_only_enabled():
+            print("  CALLISTO_LOCAL_ONLY strips hosted hermes_cli — not required")
+        else:
+            print("  a configured provider uses backend=hermes_cli but the CLI")
+            print("  is not reachable — those tiers will fail at ask time")
+            ok = False
 
     print("== database ==")
     db = _db_path()

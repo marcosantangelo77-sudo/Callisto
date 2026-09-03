@@ -96,3 +96,80 @@ def test_ipv6_wildcard_bind_fails_closed(capsys, monkeypatch):
     assert rc != 0
     bind_out = out.split("== bind ==", 1)[1].split("==", 1)[0]
     assert "FAIL" in bind_out
+
+
+def test_local_only_hosted_only_providers_fail(capsys, monkeypatch):
+    """LOCAL_ONLY + only hermes_cli must FAIL before claiming the box
+    can ask, and must not require the Hermes binary."""
+    import inference
+
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+    monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
+    monkeypatch.delenv("CALLISTO_BIND_HOST", raising=False)
+
+    def _load(_p):
+        return {"default_tier": "ox_alpha",
+                "providers": {
+                    "ox_alpha": {"backend": "hermes_cli", "model": "ox-alpha"},
+                }}
+
+    monkeypatch.setattr(inference, "load_providers_config", _load)
+    rc, out = _doctor(capsys)
+    assert rc != 0
+    assert "no local provider" in out
+    assert "those tiers will fail at ask time" not in out
+    assert "not required" in out
+
+
+def test_local_only_gpu_ok_without_hermes(capsys, monkeypatch):
+    """LOCAL_ONLY + llama.cpp + missing Hermes CLI is doctor: OK."""
+    import inference
+
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+    monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
+    monkeypatch.delenv("CALLISTO_BIND_HOST", raising=False)
+
+    def _load(_p):
+        return {"default_tier": "gpu1",
+                "providers": {
+                    "gpu1": {
+                        "backend": "llama_cpp_server",
+                        "base_url": "http://127.0.0.1:8080/v1",
+                        "model": "qwen36",
+                    },
+                    "ox_alpha": {"backend": "hermes_cli", "model": "ox-alpha"},
+                }}
+
+    monkeypatch.setattr(inference, "load_providers_config", _load)
+    rc, out = _doctor(capsys)
+    assert rc == 0
+    assert "doctor: OK" in out
+    assert "local endpoints: gpu1" in out
+    assert "not required" in out
+    assert "those tiers will fail at ask time" not in out
+
+
+def test_unset_local_only_still_requires_hermes_when_configured(
+        capsys, monkeypatch):
+    import inference
+
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+    monkeypatch.delenv("CALLISTO_LOCAL_ONLY", raising=False)
+    monkeypatch.delenv("CALLISTO_BIND_HOST", raising=False)
+
+    def _load(_p):
+        return {"default_tier": "gpu1",
+                "providers": {
+                    "gpu1": {
+                        "backend": "llama_cpp_server",
+                        "base_url": "http://127.0.0.1:8080/v1",
+                        "model": "qwen36",
+                    },
+                    "ox_alpha": {"backend": "hermes_cli", "model": "ox-alpha"},
+                }}
+
+    monkeypatch.setattr(inference, "load_providers_config", _load)
+    rc, out = _doctor(capsys)
+    assert rc != 0
+    assert "those tiers will fail at ask time" in out
+    assert "not required" not in out
