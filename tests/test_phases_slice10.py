@@ -85,7 +85,7 @@ def test_neither_regime_granger_nor_post_live_imports_autonomous():
         pkg / "backtest_run.py", pkg / "collect_eval.py", pkg / "hypgen.py",
         pkg / "pre_live.py", pkg / "shared.py", pkg / "claude_deep.py",
         pkg / "system_improve.py", pkg / "post_live_review.py",
-        pkg / "post_live_wiki.py",
+        pkg / "post_live_wiki.py", pkg / "post_live_watch.py",
     ):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
