@@ -79,3 +79,12 @@ def test_module_doc_mentions_local_only():
     assert "--backend gpu1" in doc
     # docstring, not the later argparse epilog
     assert "Hosted inference is stripped" in doc
+
+
+def test_readme_mentions_front_door():
+    """Root READme.md must name the CLI and the hosted-strip switch."""
+    text = (REPO / "READme.md").read_text(encoding="utf-8")
+    assert "callisto.py ask" in text
+    assert "CALLISTO_LOCAL_ONLY=1" in text
+    assert "CALLISTO_ALLOW_LIVE_EXECUTE=1" in text
+    assert "--backend gpu1" in text

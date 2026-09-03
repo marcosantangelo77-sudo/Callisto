@@ -49,6 +49,19 @@ Domain worlds are fully isolated — enforced by CHECK constraints at the databa
 Any world is reconstructible from the underlying catalogue at any time. The catalogue is the source of truth. Domain views (world_financial, world_technical, etc.) ARE the worlds.
 UNVERIFIED findings (confidence_score < 0.30) are physically impossible to store — the database rejects them.
 
+Front door
+
+The operator CLI is `callisto.py` (ask / runs / show / status / doctor), not a hand-wired pipeline:
+
+```bash
+python callisto.py doctor
+python callisto.py ask --backend gpu1 "Did the 2009 federal minimum wage increase to $7.25?"
+python callisto.py runs
+python callisto.py show <run_id>
+```
+
+`CALLISTO_LOCAL_ONLY=1` strips hosted inference (OpenRouter / ox_alpha). Pin `--backend` to a local tier such as `gpu1`. Live execution stays OFF unless `CALLISTO_ALLOW_LIVE_EXECUTE=1`. Paper-trading signals never include live hypotheses.
+
 Quick Start
 
 Prerequisites: Python 3.11+, Ollama running with all three models loaded.
