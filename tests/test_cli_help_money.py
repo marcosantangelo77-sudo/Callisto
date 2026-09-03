@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -53,3 +55,16 @@ def test_ask_help_inherits_money_defaults():
     assert "loopback" in out and "127.0.0.1" in out
     assert "CALLISTO_LOCAL_ONLY=1" in out
     assert "gpu1" in out
+
+
+@pytest.mark.parametrize("cmd", ["status", "runs", "show", "doctor", "help"])
+def test_subcommand_help_inherits_money_defaults(cmd):
+    r = subprocess.run(
+        [sys.executable, str(REPO / "callisto.py"), cmd, "--help"],
+        capture_output=True, text=True)
+    assert r.returncode == 0
+    out = r.stdout + r.stderr
+    assert "CALLISTO_ALLOW_LIVE_EXECUTE=1" in out
+    assert "OFF" in out or "off" in out.lower()
+    assert "loopback" in out and "127.0.0.1" in out
+    assert "CALLISTO_LOCAL_ONLY=1" in out

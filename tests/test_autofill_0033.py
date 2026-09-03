@@ -614,7 +614,8 @@ class TestFrontDoorParser:
         assert "CALLISTO_LOCAL_ONLY=1" in parser.epilog
         sub = next(a for a in parser._actions
                    if isinstance(a, argparse._SubParsersAction))
-        assert sub.choices["ask"].epilog == parser.epilog
+        for name in ("ask", "status", "runs", "show", "doctor", "help"):
+            assert sub.choices[name].epilog == parser.epilog, name
 
 
 # ══════════════════════════════════════════════════════════════════════════

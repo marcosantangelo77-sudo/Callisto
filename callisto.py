@@ -67,8 +67,8 @@ from tools.cli.status import _cmd_status, _default_db_path as _db_path  # noqa: 
 
 # ── parser ────────────────────────────────────────────────────────────────
 
-# Shared so `callisto --help` and `callisto ask --help` stay in lockstep.
-# argparse subparsers do not inherit the parent epilog.
+# Shared so `callisto --help` and every `callisto <cmd> --help` stay in
+# lockstep. argparse subparsers do not inherit the parent epilog.
 _MONEY_EPILOG = (
     "Money safety defaults: live execution is OFF unless "
     "CALLISTO_ALLOW_LIVE_EXECUTE=1 is set, hosted inference is "
@@ -100,20 +100,24 @@ def build_parser() -> argparse.ArgumentParser:
                        help="path to providers.yaml")
 
     p_status = sub.add_parser(
-        "status", help="hypothesis pool / lifecycle summary from the local DB")
+        "status", help="hypothesis pool / lifecycle summary from the local DB",
+        epilog=_MONEY_EPILOG)
     p_runs = sub.add_parser(
-        "runs", help="list saved ask() runs (newest first)")
+        "runs", help="list saved ask() runs (newest first)",
+        epilog=_MONEY_EPILOG)
     p_runs.add_argument("--limit", type=int, default=20)
     p_show = sub.add_parser(
         "show", help="show one run's conclusion, artifacts and provenance; "
-                     "re-verifies artifact hashes against the store")
+                     "re-verifies artifact hashes against the store",
+        epilog=_MONEY_EPILOG)
     p_show.add_argument("run_id", help="run id (or unique prefix) from `runs`")
     p_doc = sub.add_parser(
-        "doctor", help="can this machine answer a live question today?")
+        "doctor", help="can this machine answer a live question today?",
+        epilog=_MONEY_EPILOG)
     for p in (p_status, p_doc):
         p.add_argument("--providers", default=_default_providers_path())
     sub.add_parser(
-        "help", help="show this usage message")
+        "help", help="show this usage message", epilog=_MONEY_EPILOG)
     return ap
 
 
