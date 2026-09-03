@@ -88,3 +88,6 @@ def test_readme_mentions_front_door():
     assert "CALLISTO_LOCAL_ONLY=1" in text
     assert "CALLISTO_ALLOW_LIVE_EXECUTE=1" in text
     assert "--backend gpu1" in text
+    qs = text.split("Quick Start", 1)[1].split("API Endpoints", 1)[0]
+    assert "python callisto.py doctor" in qs
+    assert qs.find("python callisto.py doctor") < qs.find("python api.py")

@@ -70,6 +70,9 @@ Prerequisites: Python 3.11+, Ollama running with all three models loaded.
 # Install dependencies
 pip install -r requirements.txt
 
+# Can this box answer a question right now? (providers, seal key, local pool)
+python callisto.py doctor
+
 # Fix the Manager model (replaces "You are ChatGPT" identity)
 ollama create manager:latest -f modelfiles/Manager.Modelfile
 
