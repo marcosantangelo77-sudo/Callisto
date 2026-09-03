@@ -5,7 +5,7 @@ class as thin delegates so slice2/slice3 method-name pins keep passing.
 The bodies live here so tools/auto/loop.py can keep shrinking without
 changing behaviour.
 
-``_loop`` stays on AutonomousLoop for this peel.
+``_loop`` stays as a thin class delegate (body in loop_run).
 Do not import the autonomous facade (no cycles).
 Do not arm live betting. Do not add live to paper-signal.
 """
