@@ -88,6 +88,7 @@ def test_neither_post_live_review_nor_post_live_imports_autonomous():
         pkg / "backtest_run.py", pkg / "collect_eval.py", pkg / "hypgen.py",
         pkg / "pre_live.py", pkg / "shared.py", pkg / "claude_deep.py",
         pkg / "system_improve.py", pkg / "regime_granger.py",
+        pkg / "post_live_wiki.py",
     ):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -102,7 +103,7 @@ def test_line_counts():
     post_n = POST.read_text(encoding="utf-8").count("\n")
     review_n = REVIEW.read_text(encoding="utf-8").count("\n")
     assert post_n < 400, post_n
-    assert post_n >= 250, post_n
+    assert post_n >= 180, post_n
     assert review_n >= 140, review_n
 
 
