@@ -1,11 +1,10 @@
-"""Slice 4: AutonomousLoop cache-cleanup and get_status live in loop_status.
+"""Slice 5: AutonomousLoop._loop body lives in loop_run.
 
 Contract:
-- tools/auto/loop.py keeps FunctionDef ``_cleanup_dedup`` and ``get_status``
-  (slice2/slice3 method-name pins) as thin delegates.
-- The nested bodies are in tools/auto/loop_status.py (``self = loop``).
-- loop_status.py must not import tools.autonomous.
-- ``_loop`` stays on AutonomousLoop as a thin async delegate (body in loop_run).
+- tools/auto/loop.py keeps AsyncFunctionDef ``_loop`` (slice3/slice4
+  method-name pins) as a thin delegate to ``run_loop``.
+- The nested body is in tools/auto/loop_run.py (``self = loop``).
+- loop_run.py must not import tools.autonomous.
 - CALLISTO_ALLOW_LIVE_EXECUTE gate stays out of this module.
 - Paper-signal statuses stay paper_trading-only. Live betting is not armed.
 """
@@ -16,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LOOP = ROOT / "tools" / "auto" / "loop.py"
+RUN = ROOT / "tools" / "auto" / "loop_run.py"
 STATUS = ROOT / "tools" / "auto" / "loop_status.py"
 PSYCH = ROOT / "tools" / "auto" / "loop_psych.py"
 EDGE = ROOT / "tools" / "auto" / "loop_edge.py"
@@ -68,7 +68,7 @@ def _call_name(call: ast.Call) -> str:
     return ""
 
 
-def _is_thin_delegate(fn: ast.FunctionDef, expected: set[str]) -> bool:
+def _is_thin_delegate(fn, expected: set[str]) -> bool:
     body = list(fn.body)
     if (
         body
@@ -83,8 +83,12 @@ def _is_thin_delegate(fn: ast.FunctionDef, expected: set[str]) -> bool:
         return False
     stmt = body[0]
     call = None
-    if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Call):
-        call = stmt.value
+    if isinstance(stmt, ast.Return):
+        val = stmt.value
+        if isinstance(val, ast.Await):
+            val = val.value
+        if isinstance(val, ast.Call):
+            call = val
     elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
         call = stmt.value
     if call is None:
@@ -92,83 +96,69 @@ def _is_thin_delegate(fn: ast.FunctionDef, expected: set[str]) -> bool:
     return _call_name(call) in expected
 
 
-def _method(name: str) -> ast.FunctionDef:
+def _async_method(name: str) -> ast.AsyncFunctionDef:
     cls = _class_methods(LOOP, "AutonomousLoop")
     for node in cls.body:
-        if isinstance(node, ast.FunctionDef) and node.name == name:
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == name:
             return node
     raise AssertionError(name)
 
 
-def test_loop_keeps_cleanup_and_status_methods():
+def test_loop_keeps_async_loop_method():
     cls = _class_methods(LOOP, "AutonomousLoop")
     methods = {
         n.name
         for n in cls.body
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    assert "_cleanup_dedup" in methods
-    assert "get_status" in methods
     assert "_loop" in methods
 
 
-def test_cleanup_and_status_are_thin_delegates():
-    fn = _method("_cleanup_dedup")
+def test_loop_method_is_thin_delegate():
+    fn = _async_method("_loop")
     assert _is_thin_delegate(
         fn,
-        {"cleanup_dedup", "loop_status.cleanup_dedup"},
-    ), ast.dump(fn)
-    fn = _method("get_status")
-    assert _is_thin_delegate(
-        fn,
-        {
-            "get_status",
-            "_get_status",
-            "loop_status.get_status",
-        },
+        {"run_loop", "loop_run.run_loop"},
     ), ast.dump(fn)
     loop_src = LOOP.read_text(encoding="utf-8")
-    assert "200 MB/hr leak" not in loop_src
-    assert "cached_edge_keys" not in loop_src
-    assert "Keep only the 25 most recent entries" not in loop_src
+    assert "analyzing top" not in loop_src
+    assert "Autonomous loop error" not in loop_src
+    assert "Wait for first snapshot cycle" not in loop_src
 
 
-def test_loop_status_defines_the_two_functions():
-    names = _fn_names(STATUS)
-    assert "cleanup_dedup" in names
-    assert "get_status" in names
-    assert "_loop" not in names
-    tree = ast.parse(STATUS.read_text(encoding="utf-8"))
-    by_name = {
-        n.name: n
+def test_loop_run_defines_run_loop():
+    names = _fn_names(RUN)
+    assert "run_loop" in names
+    tree = ast.parse(RUN.read_text(encoding="utf-8"))
+    fn = next(
+        n
         for n in tree.body
-        if isinstance(n, ast.FunctionDef)
-    }
-    assert [a.arg for a in by_name["cleanup_dedup"].args.args] == ["loop"]
-    assert [a.arg for a in by_name["get_status"].args.args] == ["loop"]
-    src = STATUS.read_text(encoding="utf-8")
-    assert src.count("self = loop") >= 2
-    assert "200 MB/hr leak" in src
-    assert "cached_edge_keys" in src
+        if isinstance(n, ast.AsyncFunctionDef) and n.name == "run_loop"
+    )
+    assert [a.arg for a in fn.args.args] == ["loop"]
+    src = RUN.read_text(encoding="utf-8")
+    assert "self = loop" in src
+    assert "analyzing top" in src
+    assert "Wait for first snapshot cycle" in src
 
 
-def test_loop_body_not_moved_to_status_psych_or_edge():
+def test_run_loop_not_in_other_extracts():
     for path in (STATUS, PSYCH, EDGE):
         src = path.read_text(encoding="utf-8")
-        assert "async def _loop" not in src
-        assert "async def loop_main" not in src
+        assert "async def run_loop" not in src
+        assert "Wait for first snapshot cycle" not in src
 
 
-def test_loop_status_does_not_import_autonomous():
-    assert not _imports_autonomous(STATUS)
+def test_loop_run_does_not_import_autonomous():
+    assert not _imports_autonomous(RUN)
     assert not _imports_autonomous(LOOP)
 
 
 def test_loop_line_count_dropped():
     n = LOOP.read_text(encoding="utf-8").count("\n")
-    assert n < 320, n
-    d = STATUS.read_text(encoding="utf-8").count("\n")
-    assert d >= 90, d
+    assert n < 280, n
+    d = RUN.read_text(encoding="utf-8").count("\n")
+    assert d >= 55, d
 
 
 def test_paper_signal_still_paper_trading_only():
@@ -187,6 +177,6 @@ def test_paper_signal_still_paper_trading_only():
     assert "live" not in dump
 
 
-def test_no_live_execute_gate_in_loop_status():
-    src = STATUS.read_text(encoding="utf-8")
+def test_no_live_execute_gate_in_loop_run():
+    src = RUN.read_text(encoding="utf-8")
     assert "CALLISTO_ALLOW_LIVE_EXECUTE" not in src

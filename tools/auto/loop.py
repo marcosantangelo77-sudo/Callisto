@@ -84,50 +84,8 @@ class AutonomousLoop:
 
     async def _loop(self) -> None:
         """Main loop — find edges, reason about them, alert if worthy."""
-        # Wait for first snapshot cycle to populate data
-        await asyncio.sleep(30)
-
-        while self._running:
-            try:
-                self._loop_cycle += 1
-
-                # Run market psychology analysis on latest snapshots
-                self._run_market_psychology()
-
-                # Refresh injury caches for active sports
-                all_reports = self.line_monitor.get_edge_report()
-                if isinstance(all_reports, dict):
-                    for _sport_key in all_reports:
-                        await self._refresh_injury_cache(_sport_key)
-
-                # Run parlay/SGP correlation scan every 4 cycles
-                if self._loop_cycle % 4 == 0:
-                    await self._phase_parlay_correlation_scan()
-
-                candidates = self._find_analysis_candidates()
-
-                if candidates:
-                    logger.info(
-                        f"Autonomous: {len(candidates)} edge candidates found, "
-                        f"analyzing top {min(len(candidates), 3)}"
-                    )
-
-                    # Analyze top candidates sequentially (GPU bound)
-                    for candidate in candidates[:3]:
-                        if not self._running:
-                            break
-                        await self._analyze_edge(candidate)
-
-                # Clean up old dedup entries
-                self._cleanup_dedup()
-
-                await asyncio.sleep(ANALYSIS_COOLDOWN)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Autonomous loop error: {e}", exc_info=True)
-                await asyncio.sleep(30)
+        from tools.auto.loop_run import run_loop
+        return await run_loop(self)
 
     def _run_market_psychology(self) -> None:
         """Run market psychology analysis on latest snapshots.
