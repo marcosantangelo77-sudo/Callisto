@@ -12,20 +12,18 @@ p50 ≈ 11.9s / max ≈ 31.4s) does not support pointing MODEL_LADDER at this
 router yet. See tests/test_inference_planes.py, which pins both planes.
 
 Internals live in tools.infrouter (config, 429 retry, LOCAL_ONLY strip,
-endpoint state, empirical reordering, shared HTTP pool). This module keeps
-the facade class, candidates_for(), and complete() dispatch.
-CALLISTO_LOCAL_ONLY fail-closed hosted strip runs in
-candidates_for()/tier_for() BEFORE any complete() dispatch.
+endpoint state, empirical reordering, shared HTTP pool, complete()).
+This module keeps the facade class, candidates_for(), and thin
+complete()/complete_sync() delegates. CALLISTO_LOCAL_ONLY fail-closed
+hosted strip runs in candidates_for()/tier_for() BEFORE any complete()
+dispatch.
 """
 
 from typing import Any, Optional
 
-import asyncio as _asyncio
-import time as _time
-
 import httpx
 
-from inference_kernel import _parse_json_response, logger
+from inference_kernel import logger
 
 from tools.infrouter.config import (  # noqa: F401
     TASK_CLASS_ALIASES,
@@ -51,7 +49,7 @@ from tools.infrouter.retry import (  # noqa: F401
     _retry_after_seconds,
 )
 from tools.infrouter.state import CostLedger, _EndpointState
-from tools.infrouter import http as _http
+from tools.infrouter import complete as _complete, http as _http
 
 
 class ProviderRouter(EmpiricalRoutingMixin):
@@ -307,126 +305,26 @@ class ProviderRouter(EmpiricalRoutingMixin):
         allow_budget_exceed: bool = False,
         role: Optional[str] = None,
     ) -> dict:
-        """One routed completion, with failover across the tier pool,
-        per-endpoint concurrency limiting, and cost accounting.
+        """One routed completion. Body: tools.infrouter.complete.
 
-        `role` (W2): when set AND empirical routing is enabled with measured
-        scores, the measured per-(role, model) record reorders the candidate
-        list. The returned dict carries "routing_basis" so every caller can
-        see whether this decision was measured or merely configured.
-
-        Returns {"content", "parsed_json", "model", "tier", "task_class",
-                 "routing_basis"}.
-        Raises only when EVERY candidate endpoint failed (or none can serve
-        the requested capability) — a dead endpoint degrades, never crashes.
+        Dispatches through candidates_for; hermes_cli is last-resort CLI.
         """
-        msgs = self.build_messages(messages, system_context)
-        errors: list[str] = []
-
-        base_candidates = self.candidates_for(task_class, schema=schema)
-        ordered, routing_meta = self.route_order(
-            task_class, base_candidates, role=role)
-
-        for name in ordered:
-            endpoint = self.endpoints[name]
-            state = self.states[name]
-
-            if endpoint.cost_per_1k_input or endpoint.cost_per_1k_output:
-                if (self.budget_usd is not None
-                        and self.cost_ledger.total_cost_usd >= self.budget_usd
-                        and not allow_budget_exceed):
-                    errors.append(
-                        f"{name}: budget ${self.budget_usd:.2f} exhausted "
-                        f"(spent ${self.cost_ledger.total_cost_usd:.2f}) — "
-                        f"refusing paid tier; pass allow_budget_exceed=True "
-                        f"to override deliberately"
-                    )
-                    continue
-            payload = self._payload(endpoint, msgs, schema, temperature, max_tokens) \
-                if endpoint.backend != "hermes_cli" else None
-            queued_at = _time.monotonic()
-            try:
-                # Backpressure: wait here if the endpoint is saturated.
-                async with state.semaphore:
-                    queue_s = _time.monotonic() - queued_at
-                    state.in_flight += 1
-                    try:
-                        if endpoint.backend == "hermes_cli":
-                            from tools.pipeline.hermes_cli import (
-                                hermes_complete,
-                                _default_max_procs as _hc_procs)
-                            if _hc_procs() < self.endpoints[name].max_concurrency:
-                                logger.warning(
-                                    f"ProviderRouter: hermes_cli endpoint "
-                                    f"{name} declares max_concurrency="
-                                    f"{self.endpoints[name].max_concurrency} "
-                                    f"> CALLISTO_HERMES_MAX_PROCS — the "
-                                    f"shared process semaphore will bound "
-                                    f"forks to {_hc_procs()}")
-                            res = await hermes_complete(
-                                msgs,
-                                role=str(task_class),
-                                timeout_s=float(timeout),
-                                # Bind the explicitly configured provider/
-                                # model as the CLI routing target (mirrors
-                                # the supervisor's --provider/-m); absent
-                                # fields mean no flag is passed.
-                                provider=endpoint.extra.get("provider"),
-                                model=endpoint.extra.get("model"),
-                            )
-                            content = res["content"]
-                            usage: dict = {}
-                        else:
-                            content, usage = await _post_with_retry(
-                                self._post, endpoint, payload, timeout
-                            )
-                    finally:
-                        state.in_flight -= 1
-                state.record_success()
-
-                in_tok = int(usage.get("prompt_tokens", 0) or 0)
-                out_tok = int(usage.get("completion_tokens", 0) or 0)
-                cost = (
-                    in_tok / 1000 * endpoint.cost_per_1k_input
-                    + out_tok / 1000 * endpoint.cost_per_1k_output
-                )
-                await self.cost_ledger.record(name, in_tok, out_tok, cost)
-
-                if queue_s > 1.0:
-                    logger.info(
-                        f"ProviderRouter: {name} was saturated — queued "
-                        f"{queue_s:.1f}s for task_class={task_class}"
-                    )
-                return {
-                    "content": content,
-                    "parsed_json": _parse_json_response(content) if content else None,
-                    "model": endpoint.model,
-                    "tier": name,
-                    "task_class": task_class,
-                    "routing_basis": routing_meta.get("basis", "configured"),
-                }
-            except Exception as e:
-                state.record_failure()
-                errors.append(f"{name}: {e}")
-                logger.warning(
-                    f"ProviderRouter: endpoint {name} failed "
-                    f"({state.consecutive_failures} consecutive) — failing over: {e}"
-                )
-
-        raise RuntimeError(
-            f"All endpoints failed for task_class={task_class!r}: "
-            f"{'; '.join(errors) or 'no candidates'}"
+        return await _complete.complete(
+            self,
+            task_class,
+            messages,
+            schema=schema,
+            system_context=system_context,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            allow_budget_exceed=allow_budget_exceed,
+            role=role,
         )
 
     def complete_sync(self, *args, **kwargs) -> dict:
         """Synchronous wrapper around complete()."""
-        try:
-            _asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-        else:
-            raise RuntimeError("complete_sync() called from inside a running loop")
-        return _asyncio.run(self.complete(*args, **kwargs))
+        return _complete.complete_sync(self, *args, **kwargs)
 
     def status(self) -> dict:
         """Expose routing + cost state (wire into GET /system/full-status)."""
