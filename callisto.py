@@ -25,6 +25,9 @@ Examples:
     python callisto.py ask --backend gpu1 "Is Bitcoin a good buy right now?"
     python callisto.py status
     python callisto.py doctor
+
+Hosted inference is stripped when CALLISTO_LOCAL_ONLY=1; pin --backend
+to a local tier such as gpu1.
 """
 from __future__ import annotations
 

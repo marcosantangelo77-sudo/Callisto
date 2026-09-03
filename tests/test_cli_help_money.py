@@ -68,3 +68,14 @@ def test_subcommand_help_inherits_money_defaults(cmd):
     assert "OFF" in out or "off" in out.lower()
     assert "loopback" in out and "127.0.0.1" in out
     assert "CALLISTO_LOCAL_ONLY=1" in out
+
+
+def test_module_doc_mentions_local_only():
+    """The front-door module docstring is what `pydoc` / GitHub show."""
+    text = (REPO / "callisto.py").read_text(encoding="utf-8")
+    assert text.startswith('#!/usr/bin/env python3\n"""')
+    doc = text.split('"""', 2)[1]
+    assert "CALLISTO_LOCAL_ONLY=1" in doc
+    assert "--backend gpu1" in doc
+    # docstring, not the later argparse epilog
+    assert "Hosted inference is stripped" in doc
