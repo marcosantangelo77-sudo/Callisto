@@ -227,6 +227,42 @@ def test_local_only_marks_hosted_providers_stripped(capsys, monkeypatch):
     assert "[stripped]" not in gpu
     assert "[stripped]" in ox
     assert "[stripped]" in orx
+    assert "*gpu1" in gpu
+    assert "*ox_alpha" not in ox
+    assert "*openrouter_ox" not in orx
+
+
+def test_local_only_restars_hosted_yaml_default(capsys, monkeypatch):
+    """yaml default_tier=ox_alpha must not keep the star under LOCAL_ONLY
+    when a local rail exists — star gpu1 instead."""
+    import inference
+
+    monkeypatch.setenv("CALLISTO_SEAL_KEY", "ab" * 32)
+    monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
+    monkeypatch.delenv("CALLISTO_BIND_HOST", raising=False)
+
+    def _load(_p):
+        return {"default_tier": "ox_alpha",
+                "providers": {
+                    "ox_alpha": {"backend": "hermes_cli", "model": "ox-alpha"},
+                    "gpu1": {
+                        "backend": "llama_cpp_server",
+                        "base_url": "http://127.0.0.1:8080/v1",
+                        "model": "qwen36",
+                    },
+                }}
+
+    monkeypatch.setattr(inference, "load_providers_config", _load)
+    rc, out = _doctor(capsys)
+    assert rc == 0
+    assert "starring gpu1" in out
+    assert "*gpu1" in out
+    assert "*ox_alpha" not in out
+    lines = [ln for ln in out.splitlines() if "backend=" in ln]
+    ox = next(ln for ln in lines if "ox_alpha" in ln)
+    gpu = next(ln for ln in lines if "gpu1" in ln)
+    assert "[stripped]" in ox
+    assert "[stripped]" not in gpu
 
 
 def test_unset_local_only_does_not_mark_stripped(capsys, monkeypatch):

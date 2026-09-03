@@ -47,8 +47,21 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         provs = cfg.get("providers", {}) if isinstance(cfg, dict) else {}
         from tools.infrouter.local_only import local_only_enabled
         local_only = local_only_enabled()
+        star_name = default
+        if local_only and default:
+            raw_def = provs.get(default) if isinstance(provs, dict) else None
+            if isinstance(raw_def, dict) and _raw_provider_is_hosted(raw_def):
+                star_name = next(
+                    (n for n, raw in provs.items()
+                     if isinstance(raw, dict)
+                     and not _raw_provider_is_hosted(raw)),
+                    None,
+                )
+                if star_name:
+                    print(f"  default_tier {default!r} is hosted under "
+                          f"CALLISTO_LOCAL_ONLY — starring {star_name}")
         for name, ep in provs.items():
-            mark = "*" if name == default else " "
+            mark = "*" if name == star_name else " "
             tag = ""
             if local_only and isinstance(ep, dict) and _raw_provider_is_hosted(ep):
                 tag = "  [stripped]"
