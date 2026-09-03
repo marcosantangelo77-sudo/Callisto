@@ -1,7 +1,8 @@
 """`callisto ask` — one question through the full AGP pipeline.
 
 Fail-closed: `check_seal_key()` must pass before any research runs. The
-seal key value itself is never printed.
+seal key value itself is never printed. Under CALLISTO_LOCAL_ONLY, a
+hosted `--backend` is refused before any health probe or research.
 """
 from __future__ import annotations
 
@@ -35,6 +36,33 @@ def _runs_dir() -> Path:
 
 def _default_providers_path() -> str:
     return str(REPO / "config" / "providers.yaml")
+
+
+# Characterization stubs store endpoint names in a list, not EndpointConfig.
+# Name fallback so `--backend ox_alpha` still fails closed under LOCAL_ONLY.
+_WELL_KNOWN_HOSTED_RAILS = frozenset({
+    "openrouter_ox", "frontier", "ox_alpha", "ox_alpha_proxy",
+})
+
+
+def _local_only_forbids_backend(router, name: str) -> bool:
+    """True when CALLISTO_LOCAL_ONLY is on and `name` is a hosted rail.
+
+    Real ProviderRouter.endpoints is a dict of EndpointConfig (URL/backend
+    classification from tools.infrouter.local_only). Do not health-check
+    a hosted pin — that would leave the box before the strip inside
+    candidates_for() can raise.
+    """
+    from tools.infrouter.local_only import (
+        endpoint_is_hosted,
+        local_only_enabled,
+    )
+    if not local_only_enabled():
+        return False
+    eps = getattr(router, "endpoints", None)
+    if isinstance(eps, dict):
+        return endpoint_is_hosted(eps.get(name))
+    return name in _WELL_KNOWN_HOSTED_RAILS
 
 
 # ── ask ────────────────────────────────────────────────────────────────────
@@ -123,6 +151,13 @@ async def cmd_ask(args: argparse.Namespace) -> int:
         if args.backend not in router.endpoints:
             print(f"unknown provider tier '{args.backend}'. configured: "
                   f"{', '.join(router.endpoints) or '(none)'}")
+            return 2
+        if _local_only_forbids_backend(router, args.backend):
+            print(
+                f"FAIL: CALLISTO_LOCAL_ONLY forbids --backend "
+                f"'{args.backend}' (hosted). Pin gpu1/gpu1_fast or unset "
+                f"CALLISTO_LOCAL_ONLY."
+            )
             return 2
         # Route every task class at the requested endpoint.
         router.task_classes = {tc: args.backend

@@ -329,6 +329,24 @@ class TestAskKeyedBackendPreflight:
         assert health_calls == ["ox_alpha"]
         assert seen["question"] == "wave two question"
 
+    def test_local_only_refuses_hosted_backend_before_health(
+            self, monkeypatch, capsys, runs_isolated):
+        """Under CALLISTO_LOCAL_ONLY, --backend ox_alpha must FAIL before
+        check_health (no hosted probe) and before the engine is built."""
+        monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
+        router = _Router(endpoints=("gpu1", "ox_alpha"),
+                         task_classes={"decompose": "gpu1"})
+        health_calls = []
+        router.check_health = make_health_spy(router.check_health, health_calls)
+        monkeypatch.setattr(callisto, "_load_router", lambda p: router)
+        monkeypatch.setattr(callisto, "_make_engine", _boom)
+        rc = asyncio.run(callisto._cmd_ask(_ask_args(backend="ox_alpha")))
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "FAIL" in out and "CALLISTO_LOCAL_ONLY" in out
+        assert health_calls == []
+        assert list(runs_isolated.glob("*")) == []
+
     def test_unreachable_backend_reports_doctor_hint(
             self, monkeypatch, capsys, runs_isolated):
         router = _Router(endpoints=("dead",))
