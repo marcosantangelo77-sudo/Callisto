@@ -608,10 +608,13 @@ class TestFrontDoorParser:
         assert callisto.main(["ask", "anything"]) == 2
 
     def test_epilog_documents_money_defaults(self):
-        assert "CALLISTO_ALLOW_LIVE_EXECUTE" in \
-            build_parser().epilog
-        assert "127.0.0.1" in build_parser().epilog
-        assert "CALLISTO_LOCAL_ONLY=1" in build_parser().epilog
+        parser = build_parser()
+        assert "CALLISTO_ALLOW_LIVE_EXECUTE" in parser.epilog
+        assert "127.0.0.1" in parser.epilog
+        assert "CALLISTO_LOCAL_ONLY=1" in parser.epilog
+        sub = next(a for a in parser._actions
+                   if isinstance(a, argparse._SubParsersAction))
+        assert sub.choices["ask"].epilog == parser.epilog
 
 
 # ══════════════════════════════════════════════════════════════════════════

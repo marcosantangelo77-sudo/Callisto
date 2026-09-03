@@ -48,5 +48,8 @@ def test_ask_help_inherits_money_defaults():
         capture_output=True, text=True)
     assert r.returncode == 0
     out = r.stdout + r.stderr
+    assert "CALLISTO_ALLOW_LIVE_EXECUTE=1" in out
+    assert "OFF" in out or "off" in out.lower()
+    assert "loopback" in out and "127.0.0.1" in out
     assert "CALLISTO_LOCAL_ONLY=1" in out
     assert "gpu1" in out

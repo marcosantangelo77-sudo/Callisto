@@ -67,18 +67,26 @@ from tools.cli.status import _cmd_status, _default_db_path as _db_path  # noqa: 
 
 # ── parser ────────────────────────────────────────────────────────────────
 
+# Shared so `callisto --help` and `callisto ask --help` stay in lockstep.
+# argparse subparsers do not inherit the parent epilog.
+_MONEY_EPILOG = (
+    "Money safety defaults: live execution is OFF unless "
+    "CALLISTO_ALLOW_LIVE_EXECUTE=1 is set, hosted inference is "
+    "stripped when CALLISTO_LOCAL_ONLY=1, and the API binds "
+    "to loopback (127.0.0.1) unless CALLISTO_BIND_HOST is set. "
+    "Run `callisto doctor` to check this machine."
+)
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="callisto",
         description="Callisto front door — ask, status, doctor.",
-        epilog="Money safety defaults: live execution is OFF unless "
-               "CALLISTO_ALLOW_LIVE_EXECUTE=1 is set, hosted inference is "
-               "stripped when CALLISTO_LOCAL_ONLY=1, and the API binds "
-               "to loopback (127.0.0.1) unless CALLISTO_BIND_HOST is set. "
-               "Run `callisto doctor` to check this machine.")
+        epilog=_MONEY_EPILOG)
     sub = ap.add_subparsers(dest="command", required=True)
 
-    p_ask = sub.add_parser("ask", help="ask one research question")
+    p_ask = sub.add_parser(
+        "ask", help="ask one research question", epilog=_MONEY_EPILOG)
     p_ask.add_argument("question")
     p_ask.add_argument("--backend", help="route all task classes to this "
                                          "provider tier (e.g. gpu1; hosted "
