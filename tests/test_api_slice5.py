@@ -545,6 +545,8 @@ class TestWorkersModuleBehavior:
 
     def test_local_only_skip_present_in_worker(self):
         assert "local_only mode" in WORKERS_SOURCE
+        assert "_task_blocked_by_local_only" in WORKERS_SOURCE
+        assert 'getenv("CALLISTO_LOCAL_ONLY"' in WORKERS_SOURCE
 
     def test_wiki_autofile_failure_is_non_fatal_by_construction(self):
         assert "Wiki auto-file failed" in WORKERS_SOURCE

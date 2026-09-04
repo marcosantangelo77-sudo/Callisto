@@ -46,6 +46,24 @@ def _is_internal_query(query: str) -> bool:
     return False
 
 
+def _task_blocked_by_local_only(research_loop) -> bool:
+    """True when POST /task must not run the orchestrator (Claude/hosted).
+
+    ``CALLISTO_LOCAL_ONLY`` (env) and ``research_loop._local_only`` both
+    mean hosted/Claude dispatch is forbidden. Honor the env even when
+    ``research_loop`` is None — otherwise a worker with no loop object
+    would still call Claude under LOCAL_ONLY.
+
+    Truthiness matches ``tools.infrouter.local_only.local_only_enabled``
+    (1/true/yes). Do not import that module here: it pulls inference_kernel.
+    """
+    env_lo = os.getenv("CALLISTO_LOCAL_ONLY", "").strip().lower() in (
+        "1", "true", "yes")
+    if env_lo:
+        return True
+    return bool(research_loop and getattr(research_loop, "_local_only", False))
+
+
 # ---------------------------------------------------------------------------
 # Auto-followup enqueueing
 # ---------------------------------------------------------------------------
@@ -573,8 +591,9 @@ async def task_worker():
             )
 
             # In local_only mode, skip tasks that would require Claude
-            # (orchestrator calls claude_code_query without checking local_only)
-            if _research_loop and _research_loop._local_only:
+            # (orchestrator calls claude_code_query without checking local_only).
+            # Env CALLISTO_LOCAL_ONLY must fail-close even if research_loop is None.
+            if _task_blocked_by_local_only(_research_loop):
                 logger.info(f"Task {task_id} skipped — local_only mode, orchestrator would call Claude")
                 await _queue.fail_task(task_id, "local_only mode — Claude unavailable")
                 continue
