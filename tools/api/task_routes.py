@@ -273,6 +273,15 @@ async def list_tasks(status: Optional[str] = None, limit: int = 10):
 async def sync_context(ctx: ContextSync):
     """Receive context from a Claude Code session. Queues actionable items."""
     from api import queue
+    from tools.api.workers import _task_blocked_by_local_only
+
+    if ctx.actionable_queries and _task_blocked_by_local_only(None):
+        raise HTTPException(
+            status_code=403,
+            detail="CALLISTO_LOCAL_ONLY forbids queueing actionable_queries "
+                   "(orchestrator is Claude/hosted). Use callisto ask "
+                   "--backend gpu1 or unset CALLISTO_LOCAL_ONLY.",
+        )
 
     submitted = []
     for q in ctx.actionable_queries:

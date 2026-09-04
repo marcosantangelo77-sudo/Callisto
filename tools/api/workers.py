@@ -118,6 +118,13 @@ async def _maybe_auto_followup(parent_task_id: int, result: dict) -> None:
 
         followup_query = f"AUTO-FOLLOWUP from task {parent_task_id}: {next_step}"
 
+        if _task_blocked_by_local_only(None):
+            logger.info(
+                "auto_followup_rejected: parent=%d reason=local_only",
+                parent_task_id,
+            )
+            return
+
         # Evaluate guards against the live DB snapshot. Keep the scope
         # tight: one connection open just for the guard + insert path.
         from tools import followup_guard
@@ -353,6 +360,11 @@ async def ingestion_sla_watchdog_loop():
                         f"Propose a remediation."
                     )
                     try:
+                        if _task_blocked_by_local_only(None):
+                            logger.info(
+                                "SLA watchdog: not filing investigation for %s "
+                                "under CALLISTO_LOCAL_ONLY", source)
+                            continue
                         await queue.submit_task(query, priority=2)
                         _sla_alerted_sources.add(source)
                         logger.warning(

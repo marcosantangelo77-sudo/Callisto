@@ -83,3 +83,18 @@ def test_submit_task_source_403s_before_enqueue():
     assert "status_code=403" in body
     assert "except HTTPException" in body
     assert body.rfind("except HTTPException") < body.rfind("except Exception")
+
+
+def test_internal_enqueue_paths_honor_local_only():
+    """Followup, SLA watchdog, and context-sync must not queue Claude work."""
+    workers = (REPO / "tools" / "api" / "workers.py").read_text(encoding="utf-8")
+    assert workers.find("reason=local_only") < workers.find(
+        "queue.submit_task(followup_query, priority=1)")
+    assert workers.find("not filing investigation") < workers.find(
+        "queue.submit_task(query, priority=2)")
+
+    ctx = (REPO / "tools" / "api" / "task_routes.py").read_text(encoding="utf-8")
+    body = ctx.split("async def sync_context", 1)[1].split("async def admin_restart", 1)[0]
+    assert "_task_blocked_by_local_only" in body
+    assert body.find("_task_blocked_by_local_only") < body.find("queue.submit_task")
+    assert "status_code=403" in body
