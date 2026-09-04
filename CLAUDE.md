@@ -68,4 +68,5 @@ API logs stay on OneDrive for cross-machine diagnostics: `logs/api_stdout_*.log`
 - Commit all code changes autonomously (feedback_autonomous_commits)
 - Don't ask permission — check state and act (feedback_no_permission_asking)
 - Betting must be quantitative with live odds APIs (feedback_betting_strategy)
+- Paper-trade signals are `paper_trading` only — never add `live` to `_PAPER_TRADE_SIGNAL_STATUSES`
 - Never build around unproven theses — backtest first (feedback_thesis_testing)

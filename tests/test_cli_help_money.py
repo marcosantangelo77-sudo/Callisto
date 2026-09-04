@@ -107,3 +107,6 @@ def test_claude_md_names_fail_closed_switches():
     assert "CALLISTO_LOCAL_ONLY" in text
     assert "CALLISTO_ALLOW_LIVE_EXECUTE=1" in text
     assert "never printed" in text
+    assert "paper_trading" in text
+    assert "_PAPER_TRADE_SIGNAL_STATUSES" in text
+    assert "never add `live`" in text
