@@ -9,9 +9,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from pathlib import Path
+
 import pytest
 
-from tools.api.workers import _task_blocked_by_local_only
+from tools.api.workers import (
+    _post_task_orchestrator_forbidden,
+    _task_blocked_by_local_only,
+)
+
+REPO = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
@@ -51,3 +58,28 @@ def test_loop_flag_false_without_env_allows(clean_env):
 def test_env_wins_over_loop_toggled_off(clean_env, monkeypatch):
     monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
     assert _task_blocked_by_local_only(SimpleNamespace(_local_only=False)) is True
+
+
+def test_wiki_hit_allows_submit_under_local_only(clean_env, monkeypatch):
+    monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
+    assert _post_task_orchestrator_forbidden({"wiki_topic": "x"}) is False
+
+
+def test_no_wiki_forbids_submit_under_local_only(clean_env, monkeypatch):
+    monkeypatch.setenv("CALLISTO_LOCAL_ONLY", "1")
+    assert _post_task_orchestrator_forbidden(None) is True
+
+
+def test_no_wiki_allows_submit_when_local_only_unset(clean_env):
+    assert _post_task_orchestrator_forbidden(None) is False
+
+
+def test_submit_task_source_403s_before_enqueue():
+    src = (REPO / "tools" / "api" / "task_routes.py").read_text(encoding="utf-8")
+    body = src.split("async def submit_task", 1)[1].split("async def get_task", 1)[0]
+    assert "_post_task_orchestrator_forbidden" in body
+    assert body.find("_post_task_orchestrator_forbidden") < body.find(
+        "queue.submit_task")
+    assert "status_code=403" in body
+    assert "except HTTPException" in body
+    assert body.rfind("except HTTPException") < body.rfind("except Exception")

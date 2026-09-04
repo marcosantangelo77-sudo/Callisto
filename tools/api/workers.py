@@ -64,6 +64,16 @@ def _task_blocked_by_local_only(research_loop) -> bool:
     return bool(research_loop and getattr(research_loop, "_local_only", False))
 
 
+def _post_task_orchestrator_forbidden(short_circuit_result) -> bool:
+    """True when POST /task must 403 instead of enqueueing Claude/hosted work.
+
+    Wiki short-circuit hits are local (no orchestrator) and still allowed.
+    """
+    if short_circuit_result is not None:
+        return False
+    return _task_blocked_by_local_only(None)
+
+
 # ---------------------------------------------------------------------------
 # Auto-followup enqueueing
 # ---------------------------------------------------------------------------

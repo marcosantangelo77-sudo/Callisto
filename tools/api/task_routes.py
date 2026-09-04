@@ -118,6 +118,15 @@ async def submit_task(submission: TaskSubmission) -> TaskResponse:
         if os.getenv("CALLISTO_TASK_SHORT_CIRCUIT", "1") == "1":
             short_circuit_result = await wiki_task_short_circuit(submission.query)
 
+        from tools.api.workers import _post_task_orchestrator_forbidden
+        if _post_task_orchestrator_forbidden(short_circuit_result):
+            raise HTTPException(
+                status_code=403,
+                detail="CALLISTO_LOCAL_ONLY forbids POST /task orchestrator "
+                       "(Claude/hosted). Use callisto ask --backend gpu1 "
+                       "or unset CALLISTO_LOCAL_ONLY.",
+            )
+
         task_id = await queue.submit_task(submission.query, submission.priority)
 
         if short_circuit_result is not None:
@@ -134,6 +143,8 @@ async def submit_task(submission: TaskSubmission) -> TaskResponse:
                 logger.warning(f"Short-circuit complete_task failed for {task_id}: {e}")
 
         return TaskResponse(task_id=task_id)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"POST /task failed: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
